@@ -19,12 +19,13 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'status', 'finish'])
-parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.12.10.exe')
+parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.12.11.exe')
 parser.add_argument('--run', default='final')
+parser.add_argument('--python', type=Path, help='Explicit existing interpreter for an EXE startup check')
 args = parser.parse_args()
 if not re.fullmatch('[a-z0-9-]{1,30}', args.run):
     parser.error('Invalid validation run name')
-OUT = ROOT / ('build/qa-standalone-0.12.10-' + args.run)
+OUT = ROOT / ('build/qa-standalone-0.12.11-' + args.run)
 STATE = OUT / 'app-state'
 CACHE = OUT / '실행 캐시'
 COPY = OUT / 'EXE만 있는 한글 폴더' / args.exe.name
@@ -65,11 +66,13 @@ if args.action == 'start':
     save('settings-before.json', settings())
     env = os.environ.copy()
     command = [str(COPY), '--no-browser', '--state', str(STATE), '--cache-root', str(CACHE)]
+    if args.python is not None:
+        command.extend(['--python', str(args.python.resolve(strict=True))])
     first = subprocess.run(command, cwd=COPY.parent, env=env, capture_output=True, timeout=110, creationflags=HIDDEN)
     assert first.returncode == 0, f'EXE exit {first.returncode}'
     runtime = json.loads((STATE / 'runtime.json').read_text(encoding='utf-8'))
     boot = request('/api/bootstrap')
-    assert boot['workspaceVersion'] == '0.12.10' and boot['demo'] is False and not boot['error']
+    assert boot['workspaceVersion'] == '0.12.11' and boot['demo'] is False and not boot['error']
     app_root = Path(boot['appRoot'])
     assert app_root.is_relative_to(CACHE) and not (app_root / 'runtime').exists()
     assert not list(app_root.rglob('python*.exe'))
@@ -106,6 +109,7 @@ if args.action == 'start':
     result = {'success': True, 'version': boot['workspaceVersion'], 'cliVersion': boot['version'],
         'cliRuntime': boot['runtime'], 'installedPythonVersion': '.'.join(map(str, python_info['version'])),
         'serverUsesExistingPython': True, 'pythonBundled': False,
+        'explicitPythonRequested': args.python is not None,
         'exeOnlyFolder': True,
         'stableCacheAndPidReused': True, 'appRoot': str(app_root), 'personalSettingsUnchanged': settings() == json.loads((OUT / 'settings-before.json').read_text())}
     save('startup-result.json', result)

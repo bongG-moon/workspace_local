@@ -35,7 +35,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         cls.counter = 0
         cls.script = (
-            'param([string]$PythonCommand="python", [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot)\n'
+            'param([string]$PythonCommand="auto", [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot)\n'
             '$ErrorActionPreference="Stop"\n'
             '@{ python=$PythonCommand; pythonOverride=$PSBoundParameters.ContainsKey("PythonCommand"); '
             'noBrowser=[bool]$NoBrowser; demo=[bool]$Demo; '
@@ -249,7 +249,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
         result = self.run_exe(None, '--state', str(state), '--demo', env=env)
         self.assertEqual(0, result.returncode, result.stderr)
         value = json.loads(record.read_text(encoding='utf-8-sig'))
-        self.assertEqual('python', value['python'])
+        self.assertEqual('auto', value['python'])
         self.assertFalse(value['pythonOverride'])
         self.assertEqual(str(self.target() / 'Company-Workspace'), value['cwd'])
         self.assertEqual(str(state), value['state'])
@@ -262,6 +262,53 @@ class StandaloneBootstrapTests(unittest.TestCase):
         # prepend its application cache, which would alter existing wrappers.
         self.assertNotIn(str(self.target()).lower(), value['path'].lower())
         self.assertNotIn(b'private-profile-', result.stdout + result.stderr)
+
+    def test_explicit_existing_python_path_is_one_literal_argument(self):
+        directory = self.case / '기존 Python -Demo & $literal; (폴더)'
+        directory.mkdir()
+        selected = directory / 'python.exe'
+        selected.write_bytes(b'fixture path only; never executed')
+        record = self.case / '선택 경로.json'
+        env = os.environ.copy()
+        env.update(WORKSPACE_BOOTSTRAP_RESULT=str(record), CLAUDE_CONFIG_DIR='explicit-config-unchanged',
+                   ANTHROPIC_MODEL='explicit-model-unchanged', COMPANY_AGENT_CLAUDE='explicit-wrapper-unchanged')
+        result = self.run_exe(None, '--python', str(selected), env=env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(record.read_text(encoding='utf-8-sig'))
+        self.assertEqual(str(selected), value['python'])
+        self.assertTrue(value['pythonOverride'])
+        self.assertTrue(value['noBrowser'])
+        self.assertFalse(value['demo'])
+        self.assertFalse(value['state'])
+        self.assertEqual('explicit-config-unchanged', value['config'])
+        self.assertEqual('explicit-model-unchanged', value['model'])
+        self.assertEqual('explicit-wrapper-unchanged', value['entry'])
+        self.assertNotIn(str(self.target()).lower(), value['path'].lower())
+        self.assertEqual(b'fixture path only; never executed', selected.read_bytes())
+
+    def test_invalid_python_option_never_prepares_or_launches_app(self):
+        text = self.case / 'python.txt'
+        text.write_text('not an executable', encoding='utf-8')
+        directory = self.case / 'python.exe'
+        directory.mkdir()
+        existing = self.case / 'existing-python.exe'
+        existing.write_bytes(b'fixture')
+        invalid = [('--python',), ('--python', 'python'), ('--python', 'python.exe'),
+                   ('--python', r'C:python.exe'), ('--python', r'\python.exe'),
+                   ('--python', r'C:\bad|python.exe'), ('--python', str(self.case / 'missing.exe')),
+                   ('--python', str(text)), ('--python', str(directory)),
+                   ('--python', str(existing) + ' -Demo'),
+                   ('--python', str(existing) + '" -Demo "'),
+                   ('--python', str(existing), '--python', str(existing))]
+        record = self.case / 'must-not-launch.json'
+        env = {**os.environ, 'WORKSPACE_BOOTSTRAP_RESULT': str(record)}
+        for arguments in invalid:
+            with self.subTest(arguments=arguments):
+                result = self.run_exe(None, *arguments, env=env)
+                self.assertEqual(50, result.returncode, result.stderr)
+                self.assertIn(b'EXE-50', result.stderr)
+                self.assertFalse(self.cache.exists())
+                self.assertFalse(record.exists())
 
     def test_reported_launcher_error_is_not_reported_twice(self):
         env = os.environ.copy()

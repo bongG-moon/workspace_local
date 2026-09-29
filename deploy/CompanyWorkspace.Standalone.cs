@@ -60,7 +60,7 @@ namespace CompanyAgent {
         }
 
         private sealed class Options {
-            internal string StateRoot, CacheRoot;
+            internal string StateRoot, CacheRoot, PythonPath;
             internal bool NoBrowser, Demo, VerifyOnly;
         }
 
@@ -73,23 +73,33 @@ namespace CompanyAgent {
                 if (name == "--no-browser") value.NoBrowser = true;
                 else if (name == "--demo") value.Demo = true;
                 else if (name == "--verify-only") value.VerifyOnly = true;
-                else if (name == "--state" || name == "--cache-root") {
+                else if (name == "--state" || name == "--cache-root" || name == "--python") {
                     if (++i >= args.Length) throw new StandaloneFailure(50);
                     string path = AbsolutePath(args[i]);
                     if (name == "--state") value.StateRoot = path;
-                    else value.CacheRoot = path;
+                    else if (name == "--cache-root") value.CacheRoot = path;
+                    else {
+                        if (!String.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase) || !File.Exists(path))
+                            throw new StandaloneFailure(50);
+                        value.PythonPath = path;
+                    }
                 } else throw new StandaloneFailure(50);
             }
             return value;
         }
 
         private static string AbsolutePath(string path) {
-            if (String.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path) || path.IndexOf('"') >= 0 || path.IndexOf('\0') >= 0)
-                throw new StandaloneFailure(50);
-            // C:folder and \folder are rooted but depend on the caller's drive.
-            if (!(path.StartsWith(@"\\", StringComparison.Ordinal) || (path.Length >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/'))))
-                throw new StandaloneFailure(50);
-            return Path.GetFullPath(path);
+            try {
+                if (String.IsNullOrWhiteSpace(path) || path.IndexOf('"') >= 0 || path.IndexOf('\0') >= 0 || !Path.IsPathRooted(path))
+                    throw new StandaloneFailure(50);
+                // C:folder and \folder are rooted but depend on the caller's drive.
+                if (!(path.StartsWith(@"\\", StringComparison.Ordinal) || (path.Length >= 3 && path[1] == ':' && (path[2] == '\\' || path[2] == '/'))))
+                    throw new StandaloneFailure(50);
+                return Path.GetFullPath(path);
+            }
+            catch (ArgumentException) { throw new StandaloneFailure(50); }
+            catch (NotSupportedException) { throw new StandaloneFailure(50); }
+            catch (PathTooLongException) { throw new StandaloneFailure(50); }
         }
 
         private static Stream Resource(string name) {
@@ -260,6 +270,7 @@ namespace CompanyAgent {
             // carries application files only; it never provides an interpreter
             // or installs/downloads missing prerequisites.
             string command = "-NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(Path.Combine(appRoot, @"deploy\Start-CompanyWorkspace.ps1"));
+            if (options.PythonPath != null) command += " -PythonCommand " + Quote(options.PythonPath);
             if (options.NoBrowser) command += " -NoBrowser";
             if (options.Demo) command += " -Demo";
             if (options.StateRoot != null) command += " -StateRoot " + Quote(options.StateRoot);

@@ -23,6 +23,7 @@ history-sessions/
 learning-progress/
 company-agent-install.json
 Workspace-Diagnostic-*.json
+python-check-*.json
 *.pem
 *.key
 # Optional upstream sources and generated duplicate manual output.

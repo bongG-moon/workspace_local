@@ -15,7 +15,7 @@ Starting with **0.12.10**, both the EXE and VBS releases require an **existing P
 
 The app checks the existing installation before starting. It does not replace that installation or register a new Python on the system PATH. Licensing and incorporated-software notices for the separately installed Python are supplied with that installation.
 
-This notice describes the current 0.12.10 release. Historical 0.12.9 release packages and their embedded-runtime notices remain unchanged.
+This notice describes the current 0.12.11 release. Historical 0.12.9 release packages and their embedded-runtime notices remain unchanged.
 
 ## External applications
 

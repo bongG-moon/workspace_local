@@ -1,4 +1,8 @@
-# Company Workspace — 로컬 업무 화면 0.12.10
+# Company Workspace — 로컬 업무 화면 0.12.11
+
+## 0.12.11 기존 Python 확인 개선
+
+Python이 설치되어 있어도 앱 실행 환경에서 다른 경로나 검사 출력을 만나면 `WS-38`로 중단될 수 있습니다. 0.12.11은 PATH의 여러 후보, `py`의 기존 설치 목록, Windows의 Python 설치 등록 경로를 확인하고 표식이 있는 검사 응답을 구분합니다. EXE에서 필요하면 `--python`으로 이미 설치된 Python 실행 파일의 절대 경로를 지정할 수 있습니다. 자동 설치·다운로드·PATH 변경은 하지 않습니다. Python 3.11.5라는 버전 보고만으로 해당 PC의 실패 원인을 확정하지 않으며, 그 PC의 재실행 결과는 별도로 확인해야 합니다.
 
 ## 0.12.10 기존 실행 환경 확인
 
@@ -57,7 +61,7 @@ Effort 버튼과 입력 명령은 같은 설정 경로를 사용합니다. 실�
 
 자료 추가·경로 추가·모델·Effort·승인 모드를 입력창 하단의 같은 줄에서 사용합니다. `/ 스킬·명령`과 `@ 파일`은 작은 안내 문구로 표시하고, 입력 중 후보 표시와 Tab/Enter 선택은 유지합니다. 좁은 창에서는 겹치지 않도록 실행 설정만 다음 줄로 정렬합니다.
 
-`Company-Workspace-0.12.10.exe`는 앱 파일을 담은 실행기이며, 이미 설치된 Python 3.11 이상으로 앱을 시작합니다. EXE ZIP을 받았다면 먼저 풀고 실행하세요. Python을 동봉하거나 설치하지 않습니다. 기존 Claude PowerShell 프로필과 인증을 이어서 사용하며, VBS 배포 방식도 유지합니다. [단일 EXE 사용 안내](WORKSPACE_STANDALONE_EXE.md)를 참고하세요.
+`Company-Workspace-0.12.11.exe`는 앱 파일을 담은 실행기이며, 이미 설치된 Python 3.11 이상으로 앱을 시작합니다. EXE ZIP을 받았다면 먼저 풀고 실행하세요. Python을 동봉하거나 설치하지 않습니다. 기존 Claude PowerShell 프로필과 인증을 이어서 사용하며, VBS 배포 방식도 유지합니다. [단일 EXE 사용 안내](WORKSPACE_STANDALONE_EXE.md)를 참고하세요.
 
 ## 0.12.4 모델 · Effort · 승인 모드
 
@@ -174,7 +178,7 @@ Effort 버튼과 입력 명령은 같은 설정 경로를 사용합니다. 실�
 6. **사용 현황:** 현재 요청의 CLI 보고값과 사용자가 선택한 과거 JSONL 분석을 별도로 보여 줍니다. 누락은 ‘미제공’, 사내 모델 비용은 미추정입니다. 같은 메시지의 스트림 기록은 중복 제거하며 CLI 완료값·작업자·로그 합계를 서로 더하지 않습니다. CLI 버전에 따라 완료값이 누적일 수 있어 요청끼리 합산하지 않습니다. 다음 요청의 토큰 알림은 앱을 닫으면 해제되며 강제 비용 한도가 아닙니다.
 7. **준비·결과 확인:** 설치·스킬 발견·지침 분량과 실제 업무 결과를 분리합니다. 사용자 확인 기록에서 실패·중지·차단·미확인을 빼고 성공률을 만들지 않습니다. 모델/평가 시 설치 버전별 관찰 그룹을 표시하되 전체 AI 성능 점수나 인과적 개선 증거라고 주장하지 않습니다. 실제 실행 당시 버전을 입증하지 못하면 평가 시 버전과 구별합니다.
 
-이 소스의 Workspace 실행 코드 버전은 **0.12.10**이며 Company Agent 코어 버전과 별도로 관리합니다. 업무 중심 화면과 기존 기록을 유지하면서 실제 연결의 모델·Effort·승인 모드를 표시하고 설정 변경과 업무 전송을 구분합니다. 본인 계정·세션·프로필 검증과 일반 권한 재실행을 유지하며, UAC가 꺼진 환경에서는 검증된 제한 토큰 복사본을 사용하는 경로가 있습니다. 실제 문서 읽기는 설치된 스킬·도구의 지원 범위를 따릅니다.
+이 소스의 Workspace 실행 코드 버전은 **0.12.11**이며 Company Agent 코어 버전과 별도로 관리합니다. 업무 중심 화면과 기존 기록을 유지하면서 실제 연결의 모델·Effort·승인 모드를 표시하고 설정 변경과 업무 전송을 구분합니다. 본인 계정·세션·프로필 검증과 일반 권한 재실행을 유지하며, UAC가 꺼진 환경에서는 검증된 제한 토큰 복사본을 사용하는 경로가 있습니다. 실제 문서 읽기는 설치된 스킬·도구의 지원 범위를 따릅니다.
 
 Company Agent 코어의 [1.4.28 변경 안내](https://github.com/bongG-moon/claude_base_repo/blob/main/docs/UPDATE_1.4.28.md)와 [당시 배포 검증 범위](https://github.com/bongG-moon/claude_base_repo/blob/main/docs/VALIDATION_RELEASE_1.4.28.md)는 과거 배포 자료이며, 현재 개인 설치가 그 버전이라는 의미가 아닙니다. 이번 Workspace 0.12.7 안내와 구분해서 보세요. 검증 기록의 외부 링크는 인터넷 연결이 필요합니다.
 
@@ -206,7 +210,7 @@ Company Agent와 Workspace는 별도 배포 묶음이며 기존 설치·ZIP에 �
 ## 시작하기
 
 1. Windows에서 사용합니다. EXE·VBS·소스 방식 모두 회사가 승인하여 이미 설치한 Python 3.11 이상이 필요합니다. Python이나 Claude 설치 프로그램은 제공하지 않으며 자동 설치하지 않습니다. 실제 AI 업무에는 기존 Claude Code와 그 인증이 필요하며 Company Agent 기능은 기존 코어 설치 범위를 따릅니다.
-2. **`Company-Workspace-0.12.10.exe`를 더블클릭**합니다. VBS 방식은 ZIP 전체를 푼 Workspace 폴더의 `Company-Workspace.vbs`를 더블클릭합니다. 별도로 ‘관리자 권한으로 실행’을 선택할 필요는 없습니다. ZIP 미리보기 안에서 실행하지 마세요.
+2. **`Company-Workspace-0.12.11.exe`를 더블클릭**합니다. VBS 방식은 ZIP 전체를 푼 Workspace 폴더의 `Company-Workspace.vbs`를 더블클릭합니다. 별도로 ‘관리자 권한으로 실행’을 선택할 필요는 없습니다. ZIP 미리보기 안에서 실행하지 마세요.
 3. Edge가 있으면 독립 앱 모양의 창, 없으면 기본 브라우저가 열립니다. CLI 탐색에 실패해도 앱 화면을 열어 연결 확인이 필요하다고 안내하며 다른 CLI를 대신 실행하지 않습니다.
 4. ‘작업 폴더’를 선택하고 해당 폴더의 설정 실행에 동의합니다.
 5. 파일 선택 → 요청 입력 → 필요한 질문/승인 응답 → 결과 확인 순서로 진행합니다.
@@ -216,7 +220,7 @@ Company Agent와 Workspace는 별도 배포 묶음이며 기존 설치·ZIP에 �
 
 ### 관리자 권한으로 감지되거나 시작할 수 없을 때
 
-`WS-33`이나 일반 시작 실패로 중단되면 실행한 0.12.10 묶음의 `Check-Workspace.cmd`로 읽기 전용 진단을 실행하세요. VBS는 `Company-Workspace.vbs` 옆에 있고, EXE는 [단일 EXE 사용 안내](WORKSPACE_STANDALONE_EXE.md)의 실행 캐시에서 찾을 수 있습니다. [결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요. `ws33-13` 진단은 실행 정책 5개 범위, 다운로드 표시(Mark-of-the-Web)의 유무, 스크립트 구문 확인 상태를 함께 구분합니다. 다운로드 표시 원문·인증 정보·환경변수 값을 보고서에 넣거나 보안 설정을 변경하지 않습니다.
+`WS-33`이나 일반 시작 실패로 중단되면 실행한 0.12.11 묶음의 `Check-Workspace.cmd`로 읽기 전용 진단을 실행하세요. VBS는 `Company-Workspace.vbs` 옆에 있고, EXE는 [단일 EXE 사용 안내](WORKSPACE_STANDALONE_EXE.md)의 실행 캐시에서 찾을 수 있습니다. [결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요. `ws33-14` 진단은 실행 정책 5개 범위, 다운로드 표시(Mark-of-the-Web)의 유무, 스크립트 구문 확인 상태를 함께 구분합니다. 다운로드 표시 원문·인증 정보·환경변수 값을 보고서에 넣거나 보안 설정을 변경하지 않습니다.
 
 시작·진단·재실행·직접 Python의 권한 확인·파일 선택·CLI 호출용 PowerShell은 `-ExecutionPolicy Bypass`를 이번 실행의 PowerShell 프로세스와 그 자식 프로세스 계열에만 적용합니다. `CurrentUser`·`LocalMachine` 정책을 저장하지 않고 `MachinePolicy`·`UserPolicy`의 조직 정책을 우선합니다. 이 옵션은 UAC 권한을 높이지 않으며 기존 사용자·토큰 검사를 대체하지 않습니다. 다른 PC의 `exit 1` 해결 사례는 참고 후보일 뿐이며, 같은 오류 코드의 원인이 항상 실행 정책인 것은 아닙니다.
 
@@ -226,7 +230,7 @@ Company Agent와 Workspace는 별도 배포 묶음이며 기존 설치·ZIP에 �
 
 UAC·Windows의 영구 보안 정책·Claude 인증·모델·MCP·개인 설정은 자동 변경하지 않습니다. 사용자가 승인 카드에서 지속 허용을 직접 선택한 경우에만 해당 규칙과 저장 범위를 CLI에 전달합니다. 관리자 원본 권한을 그대로 허용하는 예외는 추가하지 않았습니다. 회사 정책이 토큰 생성이나 자식 실행을 막으면 재실행을 반복하지 않고 진단 결과를 안내합니다. **문제가 발생한 회사 PC에서 VBS → 실제 Claude 업무까지의 성공은 아직 검증하지 못했습니다.** 현재 PC의 제한 토큰·자식 프로세스 시험은 그 대상 환경의 성공을 대신하지 않으며 제한 토큰은 완전한 샌드박스를 뜻하지 않습니다.
 
-시작 실패 안내는 최초 실행기가 한 번 표시합니다. 이미 안내한 종료 코드 `20`은 VBS에서 다시 표시하지 않습니다. Python 버전·경로 검사가 실제로 실패한 경우에만 Python 안내를 표시하며, 다른 시작 실패를 Python 문제로 단정하지 않습니다. `-NoBrowser`로 실행할 때는 같은 이유를 콘솔 오류로 확인할 수 있습니다.
+시작 실패 안내는 최초 실행기가 한 번 표시합니다. 이미 안내한 종료 코드 `20`은 VBS에서 다시 표시하지 않습니다. Python 검사가 실제로 실패한 경우에만 후보 경로·확인한 실패 상태를 안내하며, 다른 시작 실패를 Python 문제로 단정하지 않습니다. `WS-37`·`WS-38`의 `python-1` 실패 기록은 저장에 성공한 경우 안내에 파일 위치가 표시됩니다. 이 파일에는 로컬 경로가 포함될 수 있으므로 공유 전에 확인하세요. `-NoBrowser`로 실행할 때는 같은 이유를 콘솔 오류로 확인할 수 있습니다.
 
 ### 작업 중지와 종료 확인
 
@@ -357,6 +361,6 @@ python -X utf8 scripts/test-lab/check-workspace-transport.py
 powershell -NoProfile -File deploy/New-WorkspaceBundle.ps1
 ```
 
-빌더는 `dist/company-workspace-preview-0.12.10-<생성시각>.zip`을 새로 만들며 기존 ZIP을 덮어쓰지 않습니다. 시작 실행기, 권한 검사 도우미, 읽기 전용 `Check-Workspace.cmd`·`Check-Workspace.ps1`, Noto Sans KR과 라이선스, [호환성 안내](WORKSPACE_0.12.1_COMPATIBILITY.md)를 포함합니다. 이 ZIP은 Python 3.11 이상이 필요하며 기존 Company Agent 코어를 설치·업데이트하지 않습니다. 단일 EXE 빌드는 [별도 안내](WORKSPACE_STANDALONE_EXE.md)를 따릅니다. 제작과 GitHub 게시·직원 PC 적용은 별도 단계이고 과거 묶음은 자동 변경되지 않습니다.
+빌더는 `dist/company-workspace-preview-0.12.11-<생성시각>.zip`을 새로 만들며 기존 ZIP을 덮어쓰지 않습니다. 시작 실행기, 권한 검사 도우미, 읽기 전용 `Check-Workspace.cmd`·`Check-Workspace.ps1`, Noto Sans KR과 라이선스, [호환성 안내](WORKSPACE_0.12.1_COMPATIBILITY.md)를 포함합니다. 이 ZIP은 Python 3.11 이상이 필요하며 기존 Company Agent 코어를 설치·업데이트하지 않습니다. 단일 EXE 빌드는 [별도 안내](WORKSPACE_STANDALONE_EXE.md)를 따릅니다. 제작과 GitHub 게시·직원 PC 적용은 별도 단계이고 과거 묶음은 자동 변경되지 않습니다.
 
 모형 CLI로 프로토콜과 UI를 검증한 결과는 사내 HCP를 대상으로 한 실제 업무 성공 증거가 아닙니다. 사내 확인 시에는 가상 MD 자료 생성, 실제 파일 읽기와 수치 대조, 결과 생성 승인과 파일 검증, 앱 재시작 후 후속 질문을 차례로 확인합니다. 실패 시 설정을 자동 변경하거나 미확인 결과를 성공으로 처리하지 않습니다. 실제 스킬 선택 정책은 기존 Company Agent 하네스가 담당합니다.

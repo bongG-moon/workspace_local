@@ -47,7 +47,7 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
     if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.12.10-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.12.11-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

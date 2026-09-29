@@ -1,21 +1,25 @@
-# Company Workspace 0.12.10
+# Company Workspace 0.12.11
 
 터미널 명령이나 `cd`에 익숙하지 않은 사용자가 기존 Claude Code 업무 환경을 창, 버튼, 자연어 요청으로 사용하는 Windows 로컬 앱입니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.10/Company-Workspace-0.12.10-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.10/Company-Workspace-0.12.10-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.11/Company-Workspace-0.12.11-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.11/Company-Workspace-0.12.11-vbs.zip)**
 
-[0.12.10 배포 안내](docs/WORKSPACE_RELEASE_0.12.10.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.12.10.md)
+[0.12.11 배포 안내](docs/WORKSPACE_RELEASE_0.12.11.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.12.11.md)
 
 ## 어떤 파일을 받으면 되나요?
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| `Company-Workspace-0.12.10-exe.zip` | ZIP을 풀고 `Company-Workspace-0.12.10.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 이미 설치된 Python 3.11 이상 |
-| `Company-Workspace-0.12.10-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.12.11-exe.zip` | ZIP을 풀고 `Company-Workspace-0.12.11.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 이미 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.12.11-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
 
 **앱 전용 로그인·API 키는 없습니다. AI 업무에는 같은 Windows 사용자의 기존 Claude Code와 인증이 필요합니다.** 두 방식 모두 기존 PowerShell 프로필과 Claude 호출 환경을 사용합니다. EXE는 앱 파일만 묶은 실행기이며 VBS와 같은 시작 검사·PowerShell 경로를 사용합니다. 두 배포본 모두 Python 실행 환경이나 설치 프로그램을 포함하지 않고, 다운로드·자동 설치도 하지 않습니다. 기존 Python을 확인하지 못하면 안내 후 중단합니다. 회사의 VBS·EXE·PowerShell 허용 정책이 서로 다를 수 있으므로 모든 PC에서의 실행을 보장하지 않습니다.
 
 EXE는 서명되지 않은 자체 제작 실행 파일입니다. 앱은 UAC·계정·영구 실행 정책을 자동 변경하지 않으며, 회사가 정한 배포 정책을 따릅니다. 상세 조건은 [단일 EXE 안내](docs/WORKSPACE_STANDALONE_EXE.md)와 [시작 진단](docs/WORKSPACE_STARTUP_DIAGNOSTIC.md)을 확인하세요.
+
+## 0.12.11 Python 확인 개선
+
+PATH의 여러 Python 후보, `py`의 기존 설치 목록, Windows Python 등록 경로를 확인하고 검사 응답에 섞인 안내 문구를 구분합니다. 필요하면 EXE의 `--python "<기존 python.exe의 절대 경로>"` 옵션으로 확인된 설치를 직접 지정할 수 있습니다. 설치·다운로드·PATH 변경은 하지 않습니다. `WS-38`은 버전 하나만으로 원인을 단정하지 않고 실제 실패 기록과 함께 확인합니다. [진단 안내](docs/WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
 
 ## 시작과 업데이트
 
@@ -76,4 +80,4 @@ Company Agent 코어 통합 시험에는 별도로 검토한 소스의 플러그
 
 패키지 검사기는 허용 파일, 현재 소스 일치, 시작 진단 해시와 개인 상태 미포함을 확인합니다. GitHub의 자동 소스 ZIP과 위의 실행용 Release ZIP은 구성이 다릅니다. 가상 CLI·현재 개발 PC 시험은 모든 회사 PC의 실행 정책, 실제 문서 품질·Office·DRM 호환성을 대신하지 않습니다.
 
-검증 결과와 남은 현장 확인은 [0.12.10 검증 기록](docs/VALIDATION_0.12.10.md), 라이선스는 [제3자 고지](THIRD_PARTY_NOTICES.md)를 확인하세요.
+검증 결과와 남은 현장 확인은 [0.12.11 검증 기록](docs/VALIDATION_0.12.11.md), 라이선스는 [제3자 고지](THIRD_PARTY_NOTICES.md)를 확인하세요.

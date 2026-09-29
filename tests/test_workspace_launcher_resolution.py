@@ -41,10 +41,10 @@ function Get-WorkspaceVerifiedContext {
 function Assert-WorkspaceNormalProcess { param($Context) }
 function Show-WorkspaceStartupDialog { param($Message); throw 'A fixture must never show UI' }
 function Get-Command {
-    param($Name, $CommandType, $ErrorAction)
+    param($Name, $CommandType, $ErrorAction, [switch]$All)
     if ($Name -eq 'claude') { RESOLUTION }
     if ($Name -eq 'fixture-python-with-unicode-report') {
-        return [pscustomobject]@{Source='Invoke-FixturePython'}
+        return [pscustomobject]@{Source=REPORTED_PYTHON;CommandType='Application'}
     }
     Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
 }
@@ -53,7 +53,7 @@ function Invoke-WorkspacePythonQuery {
     param($Executable,$Arguments,$TimeoutMilliseconds)
     # Use the production hidden native-process query, changing only the
     # reported sys.executable. The ASCII JSON path must survive CP949 hosts.
-    if ($Executable -eq 'Invoke-FixturePython') {
+    if ($Executable -eq REPORTED_PYTHON) {
         $Executable = REAL_PYTHON
         $Arguments = $Arguments.Replace('-c "', ('-c "' + PYTHON_PRELUDE))
     }
@@ -90,6 +90,7 @@ function Start-Process {
             overrides = overrides.replace('RESULT_FILE', ps_quote(result_file)).replace('STATE_ROOT', ps_quote(state))
             overrides = overrides.replace('NATIVE_FILE', ps_quote(native_executable))
             overrides = overrides.replace('REAL_PYTHON', ps_quote(sys.executable))
+            overrides = overrides.replace('REPORTED_PYTHON', ps_quote(reported_python))
             python_prelude = ("import sys; sys.executable = bytes.fromhex('"
                               + str(reported_python).encode('utf-8').hex() + "').decode('utf-8'); ")
             overrides = overrides.replace('PYTHON_PRELUDE', ps_quote(python_prelude))
@@ -206,46 +207,86 @@ class PythonDependencyTests(unittest.TestCase):
         functions = source[source.index('function Invoke-WorkspacePythonQuery'):source.index('\ntry {\n    $startupHelper')]
         return subprocess.run(['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive',
                                '-ExecutionPolicy', 'Bypass', '-Command',
-                               '[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n' + functions + '\n' + body],
-                              env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=25,
+                               '$ErrorActionPreference="Stop"\nSet-StrictMode -Version 2\n[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n' + functions + '\n' + body],
+                              env=os.environ.copy() if env is None else env,
+                              capture_output=True, encoding='utf-8', errors='replace', timeout=35,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
-    def resolve(self, python_status=None, listed_status=1, *, explicit=False, list_installed=True):
+    def resolve(self, python_status=None, listed_status=1, *, explicit=False, list_installed=True,
+                later_status=None, registry=False, noise=False, command_kind='Application',
+                extension='.exe', query_failure=None, alias_target='Application', malformed=False):
         with tempfile.TemporaryDirectory(prefix='workspace-existing-python-한글 & ') as raw:
             installed = Path(raw) / '기존 Python 3.12' / 'python.exe'
             installed.parent.mkdir(); installed.touch()
+            path_python = Path(raw) / ('path-python' + extension)
+            path_python.touch()
+            later_python = Path(raw) / 'later-python.exe'
+            later_python.touch()
+            py_launcher = Path(raw) / 'registered-py.exe'
             transcript = Path(raw) / 'queries.jsonl'
+            diagnosis = Path(raw) / 'diagnosis.json'
             listing = '-V:3.12 * ' + str(installed) if list_installed else 'No installed Pythons found!'
             body = r'''
 function Get-Command {
-    param($Name,$CommandType,$ErrorAction)
-    if ($Name -eq 'python' -and PYTHON_FOUND) { return [pscustomobject]@{Source='path-python'} }
-    if ($Name -eq 'py') { return [pscustomobject]@{Source='registered-py'} }
+    param($Name,$CommandType,$ErrorAction,[switch]$All)
+    if ($Name -eq 'python' -and PYTHON_FOUND) {
+        if (-not $CommandType) {
+            return [pscustomobject]@{Source=PATH_PYTHON;CommandType=COMMAND_KIND;Definition='PRIVATE_FUNCTION_BODY';ResolvedCommand=[pscustomobject]@{Source=PATH_PYTHON;CommandType=ALIAS_TARGET}}
+        }
+        [pscustomobject]@{Source=PATH_PYTHON;CommandType='Application'}
+        if ($All -and LATER_FOUND) { [pscustomobject]@{Source=LATER_PYTHON;CommandType='Application'} }
+        return
+    }
+    if ($Name -eq 'py') { return [pscustomobject]@{Source=PY_LAUNCHER;CommandType='Application'} }
     throw [System.Management.Automation.CommandNotFoundException]::new('fixture missing command')
+}
+function Get-WorkspaceRegisteredPythonCandidates {
+    param($Deadline)
+    if (REGISTRY_FOUND) { [pscustomobject]@{source='registry_current_user';path=INSTALLED;unsupported=$false} }
 }
 function Invoke-WorkspacePythonQuery {
     param($Executable,$Arguments,$TimeoutMilliseconds)
     [IO.File]::AppendAllText(TRANSCRIPT, (($Executable + '|' + $Arguments | ConvertTo-Json -Compress) + "`n"))
-    if ($Executable -eq 'registered-py') {
+    if ($Executable -eq PY_LAUNCHER) {
         if ($Arguments -ne '-0p') { throw 'Must only list installed runtimes' }
         return LISTING
     }
-    $status = if ($Executable -eq 'path-python') { PYTHON_STATUS } else { LISTED_STATUS }
-    return PATH_JSON + "`n" + $status
+    if ($Executable -eq PATH_PYTHON -and QUERY_FAILURE) {
+        $script:WorkspacePythonQueryStatus=QUERY_FAILURE
+        $script:WorkspacePythonQueryNativeCode=5
+        return $null
+    }
+    $status = if ($Executable -eq PATH_PYTHON) { PYTHON_STATUS } elseif ($Executable -eq LATER_PYTHON) { LATER_STATUS } else { LISTED_STATUS }
+    $version = if ($status -eq 0) { @(3,10,9) } else { @(3,11,5) }
+    $line = 'WORKSPACE_PYTHON_V1:' + (@{executable=INSTALLED;version=$version;modules=($status -ne 2);missingModules=@('ssl','PRIVATE_MODULE')} | ConvertTo-Json -Compress)
+    if (MALFORMED) { return $line + "`n" + $line }
+    if (WITH_NOISE) { return "Company wrapper notice`n" + $line + "`nCompany wrapper completed" }
+    return $line
 }
 try { Get-WorkspacePythonExecutable -Command SELECTED }
 catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+finally {
+    @{checks=@($script:WorkspacePythonChecks.ToArray());selected=$script:WorkspacePythonSelected;failure=$script:WorkspacePythonFailureKind} |
+        ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath DIAGNOSIS -Encoding UTF8
+}
 '''
             for key, value in {
                 'PYTHON_FOUND': '$true' if python_status is not None else '$false',
                 'PYTHON_STATUS': str(python_status or 0), 'LISTED_STATUS': str(listed_status),
+                'LATER_FOUND': '$true' if later_status is not None else '$false',
+                'LATER_STATUS': str(later_status or 0), 'LATER_PYTHON': ps_quote(later_python),
+                'PATH_PYTHON': ps_quote(path_python), 'PY_LAUNCHER': ps_quote(py_launcher),
+                'REGISTRY_FOUND': '$true' if registry else '$false', 'INSTALLED': ps_quote(installed),
+                'WITH_NOISE': '$true' if noise else '$false', 'MALFORMED': '$true' if malformed else '$false',
+                'QUERY_FAILURE': ps_quote(query_failure or ''), 'COMMAND_KIND': ps_quote(command_kind),
+                'ALIAS_TARGET': ps_quote(alias_target), 'DIAGNOSIS': ps_quote(diagnosis),
                 'TRANSCRIPT': ps_quote(transcript), 'LISTING': ps_quote(listing),
-                'PATH_JSON': ps_quote(json.dumps(str(installed))),
                 'SELECTED': ps_quote('python' if explicit else 'auto'),
             }.items():
                 body = body.replace(key, value)
             result = self.powershell(body)
             queries = [json.loads(line) for line in transcript.read_text().splitlines()] if transcript.exists() else []
+            self.diagnosis = json.loads(diagnosis.read_text(encoding='utf-8-sig'))
             return result, queries, str(installed)
 
     def test_default_existing_python_is_preferred_without_calling_py(self):
@@ -253,13 +294,14 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(installed, result.stdout.strip())
         self.assertEqual(1, len(queries))
-        self.assertTrue(queries[0].startswith('path-python|'))
+        self.assertIn('path-python.exe|-B -X utf8 -c', queries[0])
+        self.assertEqual('accepted', self.diagnosis['checks'][0]['status'])
 
     def test_py_only_installation_uses_listed_exact_unicode_path(self):
         result, queries, installed = self.resolve()
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(installed, result.stdout.strip())
-        self.assertEqual('registered-py|-0p', queries[0])
+        self.assertTrue(queries[0].endswith('registered-py.exe|-0p'))
         self.assertTrue(queries[1].startswith(installed + '|-B -X utf8 -c'))
 
     def test_old_or_incomplete_path_python_can_use_an_existing_compatible_runtime(self):
@@ -269,7 +311,7 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual(installed, result.stdout.strip())
                 self.assertEqual(3, len(queries))
-                self.assertEqual('registered-py|-0p', queries[1])
+                self.assertTrue(queries[1].endswith('registered-py.exe|-0p'))
 
     def test_explicit_missing_old_or_incomplete_python_never_uses_another_runtime(self):
         for status, code in ((None, '37'), (0, '38'), (2, '38')):
@@ -283,7 +325,166 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
         result, queries, _ = self.resolve(list_installed=False)
         self.assertNotEqual(0, result.returncode)
         self.assertIn('WORKSPACE_STARTUP:37', result.stderr)
-        self.assertEqual(['registered-py|-0p'], queries)
+        self.assertEqual(1, len(queries))
+        self.assertTrue(queries[0].endswith('registered-py.exe|-0p'))
+
+    def test_old_path_entry_does_not_hide_valid_later_path_python(self):
+        result, queries, installed = self.resolve(python_status=0, later_status=1, list_installed=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(installed, result.stdout.strip())
+        self.assertEqual(2, len(queries))
+        self.assertIn('later-python.exe|', queries[1])
+        self.assertEqual(['old_version', 'accepted'], [row['status'] for row in self.diagnosis['checks']])
+
+    def test_registry_recovers_missing_inherited_path_without_installing(self):
+        result, queries, installed = self.resolve(list_installed=False, registry=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(installed, result.stdout.strip())
+        self.assertEqual(2, len(queries))
+        self.assertEqual('registry_current_user', self.diagnosis['checks'][0]['source'])
+
+    def test_explicit_old_command_does_not_fall_back_to_path_or_registry(self):
+        result, queries, _ = self.resolve(python_status=0, later_status=1, registry=True, explicit=True)
+        self.assertIn('WORKSPACE_STARTUP:38', result.stderr)
+        self.assertEqual(1, len(queries))
+        self.assertEqual('old_version', self.diagnosis['failure'])
+
+    def test_wrapper_noise_is_ignored_but_duplicate_probe_response_is_rejected(self):
+        result, _, _ = self.resolve(python_status=1, noise=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        result, _, _ = self.resolve(python_status=1, malformed=True, explicit=True)
+        self.assertIn('WORKSPACE_STARTUP:38', result.stderr)
+        self.assertEqual('invalid_response', self.diagnosis['failure'])
+
+    def test_batch_wrapper_is_not_executed_and_later_executable_is_checked(self):
+        for extension in ('.cmd', '.bat'):
+            with self.subTest(extension=extension):
+                result, queries, _ = self.resolve(python_status=1, extension=extension, later_status=1)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(1, len(queries))
+                self.assertIn('later-python.exe|', queries[0])
+                self.assertEqual('unsupported_command', self.diagnosis['checks'][0]['status'])
+
+    def test_existing_alias_to_executable_is_resolved_without_function_execution(self):
+        result, queries, _ = self.resolve(python_status=1, command_kind='Alias', explicit=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(1, len(queries))
+        self.assertEqual('alias', self.diagnosis['checks'][0]['source'])
+        for kind, target in (('Function', 'Application'), ('Alias', 'Function')):
+            with self.subTest(kind=kind):
+                result, queries, _ = self.resolve(python_status=1, command_kind=kind, alias_target=target,
+                                                registry=True, explicit=True)
+                self.assertIn('WORKSPACE_STARTUP:38', result.stderr)
+                self.assertEqual([], queries)
+                self.assertEqual('unsupported_command', self.diagnosis['failure'])
+                self.assertNotIn('PRIVATE_FUNCTION_BODY', json.dumps(self.diagnosis))
+
+    def test_missing_module_details_are_allowlisted_and_not_mislabeled_as_old_version(self):
+        result, _, _ = self.resolve(python_status=2, explicit=True)
+        self.assertIn('WORKSPACE_STARTUP:38', result.stderr)
+        check = self.diagnosis['checks'][0]
+        self.assertEqual('missing_module', check['status'])
+        self.assertEqual('3.11.5', check['version'])
+        self.assertEqual(['ssl'], check['missingModules'])
+        self.assertNotIn('PRIVATE_MODULE', json.dumps(self.diagnosis))
+
+    def test_query_failure_preserves_safe_status_and_native_code(self):
+        for reason in ('start_failed', 'exit_failed', 'timed_out'):
+            with self.subTest(reason=reason):
+                result, _, _ = self.resolve(python_status=1, explicit=True, query_failure=reason)
+                self.assertIn('WORKSPACE_STARTUP:38', result.stderr)
+                self.assertEqual(reason, self.diagnosis['failure'])
+                self.assertEqual(5, self.diagnosis['checks'][0]['nativeCode'])
+                self.assertEqual({'source','path','status','version','nativeCode'}, set(self.diagnosis['checks'][0]))
+
+    def test_pep514_entries_use_read_only_keys_and_vendor_fallback_rules(self):
+        with tempfile.TemporaryDirectory(prefix='workspace-registry-fixture-') as raw:
+            root = Path(raw)
+            executable = root / 'python.exe'
+            executable.touch()
+            body = r'''
+function New-FixtureKey {
+    param($Children=@{},$Values=@{})
+    $key = [pscustomobject]@{Children=$Children;Values=$Values;Closed=$false}
+    $key | Add-Member ScriptMethod GetSubKeyNames { @($this.Children.Keys | ForEach-Object { ($_ -split '\\')[0] } | Select-Object -Unique) }
+    $key | Add-Member ScriptMethod OpenSubKey {
+        param($Name,$Writable)
+        if ($Writable) { throw 'Registry must be read-only' }
+        $this.Children[$Name]
+    }
+    $key | Add-Member ScriptMethod GetValue {
+        param($Name,$Default,$Options)
+        if ($Options -ne [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) { throw 'Do not expand environment data' }
+        if ($this.Values.ContainsKey($Name)) { $this.Values[$Name] } else { $Default }
+    }
+    $key | Add-Member ScriptMethod Dispose { $this.Closed=$true }
+    $key
+}
+$coreInstall = New-FixtureKey -Values @{''=DIRECTORY}
+$vendorInstall = New-FixtureKey -Values @{ExecutablePath=EXECUTABLE;ExecutableArguments='--private-argument'}
+$missingVendor = New-FixtureKey -Values @{''=DIRECTORY}
+$core = New-FixtureKey -Children @{'3.11\InstallPath'=$coreInstall}
+$vendor = New-FixtureKey -Children @{'opaque-tag\InstallPath'=$vendorInstall;'no-executable\InstallPath'=$missingVendor}
+$launcher = New-FixtureKey -Children @{'ignored\InstallPath'=$coreInstall}
+$root = New-FixtureKey -Children @{PythonCore=$core;Vendor=$vendor;PyLauncher=$launcher}
+$entries = @(Get-WorkspacePythonRegistryEntries -Root $root -Source 'registry_current_user' -Deadline ([DateTime]::UtcNow.AddSeconds(5)))
+@{entries=$entries;closed=@($coreInstall.Closed,$vendorInstall.Closed,$missingVendor.Closed,$core.Closed,$vendor.Closed);launcherUntouched=(-not $launcher.Closed)} | ConvertTo-Json -Depth 5 -Compress
+'''.replace('DIRECTORY', ps_quote(root)).replace('EXECUTABLE', ps_quote(executable))
+            result = self.powershell(body)
+            self.assertEqual(0, result.returncode, result.stderr)
+            value = json.loads(result.stdout)
+            self.assertEqual(2, len(value['entries']))
+            self.assertTrue(all(value['closed']))
+            self.assertTrue(value['launcherUntouched'])
+            entries = {entry['company']: entry for entry in value['entries']}
+            self.assertEqual(str(executable), entries['PythonCore']['path'])
+            self.assertFalse(entries['PythonCore']['unsupported'])
+            self.assertTrue(entries['Vendor']['unsupported'])
+            self.assertNotIn('private-argument', result.stdout)
+
+    def test_real_probe_start_and_exit_failures_do_not_expose_stderr(self):
+        with tempfile.TemporaryDirectory(prefix='workspace-probe-failure-') as raw:
+            missing = Path(raw) / 'missing.exe'
+            body = ('$missing = Invoke-WorkspacePythonQuery -Executable ' + ps_quote(missing)
+                    + ' -Arguments ""\n$startStatus=$script:WorkspacePythonQueryStatus\n'
+                    + '$startCode=$script:WorkspacePythonQueryNativeCode\n'
+                    + '$failed=Invoke-WorkspacePythonQuery -Executable ' + ps_quote(sys.executable)
+                    + ' -Arguments \'-B -c "import sys;sys.stderr.write(\\\"PRIVATE_DIAGNOSTIC\\\");sys.exit(7)"\'\n'
+                    + '@{startStatus=$startStatus;startCode=$startCode;status=$script:WorkspacePythonQueryStatus;'
+                      'nativeCode=$script:WorkspacePythonQueryNativeCode;noOutput=($null -eq $missing -and $null -eq $failed)} | ConvertTo-Json -Compress')
+            result = self.powershell(body)
+            self.assertEqual(0, result.returncode, result.stderr)
+            value = json.loads(result.stdout)
+            self.assertEqual('start_failed', value['startStatus'])
+            self.assertEqual(2, value['startCode'])
+            self.assertEqual('exit_failed', value['status'])
+            self.assertEqual(7, value['nativeCode'])
+            self.assertTrue(value['noOutput'])
+            self.assertNotIn('PRIVATE_DIAGNOSTIC', result.stdout + result.stderr)
+
+    def test_environment_initialization_failure_is_distinct_without_path_mutation(self):
+        # Duplicate case-insensitive keys caused ArgumentException in the
+        # observed Windows host. Inject that getter failure without relying on
+        # every test machine retaining a malformed inherited environment block.
+        fixture = r'''
+function New-Object {
+    param($TypeName,[object[]]$ArgumentList)
+    $value = Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+    if ($TypeName -eq 'Diagnostics.ProcessStartInfo') {
+        $value | Add-Member ScriptMethod get_EnvironmentVariables { throw [ArgumentException]::new('fixture duplicate environment key') } -Force
+    }
+    $value
+}
+'''
+        body = (fixture + '$before=$env:PATH\n$answer=Invoke-WorkspacePythonQuery -Executable ' + ps_quote(sys.executable)
+                + ' -Arguments \'-B -c "print(1)"\'\n'
+                + '@{empty=($null -eq $answer);status=$script:WorkspacePythonQueryStatus;pathPreserved=($before -ceq $env:PATH)} | ConvertTo-Json -Compress')
+        result = self.powershell(body)
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual('environment_failed', value['status'])
+        self.assertTrue(value['empty'])
+        self.assertTrue(value['pathPreserved'])
 
     def test_probe_child_disables_auto_install_and_parent_environment_is_preserved(self):
         names = ('PYTHON_MANAGER_AUTOMATIC_INSTALL', 'PYLAUNCHER_ALLOW_INSTALL',
@@ -311,11 +512,12 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
     def test_probe_timeout_is_bounded_and_returns_no_valid_interpreter(self):
         body = ('$clock = [Diagnostics.Stopwatch]::StartNew(); $answer = Invoke-WorkspacePythonQuery -Executable '
                 + ps_quote(sys.executable) + ' -Arguments \'-B -c "import time;time.sleep(5)"\' -TimeoutMilliseconds 100\n'
-                + '@{empty=($null -eq $answer);elapsed=$clock.Elapsed.TotalSeconds} | ConvertTo-Json -Compress')
+                + '@{empty=($null -eq $answer);elapsed=$clock.Elapsed.TotalSeconds;status=$script:WorkspacePythonQueryStatus} | ConvertTo-Json -Compress')
         result = self.powershell(body)
         self.assertEqual(0, result.returncode, result.stderr)
         value = json.loads(result.stdout)
         self.assertTrue(value['empty'])
+        self.assertEqual('timed_out', value['status'])
         self.assertLess(value['elapsed'], 3)
 
 
