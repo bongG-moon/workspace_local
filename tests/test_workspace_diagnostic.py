@@ -30,7 +30,7 @@ def ps_literal(value):
 
 def run_powershell(source):
     # Suppress personal profiles only in this isolated test harness. The shipped
-    # CMD preserves the user's normal PowerShell startup and execution policy.
+    # CMD preserves profiles and uses a process-only application execution policy.
     return subprocess.run(
         [str(PS), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source],
         capture_output=True, encoding="utf-8", timeout=30,
@@ -42,25 +42,26 @@ class WorkspaceDiagnosticContractTests(unittest.TestCase):
         script = SCRIPT.read_text(encoding="utf-8-sig")
         expected = dict(re.findall(r"'(deploy/[^']+)'\s*=\s*'([a-f0-9]{64})'", script))
         self.assertEqual(set(SOURCES), set(expected))
-        self.assertRegex(script, r"targetSource\s*=\s*'4396726'")
+        self.assertRegex(script, r"targetSource\s*=\s*'workspace-0.12.9'")
         for relative, digest in expected.items():
             with self.subTest(source=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8-sig")
                 normalized = source.replace("\r\n", "\n").encode("utf-8")
                 self.assertEqual(digest, hashlib.sha256(normalized).hexdigest())
 
-    def test_cmd_preserves_profile_and_policy_without_requesting_elevation(self):
+    def test_cmd_preserves_profile_and_uses_only_process_policy_without_elevation(self):
         command = COMMAND.read_text(encoding="utf-8-sig")
         self.assertIn(
             '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" '
-            '-NoLogo -File "%~dp0Check-Workspace.ps1"', command,
+            '-NoLogo -ExecutionPolicy Bypass -File "%~dp0Check-Workspace.ps1"', command,
         )
-        self.assertNotRegex(command.lower(), r"noprofile|bypass|executionpolicy|runas|encodedcommand")
+        self.assertNotRegex(command.lower(), r"noprofile|set-executionpolicy|runas|encodedcommand|unblock-file")
 
     def test_diagnostic_native_calls_are_allowlisted_and_never_relaunch(self):
         script = SCRIPT.read_text(encoding="utf-8-sig")
         self.assertEqual(
-            {"InspectCurrentToken", "ValidateNormalProcess", "ValidateSourceToken", "ValidateNormalTokenCandidate"},
+            {"InspectCurrentToken", "ValidateNormalProcess", "ValidateSourceToken", "ValidateNormalTokenCandidate",
+             "ValidateRestrictedSource", "IsUacDisabled"},
             set(re.findall(r"\[CompanyAgent\.WorkspaceNormalToken\]::(\w+)\s*\(", script)),
         )
         self.assertEqual(
@@ -127,14 +128,30 @@ finally { $identity.Dispose() }
             "diagnosticVersion", "targetSource", "status", "sourceMatches", "files",
             "identityVerified", "current", "linked", "predictedGuard", "uacEnabled",
             "process64Bit", "stage", "reason", "nativeCode", "notTested",
+            "executionPolicy", "scriptEvidence", "originalLaunchObserved", "nextStep",
         }, set(report))
-        self.assertEqual("ws33-1", report["diagnosticVersion"])
-        self.assertEqual("4396726", report["targetSource"])
+        self.assertEqual("ws33-12", report["diagnosticVersion"])
+        self.assertEqual("workspace-0.12.9", report["targetSource"])
         self.assertEqual(set(SOURCES), set(report["files"]))
         self.assertTrue(set(report["files"].values()) <= {"matched", "missing", "different_version"})
         self.assertEqual([
-            "original_vbs_process", "primary_token_duplication", "child_process_launch", "claude_or_python",
+            "original_vbs_process", "original_profile_startup", "original_launch_failure", "primary_token_duplication", "restricted_token_creation", "child_process_launch", "claude_or_python",
         ], report["notTested"])
+        self.assertIs(False, report['originalLaunchObserved'])
+        self.assertIn(report['nextStep'], {'compare_original_launch_context', 'use_matching_workspace_bundle',
+            'replace_invalid_workspace_scripts', 'review_current_user_and_token', 'review_effective_group_policy'})
+        self.assertEqual({'effective', 'MachinePolicy', 'UserPolicy', 'Process', 'CurrentUser', 'LocalMachine'}, set(report['executionPolicy']))
+        self.assertTrue(set(report['executionPolicy'].values()) <= {
+            None, 'Undefined', 'Restricted', 'AllSigned', 'RemoteSigned', 'Unrestricted', 'Bypass', 'Default'})
+        self.assertEqual({'Company-Workspace.vbs', 'Check-Workspace.ps1', 'deploy/Start-CompanyWorkspace.ps1',
+            'deploy/CompanyWorkspace.Startup.ps1', 'deploy/CompanyAgent.UserContext.ps1',
+            'local_app/Pick-Path.ps1', 'local_app/Invoke-TerminalClaude.ps1'}, set(report['scriptEvidence']))
+        for evidence in report['scriptEvidence'].values():
+            self.assertEqual({'exists', 'downloadMarkPresent', 'parseStatus', 'parseErrorCount'}, set(evidence))
+            self.assertIn(evidence['exists'], (None, False, True))
+            self.assertIn(evidence['downloadMarkPresent'], (None, False, True))
+            self.assertIn(evidence['parseStatus'], {'not_checked', 'valid', 'invalid', 'unavailable'})
+            self.assertTrue(evidence['parseErrorCount'] is None or 0 <= evidence['parseErrorCount'] <= 1000)
         for name in ("current", "linked"):
             snapshot = report[name]
             if snapshot is not None:
@@ -161,6 +178,46 @@ finally { $identity.Dispose() }
         self.assertEqual({"matched"}, set(report["files"].values()))
         self.assertIn(report["status"], {"observed", "incomplete"})
         self.assertNotEqual("source_check", report["stage"])
+        self.assertEqual('valid', report['scriptEvidence']['deploy/Start-CompanyWorkspace.ps1']['parseStatus'])
+
+    def test_policy_evidence_is_allowlisted_and_does_not_identify_the_original_failure(self):
+        report = self.run_diagnostic("""
+function Get-ExecutionPolicy {
+    param($Scope, $ErrorAction)
+    if ($Scope -eq 'MachinePolicy') { return 'AllSigned' }
+    if ($Scope -eq 'CurrentUser') { return 'profile-secret-value' }
+    if ($Scope -eq 'UserPolicy') { throw 'private profile error text' }
+    return 'Bypass'
+}
+""")
+        self.assertEqual('AllSigned', report['executionPolicy']['MachinePolicy'])
+        self.assertEqual('Bypass', report['executionPolicy']['Process'])
+        self.assertIsNone(report['executionPolicy']['CurrentUser'])
+        self.assertIsNone(report['executionPolicy']['UserPolicy'])
+        self.assertIs(False, report['originalLaunchObserved'])
+        self.assertNotIn('secret', json.dumps(report))
+        self.assertNotIn('private profile', json.dumps(report))
+
+    def test_download_marker_only_records_presence_not_zone_urls(self):
+        path = self.directory / 'deploy/Start-CompanyWorkspace.ps1'
+        try:
+            Path(str(path) + ':Zone.Identifier').write_text(
+                '[ZoneTransfer]\nZoneId=3\nHostUrl=https://private.invalid/secret\n', encoding='utf-8')
+        except OSError:
+            self.skipTest('Alternate data streams unavailable')
+        report = self.run_diagnostic()
+        self.assertIs(True, report['scriptEvidence']['deploy/Start-CompanyWorkspace.ps1']['downloadMarkPresent'])
+        self.assertNotIn('private.invalid', json.dumps(report))
+        self.assertNotIn('ZoneId', json.dumps(report))
+
+    def test_invalid_script_is_parsed_without_executing_or_exporting_source(self):
+        path = self.directory / 'deploy/Start-CompanyWorkspace.ps1'
+        path.write_text('throw "profile-secret"; function broken {', encoding='utf-8-sig')
+        report = self.run_diagnostic()
+        self.assertEqual('invalid', report['scriptEvidence']['deploy/Start-CompanyWorkspace.ps1']['parseStatus'])
+        self.assertGreater(report['scriptEvidence']['deploy/Start-CompanyWorkspace.ps1']['parseErrorCount'], 0)
+        self.assert_rejected_before_identity(report, 'DIAGNOSTIC_SOURCE_MISMATCH')
+        self.assertNotIn('profile-secret', json.dumps(report))
 
     def test_missing_sources_stop_before_loading_any_helper(self):
         for relative in SOURCES:

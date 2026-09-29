@@ -22,12 +22,18 @@ from .companion import Companion, begin_turn, course, observe
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .artifacts import changes, linked, snapshot
 from .capabilities import catalog
+from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES
+from .picker_protocol import read_result as read_picker_result
+from .picker_channel import private_picker_directory
+from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
+from .windows_process import powershell_path
+from .attention import AttentionNotifier, snapshot as attention_snapshot
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.11.4"
+WORKSPACE_VERSION = "0.12.9"
 MANUAL_FILENAME = "Company-Agent-사용자-안내서.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -100,7 +106,7 @@ def workspace_folder(item):
 
 
 class LocalApp:
-    def __init__(self, state: Path, command=None, info=None, demo=False):
+    def __init__(self, state: Path, command=None, info=None, demo=False, *, managed_workspace_root=None):
         self.state = state
         self.state.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
@@ -112,11 +118,26 @@ class LocalApp:
         self.sessions = {}
         self.command, self.info, self.demo = command, info or {}, demo
         self._injected_command = command is not None
+        self.notifier = AttentionNotifier(enabled=not demo and not self._injected_command)
         self.error = None
-        self.managed_workspace_root = self.state / 'workspaces'
+        self.workspace_location_error = None
+        self.managed_workspace_root = None
+        self.default_workspace = None
+        if managed_workspace_root is not None or demo:
+            # Tests and demo never create a task on the interactive Desktop.
+            self.managed_workspace_root = Path(managed_workspace_root or self.state / 'workspaces').absolute()
+            self.default_workspace = self.state.absolute()
+        else:
+            try:
+                self.default_workspace = desktop_folder()
+                self.managed_workspace_root = self.default_workspace / 'Company Workspace'
+            except ValueError:
+                self.workspace_location_error = DESKTOP_UNAVAILABLE
+        self._isolated_workspace_root = managed_workspace_root is not None or demo
         self.reconnect_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
         self.companion = Companion(state, demo=demo)
+        self.completion_discovery = CompletionDiscovery(self.companion.client)
         if command is None and not demo:
             try:
                 self.command = resolve_cli()
@@ -142,22 +163,32 @@ class LocalApp:
             return self.sessions[sid]
 
     def public(self, item):
-        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride") } | {
+        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification") } | {
             "artifacts": list(item.get("artifacts", [])),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
+        result['connectionStopped'] = bridge is None or getattr(bridge, 'cleanup_complete', False) is True
         live = bool(bridge and not bridge.closed)
         if connection is not None:
+            if live and callable(getattr(bridge, 'model_state', None)):
+                current = bridge.model_state()
+                if isinstance(current, dict):
+                    connection.update(current)
             capabilities = dict(connection.get('capabilities') or {})
             if live and isinstance(getattr(bridge, 'capabilities', None), dict):
                 capabilities.update(bridge.capabilities)
             if not live:
                 capabilities['setModel'] = False
+                capabilities['setPermissionMode'] = False
+                capabilities['setEffort'] = False
                 connection['modelOverride'] = None
+                connection['permissionModeOverride'] = None
+                connection['effortOverride'] = None
             connection.update(capabilities=capabilities, connected=live)
         if not live:
             result['modelOverride'] = None
+            result['permissionModeOverride'] = None
         result['connection'] = connection
         return result
 
@@ -170,9 +201,16 @@ class LocalApp:
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
                                  {"artifactCount": len(item.get('artifacts', []))} for item in sessions],
-                    "managedWorkspaceRoot": str(self.managed_workspace_root.absolute()),
-                    "defaultWorkspace": str(Path.home() / "Desktop" if (Path.home() / "Desktop").is_dir() else Path.home()),
+                    "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
+                    "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
+                    "workspaceLocationError": self.workspace_location_error,
+                    "windowTitle": self.notifier.window_title,
                     **self.shutdown_status()}
+
+    def attention(self):
+        with self.lock:
+            return {**attention_snapshot(self.sessions.values()),
+                    'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title}
 
     def shutdown_status(self):
         with self._lifecycle:
@@ -204,11 +242,14 @@ class LocalApp:
             raise ValueError('업무 이름을 줄바꿈 없이 1~100자로 입력해 주세요.')
         return value.strip()
 
-    def create(self, workspace, trusted, *, managed=False, title=None):
+    def create(self, workspace, trusted, *, managed=False, title=None, managed_root=None):
         if trusted is not True:
             raise ValueError("이 폴더의 Claude 설정·후크·MCP 실행에 동의해 주세요.")
         if type(managed) is not bool:
             raise ValueError('새 업무 폴더 사용 여부를 확인해 주세요.')
+        if managed_root is not None and (not managed or not isinstance(managed_root, str) or not managed_root
+                                         or not Path(managed_root).is_absolute() or '..' in Path(managed_root).parts):
+            raise ValueError('새 업무를 만들 저장 폴더를 선택해 주세요.')
         title = self.clean_title(title) if title is not None else '새 업무'
         with self.lock:
             if len(self.sessions) >= MAX_SESSIONS:
@@ -216,9 +257,22 @@ class LocalApp:
             sid = str(uuid.uuid4())
             if managed:
                 # The displayed title is never interpreted as a filesystem path.
-                base = safe(self.managed_workspace_root.absolute())
-                base.mkdir(parents=True, exist_ok=True)
-                root = safe(base / (time.strftime('%Y-%m-%d') + '-' + sid[:8]))
+                if managed_root is not None:
+                    base = folder(workspace_path(Path(managed_root)))
+                    if self.demo and not base.is_relative_to(self.state.resolve(strict=True)):
+                        raise ValueError('체험 모드에서는 체험용 저장 위치 안에만 새 업무를 만들 수 있습니다.')
+                else:
+                    if self.managed_workspace_root is None:
+                        raise ValueError(self.workspace_location_error or DESKTOP_UNAVAILABLE)
+                    base = workspace_path(self.managed_workspace_root.absolute())
+                    if self._isolated_workspace_root:
+                        base.mkdir(parents=True, exist_ok=True)
+                    else:
+                        # A disconnected/removed Desktop must not be silently recreated.
+                        folder(self.default_workspace)
+                        base.mkdir(exist_ok=True)
+                base = workspace_path(base.resolve(strict=True))
+                root = workspace_path(base / (time.strftime('%Y-%m-%d') + '-' + sid[:8]))
                 if root.parent != base:
                     raise ValueError('새 업무 폴더 위치를 확인하지 못했습니다.')
                 root.mkdir(exist_ok=False)
@@ -294,7 +348,7 @@ class LocalApp:
             raise ValueError('사용할 모델 이름을 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
                 raise ValueError('현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -305,10 +359,177 @@ class LocalApp:
             result = bridge.set_model(model.strip() if isinstance(model, str) else None)
             with self.lock:
                 item['modelOverride'] = result.get('modelOverride')
+                self._remember_control(item, 'model', result.get('modelOverride'))
                 return {'ok': True, 'modelOverride': item['modelOverride'], 'session': self.public(item)}
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
+
+    def set_effort(self, sid, effort):
+        if effort is not None and (not isinstance(effort, str) or not effort or len(effort) > 20):
+            raise ValueError('추론 수준을 확인해 주세요.')
+        with self.lock:
+            item = self.get(sid)
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
+                raise ValueError('현재 업무와 확인 요청이 끝난 뒤 추론 수준을 변경해 주세요.')
+            bridge = item.get('bridge')
+            if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
+                raise ValueError('업무 연결이 준비된 뒤 추론 수준을 선택해 주세요.')
+            item['_modelUpdating'] = True
+        try:
+            result = bridge.set_effort(effort)
+            with self.lock:
+                item.setdefault('connection', {}).update(result)
+                self._remember_control(item, 'effort', result.get('effortOverride'))
+                return {**result, 'ok': True, 'session': self.public(item)}
+        except (ValueError, OSError):
+            with self.lock:
+                self.emit(sid, 'effort_changed', bridge.model_state())
+            raise
+        finally:
+            with self.lock:
+                item['_modelUpdating'] = False
+
+    def set_permission_mode(self, sid, mode):
+        if mode is not None and (not isinstance(mode, str) or not mode or len(mode) > 40):
+            raise ValueError('승인 모드를 확인해 주세요.')
+        with self.lock:
+            item = self.get(sid)
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
+                raise ValueError('현재 업무와 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.')
+            bridge = item.get('bridge')
+            if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
+                raise ValueError('업무 연결이 준비된 뒤 승인 모드를 선택해 주세요.')
+            item['_modelUpdating'] = True
+        try:
+            result = bridge.set_permission_mode(mode)
+            with self.lock:
+                item.setdefault('connection', {}).update(result)
+                item['permissionModeOverride'] = result.get('permissionModeOverride')
+                self._remember_control(item, 'permissionMode', result.get('permissionMode') if mode is not None else None)
+                return {**result, 'ok': True, 'session': self.public(item)}
+        except (ValueError, OSError):
+            with self.lock:
+                state = bridge.model_state()
+                item.setdefault('connection', {}).update(state)
+                self.emit(sid, 'permission_mode_changed', state)
+            raise
+        finally:
+            with self.lock:
+                item['_modelUpdating'] = False
+
+    def connect(self, sid):
+        """Explicitly prepare one trusted task's CLI; never send a prompt."""
+        with self.lock:
+            item = self.get(sid)
+            if not item.get('trusted'):
+                raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
+            root = workspace_folder(item)
+            if (item['state'] in {'starting', 'running', 'question', 'approval'}
+                    or item.get('_modelUpdating') or item.get('_connecting')):
+                raise ValueError('현재 업무와 연결 준비가 끝난 뒤 명령을 불러와 주세요.')
+            if self.demo:
+                raise ValueError('화면 체험에서는 실제 Claude 명령을 불러오지 않습니다.')
+            if self.error:
+                raise ValueError(self.error)
+            bridge = item.get('bridge')
+            if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
+                raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.')
+            if bridge is None or bridge.closed:
+                count = sum(1 for row in self.sessions.values()
+                            if row.get('bridge') and not row['bridge'].closed)
+                if count >= 3:
+                    raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
+                bridge = ClaudeSession(self.command, self.info, root,
+                    lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
+                    choice_helper=lambda: self.companion.client.choice_helper(root))
+                item['bridge'] = bridge
+                item['modelOverride'] = None
+                item['permissionModeOverride'] = None
+                item.pop('connection', None)
+                item['_needsControlRestore'] = bool(item.get('_sessionControls'))
+            item['_connecting'] = True
+        try:
+            # Reader events need the app lock. Never hold it while waiting for
+            # initialization, and never create a synthetic conversation turn.
+            bridge.prepare()
+            # Make the real, prepared state visible if a previously selected
+            # mode is no longer available. No business request is sent until
+            # every remembered selection has been acknowledged again.
+            if item.get('_needsControlRestore'):
+                self._emit_bridge(sid, bridge, 'connected', bridge.connection_state())
+                self._restore_controls(item, bridge)
+            with self.lock:
+                if bridge.closed or bridge.stopping:
+                    raise ValueError('명령 목록 준비가 중지되었습니다. 다시 연결해 주세요.')
+                # Re-read after acquiring the lock so a richer system/init
+                # received during prepare is never overwritten by an old copy.
+                self.emit(sid, 'connected', bridge.connection_state())
+                session = self.public(item)
+                return {'ok': True, 'connection': session['connection'], 'session': session}
+        finally:
+            with self.lock:
+                item['_connecting'] = False
+
+    @staticmethod
+    def _remember_control(item, name, value):
+        # Current app lifetime only. HistoryStore deliberately excludes this
+        # private field, so personal Claude settings and restart defaults stay
+        # owned by the CLI.
+        choices = item.setdefault('_sessionControls', {})
+        if value is None:
+            choices.pop(name, None)
+        else:
+            choices[name] = value
+
+    def _restore_controls(self, item, bridge):
+        with self.lock:
+            if not item.get('_needsControlRestore'):
+                return
+            choices = dict(item.get('_sessionControls', {}))
+        for name, apply in (('model', bridge.set_model), ('effort', bridge.set_effort),
+                            ('permissionMode', bridge.set_permission_mode)):
+            if name in choices:
+                apply(choices[name])
+        with self.lock:
+            if item.get('bridge') is bridge and not bridge.closed:
+                item['_needsControlRestore'] = False
+
+    def _emit_bridge(self, sid, bridge, kind, data):
+        # A retired child's delayed status/init must not change a replacement
+        # connection for the same task.
+        with self.lock:
+            item = self.sessions.get(sid)
+            if item is None or item.get('bridge') is not bridge:
+                return
+            self.emit(sid, kind, data)
+
+    def answer_choice(self, sid, choice_id, *, option_id=None, text=None):
+        from .choices import answer
+        with self.lock:
+            item = self.get(sid)
+            choice = item.get('choice')
+            if not choice or not isinstance(choice_id, str) or choice['id'] != choice_id:
+                raise ValueError('이미 답변했거나 만료된 선택 질문입니다.')
+            if item['state'] not in {'idle', 'done'}:
+                raise ValueError('현재 요청이 끝난 뒤 선택해 주세요.')
+            if not item.get('trusted'):
+                raise ValueError('업무 저장 위치를 다시 확인한 뒤 선택해 주세요.')
+            if item.get('_choiceAnswerClaim'):
+                raise ValueError('이 선택 질문의 답변을 처리하고 있습니다.')
+            value = answer(choice, option_id=option_id, custom=text)
+            claim = (choice_id, secrets.token_hex(16))
+            item['_choiceAnswerClaim'] = claim
+        try:
+            # Reconnecting may wait for reader-thread ACKs. The app lock must
+            # be released; the claim still prevents duplicate answer/normal sends.
+            self.send(sid, value, [], _choice_claim=claim)
+            with self.lock:
+                return {'ok': True, 'session': self.public(item)}
+        finally:
+            with self.lock:
+                if item.get('_choiceAnswerClaim') == claim:
+                    item.pop('_choiceAnswerClaim', None)
 
     def emit(self, sid, kind, data):
         with self.lock:
@@ -319,7 +540,21 @@ class LocalApp:
                 # Keep the UI mirror bounded; the CLI owns the full transcript.
                 while len(item["messages"]) > 1 and sum(len(row.get("text", "")) for row in item["messages"]) > 500000:
                     item["messages"].pop(0)
+            elif kind == 'choice':
+                from .choices import normalize
+                clean = normalize(data)
+                if item.get('_choiceSourceKey') == clean['id']:
+                    return
+                item['_choiceSourceKey'] = clean['id']
+                data = {**clean, 'id': secrets.token_hex(16)}
+                item['choice'] = data
+            elif kind == 'choice_closed':
+                item.pop('choice', None)
+            elif kind == 'verification':
+                item['verification'] = data
             elif kind == "request":
+                previous = item['requests'].get(data['id'])
+                data = {**data, '_attentionId': previous['_attentionId'] if previous and previous.get('_attentionId') else secrets.token_hex(16)}
                 item["requests"][data["id"]] = data
                 item["state"] = "question" if data["tool"] == "AskUserQuestion" else "approval"
             elif kind == "request_closed":
@@ -335,7 +570,9 @@ class LocalApp:
                 item["state"] = data["state"]
                 if data["state"] == "stopped":
                     item["requests"].clear()
+                    item.pop('choice', None)
                     item['modelOverride'] = None
+                    item['permissionModeOverride'] = None
                     if isinstance(item.get('connection'), dict):
                         item['connection'] = self.public(item)['connection']
                         data['connection'] = item['connection']
@@ -343,15 +580,25 @@ class LocalApp:
                 item["connection"] = data
                 item["sessionId"] = data.get("sessionId")
                 item['modelOverride'] = data.get('modelOverride')
+                item['permissionModeOverride'] = data.get('permissionModeOverride')
             elif kind == "model_changed":
                 item.setdefault('connection', {}).update(data)
                 item['modelOverride'] = data.get('modelOverride')
+            elif kind == 'permission_mode_changed':
+                item.setdefault('connection', {}).update(data)
+                item['permissionModeOverride'] = data.get('permissionModeOverride')
+            elif kind == 'effort_changed':
+                item.setdefault('connection', {}).update(data)
+                item['modelOverride'] = data.get('modelOverride')
+                item['permissionModeOverride'] = data.get('permissionModeOverride')
             elif kind == "result":
                 item["sessionId"] = data.get("sessionId")
                 item["state"] = "done"
+                item['verification'] = data.get('verification')
             elif kind == "error":
                 item["state"] = "error"
                 item["requests"].clear()
+                item.pop('choice', None)
                 if "resumeSessionId" in data:
                     item["sessionId"] = data["resumeSessionId"]
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
@@ -359,46 +606,75 @@ class LocalApp:
                 self._finish_observation(item)
                 data['artifacts'] = list(item.get('artifacts', []))
                 data['lastRunId'] = item.get('lastRunId')
-            if kind in {'assistant', 'connected', 'result', 'error', 'model_changed'} or terminal:
+            if kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal:
                 item['updated'] = time.time()
             observe(item, kind, data)
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
-            if kind in {"assistant", "connected", "result", "error", "model_changed"} or terminal:
+            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed'} or terminal:
                 self.save(sid)
+            if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
+                self.notifier.update(attention_snapshot(self.sessions.values()))
 
-    def send(self, sid, text, attachments, trusted=False):
+    @staticmethod
+    def _validate_choice_claim(item, claim):
+        pending = item.get('_choiceAnswerClaim')
+        if pending is not None and pending != claim:
+            raise ValueError('선택 질문의 답변을 처리한 뒤 다음 요청을 보내 주세요.')
+        if claim is not None and (pending != claim or item.get('choice', {}).get('id') != claim[0]):
+            raise ValueError('이미 답변했거나 만료된 선택 질문입니다.')
+
+    def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None):
         if not isinstance(text, str) or not text.strip() or len(text) > 32000:
             raise ValueError("요청은 1~32,000자로 입력해 주세요.")
         if not isinstance(attachments, list) or len(attachments) > 12:
             raise ValueError("파일은 한 번에 12개까지 선택할 수 있습니다.")
         with self.lock:
+            current = self.get(sid)
+            self._validate_choice_claim(current, _choice_claim)
+            old_bridge = current.get('bridge')
+            restore = (not self.demo and bool(current.get('_sessionControls'))
+                       and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
+        if restore:
+            self.connect(sid)
+        with self.lock:
             item = self.get(sid)
+            self._validate_choice_claim(item, _choice_claim)
             if not item.get("trusted") and trusted is not True:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
             workspace_folder(item)
-            if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating'):
+            if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating') or item.get('_connecting'):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
             paths = []
             for value in attachments:
-                path = Path(value).resolve(strict=True)
-                if not path.is_file() or path.suffix.lower() not in SAFE_FILES:
-                    raise ValueError("문서 또는 이미지 파일을 선택해 주세요.")
+                candidate = Path(value).expanduser()
+                if not candidate.is_absolute() or '..' in candidate.parts:
+                    raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
+                path = workspace_path(candidate).resolve(strict=True)
+                if not path.is_file() or path.suffix.lower() not in REFERENCE_FILE_TYPES:
+                    raise ValueError("문서·이미지 또는 소스 파일을 선택해 주세요.")
                 paths.append(str(path))
             if self.error:
                 raise ValueError(self.error)
             if not self.demo:
                 bridge = item.get("bridge")
+                if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
+                    raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.')
                 if bridge is None or bridge.closed:
                     active = sum(1 for row in self.sessions.values() if row.get("bridge") and not row["bridge"].closed)
                     if active >= 3:
                         raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
-                                           lambda kind, data: self.emit(sid, kind, data), item.get("sessionId"))
+                                           lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get("sessionId"),
+                                           choice_helper=lambda: self.companion.client.choice_helper(Path(item['workspace'])))
                     item["bridge"] = bridge
                     item['modelOverride'] = None
                     item.pop('connection', None)  # no stale init evidence during reconnect
+            if item.get('choice'):
+                self.emit(sid, 'choice_closed', {'id': item['choice']['id']})
+            item.pop('_choiceSourceKey', None)
+            item.pop('verification', None)
             item["trusted"] = True
             item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
             if item["title"] == "새 업무":
@@ -425,7 +701,7 @@ class LocalApp:
                     self.emit(sid, 'error', {'message': str(exc), 'code': 'send_failed'})
                     raise
 
-    def respond(self, sid, rid, allow, answers):
+    def respond(self, sid, rid, allow, answers=None, permission_choice_id=None):
         if type(allow) is not bool:
             raise ValueError("승인 또는 거절을 선택해 주세요.")
         if self.demo:
@@ -435,7 +711,10 @@ class LocalApp:
             bridge = self.get(sid).get("bridge")
             if not bridge:
                 raise ValueError("연결이 종료된 질문입니다.")
-            bridge.respond(rid, allow, answers)
+            if permission_choice_id is None:
+                bridge.respond(rid, allow, answers)
+            else:
+                bridge.respond(rid, allow, answers, permission_choice_id=permission_choice_id)
 
     def stop(self, sid):
         bridge = self.get(sid).get("bridge")
@@ -446,7 +725,12 @@ class LocalApp:
 
     def allowed_file(self, sid, value):
         item = self.get(sid)
-        path = Path(value).resolve(strict=True)
+        if not isinstance(value, (str, Path)) or not str(value) or len(str(value)) > 32767:
+            raise ValueError('파일 경로를 확인해 주세요.')
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute() or '..' in candidate.parts:
+            raise ValueError('파일의 전체 경로를 확인해 주세요.')
+        path = workspace_path(candidate).resolve(strict=True)
         root = workspace_folder(item)
         if not path.is_file() or path.suffix.lower() not in SAFE_FILES:
             raise ValueError("미리보기를 지원하지 않는 파일입니다.")
@@ -460,26 +744,41 @@ class LocalApp:
         return [{"name": str(Path(value).relative_to(root)), "path": value, "size": signature[1]}
                 for value, signature in observed.files.items()]
 
-    def pick(self, kind):
+    def pick(self, kind, initial_directory=None):
         if os.name != "nt":
             raise ValueError("이 버전의 파일 선택 창은 Windows에서 지원합니다. 경로를 입력해 주세요.")
         if kind not in {"folder", "files"}:
             raise ValueError("올바른 선택 종류가 아닙니다.")
+        if initial_directory is not None:
+            if not isinstance(initial_directory, str) or not initial_directory or not Path(initial_directory).is_absolute():
+                raise ValueError('선택 창을 시작할 폴더를 확인해 주세요.')
+            initial_directory = str(folder(initial_directory))
         if not self.dialog_lock.acquire(blocking=False):
             raise ValueError("이미 열린 파일 선택 창을 먼저 닫아 주세요.")
         try:
             owner = workspace_window_handle()
-            result = subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-STA", "-File",
-                                     str(Path(__file__).parent / "Pick-Path.ps1"), "-Kind", kind,
-                                     "-OwnerHandle", str(owner)],
-                                    capture_output=True, encoding="utf-8", timeout=300, creationflags=HIDDEN)
-            if result.returncode:
-                raise ValueError("파일 선택 창을 열지 못했습니다. 경로를 직접 입력해 주세요.")
-            return json.loads(result.stdout.lstrip("\ufeff") or "[]")
+            with private_picker_directory() as directory:
+                result_path = Path(directory) / 'result.json'
+                args = [powershell_path(), "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-STA", "-File",
+                        str(Path(__file__).parent / "Pick-Path.ps1"), "-Kind", kind,
+                        "-OwnerHandle", str(owner), "-ResultPath", str(result_path)]
+                if initial_directory is not None:
+                    args.extend(['-InitialDirectory', initial_directory])
+                try:
+                    # Console streams are diagnostics, never part of the response.
+                    result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            timeout=300, creationflags=HIDDEN)
+                except subprocess.TimeoutExpired as exc:
+                    raise ValueError('선택 시간이 지나 창을 닫았습니다. 파일 선택 창을 다시 열어 주세요.') from exc
+                response = read_picker_result(result_path, kind)
+                if result.returncode:
+                    raise ValueError('파일 선택 창을 열지 못했습니다. 경로를 직접 입력해 주세요.')
+                return response
         finally:
             self.dialog_lock.release()
 
     def close(self):
+        self.notifier.close()
         # Close admission immediately, including when another quit owns cleanup.
         with self._lifecycle:
             if self._shutdown_state in {'running', 'failed'}:
@@ -564,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = query.get("id", [""])[0]
             if route.path == "/api/bootstrap":
                 return self.reply(app.bootstrap())
+            if route.path == '/api/attention':
+                return self.reply(app.attention())
             if route.path == "/api/events":
                 after = int(query.get("after", ["0"])[0])
                 deadline = time.monotonic() + 20
@@ -580,6 +881,30 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == "/api/capabilities":
                 with app.lock:
                     selected = app.public(app.get(sid)) if sid else None
+                # Older clients retain the task-bound view. The explicit scope
+                # is a read-only browsing context, never an execution/trust change.
+                if 'scope' in query:
+                    scope = query['scope'][0]
+                    if scope not in {'common', 'folder'}:
+                        raise ValueError('목록 조회 범위를 확인해 주세요.')
+                    folder = None
+                    if scope == 'folder':
+                        raw_folder = query.get('workspace', [''])[0]
+                        if not raw_folder or len(raw_folder) > 32767:
+                            raise ValueError('목록을 확인할 폴더를 선택해 주세요.')
+                        candidate = Path(raw_folder)
+                        if not candidate.is_absolute():
+                            raise ValueError('목록을 확인할 폴더는 전체 경로로 선택해 주세요.')
+                        folder = workspace_path(candidate).resolve(strict=True)
+                        if not folder.is_dir():
+                            raise ValueError('목록을 확인할 실제 폴더를 선택해 주세요.')
+                        if selected and Path(selected['workspace']).resolve(strict=True) != folder:
+                            raise ValueError('선택한 목록 폴더와 연결 업무의 폴더가 다릅니다.')
+                    elif sid or 'workspace' in query:
+                        raise ValueError('공통 목록에는 업무나 폴더를 지정하지 않습니다.')
+                    return self.reply(catalog(selected, client=app.companion.client,
+                                              demo=app.demo, scope=scope,
+                                              workspace=str(folder) if folder else None))
                 return self.reply(catalog(selected, client=app.companion.client,
                                           demo=app.demo, validate_workspace=workspace_folder))
             if route.path == "/api/course":
@@ -605,7 +930,15 @@ class Handler(BaseHTTPRequestHandler):
                         app.get(sid)['observation']['previewed'].add(str(path))
                     return self.reply({"kind": "image", "name": path.name, "data": "data:" + mime + ";base64," + base64.b64encode(raw).decode()})
                 if path.suffix.lower() in {".md", ".txt", ".csv", ".tsv", ".html", ".htm"}:
-                    text = path.read_text(encoding="utf-8-sig")
+                    raw = path.read_bytes()
+                    try:
+                        text = raw.decode('utf-16' if raw.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
+                    except UnicodeError:
+                        try:
+                            text = raw.decode('cp949')
+                        except UnicodeError:
+                            return self.reply({'kind': 'external', 'name': path.name,
+                                'message': '문자 인코딩을 확인하지 못했습니다. 원래 앱이나 메모장에서 확인해 주세요.'})
                     if app.get(sid).get('observation'):
                         app.get(sid)['observation']['previewed'].add(str(path))
                     if path.suffix.lower() in {'.html', '.htm'}:
@@ -623,9 +956,13 @@ class Handler(BaseHTTPRequestHandler):
             if manual_path in MANUAL_ALIASES:
                 return self.reply({}, 302, location='/manual/guide' + MANUAL_ALIASES[manual_path])
             assets = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                      "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
+                      "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
+                      "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
                       "/companion.js": ("companion.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),
+                      "/fonts/NotoSansKR-Variable.woff": ("fonts/NotoSansKR-Variable.woff", "font/woff"),
                       "/favicon.ico": ("app-icon.ico", "image/vnd.microsoft.icon"),
                       "/icon.svg": ("icon.svg", "image/svg+xml"),
                       "/app-icon-192.png": ("app-icon-192.png", "image/png"),
@@ -683,17 +1020,41 @@ class Handler(BaseHTTPRequestHandler):
         app = self.server.app
         sid = data.get("id")
         if route == "/api/create":
-            return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title')))
+            return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot')))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
         if route == '/api/reconnect':
             return self.reply(app.reconnect(sid))
+        if route == '/api/connect':
+            return self.reply(app.connect(sid))
+        if route == '/api/attention/bind':
+            # Never accept a client-provided HWND, PID, title, or auth token as
+            # native window identity. bind() examines the current OS window.
+            return self.reply({'ok': True, 'native': app.notifier.bind()})
+        if route == '/api/completions':
+            from .completions import complete
+            if not sid:
+                if data.get('kind') not in {'slash', 'command'}:
+                    raise ValueError('파일을 찾을 업무 폴더를 먼저 선택해 주세요.')
+                item = {}
+            else:
+                with app.lock:
+                    item = dict(app.get(sid))
+                    item['connection'] = dict(item.get('connection') or {})
+                    item['attachments'] = list(item.get('attachments', []))
+                item['workspace'] = str(workspace_folder(item))
+            return self.reply(complete(item, data, safe_suffixes=REFERENCE_FILE_TYPES,
+                                       discovery=None if app.demo else app.completion_discovery))
         if route == '/api/model':
             if 'model' not in data:
                 raise ValueError('사용할 모델 또는 기본 모델 복원을 선택해 주세요.')
             return self.reply(app.set_model(sid, data['model']))
+        if route == '/api/effort':
+            if 'effort' not in data:
+                raise ValueError('추론 수준 또는 기존 설정 복원을 선택해 주세요.')
+            return self.reply(app.set_effort(sid, data['effort']))
         if route == "/api/pick":
-            return self.reply({"paths": app.pick(data.get("kind"))})
+            return self.reply(app.pick(data.get("kind"), data.get('initialDirectory')))
         if route == '/api/trust':
             if data.get('trusted') is not True:
                 raise ValueError('작업 폴더 확인이 필요합니다.')
@@ -711,22 +1072,25 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/send":
             app.send(sid, data.get("text"), data.get("attachments", []), data.get("trusted"))
         elif route == "/api/respond":
-            app.respond(sid, data.get("requestId"), data.get("allow"), data.get("answers"))
+            app.respond(sid, data.get("requestId"), data.get("allow"), data.get("answers"), data.get('permissionChoiceId'))
+        elif route == '/api/permission-mode':
+            if 'mode' not in data:
+                raise ValueError('승인 모드 또는 기존 설정 복원을 선택해 주세요.')
+            return self.reply(app.set_permission_mode(sid, data['mode']))
+        elif route == '/api/choice':
+            return self.reply(app.answer_choice(sid, data.get('choiceId'), option_id=data.get('optionId'), text=data.get('text')))
         elif route == "/api/stop":
             app.stop(sid)
         elif route == "/api/open":
             path = app.allowed_file(sid, data.get("path", ""))
-            if os.name != "nt":
-                raise ValueError("원래 앱 열기는 Windows에서 지원합니다.")
-            # No raw attachment execution; supported HTML uses the isolated static preview.
-            if path.suffix.lower() in {".html", ".htm"}:
-                raise ValueError("HTML은 앱 안의 정적 미리보기 또는 소스 보기로 확인해 주세요. 원본 스크립트는 실행하지 않습니다.")
-            os.startfile(str(path))
-            if app.get(sid).get('observation'):
+            from .external_apps import open_document
+            result = open_document(path, data.get('action', 'open'))
+            if data.get('action', 'open') != 'reveal' and app.get(sid).get('observation'):
                 app.get(sid)['observation']['fileOpened'] = True
+            return self.reply(result)
         elif route == "/api/native":
             item = app.get(sid)
-            if item.get("bridge") and not item["bridge"].closed:
+            if item.get("bridge") and getattr(item['bridge'], 'cleanup_complete', False) is not True:
                 raise ValueError("같은 대화의 동시 실행을 막기 위해 먼저 연결을 중지해 주세요.")
             if not item.get("trusted") or not app.command or os.name != "nt" or app.demo:
                 raise ValueError("원본 CLI는 폴더 동의 후 Windows 실사용 모드에서 열 수 있습니다.")
@@ -757,6 +1121,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--demo", action="store_true", help="Synthetic UI rehearsal; does not start Claude or read source documents")
     args = parser.parse_args()
+    from .startup import verify_process
+    verify_process()
     if args.demo:
         args.state = args.state / "demo"
     app = LocalApp(args.state, demo=args.demo)

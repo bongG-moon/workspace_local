@@ -1,0 +1,276 @@
+"""Pending-work summaries and optional attention for one verified app window.
+
+No document text, tool arguments, authentication tokens, or native handles are
+projected. Native flashing never activates a window or changes user settings.
+"""
+from __future__ import annotations
+
+import ctypes
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path
+import secrets
+import threading
+
+
+def snapshot(sessions):
+    """Project actual pending requests, not saved status labels or chat text.
+
+    The caller holds its session lock. A newly observed native request gets a
+    fresh _attentionId in the server, even when a CLI reuses a request ID later.
+    Duplicate deliveries of that outstanding request retain its _attentionId.
+    """
+    items, seen = [], set()
+    source = sessions.values() if isinstance(sessions, dict) else sessions
+    for session in source:
+        if not isinstance(session, dict) or not isinstance(session.get('id'), str):
+            continue
+        sid = session['id']
+        if not sid or session.get('state') in {'error', 'stopped'}:
+            continue
+        bridge = session.get('bridge')
+        connected = bridge is None or not getattr(bridge, 'closed', False)
+        title = session.get('title')
+        title = title[:200] if isinstance(title, str) and title.strip() else '새 업무'
+        requests = session.get('requests')
+        candidates = []
+        if connected and isinstance(requests, dict):
+            for request in requests.values():
+                if not isinstance(request, dict):
+                    continue
+                identity = request.get('_attentionId') or request.get('id')
+                if not isinstance(identity, str) or not identity or len(identity) > 256:
+                    continue
+                kind = 'question' if request.get('tool') == 'AskUserQuestion' else 'approval'
+                candidates.append((kind, identity))
+        choice = session.get('choice')
+        if (session.get('state') in {'idle', 'done'} and isinstance(choice, dict)
+                and isinstance(choice.get('id'), str) and 0 < len(choice['id']) <= 256):
+            candidates.append(('choice', choice['id']))
+        for kind, identity in candidates:
+            key = hashlib.sha256(json.dumps([sid, kind, identity], ensure_ascii=True).encode('ascii')).hexdigest()
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append({'id': key, 'sessionId': sid, 'title': title, 'kind': kind})
+    items.sort(key=lambda row: row['id'])
+    revision = hashlib.sha256(json.dumps(items, ensure_ascii=True, sort_keys=True,
+                                        separators=(',', ':')).encode('ascii')).hexdigest()
+    return {'revision': revision, 'total': len(items),
+            'approvalCount': sum(row['kind'] == 'approval' for row in items),
+            'questionCount': sum(row['kind'] == 'question' for row in items),
+            'choiceCount': sum(row['kind'] == 'choice' for row in items), 'items': items}
+
+
+@dataclass(frozen=True)
+class WindowBinding:
+    hwnd: int
+    pid: int
+    created: int
+    session: int
+    sid: bytes
+    image: str
+
+
+class WindowsAttention:
+    """Windows adapter: capture foreground only; no window enumeration/focus.
+
+    Edge may reuse its existing process, so the launch PID is not a window
+    identity. An authenticated page sets a per-run random, non-auth title. Its
+    foreground capture is then bound to exact executable, SID/session and
+    process creation time. Every flash rechecks all of these facts.
+    """
+    def __init__(self):
+        if os.name != 'nt':
+            raise OSError('Native attention is unavailable.')
+        from ctypes import wintypes as wt
+        self.wt = wt
+        self.user = ctypes.WinDLL('user32', use_last_error=True)
+        self.kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.advapi = ctypes.WinDLL('advapi32', use_last_error=True)
+        def signature(library, name, arguments, result):
+            fn = getattr(library, name)
+            fn.argtypes, fn.restype = arguments, result
+            return fn
+        ptr = ctypes.POINTER
+        signature(self.user, 'GetForegroundWindow', [], wt.HWND)
+        signature(self.user, 'IsWindow', [wt.HWND], wt.BOOL)
+        signature(self.user, 'IsWindowVisible', [wt.HWND], wt.BOOL)
+        signature(self.user, 'GetAncestor', [wt.HWND, wt.UINT], wt.HWND)
+        signature(self.user, 'GetWindowTextLengthW', [wt.HWND], ctypes.c_int)
+        signature(self.user, 'GetWindowTextW', [wt.HWND, wt.LPWSTR, ctypes.c_int], ctypes.c_int)
+        signature(self.user, 'GetWindowThreadProcessId', [wt.HWND, ptr(wt.DWORD)], wt.DWORD)
+        signature(self.kernel, 'OpenProcess', [wt.DWORD, wt.BOOL, wt.DWORD], wt.HANDLE)
+        signature(self.kernel, 'CloseHandle', [wt.HANDLE], wt.BOOL)
+        signature(self.kernel, 'QueryFullProcessImageNameW', [wt.HANDLE, wt.DWORD, wt.LPWSTR, ptr(wt.DWORD)], wt.BOOL)
+        signature(self.kernel, 'ProcessIdToSessionId', [wt.DWORD, ptr(wt.DWORD)], wt.BOOL)
+        signature(self.kernel, 'GetProcessTimes', [wt.HANDLE, ptr(wt.FILETIME), ptr(wt.FILETIME), ptr(wt.FILETIME), ptr(wt.FILETIME)], wt.BOOL)
+        signature(self.advapi, 'OpenProcessToken', [wt.HANDLE, wt.DWORD, ptr(wt.HANDLE)], wt.BOOL)
+        signature(self.advapi, 'GetTokenInformation', [wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD, ptr(wt.DWORD)], wt.BOOL)
+        signature(self.advapi, 'IsValidSid', [ctypes.c_void_p], wt.BOOL)
+        signature(self.advapi, 'GetLengthSid', [ctypes.c_void_p], wt.DWORD)
+        class FlashInfo(ctypes.Structure):
+            _fields_ = [('cbSize', wt.UINT), ('hwnd', wt.HWND), ('dwFlags', wt.DWORD),
+                        ('uCount', wt.UINT), ('dwTimeout', wt.DWORD)]
+        self.FlashInfo = FlashInfo
+        signature(self.user, 'FlashWindowEx', [ptr(FlashInfo)], wt.BOOL)
+        self.allowed_images = set()
+        for name in ('PROGRAMFILES(X86)', 'PROGRAMFILES', 'LOCALAPPDATA'):
+            value = os.environ.get(name)
+            if value:
+                candidate = Path(value) / 'Microsoft/Edge/Application/msedge.exe'
+                if candidate.is_absolute() and candidate.is_file():
+                    self.allowed_images.add(os.path.normcase(str(candidate.resolve(strict=True))))
+        own = self._process(os.getpid())
+        if own is None or not self.allowed_images:
+            raise OSError('An eligible app browser could not be verified.')
+        self.own_session, self.own_sid = own[1], own[2]
+
+    def _process(self, pid):
+        wt = self.wt
+        handle = self.kernel.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        token = wt.HANDLE()
+        try:
+            name, size = ctypes.create_unicode_buffer(32768), wt.DWORD(32768)
+            session = wt.DWORD()
+            times = [wt.FILETIME() for _ in range(4)]
+            if (not self.kernel.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(size))
+                    or not self.kernel.ProcessIdToSessionId(pid, ctypes.byref(session))
+                    or not self.kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times))
+                    or not self.advapi.OpenProcessToken(handle, 0x0008, ctypes.byref(token))):
+                return None
+            needed = wt.DWORD()
+            self.advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))  # TokenUser
+            if not 0 < needed.value <= 65536:
+                return None
+            buffer = ctypes.create_string_buffer(needed.value)
+            if not self.advapi.GetTokenInformation(token, 1, buffer, needed.value, ctypes.byref(needed)):
+                return None
+            sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            if not sid or not self.advapi.IsValidSid(sid):
+                return None
+            length = self.advapi.GetLengthSid(sid)
+            if not 8 <= length <= 68:
+                return None
+            image = os.path.normcase(str(Path(name.value).resolve(strict=True)))
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            return created, session.value, ctypes.string_at(sid, length), image
+        finally:
+            if token:
+                self.kernel.CloseHandle(token)
+            self.kernel.CloseHandle(handle)
+
+    def _window(self, hwnd, title):
+        if (not hwnd or not self.user.IsWindow(hwnd) or not self.user.IsWindowVisible(hwnd)
+                or self.user.GetAncestor(hwnd, 2) != hwnd):  # GA_ROOT
+            return None
+        length = self.user.GetWindowTextLengthW(hwnd)
+        if not 0 < length < 2048:
+            return None
+        text = ctypes.create_unicode_buffer(length + 1)
+        if not self.user.GetWindowTextW(hwnd, text, len(text)) or text.value != title:
+            return None
+        pid = self.wt.DWORD()
+        if not self.user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)):
+            return None
+        identity = self._process(pid.value)
+        if identity is None:
+            return None
+        created, session, sid, image = identity
+        if session != self.own_session or sid != self.own_sid or image not in self.allowed_images:
+            return None
+        return WindowBinding(int(hwnd), pid.value, created, session, sid, image)
+
+    def bind(self, title):
+        return self._window(self.user.GetForegroundWindow(), title)
+
+    def flash(self, binding, title, *, stop=False):
+        if self._window(binding.hwnd, title) != binding:
+            return 'invalid'
+        foreground = self.user.GetForegroundWindow() == binding.hwnd
+        flags = 0 if stop or foreground else 2  # FLASHW_STOP / FLASHW_TRAY
+        info = self.FlashInfo(ctypes.sizeof(self.FlashInfo), binding.hwnd, flags, 0 if flags == 0 else 3, 0)
+        # The BOOL reports the previous active state, NOT whether it succeeded.
+        self.user.FlashWindowEx(ctypes.byref(info))
+        return 'stopped' if stop else 'foreground' if foreground else 'requested'
+
+
+_AUTO = object()
+
+
+class AttentionNotifier:
+    def __init__(self, *, enabled=True, native=_AUTO):
+        self.window_title = 'Company Workspace · ' + secrets.token_urlsafe(16)
+        self._lock = threading.RLock()
+        self._binding = None
+        self._revision = None
+        self._pending = set()
+        self._closed = False
+        if not enabled:
+            native = None
+        elif native is _AUTO and os.name != 'nt':
+            native = None
+        # Loading Windows libraries and checking the current process is deferred
+        # until the authenticated page asks to bind. Ordinary fixture/bootstrap
+        # construction never queries a live browser or process.
+        self._native = native
+
+    @property
+    def native_state(self):
+        with self._lock:
+            return {'supported': self._native is not None, 'bound': self._binding is not None and not self._closed}
+
+    def _flash(self, *, stop=False):
+        if self._native is None or self._binding is None:
+            return
+        try:
+            result = self._native.flash(self._binding, self.window_title, stop=stop)
+            if result == 'invalid':
+                self._binding = None
+        except (OSError, AttributeError, ValueError):
+            self._binding = None
+
+    def bind(self):
+        with self._lock:
+            if not self._closed and self._native is _AUTO:
+                try:
+                    self._native = WindowsAttention()
+                except (OSError, AttributeError, ValueError):
+                    self._native = None
+            if not self._closed and self._native is not None:
+                try:
+                    binding = self._native.bind(self.window_title)
+                except (OSError, AttributeError, ValueError):
+                    binding = None
+                if binding is not None:
+                    if self._binding is not None and self._binding != binding:
+                        self._flash(stop=True)
+                    self._binding = binding
+                    self._flash(stop=True)
+            return self.native_state
+
+    def update(self, value):
+        with self._lock:
+            if self._closed or value.get('revision') == self._revision:
+                return self.native_state
+            self._revision = value.get('revision')
+            pending = {row['id'] for row in value.get('items', []) if isinstance(row, dict) and isinstance(row.get('id'), str)}
+            added, previous = pending - self._pending, self._pending
+            self._pending = pending
+            if added:
+                self._flash()
+            elif previous and not pending:
+                self._flash(stop=True)
+            return self.native_state
+
+    def close(self):
+        with self._lock:
+            if not self._closed:
+                self._flash(stop=True)
+            self._closed = True
+            self._binding = None
+            self._pending.clear()

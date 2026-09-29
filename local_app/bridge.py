@@ -15,9 +15,13 @@ import time
 import uuid
 from collections import deque
 
+from .permission_contract import help_permission_modes, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
+
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
 CONTROL_TIMEOUT = 10
+PREPARE_TIMEOUT = 60
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class BridgeError(ValueError):
@@ -30,6 +34,10 @@ class BridgeError(ValueError):
 def resolve_cli(value: str | None = None) -> list[str]:
     """Resolve only the active user's PATH/explicit selection; never scan profiles."""
     explicit = value or os.environ.get("COMPANY_AGENT_CLAUDE")
+    if not explicit and os.environ.get('COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE') == '1':
+        raise ValueError('앱은 열렸지만 기존 터미널의 Claude 실행 명령을 확인하지 못했습니다. '
+                         '평소 사용하는 터미널에서 Claude 실행을 확인한 뒤 앱을 완전히 종료하고 다시 열어 주세요. '
+                         '앱 전용 로그인은 필요하지 않습니다.')
     raw = explicit or os.environ.get("COMPANY_WORKSPACE_CLAUDE_ENTRY") or shutil.which("claude")
     if not raw:
         raise ValueError("Claude Code를 찾지 못했습니다. 기존 CLI 설치를 먼저 확인해 주세요.")
@@ -52,7 +60,7 @@ def terminal_command(entry: str, load_profiles=False) -> list[str]:
     shell = os.environ.get("COMPANY_WORKSPACE_SHELL") or shutil.which("powershell.exe")
     if os.name != "nt" or not shell or not Path(shell).is_file():
         raise ValueError("기존 터미널의 Claude 실행 환경을 연결하지 못했습니다. 별도 로그인은 필요하지 않습니다.")
-    args = [shell, "-NoLogo", "-NoProfile", "-File",
+    args = [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             str(Path(__file__).with_name("Invoke-TerminalClaude.ps1")), "-Entry", entry]
     if load_profiles:
         args.append("-LoadProfiles")
@@ -93,8 +101,9 @@ def cli_arguments(command: list[str], info: dict, resume: str | None = None) -> 
 
 
 class ClaudeSession:
-    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None):
+    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None):
         self.command, self.info, self.cwd, self.emit = command, info, cwd, emit
+        self.choice_helper = choice_helper
         self.session_id = resume
         self.resume_id = resume
         self.process = None
@@ -117,10 +126,33 @@ class ClaudeSession:
         self.model = ""
         self.original_model = None
         self.model_override = None
+        self.effort = None
+        self.effort_override = None
+        self._effort_reported = False
+        self._effort_source = 'unreported'
+        self._effort_baselines = {}
+        self._effort_applying = False
+        self._model_runtime_reported = False
+        self._effort_control_supported = True
+        self._ultracode_requested = None
+        self._runtime_settings_checked = False
+        self.permission_mode = ""
+        self.original_permission_mode = None
+        self.permission_mode_override = None
+        self._permission_init_seen = False
+        self._permission_modes = help_permission_modes(info.get("help", ""))
+        self._permission_rejected_modes = set()
+        self._permission_control_supported = True
+        self._permission_control_verified = False
+        self._permission_choices = {}
+        self._permission_source = 'unreported'
+        self._permission_pending = None
         self.available_models = []
         self.slash_commands = []
         self._commands_reported = False
         self._initialized = False
+        self._connection_info = {}
+        self._system_commands_reported = False
         self._model_control_supported = True
         self._control_active = False
         self._control_waiters = {}
@@ -130,14 +162,98 @@ class ClaudeSession:
         self._finalized_blocks = set()
 
     @property
+    def cleanup_complete(self):
+        """True only after this owned child's cleanup has completed successfully."""
+        return self.closed and self._close_done.is_set() and self._close_error is None
+
+    @property
     def capabilities(self) -> dict:
         return {"partialMessages": "--include-partial-messages" in self.info.get("help", ""),
                 "setModel": bool(self._initialized and self.original_model and
-                                 self._model_control_supported and not self.closed)}
+                                 self._model_control_supported and not self.closed),
+                "setPermissionMode": bool(self._initialized and self._permission_control_supported
+                                          and self._permission_available_modes() and not self.closed),
+                "setEffort": bool(self._initialized and self._effort_control_supported
+                                  and self._effort_available_levels() and not self.closed)}
+
+    def _effort_available_levels(self):
+        rows = [row for row in self.available_models if isinstance(row, dict)
+                and self.model and self.model in (row.get('value'), row.get('resolvedModel'))]
+        if not rows or rows[0].get('supportsEffort') is False:
+            return []
+        # Only runtime-reported capabilities for this exact model, never a
+        # guessed model-family mapping or the help's global argument choices.
+        values = rows[0].get('supportedEffortLevels')
+        return [value for value in EFFORT_LEVELS if isinstance(values, list) and value in values]
+
+    def _read_runtime_settings(self):
+        """Read only applied model/effort; raw config is never retained/exposed."""
+        self._runtime_settings_checked = True
+        if not any(isinstance(row, dict) and isinstance(row.get('supportedEffortLevels'), list)
+                   for row in self.available_models):
+            return False
+        rid = 'runtime-settings-' + uuid.uuid4().hex
+        waiter = {'event': threading.Event(), 'response': None}
+        with self.lock:
+            self._control_waiters[rid] = waiter
+        try:
+            self._write({'type': 'control_request', 'request_id': rid,
+                         'request': {'subtype': 'get_settings'}})
+            if not waiter['event'].wait(CONTROL_TIMEOUT):
+                return False
+            response = waiter['response']
+            detail = response.get('response') if isinstance(response, dict) and response.get('subtype') == 'success' else None
+            applied = detail.get('applied') if isinstance(detail, dict) else None
+            if not isinstance(applied, dict):
+                return False
+            with self.lock:
+                model = applied.get('model')
+                if isinstance(model, str) and model and len(model) <= 200 and not any(ord(c) < 32 for c in model):
+                    self.model = model
+                    self._model_runtime_reported = True
+                    if self.original_model is None and self.model_override is None:
+                        self.original_model = model
+                value = applied.get('effort')
+                self._effort_reported = 'effort' in applied and (value is None or value in EFFORT_LEVELS)
+                self.effort = value if self._effort_reported else None
+                self._effort_source = 'cli-settings' if self._effort_reported else 'unreported'
+                if self._effort_reported and self.effort_override is None and not self._effort_applying:
+                    self._effort_baselines.setdefault(self.model, value)
+                requested = applied.get('ultracodeRequested')
+                self._ultracode_requested = requested if type(requested) is bool else None
+                return self._effort_reported
+        finally:
+            with self.lock:
+                self._control_waiters.pop(rid, None)
+
+    def _permission_available_modes(self):
+        return [mode for mode in self._permission_modes if mode not in self._permission_rejected_modes]
 
     def model_state(self) -> dict:
         return {"model": self.model, "modelOverride": self.model_override,
-                "availableModels": self.available_models, "capabilities": self.capabilities}
+                "availableModels": self.available_models, "capabilities": self.capabilities,
+                "effort": self.effort, "effortOverride": self.effort_override,
+                "effortSource": self._effort_source,
+                "availableEfforts": [{"value": value, "displayName": value,
+                                      "description": "현재 모델과 연결에서 제공한 수준"}
+                                     for value in self._effort_available_levels()],
+                "effortSupport": ("unavailable" if not self.capabilities['setEffort'] else
+                                  "confirmed" if self._effort_reported else "unverified"),
+                "effortChangeRequiresReconnect": False,
+                "effortResetRequiresReconnect": False,
+                "effortResetAvailable": self._effort_baselines.get(self.model) in self._effort_available_levels(),
+                "permissionMode": self.permission_mode,
+                "permissionModeLabel": mode_label(self.permission_mode),
+                "permissionModeSource": self._permission_source,
+                "permissionModeOverride": self.permission_mode_override,
+                "availablePermissionModes": mode_options(self._permission_available_modes()),
+                "permissionModeCycle": mode_cycle(self._permission_available_modes()),
+                "permissionModeSupport": ("unavailable" if not self.capabilities["setPermissionMode"] else
+                                          "confirmed" if self._permission_control_verified else "unverified"),
+                "permissionModeResetRequiresReconnect": False,
+                "permissionModeResetAvailable": (self.original_permission_mode is not None
+                    and self._permission_control_supported
+                    and mode_wire_value(self.original_permission_mode, self._permission_available_modes()) is not None)}
 
     def set_model(self, model: str | None) -> dict:
         """Change only this live CLI connection, after its control acknowledgement.
@@ -178,12 +294,148 @@ class ClaudeSession:
                 raise BridgeError("model_rejected", "현재 연결에서 모델 변경이 거절되었습니다. 회사에서 사용할 수 있는 모델 이름과 연결 상태를 확인해 주세요.", "모델 이름과 연결 확인")
             with self.lock:
                 self.model, self.model_override = selected, model
+                self.effort, self._effort_reported = None, False
+                self._effort_source = 'unreported'
+            self._read_runtime_settings()
+            with self.lock:
                 state = self.model_state()
             self.emit("model_changed", state)
             return state
         finally:
             with self.lock:
                 self._control_waiters.pop(rid, None)
+                self._control_active = False
+
+    def set_effort(self, effort: str | None) -> dict:
+        """Apply session-only effort with SDK control and effective readback.
+
+        Reset restores the observed pre-change level on this model. It never
+        retires a connection or clears unrelated model/permission selections.
+        """
+        if effort is not None and (not isinstance(effort, str) or effort not in EFFORT_LEVELS):
+            raise BridgeError('effort_invalid', '현재 연결에서 제공한 추론 수준을 선택해 주세요.', '추론 수준 확인')
+        with self.lock:
+            if self.busy or self.pending or self._control_active:
+                raise BridgeError('session_busy', '현재 업무와 확인 요청이 끝난 뒤 추론 수준을 변경해 주세요.', '작업 완료 기다리기')
+            if self.closed or not self._initialized or not self.process or self.process.poll() is not None:
+                raise BridgeError('effort_unavailable', '업무 연결이 준비된 뒤 추론 수준을 변경할 수 있습니다.', '연결 상태 확인')
+            self._control_active = True
+        rid = None
+        try:
+            if effort is None:
+                if self.effort_override is None:
+                    return self.model_state()
+                selected = self._effort_baselines.get(self.model)
+                if selected not in self._effort_available_levels():
+                    raise BridgeError('effort_reset_unavailable', '현재 모델의 변경 전 추론 수준을 확인하지 못해 복원하지 않았습니다. 다른 모델·승인 설정은 유지합니다.', '현재 연결에서 제공한 추론 수준 선택')
+            else:
+                selected = effort
+            if not self._read_runtime_settings() or self._ultracode_requested is None:
+                raise BridgeError('effort_unavailable', '현재 CLI가 실제 추론 설정을 제공하지 않아 안전하게 변경할 수 없습니다.', '원본 CLI에서 확인')
+            if not self.capabilities['setEffort'] or selected not in self._effort_available_levels():
+                raise BridgeError('effort_invalid', '현재 모델에서 제공한 추론 수준을 선택해 주세요.', '모델과 추론 수준 확인')
+            rid = 'effort-' + uuid.uuid4().hex
+            waiter = {'event': threading.Event(), 'response': None}
+            with self.lock:
+                self._control_waiters[rid] = waiter
+                self._effort_applying = True
+            self._write({'type': 'control_request', 'request_id': rid,
+                         'request': {'subtype': 'apply_flag_settings',
+                                     'settings': {'effortLevel': selected, 'ultracode': self._ultracode_requested}}})
+            if not waiter['event'].wait(CONTROL_TIMEOUT):
+                self.close()
+                raise BridgeError('effort_timeout', '추론 수준 변경 응답을 확인하지 못해 연결을 종료했습니다. 다음 요청은 기존 설정을 사용합니다.', '다음 요청으로 다시 연결')
+            response = waiter['response']
+            if self.closed or response is None:
+                raise BridgeError('connection_closed', '추론 수준을 변경하기 전에 업무 연결이 종료되었습니다.', '다음 요청으로 다시 연결')
+            if response.get('subtype') != 'success':
+                error = str(response.get('error', '')).casefold()
+                if any(word in error for word in ('unsupported', 'unknown request', 'unknown subtype')):
+                    self._effort_control_supported = False
+                raise BridgeError('effort_rejected', '현재 연결에서 추론 수준 변경이 거절되었습니다. 기존 설정을 유지합니다.', '회사 정책과 연결 상태 확인')
+            self.effort, self._effort_reported = None, False
+            self._effort_source = 'unreported'
+            if not self._read_runtime_settings():
+                self.close()
+                raise BridgeError('effort_unconfirmed', '변경 후 실제 추론 수준을 확인하지 못해 연결을 종료했습니다. 다음 요청은 기존 설정을 사용합니다.', '다음 요청으로 다시 연결')
+            with self.lock:
+                if self.closed:
+                    raise BridgeError('connection_closed', '추론 수준 확인 중 업무 연결이 종료되었습니다.', '다음 요청으로 다시 연결')
+                self.effort_override = effort
+                state = self.model_state()
+            self.emit('effort_changed', state)
+            return state
+        finally:
+            with self.lock:
+                if rid:
+                    self._control_waiters.pop(rid, None)
+                self._effort_applying = False
+                self._control_active = False
+
+    def set_permission_mode(self, mode: str | None) -> dict:
+        """Apply one live connection mode only after the CLI acknowledges it.
+
+        Help proves that a mode name exists, not that policy will accept a live
+        change. Missing original state is unavailable, never an invented alias
+        or a reconnection that discards another selected setting.
+        """
+        if mode is not None and mode_wire_value(mode, self._permission_available_modes()) is None:
+            raise BridgeError("permission_mode_invalid", "현재 연결에서 선택할 수 있는 승인 모드를 확인해 주세요.", "승인 모드 확인")
+        with self.lock:
+            if mode is not None and mode_wire_value(mode, self._permission_available_modes()) is None:
+                raise BridgeError("permission_mode_invalid", "현재 연결에서 선택할 수 있는 승인 모드를 확인해 주세요.", "승인 모드 확인")
+            if self.busy or self.pending or self._control_active:
+                raise BridgeError("session_busy", "현재 작업과 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.", "작업 완료 기다리기")
+            if self.closed or not self._initialized or not self.process or self.process.poll() is not None:
+                raise BridgeError("permission_mode_unavailable", "업무 연결이 준비된 뒤 승인 모드를 변경할 수 있습니다.", "연결 상태 확인")
+            if mode is not None and not self.capabilities["setPermissionMode"]:
+                raise BridgeError("permission_mode_unavailable", "현재 연결에서 승인 모드 변경을 확인하지 못했습니다.", "연결 상태 확인")
+            original_wire = mode_wire_value(self.original_permission_mode, self._permission_available_modes())
+            if mode is None and (original_wire is None or not self._permission_control_supported):
+                raise BridgeError('permission_mode_reset_unavailable', '변경 전 승인 모드의 복원을 확인할 수 없습니다. 현재 모델·추론 수준·승인 모드는 그대로 유지합니다.', '현재 연결에서 제공한 승인 모드 선택')
+            selected = mode_wire_value(mode, self._permission_available_modes()) if mode is not None else original_wire
+            rid = "permission-mode-" + uuid.uuid4().hex
+            waiter = {"event": threading.Event(), "response": None}
+            self._control_active = True
+            self._permission_pending = {'reported': None}
+            if selected is not None:
+                self._control_waiters[rid] = waiter
+        try:
+            self._write({"type": "control_request", "request_id": rid,
+                         "request": {"subtype": "set_permission_mode", "mode": selected}})
+            if not waiter["event"].wait(CONTROL_TIMEOUT):
+                self.close()
+                raise BridgeError("permission_mode_timeout", "승인 모드 변경 응답을 확인하지 못해 업무 연결을 종료했습니다. 다음 요청에서 기존 설정으로 다시 연결합니다.", "다음 요청으로 다시 연결")
+            response = waiter["response"]
+            if self.closed or response is None:
+                raise BridgeError("connection_closed", "승인 모드를 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
+            if response.get("subtype") != "success":
+                error = str(response.get("error", "")).casefold()
+                with self.lock:
+                    self._permission_rejected_modes.add(selected)
+                    if any(word in error for word in ("unknown request", "unknown subtype", "unsupported control")):
+                        self._permission_control_supported = False
+                raise BridgeError("permission_mode_rejected", "현재 연결에서 승인 모드 변경이 거절되었습니다. 현재 모드를 유지하며 거절된 선택지는 숨겼습니다.", "회사 정책과 연결 상태 확인")
+            with self.lock:
+                if self.closed:
+                    raise BridgeError("connection_closed", "승인 모드를 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
+                detail = response.get('response')
+                acknowledged = observed_mode(detail.get('mode')) if isinstance(detail, dict) else ''
+                reported = self._permission_pending['reported']
+                self._permission_pending = None
+                self.permission_mode, self.permission_mode_override = acknowledged or reported or selected, mode
+                self._permission_source = 'cli-control' if acknowledged or not reported else 'cli-status'
+                self._permission_control_verified = True
+                # A change before system/init means the original mode was never
+                # observed. A later init must not mistake our override for it.
+                self._permission_init_seen = True
+                state = self.model_state()
+            self.emit("permission_mode_changed", state)
+            return state
+        finally:
+            with self.lock:
+                self._control_waiters.pop(rid, None)
+                self._permission_pending = None
                 self._control_active = False
 
     def _auth_error(self, text: str) -> bool:
@@ -205,9 +457,13 @@ class ClaudeSession:
         with self.lock:
             if self.closed or self.stopping:
                 raise ValueError("중지된 연결은 시작하지 않습니다.")
+            if self.process is not None:
+                if self.process.poll() is not None:
+                    raise ValueError("CLI 연결이 종료되었습니다. 다시 연결해 주세요.")
+                return
             env = dict(os.environ)
-            # Encoding only; auth, provider, model, config-root and policy stay untouched.
-            env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+            # Encoding and a UI presentation signal only; Claude-owned settings stay untouched.
+            env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", COMPANY_WORKSPACE_UI="1")
             self.process = subprocess.Popen(cli_arguments(self.command, self.info, self.session_id),
                 cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, creationflags=HIDDEN)
@@ -217,6 +473,43 @@ class ClaudeSession:
                 reader.start()
             self._write({"type": "control_request", "request_id": self.initialize_id,
                          "request": {"subtype": "initialize"}})
+
+    def connection_state(self):
+        """Only metadata the live child has reported, including pre-turn commands."""
+        with self.lock:
+            return {**self._connection_info, "sessionId": self.session_id,
+                    **self.model_state(), "slashCommands": list(self.slash_commands),
+                    "reported": {"skills": False, "plugins": False, "mcp": False,
+                                 "tools": False, **self._connection_info.get("reported", {}),
+                                 "commands": self._commands_reported}}
+
+    def prepare(self):
+        """Initialize the existing CLI without sending a user/model request.
+
+        Its normal startup hooks and MCP discovery still run. The caller must
+        have confirmed trust in the task's folder before invoking this method.
+        """
+        with self.lock:
+            if self.busy or self.pending or self._control_active:
+                raise ValueError("현재 업무와 연결 준비가 끝난 뒤 다시 시도해 주세요.")
+            self._control_active = True
+        try:
+            self.start()
+            if not self.ready.wait(PREPARE_TIMEOUT):
+                raise ValueError("CLI 명령 준비 응답이 60초 동안 없습니다. 시작 후크·MCP 상태를 확인한 뒤 다시 연결해 주세요.")
+            if self.initialization_error:
+                raise ValueError(self.initialization_error)
+            if self.closed or self.stopping or not self.process or self.process.poll() is not None:
+                raise ValueError("명령 목록을 준비하는 동안 CLI 연결이 종료되었습니다. 기존 Claude 실행 환경을 확인해 주세요.")
+            if not self._runtime_settings_checked:
+                self._read_runtime_settings()
+            return self.connection_state()
+        except Exception:
+            self.close()
+            raise
+        finally:
+            with self.lock:
+                self._control_active = False
 
     def _write(self, value):
         with self.lock:
@@ -235,6 +528,11 @@ class ClaudeSession:
             self._stream_blocks.clear()
             self._finalized_blocks.clear()
             self._stream_message_id = self._stream_index = None
+            self._assistant_frames = set()
+            self._stream_frames = set()
+            self._choice_tools = set()
+            self._choice_questions = set()
+            self._hook_states = {}
         self.emit("status", {"state": "starting", "label": "기존 Claude 설정을 연결하고 있어요"})
         threading.Thread(target=self._send_when_ready, args=(prompt,), daemon=True).start()
 
@@ -248,9 +546,11 @@ class ClaudeSession:
                 return
             if self.initialization_error:
                 raise ValueError(self.initialization_error)
+            # Announce activity before writing: a fast result must not be
+            # followed by a delayed local "running" event for the same turn.
+            self.emit("status", {"state": "running", "label": "요청을 처리하고 있어요"})
             self._write({"type": "user", "message": {"role": "user", "content": prompt},
                          "session_id": self.session_id or "", "parent_tool_use_id": None})
-            self.emit("status", {"state": "running", "label": "요청을 처리하고 있어요"})
         except Exception as exc:
             if not self.stopping and not self.closed:
                 self.emit("error", {"message": str(exc)})
@@ -291,6 +591,17 @@ class ClaudeSession:
         # A delegated agent's text must never become the coordinator's answer.
         if data.get("parent_tool_use_id"):
             return
+        # Replays are identifiable only when the transport supplies an ID.
+        # Repeated equal deltas without IDs can be valid text and stay intact.
+        frame_id = data.get('uuid')
+        if isinstance(frame_id, str):
+            seen = getattr(self, '_stream_frames', None)
+            if seen is None:
+                seen = self._stream_frames = set()
+            if frame_id in seen:
+                return
+            if len(seen) < 10000:
+                seen.add(frame_id)
         event = data.get("event", {})
         kind = event.get("type")
         if kind == "message_start":
@@ -315,7 +626,13 @@ class ClaudeSession:
                 self.emit("assistant_delta", {"messageId": key[0], "index": index, "text": text})
 
     def _assistant_text(self, text: str, message_id=None, index=0):
-        if not text:
+        if not isinstance(text, str) or not text:
+            return
+        frames = getattr(self, '_assistant_frames', None)
+        if frames is None:
+            frames = self._assistant_frames = set()
+        identity = (message_id, index, text)
+        if message_id is not None and identity in frames:
             return
         # Complete messages may contain a single block even when the raw stream
         # block index is greater than zero. Match that block to its streamed text.
@@ -328,7 +645,7 @@ class ClaudeSession:
             active_key = (message_id, self._stream_index)
             key = (active_key if active_key in self._stream_blocks and active_key not in self._finalized_blocks
                    else (message_id or "message-" + uuid.uuid4().hex, index))
-            if text in self.seen_text:
+            if message_id is None and text in self.seen_text:
                 return
             # Without raw stream events, separate single-block assistant frames
             # share a message ID and each enumerates at zero. Give later blocks
@@ -336,10 +653,22 @@ class ClaudeSession:
             while key in self._finalized_blocks:
                 key = (key[0], key[1] + 1)
         self._finalized_blocks.add(key)
+        if message_id is not None:
+            frames.add(identity)
         self.seen_text.add(text)
         self.emit("assistant", {"messageId": key[0], "index": key[1], "text": text})
 
+    @staticmethod
+    def _command_details(names, detail):
+        descriptions = {row.get('name'): row for row in detail
+                        if isinstance(row, dict) and isinstance(row.get('name'), str)}
+        return [descriptions.get(row, row) if isinstance(row, str)
+                else {**descriptions.get(row.get('name') if isinstance(row.get('name'), str) else '', {}), **row}
+                if isinstance(row, dict) else row for row in names]
+
     def handle(self, data: dict):
+        if self.closed:
+            return
         kind = data.get("type")
         if kind == "control_response":
             response = data.get("response", {})
@@ -351,10 +680,16 @@ class ClaudeSession:
                     detail = response.get("response", {})
                     if isinstance(detail, dict):
                         if isinstance(detail.get("commands"), list):
-                            self.slash_commands = detail["commands"]
+                            self.slash_commands = (self._command_details(self.slash_commands, detail["commands"])
+                                                   if self._system_commands_reported else detail["commands"])
                             self._commands_reported = True
                         if isinstance(detail.get("models"), list):
                             self.available_models = detail["models"]
+                        reported_mode = observed_mode(detail.get('current_permission_mode'))
+                        if reported_mode and self._permission_source == 'unreported':
+                            self.permission_mode = self.original_permission_mode = reported_mode
+                            self._permission_init_seen = True
+                            self._permission_source = 'cli-initialize'
                 self.ready.set()
             else:
                 with self.lock:
@@ -375,38 +710,54 @@ class ClaudeSession:
                 if rid in self.pending:
                     return
                 self.pending[rid] = request
+                permission_choices, permission_updates = session_choices(request)
+                self._permission_choices[rid] = permission_updates
             self.emit("request", {"id": rid, "tool": request.get("tool_name", ""),
                 "input": request.get("input", {}), "description": request.get("description", ""),
-                "title": request.get("title", ""), "agent": request.get("agent_id")})
+                "title": request.get("title", ""), "agent": request.get("agent_id"),
+                "permissionChoices": permission_choices, **request_context(request)})
         elif kind == "control_cancel_request":
             with self.lock:
                 self.pending.pop(data.get("request_id"), None)
+                self._permission_choices.pop(data.get("request_id"), None)
             self.emit("request_closed", {"id": data.get("request_id")})
         elif kind == "system":
             subtype = data.get("subtype")
             if subtype == "init":
                 self.session_id = data.get("session_id") or self.session_id
-                self.model = data.get("model", "")
+                if not self._model_runtime_reported and self.model_override is None:
+                    self.model = data.get("model", "")
                 if self.original_model is None and self.model:
                     self.original_model = self.model
+                reported_mode = observed_mode(data.get("permissionMode"))
+                if not self._permission_init_seen:
+                    self._permission_init_seen = True
+                    self.original_permission_mode = reported_mode or None
+                if reported_mode and self._permission_source == 'unreported' and self._permission_pending is None:
+                    self.permission_mode = reported_mode
+                    self._permission_source = 'cli-init'
+                if 'effort' in data and not self._effort_reported and self.effort_override is None:
+                    value = data.get('effort')
+                    self._effort_reported = value is None or value in EFFORT_LEVELS
+                    self.effort = value if self._effort_reported else None
+                    self._effort_source = 'cli-init' if self._effort_reported else 'unreported'
+                    if self._effort_reported and not self._effort_applying:
+                        self._effort_baselines.setdefault(self.model, value)
                 if isinstance(data.get("slash_commands"), list):
                     # system/init is authoritative for which names are listed;
                     # initialize often supplies richer descriptions for them.
-                    descriptions = {row.get('name'): row for row in self.slash_commands
-                                    if isinstance(row, dict) and isinstance(row.get('name'), str)}
-                    self.slash_commands = [descriptions.get(row, row) if isinstance(row, str)
-                                           else {**descriptions.get(row.get('name') if isinstance(row.get('name'), str) else '', {}), **row}
-                                           if isinstance(row, dict) else row
-                                           for row in data["slash_commands"]]
+                    self.slash_commands = self._command_details(data["slash_commands"], self.slash_commands)
+                    self._system_commands_reported = True
                     self._commands_reported = True
-                self.emit("connected", {"sessionId": self.session_id, **self.model_state(),
+                self._connection_info = {"sessionId": self.session_id, **self.model_state(),
                     "slashCommands": self.slash_commands,
                     "skills": data.get("skills", []), "plugins": data.get("plugins", []),
                     "mcp": data.get("mcp_servers", []), "tools": data.get("tools", []),
                     "reported": {"commands": self._commands_reported,
                                  **{name: isinstance(data.get(field), list) for name, field in
                                     (("skills", "skills"), ("plugins", "plugins"),
-                                     ("mcp", "mcp_servers"), ("tools", "tools"))}}})
+                                     ("mcp", "mcp_servers"), ("tools", "tools"))}}}
+                self.emit("connected", self._connection_info)
             elif subtype == "task_started" and data.get("task_type") in {"local_agent", "local_workflow"}:
                 self.tasks.add(data.get("task_id"))
                 self.emit("status", {"state": "running", "label": "담당 작업자가 처리하고 있어요"})
@@ -414,8 +765,35 @@ class ClaudeSession:
                     data.get("patch", {}).get("status") in {"completed", "failed", "stopped"}):
                 self.tasks.discard(data.get("task_id"))
                 # Do not announce completion yet; the coordinator still needs its next result.
+            elif subtype in {'hook_started', 'hook_response'}:
+                from .hook_status import project as hook_status
+                status = hook_status(data)
+                if status:
+                    states = getattr(self, '_hook_states', None)
+                    if states is None:
+                        states = self._hook_states = {}
+                    name = data.get('hook_name') or data.get('hook_id') or 'Stop'
+                    if isinstance(name, str) and len(name) <= 500 and len(states) < 100:
+                        states[name] = status
+                    self.emit('verification', status)
             elif subtype == "status":
-                self.emit("status", {"state": "running", "label": "작업을 계속하고 있어요"})
+                # CLI uses status:null for permission-mode changes. This is
+                # settings metadata, not proof that a user request is running.
+                reported_mode = observed_mode(data.get('permissionMode'))
+                state = None
+                with self.lock:
+                    if reported_mode:
+                        if self._permission_pending is not None:
+                            self._permission_pending['reported'] = reported_mode
+                        else:
+                            self.permission_mode = reported_mode
+                            self._permission_source = 'cli-status'
+                            state = self.model_state()
+                    active = self.busy and not self.pending
+                if state is not None:
+                    self.emit('permission_mode_changed', state)
+                if active and data.get('status') == 'compacting':
+                    self.emit("status", {"state": "running", "label": "대화 내용을 정리하고 있어요"})
         elif kind == "stream_event":
             self._handle_stream(data)
         elif kind == "assistant":
@@ -429,8 +807,43 @@ class ClaudeSession:
                 if block.get("type") == "text" and not parent:
                     self._assistant_text(block.get("text", ""), message.get("id"), index)
                 elif block.get("type") == "tool_use":
+                    if not parent and block.get('name') in {'Bash', 'PowerShell'}:
+                        command = block.get('input', {}).get('command')
+                        tool_id = block.get('id')
+                        if isinstance(tool_id, str) and isinstance(command, str) and 'html-choices' in command:
+                            from .choices import command_is_helper
+                            try:
+                                if self.choice_helper is None:
+                                    from .harness_client import HarnessClient
+                                    origin = HarnessClient().choice_helper(self.cwd)
+                                else:
+                                    origin = self.choice_helper()
+                                accepted = command_is_helper(command, origin)
+                            except (ValueError, OSError, KeyError, TypeError, UnicodeError):
+                                accepted = False
+                            choices = getattr(self, '_choice_tools', None)
+                            if choices is None:
+                                choices = self._choice_tools = set()
+                            if accepted and len(choices) < 100:
+                                choices.add(tool_id)
                     self.emit("activity", {"tool": block.get("name"), "id": block.get("id"),
                         "skill": block.get("input", {}).get("skill") if block.get("name") == "Skill" else None})
+        elif kind == 'user' and not data.get('parent_tool_use_id'):
+            from .choices import from_tool_output
+            blocks = data.get('message', {}).get('content', [])
+            if isinstance(blocks, list):
+                for block in blocks:
+                    if (not isinstance(block, dict) or block.get('type') != 'tool_result'
+                            or block.get('is_error') or block.get('tool_use_id') not in getattr(self, '_choice_tools', set())):
+                        continue
+                    choice = from_tool_output(block.get('content'))
+                    if choice:
+                        seen = getattr(self, '_choice_questions', None)
+                        if seen is None:
+                            seen = self._choice_questions = set()
+                        if choice['id'] not in seen:
+                            seen.add(choice['id'])
+                            self.emit('choice', choice)
         elif kind == "result":
             self.last_result = data
             self.session_id = data.get("session_id") or self.session_id
@@ -448,16 +861,29 @@ class ClaudeSession:
             elif not self.tasks:
                 self.busy = False
                 self.resume_id = self.session_id
+                from .hook_status import at_result
+                problems = [state for state in getattr(self, '_hook_states', {}).values()
+                            if state.get('state') == 'needs-review']
+                verification = at_result(problems[-1] if problems else None)
                 self.emit("result", {"sessionId": self.session_id, "durationMs": data.get("duration_ms"),
-                    "usage": data.get("usage", {}), "costUsd": data.get("total_cost_usd")})
+                    "usage": data.get("usage", {}), "costUsd": data.get("total_cost_usd"),
+                    "verification": verification})
             else:
                 self.emit("status", {"state": "running", "label": "작업자의 결과를 기다리고 있어요"})
 
-    def respond(self, rid: str, allow: bool, answers=None):
+    def respond(self, rid: str, allow: bool, answers=None, permission_choice_id=None):
         with self.lock:
             request = self.pending.get(rid)
             if request is None:
                 raise ValueError("이미 처리되었거나 만료된 질문입니다.")
+            permission_update = None
+            if permission_choice_id is not None:
+                if (not allow or request.get("tool_name") == "AskUserQuestion"
+                        or request.get('suppress_always_allow_rule') is True
+                        or not isinstance(permission_choice_id, str)
+                        or permission_choice_id not in self._permission_choices.get(rid, {})):
+                    raise ValueError("이 요청에서 제공된 승인 범위를 선택해 주세요.")
+                permission_update = self._permission_choices[rid][permission_choice_id]
             original = request.get("input", {})
             updated = dict(original)
             if request.get("tool_name") == "AskUserQuestion" and allow:
@@ -468,9 +894,12 @@ class ClaudeSession:
                 updated["answers"] = {q["question"]: answers[q["question"]][:8000] for q in questions}
             response = {"behavior": "allow", "updatedInput": updated} if allow else {
                 "behavior": "deny", "message": "사용자가 이번 요청을 거절했습니다. 다른 권한이나 우회 실행으로 재시도하지 마세요."}
+            if permission_update is not None:
+                response["updatedPermissions"] = [permission_update]
             self._write({"type": "control_response", "response": {"subtype": "success",
                         "request_id": rid, "response": response}})
             del self.pending[rid]
+            self._permission_choices.pop(rid, None)
         self.emit("request_closed", {"id": rid})
 
     def close(self):
@@ -484,6 +913,7 @@ class ClaudeSession:
             else:
                 self.closed, self.busy = True, False
                 self.pending.clear()
+                self._permission_choices.clear()
                 for waiter in self._control_waiters.values():
                     waiter["event"].set()
                 self._close_owner = current

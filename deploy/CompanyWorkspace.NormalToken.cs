@@ -1,12 +1,14 @@
 // Windows PowerShell 5.1 / .NET Framework: compile with Add-Type -Path.
-// Only the current user's linked, limited UAC token is eligible. No credentials,
-// other process tokens, privilege changes, or token creation are attempted.
+// Prefer the current user's limited UAC token. On a verified UAC-disabled host,
+// only a separately created, strictly validated restricted copy is eligible.
+// Never modify the source token, Windows policy, another process, or credentials.
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
+using Microsoft.Win32;
 
 namespace CompanyAgent
 {
@@ -59,6 +61,7 @@ namespace CompanyAgent
         private const uint TokenQuery = 0x0008;
         private const uint TokenDuplicate = 0x0002;
         private const uint TokenAssignPrimary = 0x0001;
+        private const uint TokenAdjustDefault = 0x0080;
         private const uint CreateSuspended = 0x00000004;
         private const uint CreateUnicodeEnvironment = 0x00000400;
         private const uint StartfUseShowWindow = 0x00000001;
@@ -81,6 +84,29 @@ namespace CompanyAgent
         {
             return ValidateNormalProcess(token, expectedSid, expectedSession) &&
                 token.ElevationType == 3;
+        }
+
+        public static bool ValidateRestrictedSource(WorkspaceTokenSnapshot token,
+            string expectedSid, int expectedSession, bool uacDisabled)
+        {
+            // Do not reinterpret a failed linked-token launch as permission to
+            // use a different policy. Only the unsplit, UAC-disabled case qualifies.
+            return uacDisabled && MatchesIdentity(token, expectedSid, expectedSession) &&
+                token.IsPrimary && token.ElevationType == 1 && token.IsElevated &&
+                token.IsAdministrator && token.IntegrityRid == 0x3000;
+        }
+
+        public static bool IsUacDisabled()
+        {
+            // Missing, inaccessible, or malformed policy is never an opt-in.
+            try {
+                using (RegistryKey machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (RegistryKey policy = machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", false))
+                {
+                    object value = policy == null ? null : policy.GetValue("EnableLUA", null);
+                    return value is Int32 && (Int32)value == 0;
+                }
+            } catch { return false; }
         }
 
         // Ordinary starts may use a standard user's unlinked token. Relaunch
@@ -151,7 +177,8 @@ namespace CompanyAgent
             if (String.IsNullOrWhiteSpace(scriptPath) || String.IsNullOrWhiteSpace(pythonCommand))
                 throw Failure("invalid_argument", 0);
             StringBuilder command = new StringBuilder(QuoteWindowsArgument(PowerShellPath()));
-            command.Append(" -NoLogo -WindowStyle Hidden -File ");
+            // Only this process tree; registry and Group Policy are unchanged.
+            command.Append(" -NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File ");
             command.Append(QuoteWindowsArgument(scriptPath));
             command.Append(" -NormalTokenRelaunch -PythonCommand ");
             command.Append(QuoteWindowsArgument(pythonCommand));
@@ -203,7 +230,8 @@ namespace CompanyAgent
             string commandLine = BuildCommandLine(exactScript, pythonCommand, demo, noBrowser, stateRoot);
 
             SafeNativeHandle current;
-            if (!OpenProcessToken(GetCurrentProcess(), TokenQuery | TokenDuplicate, out current))
+            if (!OpenProcessToken(GetCurrentProcess(), TokenQuery | TokenDuplicate |
+                TokenAssignPrimary | TokenAdjustDefault, out current))
             {
                 int error = Marshal.GetLastWin32Error();
                 if (current != null) current.Dispose();
@@ -211,13 +239,25 @@ namespace CompanyAgent
             }
             using (current)
             {
-                if (!ValidateSourceToken(ReadToken(current), expectedSid, expectedSession))
+                WorkspaceTokenSnapshot source = ReadToken(current);
+                bool linkedSource = ValidateSourceToken(source, expectedSid, expectedSession);
+                bool restrictedSource = ValidateRestrictedSource(source, expectedSid, expectedSession, IsUacDisabled());
+                if (!linkedSource && !restrictedSource)
                     throw Failure("source_not_same_user_split_token", 0);
                 uint currentSession;
                 if (!ProcessIdToSessionId(GetCurrentProcessId(), out currentSession))
                     throw LastFailure("current_session");
                 if (currentSession != (uint)expectedSession)
                     throw Failure("current_session_mismatch", 0);
+
+                if (restrictedSource)
+                {
+                    using (SafeNativeHandle restricted = CreateRestrictedNormalToken(current))
+                    {
+                        ValidateRestrictedCandidate(restricted, expectedSid, expectedSession);
+                        return StartAndWait(restricted, executable, commandLine, expectedSid, expectedSession, true);
+                    }
+                }
 
                 using (SafeNativeHandle linked = ReadLinkedToken(current))
                 {
@@ -251,7 +291,7 @@ namespace CompanyAgent
         }
 
         private static int StartAndWait(SafeNativeHandle primary, string executable,
-            string commandLine, string expectedSid, int expectedSession)
+            string commandLine, string expectedSid, int expectedSession, bool restricted = false)
         {
             IntPtr environment = IntPtr.Zero;
             SafeNativeHandle process = null;
@@ -269,7 +309,14 @@ namespace CompanyAgent
                 startup.dwFlags = StartfUseShowWindow;
                 startup.wShowWindow = 0;
                 ProcessInformation information;
-                bool created = CreateProcessWithTokenW(primary, 0, executable,
+                // A restricted version of our own primary token is eligible for
+                // CreateProcessAsUser without assigning a different user's token.
+                // Required privileges are never enabled manually; an API denial
+                // remains a startup failure, without an elevated fallback.
+                bool created = restricted ? CreateProcessAsUserW(primary, executable,
+                    new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, false,
+                    CreateSuspended | CreateUnicodeEnvironment, environment, null, ref startup, out information)
+                    : CreateProcessWithTokenW(primary, 0, executable,
                     new StringBuilder(commandLine), CreateSuspended | CreateUnicodeEnvironment,
                     environment, null, ref startup, out information);
                 int createError = created ? 0 : Marshal.GetLastWin32Error();
@@ -292,7 +339,8 @@ namespace CompanyAgent
                 }
                 using (childToken)
                 {
-                    if (!ValidateNormalTokenCandidate(ReadToken(childToken), expectedSid, expectedSession))
+                    if (restricted) ValidateRestrictedCandidate(childToken, expectedSid, expectedSession);
+                    else if (!ValidateNormalTokenCandidate(ReadToken(childToken), expectedSid, expectedSession))
                         throw Failure("child_token_not_normal", 0);
                 }
 
@@ -319,6 +367,87 @@ namespace CompanyAgent
                 if (thread != null) thread.Dispose();
                 if (process != null) process.Dispose();
                 if (environment != IntPtr.Zero) FreeEnvironmentStringsW(environment);
+            }
+        }
+
+        private static SafeNativeHandle CreateRestrictedNormalToken(SafeNativeHandle source)
+        {
+            // DISABLE_MAX_PRIVILEGE | LUA_TOKEN. SANDBOX_INERT is deliberately
+            // absent: AppLocker and Software Restriction Policies still apply.
+            SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            byte[] sidBytes = new byte[administrators.BinaryLength];
+            administrators.GetBinaryForm(sidBytes, 0);
+            using (TokenBuffer sid = new TokenBuffer(sidBytes.Length))
+            {
+                Marshal.Copy(sidBytes, 0, sid.Pointer, sidBytes.Length);
+                SidAndAttributes[] disabled = { new SidAndAttributes { Sid = sid.Pointer, Attributes = 0 } };
+                SafeNativeHandle restricted;
+                if (!CreateRestrictedToken(source, 0x1 | 0x4, 1, disabled, 0, IntPtr.Zero,
+                    0, IntPtr.Zero, out restricted))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    if (restricted != null) restricted.Dispose();
+                    throw Failure("restricted_token_create", error);
+                }
+                try
+                {
+                    SecurityIdentifier medium = new SecurityIdentifier("S-1-16-8192");
+                    byte[] labelBytes = new byte[medium.BinaryLength];
+                    medium.GetBinaryForm(labelBytes, 0);
+                    using (TokenBuffer labelSid = new TokenBuffer(labelBytes.Length))
+                    {
+                        Marshal.Copy(labelBytes, 0, labelSid.Pointer, labelBytes.Length);
+                        SidAndAttributes label = new SidAndAttributes { Sid = labelSid.Pointer, Attributes = 0x20 };
+                        if (!SetTokenInformation(restricted, 25, ref label,
+                            Marshal.SizeOf(typeof(SidAndAttributes)) + labelBytes.Length))
+                            throw LastFailure("restricted_token_integrity");
+                    }
+                    return restricted;
+                }
+                catch { restricted.Dispose(); throw; }
+            }
+        }
+
+        private static void ValidateRestrictedCandidate(SafeNativeHandle token, string expectedSid, int expectedSession)
+        {
+            // A filtered token is not accepted merely because filtering returned
+            // success. Requery its actual identity, integrity, elevation, groups,
+            // and privileges, and do so again for the suspended child.
+            if (!ValidateNormalProcess(ReadToken(token), expectedSid, expectedSession) ||
+                ReadTokenInt(token, 21) == 0)
+                throw Failure("restricted_token_not_normal", 0);
+            using (TokenBuffer groups = QueryToken(token, 2))
+            {
+                int count = Marshal.ReadInt32(groups.Pointer);
+                if (count < 0 || count > 4096) throw Failure("restricted_token_groups", 0);
+                int offset = IntPtr.Size == 8 ? 8 : 4;
+                int size = Marshal.SizeOf(typeof(SidAndAttributes));
+                for (int index = 0; index < count; index++)
+                {
+                    SidAndAttributes group = (SidAndAttributes)Marshal.PtrToStructure(
+                        IntPtr.Add(groups.Pointer, offset + index * size), typeof(SidAndAttributes));
+                    if (new SecurityIdentifier(group.Sid).IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) &&
+                        ((group.Attributes & 0x10) == 0 || (group.Attributes & 0x4) != 0))
+                        throw Failure("restricted_token_groups", 0);
+                }
+            }
+            Luid notify;
+            if (!LookupPrivilegeValueW(null, "SeChangeNotifyPrivilege", out notify))
+                throw LastFailure("restricted_token_privileges");
+            using (TokenBuffer privileges = QueryToken(token, 3))
+            {
+                int count = Marshal.ReadInt32(privileges.Pointer);
+                if (count < 0 || count > 256) throw Failure("restricted_token_privileges", 0);
+                int size = Marshal.SizeOf(typeof(LuidAndAttributes));
+                for (int index = 0; index < count; index++)
+                {
+                    LuidAndAttributes privilege = (LuidAndAttributes)Marshal.PtrToStructure(
+                        IntPtr.Add(privileges.Pointer, 4 + index * size), typeof(LuidAndAttributes));
+                    // Reject even disabled administrative privileges: retaining
+                    // one could let a child re-enable it later.
+                    if (privilege.Luid.LowPart != notify.LowPart || privilege.Luid.HighPart != notify.HighPart)
+                        throw Failure("restricted_token_privileges", 0);
+                }
             }
         }
 
@@ -389,7 +518,7 @@ namespace CompanyAgent
             int error;
             // Fixed-size classes (notably TokenSessionId) can report
             // ERROR_BAD_LENGTH instead of a sizing response for a zero buffer.
-            if (informationClass == 1 || informationClass == 25)
+            if (informationClass == 1 || informationClass == 2 || informationClass == 3 || informationClass == 25)
             {
                 bool measured = GetTokenInformation(token, informationClass, IntPtr.Zero, 0, out needed);
                 error = Marshal.GetLastWin32Error();
@@ -454,6 +583,13 @@ namespace CompanyAgent
             internal uint dwProcessId, dwThreadId;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SidAndAttributes { internal IntPtr Sid; internal uint Attributes; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Luid { internal uint LowPart; internal int HighPart; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LuidAndAttributes { internal Luid Luid; internal uint Attributes; }
+
         [DllImport("kernel32.dll")] private static extern IntPtr GetCurrentProcess();
         [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -471,6 +607,16 @@ namespace CompanyAgent
         [DllImport("advapi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CheckTokenMembership(
             SafeNativeHandle token, byte[] sid, [MarshalAs(UnmanagedType.Bool)] out bool isMember);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CreateRestrictedToken(
+            SafeNativeHandle existing, uint flags, uint disableCount, [In] SidAndAttributes[] disabled,
+            uint deleteCount, IntPtr deleted, uint restrictedCount, IntPtr restrictedSids, out SafeNativeHandle token);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetTokenInformation(
+            SafeNativeHandle token, int informationClass, ref SidAndAttributes information, int length);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool LookupPrivilegeValueW(
+            string system, string name, out Luid luid);
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)] private static extern bool ProcessIdToSessionId(
             uint processId, out uint sessionId);
@@ -483,6 +629,11 @@ namespace CompanyAgent
             SafeNativeHandle token, uint logonFlags, string application, StringBuilder commandLine,
             uint creationFlags, IntPtr environment, string currentDirectory,
             ref StartupInfo startupInfo, out ProcessInformation information);
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CreateProcessAsUserW(
+            SafeNativeHandle token, string application, StringBuilder commandLine, IntPtr processAttributes,
+            IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint creationFlags,
+            IntPtr environment, string currentDirectory, ref StartupInfo startupInfo, out ProcessInformation information);
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern uint ResumeThread(SafeNativeHandle thread);
         [DllImport("kernel32.dll", SetLastError = true)]

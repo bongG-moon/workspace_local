@@ -3,8 +3,8 @@ param()
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $report = [ordered]@{
-    diagnosticVersion = 'ws33-1'
-    targetSource = '4396726'
+    diagnosticVersion = 'ws33-12'
+    targetSource = 'workspace-0.12.9'
     status = 'checking'
     sourceMatches = $false
     files = [ordered]@{}
@@ -17,12 +17,16 @@ $report = [ordered]@{
     stage = 'source_check'
     reason = $null
     nativeCode = $null
-    notTested = @('original_vbs_process', 'primary_token_duplication', 'child_process_launch', 'claude_or_python')
+    executionPolicy = [ordered]@{ effective=$null; MachinePolicy=$null; UserPolicy=$null; Process=$null; CurrentUser=$null; LocalMachine=$null }
+    scriptEvidence = [ordered]@{}
+    originalLaunchObserved = $false
+    nextStep = 'compare_original_launch_context'
+    notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = '5611bebcdcefa6dc2c77d8e5be42240873b8db25fb3767118c2c399bd1bdffb1'
-    'deploy/CompanyWorkspace.Startup.ps1' = '84ff2fb66ccf484aa86db2862e215a4515f2d46a58c9660491950e9296b856c2'
-    'deploy/CompanyWorkspace.NormalToken.cs' = '540593a7f1fa5dd52706854d4e3a02e60d73845cafe7e13298f1906f4062ac5f'
+    'deploy/Start-CompanyWorkspace.ps1' = 'c0d464eea0adf0dbea156fa34df59f37f83c452f55b58dc41509cf9eaeb7df82'
+    'deploy/CompanyWorkspace.Startup.ps1' = 'fe591b341a95b3f057ab287f00847e7acf9ce49a791b5c275cd6f0cc1ff26ccd'
+    'deploy/CompanyWorkspace.NormalToken.cs' = '6d83895f90440b8efe9d9c91dc7e31c0c0199d9eef889ea37bbf2218571d5ec4'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }
 function Safe-Snapshot($Snapshot, $Context) {
@@ -36,8 +40,58 @@ function Safe-Snapshot($Snapshot, $Context) {
         primary = $Snapshot.IsPrimary
     }
 }
-Write-Host 'Workspace 권한 상태를 확인합니다. 설정 변경이나 관리자 권한 요청은 하지 않습니다.'
+function Read-WorkspaceExecutionEvidence {
+    # Scope values are allowlisted. No policy setter, profile replay, exception
+    # text, profile path/content, Zone URL, or authentication data is exported.
+    $allowedPolicies = @('Undefined', 'Restricted', 'AllSigned', 'RemoteSigned', 'Unrestricted', 'Bypass', 'Default')
+    try {
+        # A parent PowerShell 7 PSModulePath can select incompatible modules in
+        # Windows PowerShell 5.1. Load this host's own built-in module only.
+        $securityModule = Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+        Import-Module -Name $securityModule -ErrorAction Stop | Out-Null
+    } catch { # Query failures below stay null; do not modify PSModulePath.
+    }
+    foreach ($scope in @('effective', 'MachinePolicy', 'UserPolicy', 'Process', 'CurrentUser', 'LocalMachine')) {
+        try {
+            $value = if ($scope -eq 'effective') { [string](Get-ExecutionPolicy -ErrorAction Stop) }
+                     else { [string](Get-ExecutionPolicy -Scope $scope -ErrorAction Stop) }
+            if ($value -in $allowedPolicies) { $report.executionPolicy[$scope] = $value }
+        } catch { # Unavailable remains null, never an inferred policy failure.
+        }
+    }
+    foreach ($relative in @('Company-Workspace.vbs', 'Check-Workspace.ps1',
+                            'deploy/Start-CompanyWorkspace.ps1', 'deploy/CompanyWorkspace.Startup.ps1',
+                            'deploy/CompanyAgent.UserContext.ps1', 'local_app/Pick-Path.ps1',
+                            'local_app/Invoke-TerminalClaude.ps1')) {
+        $evidence = [ordered]@{ exists=$null; downloadMarkPresent=$null; parseStatus='not_checked'; parseErrorCount=$null }
+        $path = Join-Path $PSScriptRoot $relative
+        try {
+            $evidence.exists = [bool](Test-Path -LiteralPath $path -PathType Leaf -ErrorAction Stop)
+            if ($evidence.exists) {
+                try {
+                    $streams = @(Get-Item -LiteralPath $path -Stream * -ErrorAction Stop)
+                    $evidence.downloadMarkPresent = [bool]($streams | Where-Object { $_.Stream -eq 'Zone.Identifier' })
+                } catch {}
+                if ([IO.Path]::GetExtension($path) -eq '.ps1') {
+                    $parseTokens = $null; $parseErrors = $null
+                    # Parse only: no dot-source or invocation of a candidate file.
+                    if ((Get-Item -LiteralPath $path -ErrorAction Stop).Length -gt 524288) {
+                        $evidence.parseStatus = 'unavailable'
+                    } else {
+                        $null = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$parseTokens, [ref]$parseErrors)
+                        $evidence.parseErrorCount = [Math]::Min(1000, @($parseErrors).Count)
+                        $evidence.parseStatus = if ($evidence.parseErrorCount) { 'invalid' } else { 'valid' }
+                    }
+                }
+            }
+        } catch { $evidence.parseStatus = 'unavailable' }
+        $report.scriptEvidence[$relative] = $evidence
+    }
+}
+Read-WorkspaceExecutionEvidence
+Write-Host 'Workspace 실행·권한 상태를 읽기 전용으로 확인합니다. 영구 정책 변경이나 관리자 권한 요청은 하지 않습니다.'
 Write-Host 'Claude와 Workspace 업무 서버는 실행하지 않습니다.'
+Write-Host '원래 VBS 종료 코드 1의 원인을 재현하는 검사는 아닙니다. 프로필과 오류 원문은 저장하지 않습니다.'
 try {
     $hasher = [Security.Cryptography.SHA256]::Create()
     try {
@@ -74,8 +128,11 @@ try {
     $report.current = Safe-Snapshot $current $context
     $normal = [CompanyAgent.WorkspaceNormalToken]::ValidateNormalProcess($current, $context.sid, $context.sessionId)
     $sourceAllowed = [CompanyAgent.WorkspaceNormalToken]::ValidateSourceToken($current, $context.sid, $context.sessionId)
+    $restrictedSource = [CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($current, $context.sid, $context.sessionId, [CompanyAgent.WorkspaceNormalToken]::IsUacDisabled())
     if (-not $context.isAdministrator) {
         $report.predictedGuard = $(if ($normal) { 'normal_process_accepted' } else { 'WS33_current_token_rejected' })
+    } elseif ($restrictedSource) {
+        $report.predictedGuard = 'restricted_candidate_required_launch_not_tested'
     } elseif (-not $sourceAllowed) {
         $report.predictedGuard = 'WS33_source_not_same_user_split_token'
     } else {
@@ -125,6 +182,16 @@ try {
     $policy = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA
     $report.uacEnabled = [int]$policy.EnableLUA
 } catch { $report.uacEnabled = $null }
+
+if (-not $report.sourceMatches) { $report.nextStep = 'use_matching_workspace_bundle' }
+elseif (@($report.scriptEvidence.Values | Where-Object { $_.parseStatus -eq 'invalid' }).Count) {
+    $report.nextStep = 'replace_invalid_workspace_scripts'
+} elseif ($report.predictedGuard -like 'WS33_*' -or $report.reason -like 'USER_CONTEXT_*') {
+    $report.nextStep = 'review_current_user_and_token'
+} elseif (($report.executionPolicy.MachinePolicy -and $report.executionPolicy.MachinePolicy -ne 'Undefined') -or
+          ($report.executionPolicy.UserPolicy -and $report.executionPolicy.UserPolicy -ne 'Undefined')) {
+    $report.nextStep = 'review_effective_group_policy'
+}
 
 # Only these allowlisted booleans/numbers and fixed reason tags leave memory.
 # No account name, SID, original path, auth value, or exception text is saved.

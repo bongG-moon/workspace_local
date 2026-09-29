@@ -103,6 +103,22 @@ $sourceResults = @{
     limited=[CompanyAgent.WorkspaceNormalToken]::ValidateSourceToken((Make-Snapshot), $expectedSid, 1)
     missing=[CompanyAgent.WorkspaceNormalToken]::ValidateSourceToken($null, $expectedSid, 1)
 }
+$unsplit = Make-Snapshot -kind 1 -elevated $true -integrity 12288 -admin $true
+$restrictedSources = @{
+    uacDisabled=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($unsplit, $expectedSid, 1, $true)
+    uacEnabled=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($unsplit, $expectedSid, 1, $false)
+    otherUser=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($unsplit, $differentSid, 1, $true)
+    otherSession=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($unsplit, $expectedSid, 2, $true)
+    splitToken=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($source, $expectedSid, 1, $true)
+    normal=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot), $expectedSid, 1, $true)
+    service=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -elevated $true -integrity 12288 -admin $true -session 0), $expectedSid, 0, $true)
+    systemIntegrity=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -elevated $true -integrity 16384 -admin $true), $expectedSid, 1, $true)
+    impersonation=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -elevated $true -integrity 12288 -admin $true -primary $false), $expectedSid, 1, $true)
+    nonAdmin=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -elevated $true -integrity 12288), $expectedSid, 1, $true)
+    nonElevated=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -integrity 12288 -admin $true), $expectedSid, 1, $true)
+    mediumIntegrity=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource((Make-Snapshot -kind 1 -elevated $true -admin $true), $expectedSid, 1, $true)
+    missing=[CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($null, $expectedSid, 1, $true)
+}
 $quoted = @($data.quotes | ForEach-Object { [CompanyAgent.WorkspaceNormalToken]::QuoteWindowsArgument($_) })
 $malformed = @("bad`0value", "bad`rvalue", "bad`nvalue")
 $invalidArgumentResults = @($malformed | ForEach-Object {
@@ -148,7 +164,7 @@ try {
 }
 @{
     powershellMajor=$PSVersionTable.PSVersion.Major; powershellMinor=$PSVersionTable.PSVersion.Minor
-    candidates=$candidateResults; normalProcesses=$normalProcessResults; sources=$sourceResults; quotes=$quoted
+    candidates=$candidateResults; normalProcesses=$normalProcessResults; sources=$sourceResults; restrictedSources=$restrictedSources; quotes=$quoted
     invalidArguments=$invalidArgumentResults; nullArgumentRejected=$nullArgumentRejected
     boundaryLength=$boundary.Length; tooLongRejected=$tooLong
     native=@{ identityMatches=$identityMatches; adminMatches=$adminMatches; sessionMatches=$sessionMatches;
@@ -188,6 +204,76 @@ try {
         for fixture in self.result['normalProcesses']:
             with self.subTest(fixture=fixture['name']):
                 self.assertEqual(fixture['expected'], fixture['actual'])
+
+    def test_restricted_source_is_only_same_user_unsplit_high_admin_with_uac_disabled(self):
+        for name, accepted in self.result['restrictedSources'].items():
+            with self.subTest(source=name):
+                self.assertEqual(name == 'uacDisabled', accepted)
+
+    @unittest.skipUnless(os.environ.get('COMPANY_WORKSPACE_TEST_RESTRICTED_TOKEN') == '1',
+                         'Opt in outside the sandbox: create and dispose only a restricted token copy')
+    def test_native_restricted_copy_is_verified_without_mutating_original_or_launching(self):
+        script = r"""
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+Add-Type -Path SOURCE_PATH
+$native=[CompanyAgent.WorkspaceNormalToken]
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$source=$null; $restricted=$null
+try {
+    $process=$native.GetMethod('GetCurrentProcess',$flags).Invoke($null,@())
+    $tokenArgs=[object[]]@($process,[uint32]139,$null)
+    if (-not $native.GetMethod('OpenProcessToken',$flags).Invoke($null,$tokenArgs)) {throw 'Cannot open own token'}
+    $source=$tokenArgs[2]
+    $before=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+    $restricted=$native.GetMethod('CreateRestrictedNormalToken',$flags).Invoke($null,@($source))
+    $filtered=$native.GetMethod('ReadToken',$flags).Invoke($null,@($restricted))
+    $native.GetMethod('ValidateRestrictedCandidate',$flags).Invoke($null,@($restricted,$before.UserSid,$before.SessionId))
+    $after=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+    $wrongIdentityRejected=$false
+    try {$native.GetMethod('ValidateRestrictedCandidate',$flags).Invoke($null,@($restricted,'S-1-5-21-100-200-300-1001',$before.SessionId))}
+    catch {$wrongIdentityRejected=$true}
+    @{sameUser=($before.UserSid -eq $filtered.UserSid);sameSession=($before.SessionId -eq $filtered.SessionId);
+      sourceUnchanged=(($before | ConvertTo-Json -Compress) -eq ($after | ConvertTo-Json -Compress));
+      normal=[CompanyAgent.WorkspaceNormalToken]::ValidateNormalProcess($filtered,$before.UserSid,$before.SessionId);
+      wrongIdentityRejected=$wrongIdentityRejected} | ConvertTo-Json -Compress
+} finally {if($restricted){$restricted.Dispose()};if($source){$source.Dispose()}}
+""".replace('SOURCE_PATH', ps_literal(SOURCE))
+        result = subprocess.run([str(PS), '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, encoding='utf-8', timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(dict(sameUser=True, sameSession=True, sourceUnchanged=True, normal=True,
+                              wrongIdentityRejected=True), json.loads(result.stdout))
+
+    @unittest.skipUnless(os.environ.get('COMPANY_WORKSPACE_TEST_RESTRICTED_TOKEN') == '1',
+                         'Opt in outside the sandbox: one hidden disposable restricted child')
+    def test_native_restricted_child_is_validated_before_resuming(self):
+        probe = Path(self.temp.name) / 'restricted-child.ps1'
+        probe.write_text('param([switch]$NormalTokenRelaunch,[string]$PythonCommand)\nexit 73\n', encoding='utf-8-sig')
+        script = r"""
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+Add-Type -Path SOURCE_PATH
+$native=[CompanyAgent.WorkspaceNormalToken]
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$source=$null; $restricted=$null
+try {
+    $process=$native.GetMethod('GetCurrentProcess',$flags).Invoke($null,@())
+    $tokenArgs=[object[]]@($process,[uint32]139,$null)
+    if (-not $native.GetMethod('OpenProcessToken',$flags).Invoke($null,$tokenArgs)) {throw 'Cannot open own token'}
+    $source=$tokenArgs[2]
+    $identity=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+    $restricted=$native.GetMethod('CreateRestrictedNormalToken',$flags).Invoke($null,@($source))
+    $native.GetMethod('ValidateRestrictedCandidate',$flags).Invoke($null,@($restricted,$identity.UserSid,$identity.SessionId))
+    $command=$native::BuildCommandLine(PROBE_PATH,'python',$false,$false,$null).Replace(' -NoLogo ',' -NoLogo -NoProfile -NonInteractive ')
+    $code=$native.GetMethod('StartAndWait',$flags).Invoke($null,@($restricted,PS_PATH,$command,$identity.UserSid,$identity.SessionId,$true))
+    @{exitCode=$code} | ConvertTo-Json -Compress
+} finally {if($restricted){$restricted.Dispose()};if($source){$source.Dispose()}}
+""".replace('SOURCE_PATH', ps_literal(SOURCE)).replace('PROBE_PATH', ps_literal(probe)).replace('PS_PATH', ps_literal(PS))
+        result = subprocess.run([str(PS), '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, encoding='utf-8', timeout=75)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({'exitCode': 73}, json.loads(result.stdout))
 
     def test_native_probe_matches_windows_identity_without_handle_leaks(self):
         native = self.result['native']
@@ -242,9 +328,9 @@ try {
     def test_production_command_preserves_profile_and_optional_switch_intent(self):
         command = self.result['command']
         self.assertTrue(command.casefold().startswith(('"' + str(PS) + '"').casefold()))
-        self.assertIn(' -NoLogo -WindowStyle Hidden -File ', command)
+        self.assertIn(' -NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File ', command)
         self.assertIn(' -NormalTokenRelaunch ', command)
-        for forbidden in ('-NoProfile', '-ExecutionPolicy', '-Command', '-EncodedCommand'):
+        for forbidden in ('-NoProfile', '-Command', '-EncodedCommand', 'Set-ExecutionPolicy'):
             self.assertNotIn(forbidden, command)
         for optional in (' -Demo', ' -NoBrowser', ' -StateRoot'):
             self.assertIn(optional, command)

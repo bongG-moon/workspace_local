@@ -152,6 +152,117 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(result['warnings'])
 
 
+class ScopedCatalogTests(unittest.TestCase):
+    def setUp(self):
+        self.client = Mock()
+        self.client.discovery_inventory.return_value = {'skills': []}
+        self.item = {'id': 'task-a', 'workspace': 'fixture-folder', 'trusted': False,
+                     'connection': {'connected': True, 'tools': ['Read'],
+                                    'reported': {'tools': True}}}
+
+    def result(self, scope='folder'):
+        return catalog(self.item, client=self.client, scope=scope,
+                       workspace='fixture-folder' if scope == 'folder' else None)
+
+    def test_common_ignores_active_task_and_never_requires_trust(self):
+        result = self.result('common')
+        self.assertEqual(2, result['schemaVersion'])
+        self.assertEqual({'scope': 'common', 'workspace': None}, result['context'])
+        self.assertEqual('installed-only', result['status'])
+        self.assertIsNone(result['sessionId'])
+        self.assertFalse(result['runtime']['groups']['tools']['reported'])
+        self.client.discovery_inventory.assert_called_once_with(None)
+        self.client.skill_inventory.assert_not_called()
+        self.client.call.assert_not_called()
+        self.assertFalse(self.item['trusted'])
+
+    def test_folder_metadata_does_not_validate_or_grant_task_trust(self):
+        validator = Mock(side_effect=AssertionError('task execution validation must not run'))
+        result = catalog(self.item, client=self.client, scope='folder', workspace='fixture-folder',
+                         validate_workspace=validator)
+        self.assertEqual('task-a', result['sessionId'])
+        self.assertEqual('live', result['runtime']['state'])
+        self.assertFalse(self.item['trusted'])
+        self.client.discovery_inventory.assert_called_once_with('fixture-folder')
+        validator.assert_not_called()
+
+    def test_same_invocation_candidates_keep_identity_origin_and_scope(self):
+        self.client.discovery_inventory.return_value = {'skills': [
+            {'name': 'report', 'invocation': 'report', 'source': 'user', 'storageScope': 'personal',
+             'userInvocable': True, 'candidateId': 'user:a', 'originLabel': '사용자 스킬'},
+            {'name': 'report', 'invocation': 'report', 'source': 'project', 'storageScope': 'project',
+             'userInvocable': True, 'candidateId': 'project:b', 'scopeLabel': '선택 폴더'},
+            {'name': 'report', 'invocation': 'report', 'source': 'project', 'storageScope': 'project',
+             'userInvocable': True, 'candidateId': 'project:c', 'scopeLabel': '상위 1단계 폴더'},
+        ]}
+        result = self.result()
+        rows = result['installed']['skills']
+        self.assertEqual(['user:a', 'project:b', 'project:c'], [row['candidateId'] for row in rows])
+        self.assertEqual(3, result['installed']['counts']['skills'])
+        self.assertEqual('상위 1단계 폴더', rows[2]['scopeLabel'])
+        common = self.result('common')
+        self.assertEqual(['user:a'], [row['candidateId'] for row in common['installed']['skills']])
+
+    def test_partial_metadata_retains_rows_context_and_safe_diagnostics(self):
+        self.client.discovery_inventory.return_value = {
+            'skills': [{'name': 'report', 'invocation': 'report', 'source': 'user', 'userInvocable': True,
+                        'candidateId': 'user:a'}], 'readFailures': 2,
+            'context': {'configRootSource': 'environment', 'actualCliContextVerified': False,
+                        'configRoot': 'SECRET-SENTINEL', 'scope': 'folder'},
+            'diagnostics': {'code': 'registration_missing', 'summary': '등록을 확인하지 못했습니다.',
+                            'settings': 'SECRET-SENTINEL',
+                            'checks': [{'code': 'metadata_partial', 'status': 'partial', 'message': '일부 확인'}]}}
+        result = self.result()
+        self.assertEqual('partial', result['installed']['state'])
+        self.assertEqual(1, result['installed']['counts']['skills'])
+        self.assertEqual({'configRootSource': 'environment', 'actualCliContextVerified': False, 'scope': 'folder'},
+                         result['installed']['context'])
+        self.assertEqual('registration_missing', result['installed']['diagnostics']['code'])
+        self.assertNotIn('SECRET-SENTINEL', json.dumps(result))
+
+    def test_failed_empty_discovery_is_partial_and_complete_empty_is_discovered(self):
+        self.client.discovery_inventory.return_value = {'skills': [], 'readFailures': 1}
+        self.assertEqual('partial', self.result()['installed']['state'])
+        self.client.discovery_inventory.return_value = {'skills': []}
+        self.assertEqual('discovered', self.result()['installed']['state'])
+
+    def test_malformed_reported_list_is_unknown_but_valid_empty_is_reported(self):
+        for raw in [None, {'unexpected': 'value'}, [None, {'name': []}]]:
+            with self.subTest(raw=raw):
+                self.item['connection']['tools'] = raw
+                group = self.result()['runtime']['groups']['tools']
+                self.assertFalse(group['reported'])
+                self.assertEqual([], group['items'])
+                self.assertTrue(group['limited'])
+        self.item['connection']['tools'] = []
+        group = self.result()['runtime']['groups']['tools']
+        self.assertTrue(group['reported'])
+        self.assertFalse(group['limited'])
+
+    def test_tools_keep_real_description_reference_and_unknown_separate(self):
+        self.item['connection']['tools'] = [
+            'Read', 'Task', 'DesignSync', 'ReadMcpResourceDirTool',
+            {'name': 'Bash', 'description': '실제 연결의 설명'},
+            {'name': 'Read', 'source': 'plugin', 'description': '플러그인 설명', 'pluginNamespace': 'other'},
+            {'name': 'Custom', 'source': 'harness', 'description': '회사 도구'},
+            'mcp__research__lookup', {'name': 'Opaque', 'kind': {}, 'source': []},
+        ]
+        rows = self.result()['runtime']['groups']['tools']['items']
+        self.assertEqual(9, len(rows))
+        self.assertEqual('reference', rows[0]['descriptionSource'])
+        self.assertEqual('파일 읽기', rows[0]['displayName'])
+        for row in rows[1:4]:
+            self.assertEqual('unknown', row['kind'])
+            self.assertEqual('', row['description'])
+        self.assertEqual('실제 연결의 설명', rows[4]['description'])
+        self.assertEqual('runtime', rows[4]['descriptionSource'])
+        self.assertEqual('unknown', rows[5]['kind'])
+        self.assertNotEqual(rows[0]['id'], rows[5]['id'])
+        self.assertEqual('harness', rows[6]['kind'])
+        self.assertEqual('research', rows[7]['server'])
+        self.assertEqual('unknown', rows[8]['kind'])
+
+
 class CatalogBridgeTests(unittest.TestCase):
     def setUp(self):
         self.events = []

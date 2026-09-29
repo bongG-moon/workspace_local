@@ -1,2 +1,4 @@
 # Preserve the validated portable source bytes, including PowerShell UTF-8 BOMs.
 * -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Preserve the upstream font license byte-for-byte, including its whitespace.
+local_app/web/fonts/OFL.txt -whitespace

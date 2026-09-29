@@ -3,13 +3,14 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import uuid
 
 if "--version" in sys.argv:
     print("test-cli 1.0")
     sys.exit(0)
 if "--help" in sys.argv:
-    print('--input-format --output-format --setting-sources --permission-prompt-tool --include-partial-messages "manual"')
+    print('--input-format --output-format --setting-sources --permission-prompt-tool --include-partial-messages --permission-mode <mode> (choices: "manual", "auto", "plan", "acceptEdits")')
     sys.exit(0)
 if "--print" in sys.argv and "--verbose" not in sys.argv:
     print("Missing --verbose: shell wrapper consumed a CLI argument", file=sys.stderr)
@@ -18,6 +19,10 @@ if "--print" in sys.argv and "--verbose" not in sys.argv:
 session = next((arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--resume=")), str(uuid.uuid4()))
 turn = 0
 model = "fake-only"
+mode = 'manual'
+effort = 'medium'
+effort_controls = os.environ.get('WORKSPACE_FAKE_EFFORT') == '1'
+ultracode = False
 
 
 def emit(data):
@@ -29,6 +34,12 @@ for raw in sys.stdin.buffer:
     value = json.loads(raw)
     if value["type"] == "control_request":
         subtype = value["request"]["subtype"]
+        if effort_controls and subtype == 'apply_flag_settings':
+            settings = value['request'].get('settings') or {}
+            effort = settings.get('effortLevel', effort)
+            ultracode = settings.get('ultracode', ultracode)
+        if subtype == 'set_permission_mode':
+            mode = value['request'].get('mode')
         if subtype == "set_model":
             requested = value["request"].get("model")
             if requested == "fake-rejected":
@@ -41,6 +52,13 @@ for raw in sys.stdin.buffer:
                                {"value": "fake-alternative", "displayName": "Alternative test model"}],
                    "commands": [{"name": "test-skill", "description": "Local fixture command"}]}
                   if subtype == "initialize" else {})
+        if effort_controls and subtype == 'initialize':
+            for row in detail['models']:
+                row.update(resolvedModel=row['value'], supportsEffort=True,
+                           supportedEffortLevels=['low', 'medium', 'high', 'max'])
+        if effort_controls and subtype == 'get_settings':
+            detail = {'applied': {'model': model, 'effort': effort,
+                                  'ultracode': ultracode, 'ultracodeRequested': ultracode}}
         emit({"type": "control_response", "response": {"subtype": "success", "request_id": value["request_id"], "response": detail}})
         if subtype == "interrupt":
             break
@@ -57,9 +75,33 @@ for raw in sys.stdin.buffer:
                 'mcp_servers': [{'name': 'fixture_docs', 'status': 'connected'},
                                 {'name': 'fixture_offline', 'status': 'failed'}],
             }
-        emit({"type": "system", "subtype": "init", "session_id": session, "model": model,
+        emit({"type": "system", "subtype": "init", "session_id": session, "model": model, "permissionMode": mode,
               "skills": ["company-agent:html-report"], "plugins": [{"name": "company-agent"}], "mcp_servers": [], **catalog})
         text = value["message"]["content"]
+        if text == "HTML_CHOICES_PROTOCOL_TEST":
+            # An explicitly supplied source checkout is optional. Never locate
+            # or alter the user's installed Claude/Company Agent for a fixture.
+            core = (Path(os.environ['COMPANY_AGENT_SOURCE']).expanduser().resolve()
+                    if 'COMPANY_AGENT_SOURCE' in os.environ
+                    else Path(__file__).resolve().parents[2] / 'company-agent-plugin')
+            sys.path.insert(0, str(core / 'scripts'))
+            from company_agent.report_styles import choices
+            spec_path = Path.cwd() / 'fixture-choice-spec.json'
+            spec_path.write_text('{"designMenu":"additional"}', encoding='utf-8')
+            command = subprocess.list2cmdline([sys.executable, '-X', 'utf8',
+                str(core / 'scripts/harness_cli.py'),
+                'business', 'html-choices', '--spec', str(spec_path)])
+            emit({'type': 'assistant', 'message': {'id': 'choice-tool-' + str(turn), 'content': [
+                {'type': 'tool_use', 'id': 'choice-' + str(turn), 'name': 'Bash',
+                 'input': {'command': command}}]}})
+            emit({'type': 'user', 'message': {'role': 'user', 'content': [
+                {'type': 'tool_result', 'tool_use_id': 'choice-' + str(turn),
+                 'content': json.dumps(choices({'designMenu': 'additional'}), ensure_ascii=False)}]}})
+            emit({'type': 'result', 'session_id': session, 'is_error': False, 'result': '디자인을 선택해 주세요.'})
+            continue
+        if isinstance(text, str) and text.endswith('디자인으로 진행해 주세요.'):
+            emit({'type': 'result', 'session_id': session, 'is_error': False, 'result': '선택한 디자인을 확인했습니다: ' + text})
+            continue
         if text == "STREAM_PROTOCOL_TEST":
             mid = "fixture-message-" + str(turn)
             if "--include-partial-messages" in sys.argv:

@@ -12,6 +12,7 @@ args = parser.parse_args()
 count = 0
 expected = {"Company-Workspace.vbs", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md",
             "Check-Workspace.cmd", "Check-Workspace.ps1", "docs/WORKSPACE_STARTUP_DIAGNOSTIC.md",
+            "docs/WORKSPACE_0.12.1_COMPATIBILITY.md", "docs/WORKSPACE_0.12.2_INPUT.md", "docs/WORKSPACE_0.12.3_AUTOCOMPLETE.md", "docs/WORKSPACE_0.12.4_CONTROLS.md", "docs/WORKSPACE_STANDALONE_EXE.md",
             "deploy/CompanyWorkspace.Startup.ps1", "deploy/CompanyWorkspace.NormalToken.cs",
             "deploy/CompanyAgent.UserContext.ps1",
             "docs/SKILL_PRIORITY.md",
@@ -22,7 +23,13 @@ expected = {"Company-Workspace.vbs", "deploy/Start-CompanyWorkspace.ps1", "docs/
             "local_app/__init__.py", "local_app/bridge.py", "local_app/server.py", "local_app/demo.py",
             "local_app/companion.py", "local_app/harness_client.py", "local_app/history.py", "local_app/artifacts.py", "local_app/capabilities.py", "local_app/skill_inventory.py", "local_app/html_preview.py", "company-agent-plugin/resources/onboarding-course.json",
             "local_app/Pick-Path.ps1", "local_app/WorkspacePicker.cs", "local_app/Invoke-TerminalClaude.ps1",
+            "local_app/startup.py", "local_app/picker_protocol.py", "local_app/windows_paths.py",
+            "local_app/windows_process.py", "local_app/picker_channel.py",
+            "local_app/choices.py", "local_app/hook_status.py", "local_app/permission_contract.py",
+            "local_app/external_apps.py", "local_app/completions.py", "local_app/attention.py",
+            "local_app/web/fonts/NotoSansKR-Variable.woff", "local_app/web/fonts/OFL.txt", "local_app/web/fonts/SOURCE.json",
             "local_app/web/index.html", "local_app/web/app.css", "local_app/web/app.js", "local_app/web/companion.js", "local_app/web/capabilities.js",
+            "local_app/web/composer.js", "local_app/web/inline-controls.js", "local_app/web/attention.js",
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
 seen = set()

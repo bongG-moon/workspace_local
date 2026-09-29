@@ -20,6 +20,7 @@ $files = @(
     'deploy\CompanyAgent.UserContext.ps1',
     'docs\LOCAL_WORKSPACE.md',
     'docs\WORKSPACE_STARTUP_DIAGNOSTIC.md',
+    'docs\WORKSPACE_0.12.1_COMPATIBILITY.md', 'docs\WORKSPACE_0.12.2_INPUT.md', 'docs\WORKSPACE_0.12.3_AUTOCOMPLETE.md', 'docs\WORKSPACE_0.12.4_CONTROLS.md', 'docs\WORKSPACE_STANDALONE_EXE.md',
     'docs\SKILL_PRIORITY.md',
     'docs\README.md', 'docs\CLAUDE_CODE_BASICS.md', 'docs\DESIGN_TERMS.md',
     'docs\COMPANY_AGENT_HANDBOOK.md', 'docs\ONBOARDING_COURSE.md',
@@ -29,15 +30,24 @@ $files = @(
     'local_app\companion.py', 'local_app\harness_client.py', 'local_app\history.py', 'local_app\artifacts.py', 'local_app\capabilities.py', 'local_app\skill_inventory.py', 'local_app\html_preview.py',
     'company-agent-plugin\resources\onboarding-course.json',
     'local_app\Pick-Path.ps1', 'local_app\WorkspacePicker.cs', 'local_app\Invoke-TerminalClaude.ps1',
+    'local_app\startup.py', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
+    'local_app\windows_process.py', 'local_app\picker_channel.py',
+    'local_app\choices.py', 'local_app\hook_status.py', 'local_app\permission_contract.py',
+    'local_app\external_apps.py', 'local_app\completions.py', 'local_app\attention.py',
+    'local_app\web\fonts\NotoSansKR-Variable.woff', 'local_app\web\fonts\OFL.txt', 'local_app\web\fonts\SOURCE.json',
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\companion.js', 'local_app\web\capabilities.js',
+    'local_app\web\composer.js', 'local_app\web\inline-controls.js', 'local_app\web\attention.js',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
     'local_app\web\app-icon-192.png', 'local_app\web\app-icon-512.png'
 )
 foreach ($relative in $files) {
+    $sourceFile = Join-Path $repoRoot $relative
+    if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) { throw ('Missing bundle source: ' + $relative) }
     New-Item -ItemType Directory -Path (Split-Path (Join-Path $payload $relative) -Parent) -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot $relative) -Destination (Join-Path $payload $relative)
+    Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
+    if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.11.4-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.12.9-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

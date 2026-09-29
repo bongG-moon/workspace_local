@@ -1,6 +1,8 @@
 ﻿param(
     [ValidateSet('folder', 'files')][string]$Kind,
-    [long]$OwnerHandle = 0
+    [long]$OwnerHandle = 0,
+    [string]$ResultPath,
+    [string]$InitialDirectory
 )
 
 function Initialize-WorkspacePicker {
@@ -80,21 +82,39 @@ function Show-WorkspacePickerOwner($Context) {
 function New-WorkspacePathDialog([string]$Kind) {
     return New-Object WorkspacePicker.NativePathDialog($Kind)
 }
+function Write-WorkspacePickerResult($Result, [string]$Path) {
+    $json = ConvertTo-Json -InputObject $Result -Compress -Depth 4
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $json }
+    # The caller owns an unpredictable per-request directory. CreateNew rejects
+    # a pre-existing destination; no stdout or diagnostic text enters this file.
+    if (-not [IO.Path]::IsPathRooted($Path)) { throw 'The result path must be absolute.' }
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
+}
+
 function Invoke-WorkspacePathPicker {
-    param([ValidateSet('folder', 'files')][string]$Kind, [long]$OwnerHandle = 0)
+    param([ValidateSet('folder', 'files')][string]$Kind, [long]$OwnerHandle = 0,
+          [string]$ResultPath, [string]$InitialDirectory)
     Initialize-WorkspacePicker
     $context = $null
     $dialog = $null
     $paths = @()
+    $status = 'cancel'
     try {
         $context = New-WorkspacePickerOwner $OwnerHandle
         $dialog = New-WorkspacePathDialog $Kind
+        if (-not [string]::IsNullOrWhiteSpace($InitialDirectory)) {
+            $dialog.SetInitialDirectory($InitialDirectory)
+        }
         Show-WorkspacePickerOwner $context
         if ($dialog.ShowDialog($context.Window) -eq 'OK') {
             if ($Kind -eq 'folder') { $paths = @($dialog.SelectedPath) }
             else { $paths = @($dialog.FileNames) }
+            $status = 'success'
         }
-        ConvertTo-Json -InputObject @($paths) -Compress
     } finally {
         try {
             if ($null -ne $dialog) { $dialog.Dispose() }
@@ -110,11 +130,20 @@ function Invoke-WorkspacePathPicker {
             }
         }
     }
+    Write-WorkspacePickerResult @{version=1; status=$status; paths=@($paths)} $ResultPath
 }
 
 # Dot-sourcing loads the lifecycle functions for noninteractive regression tests.
 if ($MyInvocation.InvocationName -ne '.') {
     $ErrorActionPreference = 'Stop'
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-    Invoke-WorkspacePathPicker -Kind $Kind -OwnerHandle $OwnerHandle
+    try {
+        if ([string]::IsNullOrWhiteSpace($ResultPath)) { throw 'A dedicated result path is required.' }
+        Invoke-WorkspacePathPicker -Kind $Kind -OwnerHandle $OwnerHandle -ResultPath $ResultPath -InitialDirectory $InitialDirectory
+    } catch {
+        try { Write-WorkspacePickerResult @{version=1; status='error'; paths=@(); errorCode='picker_failed'} $ResultPath | Out-Null }
+        catch { }
+        [Console]::Error.WriteLine('Workspace picker failed.')
+        exit 1
+    }
 }

@@ -366,7 +366,7 @@ class ServerTests(unittest.TestCase):
     def test_bootstrap_identifies_shared_cli_without_claiming_login_success(self):
         with self.request("/api/bootstrap") as response:
             value = json.load(response)
-        self.assertEqual(value["workspaceVersion"], "0.11.4")
+        self.assertEqual(value["workspaceVersion"], "0.12.9")
         self.assertEqual(value["appRoot"], str(ROOT))
         self.assertEqual(value["runtime"]["authentication"], "shared-with-cli")
         self.assertNotIn("loggedIn", value["runtime"])
@@ -432,9 +432,17 @@ class ServerTests(unittest.TestCase):
         with self.request("/api/preview?" + urlencode({"id":self.id,"path":str(path)})) as response:
             self.assertIn("안녕하세요", json.load(response)["text"])
         path.write_bytes("한글".encode("cp949"))
-        with self.assertRaises(HTTPError):
-            self.request("/api/preview?" + urlencode({"id":self.id,"path":str(path)}))
+        with self.request("/api/preview?" + urlencode({"id":self.id,"path":str(path)})) as response:
+            self.assertEqual('한글', json.load(response)['text'])
         self.assertEqual(path.read_bytes(), "한글".encode("cp949"))
+        path.write_bytes('UTF16 한글'.encode('utf-16'))
+        with self.request('/api/preview?' + urlencode({'id': self.id, 'path': str(path)})) as response:
+            self.assertEqual('UTF16 한글', json.load(response)['text'])
+        path.write_bytes(b'\xff\x00\xfe')
+        with self.request('/api/preview?' + urlencode({'id': self.id, 'path': str(path)})) as response:
+            data = json.load(response)
+            self.assertEqual('external', data['kind'])
+            self.assertNotIn('text', data)
 
     def test_supported_html_preview_is_static_but_raw_attachment_is_text(self):
         from urllib.parse import urlencode
@@ -450,8 +458,10 @@ class ServerTests(unittest.TestCase):
         path.write_text('<html>첨부 원본</html>', encoding='utf-8')
         with self.request(route) as response:
             self.assertEqual('text', json.load(response)['kind'])
-        with self.assertRaises(HTTPError):
-            self.request('/api/open', {'id':self.id, 'path':str(path)})
+        with patch('local_app.external_apps.open_document', return_value={'ok': True, 'requested': True}) as opened:
+            with self.request('/api/open', {'id': self.id, 'path': str(path)}) as response:
+                self.assertTrue(json.load(response)['requested'])
+            opened.assert_called_once_with(path, 'open')
 
     def test_full_http_send_question_permission_result(self):
         with self.request("/api/send", {"id":self.id,"text":"업무 요청","attachments":[]}) as response:

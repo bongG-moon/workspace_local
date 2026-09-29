@@ -24,7 +24,7 @@ const esc=x=>x.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&q
 const fontRoot=path.join(root,'scripts/assets/manual-font');
 const font=fs.readFileSync(path.join(fontRoot,'NotoSansKR-guide.woff'));
 const fontManifest=JSON.parse(fs.readFileSync(path.join(fontRoot,'manifest.json'),'utf8'));
-const fontLicense=fs.readFileSync(path.join(fontRoot,'OFL.txt'),'utf8');
+const fontLicense=fs.readFileSync(path.join(fontRoot,'OFL.txt'),'utf8').replace(/\r\n/g,'\n');
 if(createHash('sha256').update(font).digest('hex')!==fontManifest.sha256)throw Error('Manual font hash mismatch');
 const csp="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src 'none'; script-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'";
 const style=`

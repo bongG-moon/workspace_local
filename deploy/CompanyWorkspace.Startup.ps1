@@ -1,6 +1,8 @@
 ﻿# Workspace startup policy only. No credentials, settings, UAC, or permissions
 # are changed. The installer identity helper is read-only here; its allowance
 # of same-user elevation does NOT authorize an elevated Workspace process.
+# UAC-disabled starts may use a separately restricted, verified normal token;
+# the source token and Windows policy are never changed.
 function Get-WorkspaceStartupMessage {
     param([int] $Code)
     switch ($Code) {
@@ -8,7 +10,7 @@ function Get-WorkspaceStartupMessage {
         30 { return '현재 Windows 로그인 사용자를 확인하지 못했습니다. 본인 계정의 바탕화면에서 다시 실행해 주세요. 계속되면 담당자에게 알려 주세요. 설정은 변경하지 않았습니다.' }
         31 { return '로그인한 사용자와 실행 계정이 다르거나 서비스 환경에서 실행되었습니다. 본인 계정의 바탕화면에서 실행해 주세요. 다른 사용자의 설정은 사용하지 않았습니다.' }
         32 { return 'Windows 사용자 폴더와 실행 환경의 폴더가 일치하지 않습니다. 담당자에게 실행 환경 확인을 요청해 주세요. 기존 Claude 설정은 변경하지 않았습니다.' }
-        33 { return '일반 권한으로 실행할 수 있는 같은 계정의 Windows 토큰을 확인하지 못했습니다. 더블클릭해도 PC 정책에 따라 발생할 수 있습니다. 담당자에게 일반 권한 실행 환경을 확인해 달라고 요청해 주세요. 보안 설정은 바꾸지 않았습니다.' }
+        33 { return '같은 계정의 일반 권한 실행 환경을 확인하지 못했습니다. 일반 권한 연결 토큰 또는 제한된 실행 토큰이 검증되지 않았습니다. Check-Workspace.cmd로 진단 결과를 확인해 주세요. PC 보안 설정과 개인 Claude 설정은 바꾸지 않았습니다.' }
         34 { return '일반 권한으로 다시 실행한 뒤에도 관리자 권한으로 감지되어 중단했습니다. 재시도는 한 번만 수행하며 관리자 권한으로 AI를 실행하지 않습니다.' }
         35 { return '일반 권한 실행 요청을 Windows가 처리하지 못했습니다. 담당자에게 실행 정책을 확인해 달라고 요청해 주세요. 다른 계정이나 관리자 권한으로 대신 실행하지 않았습니다.' }
         36 { return '이 실행 환경에서 기존 Claude Code 명령을 찾거나 실행 경로를 확인하지 못했습니다. 평소 Claude가 동작하는 Windows PowerShell 환경인지 확인해 주세요. 로그인과 모델 설정은 변경하지 않았습니다.' }
@@ -146,7 +148,7 @@ function Invoke-WorkspaceNormalTokenRelaunch {
         $reason = if ($reasonProperty) { [string]$reasonProperty.Value } else { '' }
         if ($reason -in @('invalid_argument', 'command_too_long', 'invalid_identity')) { throw 'WORKSPACE_STARTUP:42' }
         if ($reason -eq 'missing_launcher') { throw 'WORKSPACE_STARTUP:41' }
-        if ($reason -match '^(source_not_same_user_split_token|linked_|primary_token_not_normal|current_session_mismatch|child_session_mismatch|child_token_not_normal|integrity_label|membership_)') {
+        if ($reason -match '^(source_not_same_user_split_token|linked_|restricted_token_|primary_token_not_normal|current_session_mismatch|child_session_mismatch|child_token_not_normal|integrity_label|membership_)') {
             throw 'WORKSPACE_STARTUP:33'
         }
         throw 'WORKSPACE_STARTUP:35'

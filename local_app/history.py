@@ -79,6 +79,18 @@ def row(item):
     result['artifacts'] = artifacts
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
+    # A display-only business question may survive a restart. It never restores
+    # trust, pending tool permission, or permission-mode overrides.
+    if isinstance(item.get('choice'), dict):
+        from .choices import normalize
+        try:
+            result['choice'] = normalize(item['choice'])
+        except (ValueError, TypeError):
+            pass
+    verification = item.get('verification')
+    if isinstance(verification, dict) and verification.get('state') in {'checking', 'needs-review', 'unverified'}:
+        state = verification['state'] if verification['state'] != 'checking' else 'unverified'
+        result['verification'] = {'state': state, 'message': '이전 요청의 결과 확인 상태입니다. 연결 종료 후 추가 확인은 수행되지 않았습니다.'}
     return result
 
 

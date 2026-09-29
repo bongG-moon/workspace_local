@@ -7,6 +7,8 @@ from pathlib import Path
 import stat
 import time
 
+from .windows_paths import redirects_path
+
 DOCUMENT_TYPES = {'.md', '.txt', '.csv', '.tsv', '.html', '.htm', '.pdf', '.pptx', '.docx', '.xlsx', '.png', '.jpg', '.jpeg', '.webp'}
 EXCLUDED = {'node_modules', 'venv', '__pycache__', 'build', 'dist'}
 
@@ -26,7 +28,7 @@ class Snapshot:
 
 def linked(path):
     info = path.lstat()
-    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & 0x400)
+    return redirects_path(info)
 
 
 def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30, seconds=.5):
@@ -63,7 +65,7 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
                         continue
                     try:
                         info = child.stat(follow_symlinks=False)
-                        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
+                        if redirects_path(info):
                             continue
                         path = Path(child.path)
                         if stat.S_ISDIR(info.st_mode) and depth == 0:

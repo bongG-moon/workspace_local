@@ -1,0 +1,12 @@
+{
+  "family": "Noto Sans KR",
+  "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf",
+  "sourceSha256": "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252",
+  "fontSha256": "4f0769528a12c78397fea9dd32f979de67c77898342e5b4797956dfc8ae04c93",
+  "coverage": "All 11172 modern Hangul syllables verified; original cmap retained",
+  "format": "WOFF lossless container conversion; no glyph subset",
+  "weight": [
+    100,
+    900
+  ]
+}

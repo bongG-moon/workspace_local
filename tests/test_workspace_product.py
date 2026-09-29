@@ -4,7 +4,9 @@ from pathlib import Path
 import tempfile
 import threading
 import sys
+import stat
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -13,8 +15,155 @@ import uuid
 
 from local_app.artifacts import changes, snapshot
 from local_app.bridge import probe_cli
-from local_app.history import HistoryStore, row
-from local_app.server import LocalApp, Server
+from local_app.history import HistoryStore, row, safe
+from local_app.server import LocalApp, Server, workspace_folder
+from local_app.windows_paths import desktop_folder, DESKTOP_UNAVAILABLE, redirects_path
+
+
+class WorkspaceLocationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='workspace-location-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.desktop = self.root / 'OneDrive 회사' / '바탕 화면'
+        self.desktop.mkdir(parents=True)
+
+    def app(self, suffix='state', **kwargs):
+        with patch('local_app.server.desktop_folder', return_value=self.desktop):
+            app = LocalApp(self.root / suffix, command=['fixture-cli'], **kwargs)
+        self.addCleanup(app.close)
+        return app
+
+    def test_redirected_desktop_default_is_lazy_and_internal_state_stays_separate(self):
+        app = self.app()
+        expected = self.desktop / 'Company Workspace'
+        self.assertFalse(expected.exists())
+        boot = app.bootstrap()
+        self.assertEqual(str(self.desktop), boot['defaultWorkspace'])
+        self.assertEqual(str(expected), boot['managedWorkspaceRoot'])
+        self.assertIsNone(boot['workspaceLocationError'])
+        created = app.create('', True, managed=True, title='실제 파일명이 아닌 업무 제목')
+        self.assertEqual(expected, Path(created['workspace']).parent)
+        self.assertEqual(self.root / 'state', app.history.root)
+        self.assertFalse((self.desktop / 'history.json').exists())
+
+    def test_explicit_existing_parent_and_existing_workspace_modes_are_distinct(self):
+        app = self.app()
+        chosen = self.root / '선택 위치'
+        chosen.mkdir()
+        created = app.create('', True, managed=True, managed_root=str(chosen))
+        self.assertEqual(chosen, Path(created['workspace']).parent)
+        existing = app.create(str(chosen), True, managed=False)
+        self.assertEqual(str(chosen), existing['workspace'])
+        self.assertFalse((self.desktop / 'Company Workspace').exists())
+        self.assertEqual(str(self.desktop / 'Company Workspace'), app.bootstrap()['managedWorkspaceRoot'])
+
+    def test_bad_parent_does_not_create_dirs_or_session_and_does_not_override_existing_mode(self):
+        app = self.app()
+        file = self.root / 'file.txt'
+        file.write_text('preserved', encoding='utf-8')
+        for selected in ['', 'relative', str(self.root / 'missing'), str(file), True]:
+            with self.subTest(selected=selected), self.assertRaises((ValueError, OSError)):
+                app.create('', True, managed=True, managed_root=selected)
+        with self.assertRaises(ValueError):
+            app.create(str(self.desktop), True, managed=False, managed_root=str(self.root))
+        self.assertEqual({}, app.sessions)
+        self.assertFalse((self.root / 'missing').exists())
+        self.assertEqual('preserved', file.read_text(encoding='utf-8'))
+
+    def test_unavailable_desktop_does_not_fall_back_and_user_can_choose_existing_location(self):
+        with patch('local_app.server.desktop_folder', side_effect=ValueError(DESKTOP_UNAVAILABLE)):
+            app = LocalApp(self.root / 'state', command=['fixture-cli'])
+        self.addCleanup(app.close)
+        self.assertIsNone(app.bootstrap()['managedWorkspaceRoot'])
+        self.assertEqual('', app.bootstrap()['defaultWorkspace'])
+        self.assertEqual(DESKTOP_UNAVAILABLE, app.bootstrap()['workspaceLocationError'])
+        with self.assertRaisesRegex(ValueError, '바탕화면'):
+            app.create('', True, managed=True)
+        self.assertFalse((app.state / 'workspaces').exists())
+        created = app.create('', True, managed=True, managed_root=str(self.desktop))
+        self.assertEqual(self.desktop, Path(created['workspace']).parent)
+
+    def test_demo_and_explicit_test_roots_never_resolve_interactive_desktop(self):
+        with patch('local_app.server.desktop_folder', side_effect=AssertionError('no Desktop lookup')):
+            demo = LocalApp(self.root / 'demo', demo=True)
+            isolated = LocalApp(self.root / 'state', command=['fixture-cli'],
+                                managed_workspace_root=self.root / 'isolated')
+        self.addCleanup(demo.close)
+        self.addCleanup(isolated.close)
+        self.assertEqual(demo.state / 'workspaces', Path(demo.create('', True, managed=True)['workspace']).parent)
+        self.assertEqual(self.root / 'isolated', Path(isolated.create('', True, managed=True)['workspace']).parent)
+        with self.assertRaises(ValueError):
+            demo.create('', True, managed=True, managed_root=str(self.desktop))
+        self.assertEqual([], list(self.desktop.iterdir()))
+
+    def test_old_task_files_and_location_are_unchanged_after_new_default(self):
+        app = self.app(managed_workspace_root=self.root / 'state' / 'workspaces')
+        old = app.create('', True, managed=True)
+        original = Path(old['workspace']) / '원본.md'
+        original.write_text('preserve', encoding='utf-8')
+        app.close()
+        restored = self.app()
+        self.assertEqual(old['workspace'], restored.get(old['id'])['workspace'])
+        self.assertFalse(restored.get(old['id'])['trusted'])
+        self.assertEqual('preserve', original.read_text(encoding='utf-8'))
+        new = restored.create('', True, managed=True)
+        self.assertEqual(self.desktop / 'Company Workspace', Path(new['workspace']).parent)
+
+    def test_name_collision_never_reuses_existing_directory_or_session(self):
+        app = self.app()
+        first = app.create('', True, managed=True)
+        original = Path(first['workspace']) / 'preserve.txt'
+        original.write_text('original', encoding='utf-8')
+        with patch('local_app.server.uuid.uuid4', return_value=uuid.UUID(first['id'])), self.assertRaises(FileExistsError):
+            app.create('', True, managed=True)
+        self.assertEqual(1, len(app.sessions))
+        self.assertEqual('original', original.read_text(encoding='utf-8'))
+
+    def test_missing_desktop_is_not_recreated(self):
+        app = self.app()
+        self.desktop.rmdir()
+        with self.assertRaises(FileNotFoundError):
+            app.create('', True, managed=True)
+        self.assertFalse(self.desktop.exists())
+
+    def test_known_folder_result_uses_redirected_path_and_rejects_invalid_results(self):
+        with patch('local_app.windows_paths._known_desktop_path', return_value=str(self.desktop)):
+            self.assertEqual(self.desktop, desktop_folder())
+        for value in ('relative', str(self.root / 'missing')):
+            with patch('local_app.windows_paths._known_desktop_path', return_value=value), self.assertRaisesRegex(ValueError, '바탕화면'):
+                desktop_folder()
+
+    def test_cloud_tags_allow_workspace_creation_and_use_but_state_stays_strict(self):
+        original = Path.lstat
+        def cloud_info(path, *args, **kwargs):
+            info = original(path, *args, **kwargs)
+            if path == self.desktop:
+                attrs = {key: getattr(info, key) for key in dir(info) if key.startswith('st_')}
+                attrs.update(st_file_attributes=0x400, st_reparse_tag=0x9000301A)
+                return SimpleNamespace(**attrs)
+            return info
+        app = self.app()
+        with patch.object(Path, 'lstat', cloud_info):
+            created = app.create('', True, managed=True)
+            task = app.get(created['id'])
+            self.assertEqual(Path(created['workspace']), workspace_folder(task))
+            document = Path(created['workspace']) / '결과.txt'
+            document.write_text('synthetic cloud-tag fixture', encoding='utf-8')
+            self.assertEqual(1, len(app.files(created['id'])))
+            with self.assertRaises(ValueError):
+                safe(self.desktop / 'internal-state.json')
+
+    def test_junction_and_unknown_reparse_tags_are_still_blocked(self):
+        for tag in (0xA0000003, 0xA000000C, 0, 0x9000001B):
+            with self.subTest(tag=tag):
+                info = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400, st_reparse_tag=tag)
+                self.assertTrue(redirects_path(info))
+        for variant in range(16):
+            info = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400,
+                                   st_reparse_tag=0x9000001A | (variant << 12))
+            self.assertFalse(redirects_path(info))
+        self.assertTrue(redirects_path(SimpleNamespace(st_mode=stat.S_IFLNK, st_file_attributes=0)))
 
 
 class ProductTests(unittest.TestCase):
@@ -24,7 +173,8 @@ class ProductTests(unittest.TestCase):
         self.root = Path(self.temp.name).resolve()
         self.workspace = self.root / '업무 자료'
         self.workspace.mkdir()
-        self.app = LocalApp(self.root / 'state', command=['fixture-cli'], info={'version': 'fixture'})
+        self.app = LocalApp(self.root / 'state', command=['fixture-cli'], info={'version': 'fixture'},
+                            managed_workspace_root=self.root / 'managed-workspaces')
         self.addCleanup(self.app.close)
         self.sid = self.app.create(str(self.workspace), True)['id']
 
@@ -236,6 +386,8 @@ class ProductTests(unittest.TestCase):
             self.assertEqual('주간 보고', created['title'])
             self.assertTrue(request('/api/session/update', {'id': created['id'], 'pinned': True})['pinned'])
             self.assertEqual([], request('/api/results?id=' + created['id'])['artifacts'])
+            custom = request('/api/create', {'managed': True, 'trusted': True, 'managedRoot': str(self.workspace)})
+            self.assertEqual(self.workspace, Path(custom['workspace']).parent)
             with patch('local_app.server.probe_cli', return_value={'version': 'fresh'}):
                 self.assertTrue(request('/api/reconnect', {})['ok'])
         finally:

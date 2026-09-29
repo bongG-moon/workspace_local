@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import unittest
+from unittest.mock import patch
+
+from local_app.picker_channel import private_picker_directory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +92,7 @@ catch {$failure = $_.Exception.Message}
     def test_owned_folder_selection_raises_once_then_releases_topmost(self):
         value = self.scenario()
         self.assertIsNone(value["error"])
-        self.assertEqual(json.loads(value["output"]), [r"C:\work\selected"])
+        self.assertEqual(json.loads(value["output"]), {'version': 1, 'status': 'success', 'paths': [r"C:\work\selected"]})
         self.assertEqual(value["events"], [
             "initialize", "owner:1234", "create:folder", "show:owned", "front:True",
             "activate:True", "foreground", "dialog:False", "dialog-dispose", "close:False", "owner-dispose", "icon-dispose",
@@ -97,11 +101,11 @@ catch {$failure = $_.Exception.Message}
 
     def test_files_return_all_selected_paths(self):
         value = self.scenario(kind="files")
-        self.assertEqual(json.loads(value["output"]), [r"C:\work\a.pdf", r"C:\work\b.txt"])
+        self.assertEqual(json.loads(value["output"])['paths'], [r"C:\work\a.pdf", r"C:\work\b.txt"])
 
-    def test_cancel_returns_json_array_and_disposes_every_window(self):
+    def test_cancel_returns_explicit_status_and_disposes_every_window(self):
         value = self.scenario(result="Cancel", has_external=False)
-        self.assertEqual(value["output"], "[]")
+        self.assertEqual(json.loads(value["output"]), {'version': 1, 'status': 'cancel', 'paths': []})
         self.assertIn("show:fallback", value["events"])
         self.assertEqual(value["events"][-4:], ["dialog-dispose", "close:False", "owner-dispose", "icon-dispose"])
 
@@ -165,6 +169,41 @@ try {
         self.assertTrue(value["invalid"])
         self.assertTrue(value["multiselect"])
         self.assertEqual(value["folderType"], "NativePathDialog")
+
+    def test_result_channel_is_utf8_and_never_overwrites_existing_file(self):
+        with tempfile.TemporaryDirectory(prefix='workspace-picker-channel-') as directory:
+            result = Path(directory) / 'result.json'
+            literal = str(result).replace("'", "''")
+            value = self.run_ps(r"""
+Write-WorkspacePickerResult @{version=1; status='success'; paths=@('C:\업무 자료 🗂')} '__RESULT__'
+$rejected = $false
+try {Write-WorkspacePickerResult @{version=1; status='cancel'; paths=@()} '__RESULT__'}
+catch {$rejected=$true}
+@{rejected=$rejected} | ConvertTo-Json -Compress
+""".replace('__RESULT__', literal))
+            self.assertTrue(value['rejected'])
+            self.assertEqual({'version': 1, 'status': 'success', 'paths': ['C:\\업무 자료 🗂']},
+                             json.loads(result.read_text(encoding='utf-8')))
+
+    def test_native_channel_has_only_user_and_system_access_inherited_by_result(self):
+        with tempfile.TemporaryDirectory(prefix='workspace-picker-security-') as parent, \
+                patch('local_app.picker_channel.local_app_data_folder', return_value=Path(parent)), \
+                private_picker_directory() as directory:
+            result = directory / 'result.json'
+            result.write_text('{}', encoding='utf-8')
+            value = self.run_ps(r"""
+$acl = [IO.Directory]::GetAccessControl('__DIRECTORY__')
+$fileAcl = [IO.File]::GetAccessControl('__RESULT__')
+$current = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$rules = @($acl.Access | ForEach-Object {$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value})
+$fileRules = @($fileAcl.Access | ForEach-Object {$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value})
+@{protected=$acl.AreAccessRulesProtected; rules=$rules; fileRules=$fileRules; current=$current} | ConvertTo-Json -Compress
+""".replace('__DIRECTORY__', str(directory).replace("'", "''"))
+                .replace('__RESULT__', str(result).replace("'", "''")))
+            self.assertTrue(value['protected'])
+            self.assertEqual({value['current'], 'S-1-5-18'}, set(value['rules']))
+            self.assertEqual({value['current'], 'S-1-5-18'}, set(value['fileRules']))
+        self.assertFalse(directory.exists())
 
 
 if __name__ == "__main__":

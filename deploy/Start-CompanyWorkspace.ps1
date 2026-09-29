@@ -44,7 +44,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.11.4' -and $health.appRoot -eq $appRoot
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.12.9' -and $health.appRoot -eq $appRoot
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -66,31 +66,75 @@ try {
     if (-not $Demo -and -not $env:COMPANY_AGENT_CLAUDE) {
         # Resolve exactly what `claude` means in this user's shell. Do not silently
         # replace a profile alias/company wrapper with another executable on PATH.
-        try { $terminalClaude = Get-Command claude -ErrorAction Stop | Select-Object -First 1 }
-        catch { throw 'WORKSPACE_STARTUP:36' }
-        while ($terminalClaude.CommandType -eq 'Alias') { $terminalClaude = $terminalClaude.ResolvedCommand }
-        if ($terminalClaude.CommandType -in @('Application', 'ExternalScript')) {
-            $env:COMPANY_WORKSPACE_CLAUDE_ENTRY = $terminalClaude.Source
-            $env:COMPANY_WORKSPACE_CLAUDE_PROFILE = '0'
-        } elseif ($terminalClaude.CommandType -eq 'Function') {
-            # Functions are reloaded from the same trusted shell profiles; no
-            # function body or credential is copied into the app's state directory.
-            $env:COMPANY_WORKSPACE_CLAUDE_ENTRY = 'claude'
-            $env:COMPANY_WORKSPACE_CLAUDE_PROFILE = '1'
-            $definitionHasher = [Security.Cryptography.SHA256]::Create()
+        # Never reuse stale launcher evidence inherited from another process.
+        foreach ($name in @('COMPANY_WORKSPACE_CLAUDE_ENTRY', 'COMPANY_WORKSPACE_CLAUDE_PROFILE',
+                            'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH', 'COMPANY_WORKSPACE_SHELL')) {
+            Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
+        }
+        try {
             try {
-                $definitionBytes = [Text.Encoding]::UTF8.GetBytes($terminalClaude.Definition)
-                $env:COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH = [BitConverter]::ToString($definitionHasher.ComputeHash($definitionBytes))
-            } finally { $definitionHasher.Dispose() }
-        } else { throw 'WORKSPACE_STARTUP:36' }
+                $terminalClaude = Get-Command claude -ErrorAction Stop | Select-Object -First 1
+            } catch [System.Management.Automation.CommandNotFoundException] {
+                # Explorer can keep an older PATH after the native installer has
+                # completed. Check only its documented location in the already
+                # verified current user's profile. Never replace a found alias,
+                # wrapper, function, or a command that failed for another reason.
+                $nativeClaude = Join-Path $context.userProfile '.local\bin\claude.exe'
+                if (-not (Test-Path -LiteralPath $nativeClaude -PathType Leaf)) { throw }
+                $terminalClaude = Get-Command -Name $nativeClaude -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            }
+            $aliasDepth = 0
+            while ($terminalClaude -and $terminalClaude.CommandType -eq 'Alias') {
+                if (++$aliasDepth -gt 16) { throw 'WORKSPACE_STARTUP:36' }
+                $terminalClaude = $terminalClaude.ResolvedCommand
+            }
+            if (-not $terminalClaude) { throw 'WORKSPACE_STARTUP:36' }
+            if ($terminalClaude.CommandType -in @('Application', 'ExternalScript')) {
+                if ([string]::IsNullOrWhiteSpace($terminalClaude.Source)) { throw 'WORKSPACE_STARTUP:36' }
+                $env:COMPANY_WORKSPACE_CLAUDE_ENTRY = $terminalClaude.Source
+                $env:COMPANY_WORKSPACE_CLAUDE_PROFILE = '0'
+            } elseif ($terminalClaude.CommandType -eq 'Function') {
+                # Reload the same trusted profiles, without copying their body or secrets.
+                $definitionHasher = [Security.Cryptography.SHA256]::Create()
+                try {
+                    $definitionBytes = [Text.Encoding]::UTF8.GetBytes($terminalClaude.Definition)
+                    $definitionHash = [BitConverter]::ToString($definitionHasher.ComputeHash($definitionBytes))
+                } finally { $definitionHasher.Dispose() }
+                $env:COMPANY_WORKSPACE_CLAUDE_ENTRY = 'claude'
+                $env:COMPANY_WORKSPACE_CLAUDE_PROFILE = '1'
+                $env:COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH = $definitionHash
+            } else { throw 'WORKSPACE_STARTUP:36' }
+            $env:COMPANY_WORKSPACE_SHELL = (Get-Process -Id $PID).Path
+            Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE -ErrorAction SilentlyContinue
+        } catch {
+            # Claude availability is an AI connection issue, not an app-start gate.
+            # A fixed marker prevents the server from silently choosing another shim.
+            foreach ($name in @('COMPANY_WORKSPACE_CLAUDE_ENTRY', 'COMPANY_WORKSPACE_CLAUDE_PROFILE',
+                                'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH', 'COMPANY_WORKSPACE_SHELL')) {
+                Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
+            }
+            $env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE = '1'
+        }
+    } elseif ($env:COMPANY_AGENT_CLAUDE) {
+        # An explicit wrapper still needs this shell, not stale internal
+        # launcher evidence inherited from an earlier Workspace process.
+        foreach ($name in @('COMPANY_WORKSPACE_CLAUDE_ENTRY', 'COMPANY_WORKSPACE_CLAUDE_PROFILE',
+                            'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH')) {
+            Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
+        }
         $env:COMPANY_WORKSPACE_SHELL = (Get-Process -Id $PID).Path
+        Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE -ErrorAction SilentlyContinue
     }
     try { $resolvedPython = (Get-Command $PythonCommand -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
     catch { throw 'WORKSPACE_STARTUP:37' }
-    try { $probe = @(& $resolvedPython -X utf8 -c "import sys; print(sys.executable); print(int(sys.version_info >= (3, 11)))") }
+    try { $probe = @(& $resolvedPython -X utf8 -c "import json, sys; print(json.dumps(sys.executable, ensure_ascii=True)); print(int(sys.version_info >= (3, 11)))") }
     catch { throw 'WORKSPACE_STARTUP:38' }
     if ($LASTEXITCODE -ne 0 -or $probe.Count -ne 2 -or $probe[-1] -ne '1') { throw 'WORKSPACE_STARTUP:38' }
-    $resolvedPython = [string]$probe[0]
+    # Hidden Windows PowerShell can decode native stdout with CP949. Keep the
+    # executable path ASCII on the wire, then decode JSON before spawning.
+    try { $resolvedPython = [string]($probe[0] | ConvertFrom-Json -ErrorAction Stop) }
+    catch { throw 'WORKSPACE_STARTUP:38' }
+    if (-not [IO.Path]::IsPathRooted($resolvedPython) -or -not (Test-Path -LiteralPath $resolvedPython -PathType Leaf)) { throw 'WORKSPACE_STARTUP:38' }
     $windowless = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
     if (Test-Path -LiteralPath $windowless) { $resolvedPython = $windowless }
     $arguments = @('-X', 'utf8', '-m', 'local_app.server')

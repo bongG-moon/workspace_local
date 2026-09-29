@@ -67,6 +67,38 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_managed_location_button_selects_parent_without_resetting_draft(self):
+        self.run_case(r"""(async()=>{
+          boot={defaultWorkspace:'C:/Desktop',managedWorkspaceRoot:'C:/Desktop/Company Workspace'};
+          $('prompt').value='작성 중 요청';chooseFolder();$('task-name').value='보고서';$('trust').checked=true;
+          let call;api=async(path,data)=>{call={path,data};return {status:'success',paths:['D:/업무 자료']};};
+          await $('choose-managed').onclick();
+          assert.equal(call.path,'/api/pick');assert.equal(call.data.initialDirectory,'C:/Desktop');
+          assert.equal(managedRootChoice,'D:/업무 자료');assert.equal($('new-workspace-location').textContent,'D:/업무 자료');
+          assert.equal($('task-name').value,'보고서');assert.equal($('prompt').value,'작성 중 요청');
+          assert.equal($('trust').checked,false);
+        })()""")
+
+    def test_cancelled_and_stale_folder_choice_cannot_change_new_dialog(self):
+        self.run_case(r"""(async()=>{
+          boot={defaultWorkspace:'C:/Desktop',managedWorkspaceRoot:'C:/Desktop/Company Workspace'};
+          chooseFolder();managedRootChoice='D:/keep';api=async()=>({status:'cancel',paths:[]});
+          await $('choose-managed').onclick();assert.equal(managedRootChoice,'D:/keep');
+          let reply;api=()=>new Promise(resolve=>reply=resolve);
+          const pending=$('choose-managed').onclick();chooseFolder();
+          reply({status:'success',paths:['D:/stale']});await pending;
+          assert.equal(managedRootChoice,null);assert.equal($('new-workspace-location').textContent,boot.managedWorkspaceRoot);
+        })()""")
+
+    def test_managed_creation_requires_resolved_or_selected_location(self):
+        self.run_case(r"""(async()=>{
+          boot={managedWorkspaceRoot:null,workspaceLocationError:'위치 확인 필요'};chooseFolder();$('trust').checked=true;
+          let calls=0;api=async()=>{calls++;};let message;toast=text=>message=text;
+          const button={value:'ok',disabled:false};
+          await $('folder-form').onsubmit({submitter:button,preventDefault(){}});
+          assert.equal(calls,0);assert.match(message,/저장할 위치/);assert.equal(button.disabled,false);
+        })()""")
+
     def test_delayed_pin_response_never_changes_selected_workspace(self):
         self.run_case(r"""(async()=>{
           active={id:'A',title:'A',state:'running',pinned:false};

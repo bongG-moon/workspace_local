@@ -19,6 +19,13 @@ def ps_quote(value):
 
 @unittest.skipUnless(os.name == "nt", "Windows PowerShell launcher")
 class WorkspaceStartupTests(unittest.TestCase):
+    def test_reopen_version_matches_running_server(self):
+        from local_app.server import WORKSPACE_VERSION
+        source = LAUNCHER.read_text(encoding="utf-8-sig")
+        match = re.search(r"\$health\.workspaceVersion -eq '([^']+)'", source)
+        self.assertIsNotNone(match)
+        self.assertEqual(WORKSPACE_VERSION, match.group(1))
+
     def powershell(self, source):
         command = "[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); " + source
         return subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-Command", command],
@@ -52,7 +59,7 @@ class WorkspaceStartupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.split(), ["37", "31", "31", "32", "32", "30", "45"])
         result = self.powershell(". " + ps_quote(HELPER) + "; Get-WorkspaceStartupMessage 33")
-        self.assertIn("더블클릭", result.stdout)
+        self.assertIn("Check-Workspace.cmd", result.stdout)
         self.assertNotIn("Python", result.stdout)
 
     def test_native_reason_property_not_stack_or_class_name_controls_error_category(self):
@@ -71,14 +78,14 @@ namespace CompanyAgent {
 }
 '@
         $context = [pscustomobject]@{sid='S-1-5-21-123'; sessionId=1}
-        foreach ($reason in @('create_process','linked_token_not_normal','command_too_long','missing_launcher','environment_block')) {
+        foreach ($reason in @('create_process','linked_token_not_normal','command_too_long','missing_launcher','environment_block','restricted_token_not_normal','restricted_token_create','restricted_token_privileges')) {
           try { Invoke-WorkspaceNormalTokenRelaunch $context 'fixture.ps1' $reason $true $true '' }
           catch { Get-WorkspaceStartupCode $_.Exception.Message }
         }
         """
         result = self.powershell(source)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.split(), ["35", "33", "42", "41", "35"])
+        self.assertEqual(result.stdout.split(), ["35", "33", "42", "41", "35", "33", "33", "33"])
 
     def fixture_launch(self, admin=True, child_code=0, relaunched=False, no_browser=True, identity_error=None, unsafe_token=False):
         # Only the COPIED helper is mocked. Production has no env/CLI bypass.
@@ -188,7 +195,7 @@ function Assert-WorkspaceNormalProcess { param($Context) TOKEN_CHECK }
             (folder / "deploy").mkdir()
             vbs = folder / "Company-Workspace.vbs"
             vbs.write_text(instrumented, encoding="ascii")
-            for status in (37, 20, 0):
+            for status in (1, 37, 20, 0):
                 with self.subTest(status=status):
                     (folder / "deploy/Start-CompanyWorkspace.ps1").write_text("exit " + str(status), encoding="ascii")
                     result = subprocess.run(["cscript.exe", "//NoLogo", "//U", str(vbs)],
@@ -201,6 +208,9 @@ function Assert-WorkspaceNormalProcess { param($Context) TOKEN_CHECK }
                     else:
                         self.assertEqual(output.count("오류 코드"), 1)
                         self.assertNotIn("Python", output)
+                    if status == 1:
+                        self.assertIn('Check-Workspace.cmd', output)
+                        self.assertIn('아직 확인되지 않았습니다', output)
 
 
 class WorkspaceStartupContractTests(unittest.TestCase):
@@ -210,6 +220,8 @@ class WorkspaceStartupContractTests(unittest.TestCase):
         vbs = (ROOT / "Company-Workspace.vbs").read_text(encoding="ascii")
         self.assertIn("result <> 0 And result <> 20", vbs)
         self.assertNotIn("-NoProfile", vbs)
+        self.assertIn('-ExecutionPolicy Bypass', vbs)
+        self.assertNotIn('Set-ExecutionPolicy', vbs)
         source = LAUNCHER.read_text(encoding="utf-8-sig")
         self.assertLess(source.index("Get-WorkspaceVerifiedContext"), source.index("Threading.Mutex"))
         self.assertLess(source.index("Invoke-WorkspaceNormalTokenRelaunch"), source.index("Threading.Mutex"))
@@ -223,7 +235,7 @@ class WorkspaceStartupContractTests(unittest.TestCase):
         source = (ROOT / "Company-Workspace.vbs").read_text(encoding="ascii")
         messages = ["".join(chr(int(value, 16)) for value in encoded.split())
                     for encoded in re.findall(r'Korean\("([A-F0-9 ]+)"\)', source)]
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 4)
         self.assertIn("압축 해제", messages[0])
         self.assertTrue(all("실행" in message and "Python" not in message for message in messages))
         self.assertTrue(all("오류 코드" in message for message in messages[1:]))

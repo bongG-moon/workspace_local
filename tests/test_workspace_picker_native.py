@@ -130,6 +130,27 @@ ConvertTo-Json -InputObject @($results) -Compress
 """.replace("__PATHS__", literals))
         self.assertEqual(value, paths)
 
+    def test_initial_directory_is_applied_to_unshown_native_dialog(self):
+        with tempfile.TemporaryDirectory(prefix='workspace-picker-initial-업무-') as directory:
+            literal = str(Path(directory)).replace("'", "''")
+            value = self.run_ps(r"""
+Initialize-WorkspacePicker
+$dialog = New-WorkspacePathDialog 'folder'
+try {
+    $dialog.SetInitialDirectory('__DIRECTORY__')
+    $native = $dialog.GetType().GetField('dialog', 'Instance,NonPublic').GetValue($dialog)
+    $interface = [WorkspacePicker.NativePathDialog].GetNestedType('IFileOpenDialog', 'NonPublic')
+    $arguments = [object[]]@($null)
+    $interface.GetMethod('GetFolder').Invoke($native, $arguments) | Out-Null
+    $item = $arguments[0]
+    try {
+        $readPath = [WorkspacePicker.NativePathDialog].GetMethod('ReadPath', [Reflection.BindingFlags]'Static,NonPublic')
+        @{path=$readPath.Invoke($null, [object[]]@($item))} | ConvertTo-Json -Compress
+    } finally {[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($item)}
+} finally {$dialog.Dispose()}
+""".replace('__DIRECTORY__', literal))
+            self.assertEqual(str(Path(directory)), value['path'])
+
 
 if __name__ == "__main__":
     unittest.main()

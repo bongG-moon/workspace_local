@@ -117,6 +117,10 @@ namespace WorkspacePicker {
         private const uint FileSystemPath = 0x80058000;
         private IFileOpenDialog dialog;
 
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+        private static extern void SHCreateItemFromParsingName(string path, IntPtr context, ref Guid iid,
+                                                               [MarshalAs(UnmanagedType.Interface)] out IShellItem item);
+
         public bool IsFolderPicker { get; private set; }
         public bool Multiselect { get { return !IsFolderPicker; } }
         public string SelectedPath { get; private set; }
@@ -165,6 +169,18 @@ namespace WorkspacePicker {
                 Dispose();
                 throw;
             }
+        }
+
+        public void SetInitialDirectory(string path) {
+            EnsureOpen();
+            if (String.IsNullOrWhiteSpace(path) || !System.IO.Path.IsPathRooted(path) || !System.IO.Directory.Exists(path))
+                throw new ArgumentException("The initial directory must exist.", "path");
+            IShellItem item = null;
+            try {
+                Guid iid = typeof(IShellItem).GUID;
+                SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out item);
+                dialog.SetFolder(item);
+            } finally { Release(item); }
         }
 
         public DialogResult ShowDialog(IWin32Window owner) {
