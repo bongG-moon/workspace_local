@@ -19,12 +19,12 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'status', 'finish'])
-parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.12.9.exe')
+parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.12.10.exe')
 parser.add_argument('--run', default='final')
 args = parser.parse_args()
 if not re.fullmatch('[a-z0-9-]{1,30}', args.run):
     parser.error('Invalid validation run name')
-OUT = ROOT / ('build/qa-standalone-0.12.9-' + args.run)
+OUT = ROOT / ('build/qa-standalone-0.12.10-' + args.run)
 STATE = OUT / 'app-state'
 CACHE = OUT / '실행 캐시'
 COPY = OUT / 'EXE만 있는 한글 폴더' / args.exe.name
@@ -64,30 +64,32 @@ if args.action == 'start':
     assert list(COPY.parent.iterdir()) == [COPY]
     save('settings-before.json', settings())
     env = os.environ.copy()
-    original_path = env.get('PATH', '').split(os.pathsep)
-    env['PATH'] = os.pathsep.join(item for item in original_path if 'python' not in item.casefold() and 'windowsapps' not in item.casefold())
     command = [str(COPY), '--no-browser', '--state', str(STATE), '--cache-root', str(CACHE)]
     first = subprocess.run(command, cwd=COPY.parent, env=env, capture_output=True, timeout=110, creationflags=HIDDEN)
     assert first.returncode == 0, f'EXE exit {first.returncode}'
     runtime = json.loads((STATE / 'runtime.json').read_text(encoding='utf-8'))
     boot = request('/api/bootstrap')
-    assert boot['workspaceVersion'] == '0.12.9' and boot['demo'] is False and not boot['error']
+    assert boot['workspaceVersion'] == '0.12.10' and boot['demo'] is False and not boot['error']
     app_root = Path(boot['appRoot'])
-    assert app_root.is_relative_to(CACHE) and (app_root / 'runtime/python.exe').is_file()
-    diagnostic = subprocess.run([str(app_root / 'runtime/python.exe'), '-X', 'utf8', '-c',
-        'import sys,sqlite3,ctypes,ssl,local_app.server; print(sys.executable); print(sys.version.split()[0]); print(sys.flags.isolated)'],
-        cwd=COPY.parent, env=env, capture_output=True, text=True, encoding='utf-8', timeout=20, creationflags=HIDDEN)
-    assert diagnostic.returncode == 0, diagnostic.stderr
-    lines = diagnostic.stdout.strip().splitlines()
-    assert Path(lines[0]).resolve() == (app_root / 'runtime/python.exe').resolve()
-    assert lines[1] == '3.13.15' and lines[2] == '1'
+    assert app_root.is_relative_to(CACHE) and not (app_root / 'runtime').exists()
+    assert not list(app_root.rglob('python*.exe'))
     # Read the owned server's executable, never expose its command line or auth.
     shell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     process = subprocess.run([str(shell), '-NoProfile', '-Command',
         f'$p=(Get-CimInstance Win32_Process -Filter "ProcessId={int(runtime["pid"])}").ExecutablePath; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))'],
         capture_output=True, text=True, timeout=15, creationflags=HIDDEN)
     server_python = base64.b64decode(process.stdout.strip()).decode('utf-8')
-    assert Path(server_python).resolve() == (app_root / 'runtime/pythonw.exe').resolve()
+    assert process.returncode == 0 and server_python
+    installed_python = Path(server_python).resolve()
+    assert installed_python.is_file() and not installed_python.is_relative_to(CACHE)
+    probe_python = installed_python.with_name('python.exe') if installed_python.name.lower() == 'pythonw.exe' else installed_python
+    diagnostic = subprocess.run([str(probe_python), '-X', 'utf8', '-c',
+        'import json,sys,ctypes,ssl,local_app.server; print(json.dumps({"executable":sys.executable,"version":list(sys.version_info[:3])}))'],
+        cwd=app_root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=20, creationflags=HIDDEN)
+    assert diagnostic.returncode == 0, diagnostic.stderr
+    python_info = json.loads(diagnostic.stdout)
+    assert tuple(python_info['version']) >= (3, 11, 0)
+    assert Path(python_info['executable']).resolve() == probe_python
     second = subprocess.run(command, cwd=COPY.parent, env=env, capture_output=True, timeout=110, creationflags=HIDDEN)
     assert second.returncode == 0
     assert json.loads((STATE / 'runtime.json').read_text())['pid'] == runtime['pid']
@@ -102,8 +104,9 @@ if args.action == 'start':
     task = request('/api/create', {'workspace': str(workspace), 'trusted': True, 'title': '단일 EXE 연결 검증'})
     save('task.json', {'id': task['id'], 'workspace': str(workspace)})
     result = {'success': True, 'version': boot['workspaceVersion'], 'cliVersion': boot['version'],
-        'cliRuntime': boot['runtime'], 'embeddedPython': lines[1], 'serverUsesEmbeddedPython': True,
-        'exeOnlyFolder': True, 'pythonPathEntriesRemoved': len(original_path) - len(env['PATH'].split(os.pathsep)),
+        'cliRuntime': boot['runtime'], 'installedPythonVersion': '.'.join(map(str, python_info['version'])),
+        'serverUsesExistingPython': True, 'pythonBundled': False,
+        'exeOnlyFolder': True,
         'stableCacheAndPidReused': True, 'appRoot': str(app_root), 'personalSettingsUnchanged': settings() == json.loads((OUT / 'settings-before.json').read_text())}
     save('startup-result.json', result)
     print(json.dumps(result, ensure_ascii=False))

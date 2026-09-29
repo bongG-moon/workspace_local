@@ -35,9 +35,10 @@ class StandaloneBootstrapTests(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         cls.counter = 0
         cls.script = (
-            'param([string]$PythonCommand, [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot)\n'
+            'param([string]$PythonCommand="python", [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot)\n'
             '$ErrorActionPreference="Stop"\n'
-            '@{ python=$PythonCommand; noBrowser=[bool]$NoBrowser; demo=[bool]$Demo; '
+            '@{ python=$PythonCommand; pythonOverride=$PSBoundParameters.ContainsKey("PythonCommand"); '
+            'noBrowser=[bool]$NoBrowser; demo=[bool]$Demo; '
             'state=$StateRoot; cwd=(Get-Location).Path; config=$env:CLAUDE_CONFIG_DIR; '
             'model=$env:ANTHROPIC_MODEL; path=$env:PATH; entry=$env:COMPANY_AGENT_CLAUDE } '
             '| ConvertTo-Json -Compress | Set-Content -LiteralPath $env:WORKSPACE_BOOTSTRAP_RESULT -Encoding UTF8\n'
@@ -48,7 +49,6 @@ class StandaloneBootstrapTests(unittest.TestCase):
         ).encode('utf-8-sig')
         cls.base_files = {
             PREFIX + 'deploy/Start-CompanyWorkspace.ps1': cls.script,
-            PREFIX + 'runtime/python.exe': b'isolated-test-runtime-placeholder',
             PREFIX + 'local_app/server.py': b'# isolated fixture; never executed\n',
             PREFIX + 'local_app/web/한글 설명.txt': '한글 파일과 경로 확인'.encode(),
         }
@@ -122,6 +122,9 @@ class StandaloneBootstrapTests(unittest.TestCase):
         self.assertEqual(0, first.returncode, first.stderr)
         expected = self.target() / (PREFIX + 'local_app/web/한글 설명.txt')
         self.assertEqual(self.good_files[PREFIX + 'local_app/web/한글 설명.txt'], expected.read_bytes())
+        self.assertEqual(set(self.good_files), {p.relative_to(self.target()).as_posix()
+                                              for p in self.target().rglob('*') if p.is_file()})
+        self.assertFalse((self.target() / (PREFIX + 'runtime')).exists())
         timestamps = {str(p): p.stat().st_mtime_ns for p in self.target().rglob('*') if p.is_file()}
         second = self.run_exe(None, '--verify-only')
         self.assertEqual(0, second.returncode, second.stderr)
@@ -148,7 +151,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
 
     def test_missing_cache_file_is_not_silently_replaced(self):
         self.assertEqual(0, self.run_exe(None, '--verify-only').returncode)
-        damaged = self.target() / (PREFIX + 'runtime/python.exe')
+        damaged = self.target() / (PREFIX + 'deploy/Start-CompanyWorkspace.ps1')
         damaged.unlink()
         self.assertEqual(54, self.run_exe(None, '--verify-only').returncode)
         self.assertFalse(damaged.exists())
@@ -170,7 +173,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
         # the same ZIP's file records may use forward slashes.
         directories = [(name, b'') for name in [
             'Company-Workspace\\', 'Company-Workspace\\deploy\\',
-            'Company-Workspace\\runtime\\', 'Company-Workspace\\local_app\\',
+            'Company-Workspace\\local_app\\',
             'Company-Workspace\\local_app\\web\\']]
         exe, digest, _ = self.compile_fixture(entries=directories + list(self.base_files.items()))
         result = self.run_exe(exe, '--verify-only')
@@ -186,7 +189,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
 
     def test_backslash_zip_paths_still_reject_traversal_and_alias_duplicates(self):
         for suffix, name in [('traversal', 'Company-Workspace\\..\\escaped.txt'),
-                              ('duplicate', 'Company-Workspace\\runtime\\python.exe')]:
+                              ('duplicate', 'Company-Workspace\\local_app\\server.py')]:
             exe, _, _ = self.compile_fixture(entries=list(self.base_files.items()) + [(name, b'bad')])
             cache = self.case / suffix
             self.assertEqual(51, self.run_exe(exe, '--verify-only', cache=cache).returncode)
@@ -194,8 +197,8 @@ class StandaloneBootstrapTests(unittest.TestCase):
 
     def test_traversal_and_windows_alias_paths_rejected(self):
         for i, name in enumerate([PREFIX + '../escape.txt', PREFIX + 'nested/../../escape.txt',
-                                  PREFIX + 'runtime/CON.txt', PREFIX + 'runtime/file:stream',
-                                  PREFIX + 'runtime/trailing.', PREFIX + 'runtime/dir\\escape.txt']):
+                                  PREFIX + 'local_app/CON.txt', PREFIX + 'local_app/file:stream',
+                                  PREFIX + 'local_app/trailing.', PREFIX + 'local_app/dir\\escape.txt']):
             with self.subTest(name=name):
                 extra = (name, b'do not extract')
                 exe, _, _ = self.compile_fixture(entries=list(self.base_files.items()) + [extra],
@@ -204,7 +207,7 @@ class StandaloneBootstrapTests(unittest.TestCase):
         self.assertFalse((self.case / 'escape.txt').exists())
 
     def test_manifest_case_collision_and_content_mismatch_rejected(self):
-        collision = list(self.base_files.items()) + [(PREFIX + 'RUNTIME/PYTHON.EXE', b'collision')]
+        collision = list(self.base_files.items()) + [(PREFIX + 'LOCAL_APP/SERVER.PY', b'collision')]
         exe, _, _ = self.compile_fixture(manifest_entries=collision)
         self.assertEqual(51, self.run_exe(exe, '--verify-only').returncode)
         wrong = dict(self.base_files)
@@ -212,6 +215,15 @@ class StandaloneBootstrapTests(unittest.TestCase):
         exe, _, _ = self.compile_fixture(manifest_entries=list(wrong.items()))
         self.assertEqual(54, self.run_exe(exe, '--verify-only').returncode)
         self.assertEqual([], list(self.cache.iterdir()))
+
+    def test_app_and_shared_launcher_are_required_before_cache_creation(self):
+        for relative in ['deploy/Start-CompanyWorkspace.ps1', 'local_app/server.py']:
+            with self.subTest(relative=relative):
+                files = [(name, data) for name, data in self.base_files.items() if name != PREFIX + relative]
+                exe, _, _ = self.compile_fixture(entries=files, manifest_entries=files)
+                cache = self.case / Path(relative).name
+                self.assertEqual(51, self.run_exe(exe, '--verify-only', cache=cache).returncode)
+                self.assertFalse(cache.exists())
 
     def test_parallel_extractors_share_one_cache(self):
         args = [str(self.good_exe), '--cache-root', str(self.cache), '--verify-only']
@@ -237,7 +249,8 @@ class StandaloneBootstrapTests(unittest.TestCase):
         result = self.run_exe(None, '--state', str(state), '--demo', env=env)
         self.assertEqual(0, result.returncode, result.stderr)
         value = json.loads(record.read_text(encoding='utf-8-sig'))
-        self.assertEqual(str(self.target() / (PREFIX + 'runtime/python.exe')), value['python'])
+        self.assertEqual('python', value['python'])
+        self.assertFalse(value['pythonOverride'])
         self.assertEqual(str(self.target() / 'Company-Workspace'), value['cwd'])
         self.assertEqual(str(state), value['state'])
         self.assertTrue(value['demo'])
@@ -246,8 +259,8 @@ class StandaloneBootstrapTests(unittest.TestCase):
                               ('entry', 'COMPANY_AGENT_CLAUDE')]:
             self.assertEqual(env[variable], value[key])
         # Profiles may legitimately change PATH; the bootstrap itself must not
-        # prepend its embedded runtime, which would alter existing wrappers.
-        self.assertNotIn(str(self.target() / (PREFIX + 'runtime')).lower(), value['path'].lower())
+        # prepend its application cache, which would alter existing wrappers.
+        self.assertNotIn(str(self.target()).lower(), value['path'].lower())
         self.assertNotIn(b'private-profile-', result.stdout + result.stderr)
 
     def test_reported_launcher_error_is_not_reported_twice(self):
@@ -258,12 +271,17 @@ class StandaloneBootstrapTests(unittest.TestCase):
         self.assertEqual(b'', result.stdout + result.stderr)
 
     def test_no_browser_error_preserves_launcher_category_without_private_output(self):
-        env = os.environ.copy()
-        env.update(WORKSPACE_BOOTSTRAP_RESULT=str(self.case / 'args.json'), WORKSPACE_BOOTSTRAP_EXIT='33')
-        result = self.run_exe(env=env)
-        self.assertEqual(33, result.returncode)
-        self.assertIn(b'WS-33', result.stderr)
-        self.assertNotIn(b'private-profile-', result.stdout + result.stderr)
+        # Missing/unsupported installed Python remains the shared launcher's
+        # precise prerequisite failure, rather than a generic extraction error.
+        for code in [33, 37, 38]:
+            with self.subTest(code=code):
+                env = os.environ.copy()
+                env.update(WORKSPACE_BOOTSTRAP_RESULT=str(self.case / 'args.json'), WORKSPACE_BOOTSTRAP_EXIT=str(code))
+                result = self.run_exe(env=env)
+                self.assertEqual(code, result.returncode)
+                self.assertIn(('WS-' + str(code)).encode(), result.stderr)
+                self.assertNotIn(b'EXE-58', result.stderr)
+                self.assertNotIn(b'private-profile-', result.stdout + result.stderr)
 
     def test_invalid_options_and_nonabsolute_paths_do_not_extract(self):
         for args in [('--unknown',), ('--state', 'relative'), ('--state', r'C:relative'),

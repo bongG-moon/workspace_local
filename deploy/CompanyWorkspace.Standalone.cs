@@ -125,7 +125,7 @@ namespace CompanyAgent {
                 if (entries.ContainsKey(name)) throw new StandaloneFailure(51);
                 entries.Add(name, fields[0]);
             }
-            foreach (string required in new[] { "deploy/Start-CompanyWorkspace.ps1", "runtime/python.exe", "local_app/server.py" })
+            foreach (string required in new[] { "deploy/Start-CompanyWorkspace.ps1", "local_app/server.py" })
                 if (!entries.ContainsKey(PayloadPrefix + required)) throw new StandaloneFailure(51);
             return entries;
         }
@@ -256,8 +256,10 @@ namespace CompanyAgent {
         private static int Launch(string appRoot, Options options) {
             string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
             if (!File.Exists(powershell)) throw new StandaloneFailure(56);
-            string command = "-NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(Path.Combine(appRoot, @"deploy\Start-CompanyWorkspace.ps1")) +
-                             " -PythonCommand " + Quote(Path.Combine(appRoot, @"runtime\python.exe"));
+            // The shared launcher checks the user's existing Python. The EXE
+            // carries application files only; it never provides an interpreter
+            // or installs/downloads missing prerequisites.
+            string command = "-NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Quote(Path.Combine(appRoot, @"deploy\Start-CompanyWorkspace.ps1"));
             if (options.NoBrowser) command += " -NoBrowser";
             if (options.Demo) command += " -Demo";
             if (options.StateRoot != null) command += " -StateRoot " + Quote(options.StateRoot);
@@ -275,7 +277,8 @@ namespace CompanyAgent {
                 process.StartInfo = start;
                 process.OutputDataReceived += delegate { };
                 process.ErrorDataReceived += delegate { };
-                if (!process.Start()) throw new StandaloneFailure(56);
+                try { if (!process.Start()) throw new StandaloneFailure(56); }
+                catch (System.ComponentModel.Win32Exception) { throw new StandaloneFailure(56); }
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
                 if (!process.WaitForExit(90000)) throw new StandaloneFailure(57);
@@ -298,7 +301,7 @@ namespace CompanyAgent {
                 case 53: message = "실행 자료를 저장할 폴더에 연결 경로가 있어 시작하지 못했습니다. 기존 자료와 설정은 변경하지 않았습니다."; break;
                 case 54: message = "보관된 실행 자료가 없거나 변경되어 시작하지 못했습니다. 실행 중인 업무를 종료한 뒤 담당자에게 실행 캐시 확인을 요청해 주세요. 기존 자료는 삭제하지 않았습니다."; break;
                 case 55: message = "다른 실행기에서 자료를 준비하고 있습니다. 잠시 뒤 다시 열어 주세요."; break;
-                case 56: message = "Windows 실행기를 시작하지 못했습니다. PC의 실행 환경을 확인해 주세요."; break;
+                case 56: message = "Windows PowerShell을 찾거나 시작하지 못했습니다. PC의 기존 PowerShell 실행 환경을 확인해 주세요. 설치나 설정 변경은 하지 않았습니다."; break;
                 case 57: message = "실행 준비 시간이 길어지고 있습니다. 준비 중인 프로세스는 종료하지 않았습니다. 잠시 뒤 앱이 열리는지 확인해 주세요."; break;
                 case 58: message = "앱 실행을 완료하지 못했습니다. 실행 캐시의 Company-Workspace 폴더에 있는 Check-Workspace.cmd로 진단하거나 이 오류 코드를 담당자에게 전달해 주세요."; break;
                 default: message = "실행 자료를 준비하지 못했습니다. 저장 공간과 폴더 접근 권한을 확인해 주세요. 개인 설정은 변경하지 않았습니다."; break;

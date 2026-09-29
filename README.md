@@ -1,19 +1,19 @@
-# Company Workspace 0.12.9
+# Company Workspace 0.12.10
 
 터미널 명령이나 `cd`에 익숙하지 않은 사용자가 기존 Claude Code 업무 환경을 창, 버튼, 자연어 요청으로 사용하는 Windows 로컬 앱입니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.9/Company-Workspace-0.12.9-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.9/Company-Workspace-0.12.9-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.10/Company-Workspace-0.12.10-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.10/Company-Workspace-0.12.10-vbs.zip)**
 
-[0.12.9 배포 안내](docs/WORKSPACE_RELEASE_0.12.9.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.12.9.md)
+[0.12.10 배포 안내](docs/WORKSPACE_RELEASE_0.12.10.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.12.10.md)
 
 ## 어떤 파일을 받으면 되나요?
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| `Company-Workspace-0.12.9-exe.zip` | ZIP을 풀고 `Company-Workspace-0.12.9.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell. Python 3.13.15 x64가 포함되어 별도 Python 설치 불필요 |
-| `Company-Workspace-0.12.9-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.12.10-exe.zip` | ZIP을 풀고 `Company-Workspace-0.12.10.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 이미 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.12.10-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
 
-**앱 전용 로그인·API 키는 없습니다. AI 업무에는 같은 Windows 사용자의 기존 Claude Code와 인증이 필요합니다.** 두 방식 모두 기존 PowerShell 프로필과 Claude 호출 환경을 사용합니다. EXE는 앱과 Python을 묶은 방식이며 시작 검사·PowerShell 경로를 없애는 방식은 아닙니다. 회사의 VBS·EXE·PowerShell 허용 정책이 서로 다를 수 있으므로 모든 PC에서의 실행을 보장하지 않습니다.
+**앱 전용 로그인·API 키는 없습니다. AI 업무에는 같은 Windows 사용자의 기존 Claude Code와 인증이 필요합니다.** 두 방식 모두 기존 PowerShell 프로필과 Claude 호출 환경을 사용합니다. EXE는 앱 파일만 묶은 실행기이며 VBS와 같은 시작 검사·PowerShell 경로를 사용합니다. 두 배포본 모두 Python 실행 환경이나 설치 프로그램을 포함하지 않고, 다운로드·자동 설치도 하지 않습니다. 기존 Python을 확인하지 못하면 안내 후 중단합니다. 회사의 VBS·EXE·PowerShell 허용 정책이 서로 다를 수 있으므로 모든 PC에서의 실행을 보장하지 않습니다.
 
 EXE는 서명되지 않은 자체 제작 실행 파일입니다. 앱은 UAC·계정·영구 실행 정책을 자동 변경하지 않으며, 회사가 정한 배포 정책을 따릅니다. 상세 조건은 [단일 EXE 안내](docs/WORKSPACE_STANDALONE_EXE.md)와 [시작 진단](docs/WORKSPACE_STARTUP_DIAGNOSTIC.md)을 확인하세요.
 
@@ -36,13 +36,13 @@ EXE는 서명되지 않은 자체 제작 실행 파일입니다. 앱은 UAC·계
 - `/` 명령·`@` 파일 추천, 모델·Effort·승인 모드의 현재 값, `/effort`와 입력창의 Shift+Tab 모드 전환을 제공합니다.
 - 승인 카드를 간결하게 정리하고 **이번만 허용 / CLI가 제안한 연결·지속 허용 범위**를 구분합니다. 기존 Claude 승인 규칙을 임의로 넓히지 않습니다.
 - HTML을 포함한 지원 파일을 기본 앱에서 열거나 탐색기로 확인하고, 지원 텍스트를 메모장으로 엽니다.
-- Python을 포함한 단일 EXE 배포 방식을 추가합니다.
+- 기존 Python을 확인하여 사용하는 EXE 배포 방식을 제공합니다. Python 설치나 다운로드 없이 준비 조건만 확인합니다.
 
 일반 터미널 전체를 에뮬레이션하지 않습니다. 제공 목록·모드·스킬의 실제 동작은 설치된 CLI, 모델, 회사 정책과 플러그인에 따릅니다. HTML 디자인 카드와 일부 Stop 후크 개선은 해당 기능을 제공하는 Company Agent 코어가 별도로 필요합니다.
 
 ## 기존 환경을 사용하는 구조
 
-이 저장소는 **Workspace 화면과 로컬 연결 코드**를 제공합니다. Claude 실행 파일, 로그인 정보, 회사 API 키, 개인 설정이나 Company Agent 전체 설치본은 포함하지 않습니다. 호환되는 Company Agent 설치가 있으면 기억·업무 방식·따라 하기 등을 연결하며, 등록을 확인하지 못하면 가능한 메타데이터 조회와 진단을 구분해서 표시합니다.
+이 저장소는 **Workspace 화면과 로컬 연결 코드**를 제공합니다. Python 실행 환경·설치 프로그램, Claude 실행 파일, 로그인 정보, 회사 API 키, 개인 설정이나 Company Agent 전체 설치본은 포함하지 않습니다. 호환되는 Company Agent 설치가 있으면 기억·업무 방식·따라 하기 등을 연결하며, 등록을 확인하지 못하면 가능한 메타데이터 조회와 진단을 구분해서 표시합니다.
 
 모델·Effort·승인 모드는 실제 CLI 응답으로 확인합니다. 같은 앱 실행 중 같은 업무의 재연결에는 선택을 메모리에서 다시 적용하지만, 앱을 완전히 재시작하면 개인 기본 설정을 다시 상속합니다. `/effort auto`는 관찰한 변경 전 값을 복원하며 개인 설정을 지우지 않습니다.
 
@@ -64,16 +64,16 @@ python -X utf8 scripts/test-lab/test-workspace.py
 # VBS 묶음 제작·검사
 powershell -NoProfile -ExecutionPolicy Bypass -File deploy/New-WorkspaceBundle.ps1
 python -X utf8 scripts/test-lab/check-workspace-bundle.py 'dist\<생성된 ZIP 파일명>.zip'
-# Python을 포함한 EXE 제작
+# 앱 파일만 포함한 EXE 제작 (실행 PC에 기존 Python 필요)
 powershell -NoProfile -ExecutionPolicy Bypass -File deploy/New-WorkspaceStandalone.ps1
 # 같은 버전의 VBS/EXE ZIP과 체크섬 생성 (기존 EXE와 소스 동일성 확인)
 powershell -NoProfile -ExecutionPolicy Bypass -File deploy/New-WorkspaceRelease.ps1
 ```
 
-앱은 Python 표준 라이브러리를 사용하며 프론트엔드 빌드 없이 실행합니다. Node.js는 UI 회귀 시험에 필요합니다. EXE 제작은 공식 체크섬으로 고정한 Python 임베디드 ZIP과 Windows .NET Framework C# 컴파일러를 사용합니다. Windows 사용자·토큰 시험은 실제 로그인 환경과 별도 실행 조건을 구분합니다.
+앱은 Python 표준 라이브러리를 사용하며 프론트엔드 빌드 없이 실행합니다. Node.js는 UI 회귀 시험에 필요합니다. EXE 제작은 VBS와 같은 앱 파일과 Windows .NET Framework C# 컴파일러를 사용하며 Python 배포본을 다운로드·포함하지 않습니다. Windows 사용자·토큰 시험은 실제 로그인 환경과 별도 실행 조건을 구분합니다.
 
 Company Agent 코어 통합 시험에는 별도로 검토한 소스의 플러그인 루트를 `COMPANY_AGENT_SOURCE`로 지정할 수 있습니다. 외부 코어가 없으면 해당 시험만 생략하며 잘못된 경로를 지정하면 구성 오류로 처리합니다. 시험 때문에 실행 중인 개인 설치를 수정하지 않습니다.
 
 패키지 검사기는 허용 파일, 현재 소스 일치, 시작 진단 해시와 개인 상태 미포함을 확인합니다. GitHub의 자동 소스 ZIP과 위의 실행용 Release ZIP은 구성이 다릅니다. 가상 CLI·현재 개발 PC 시험은 모든 회사 PC의 실행 정책, 실제 문서 품질·Office·DRM 호환성을 대신하지 않습니다.
 
-검증 결과와 남은 현장 확인은 [0.12.9 검증 기록](docs/VALIDATION_0.12.9.md), 라이선스는 [제3자 고지](THIRD_PARTY_NOTICES.md)를 확인하세요.
+검증 결과와 남은 현장 확인은 [0.12.10 검증 기록](docs/VALIDATION_0.12.10.md), 라이선스는 [제3자 고지](THIRD_PARTY_NOTICES.md)를 확인하세요.

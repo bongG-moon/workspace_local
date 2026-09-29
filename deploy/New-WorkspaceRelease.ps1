@@ -35,6 +35,12 @@ $compared = 0
 try {
     $embeddedFiles = @{}
     foreach ($entry in $embedded.Entries) { $embeddedFiles[$entry.FullName.Replace('\','/')] = $entry }
+    $embeddedFileCount = @($embedded.Entries | Where-Object { $_.Name }).Count
+    foreach ($name in $embeddedFiles.Keys) {
+        if ($name.StartsWith('Company-Workspace/runtime/', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The EXE contains a Python runtime; rebuild the prerequisite-checking edition.'
+        }
+    }
     foreach ($entry in $portable.Entries) {
         if (-not $entry.Name) { continue }
         $name = $entry.FullName.Replace('\','/')
@@ -48,6 +54,7 @@ try {
         $compared++
     }
     if ($compared -lt 1) { throw 'Empty VBS source bundle.' }
+    if ($embeddedFileCount -ne $compared) { throw 'EXE contains files outside the VBS application payload.' }
 } finally { $portable.Dispose(); $embedded.Dispose(); $stream.Dispose(); $sha.Dispose() }
 $exeStage = Join-Path $stage 'exe'
 New-Item -ItemType Directory -Path $exeStage -Force | Out-Null
@@ -59,7 +66,8 @@ $instructions = @"
 Company Workspace $version - single EXE edition
 
 1. Extract this ZIP, then double-click $exeName.
-2. Python 3.13.15 x64 is included. No separate Python install is needed.
+2. Existing Python 3.11 or newer is required. This EXE does not include,
+   download or install Python. Missing prerequisites are reported at startup.
 3. AI features use the current Windows user's existing Claude Code installation
    and authentication. Claude and Company Agent are not installed by this ZIP.
 4. Before switching from the VBS edition or another version, use Settings >
@@ -69,9 +77,9 @@ Company Workspace $version - single EXE edition
    does not bypass those restrictions.
 
 Windows 10/11 x64, Windows PowerShell and .NET Framework 4 are required.
-The EXE extracts its bundled files to a per-user cache on first run.
-The EXE alone is sufficient after extraction; README and hash are for reference.
-Python's license is retained in the embedded runtime/LICENSE.txt.
+The EXE extracts only its application files to a per-user cache on first run.
+Keep the EXE as the entry point; README and hash are for reference.
+Existing Python and Claude remain installed and managed separately on the PC.
 
 Korean guide and the alternative VBS ZIP:
 https://github.com/bongG-moon/workspace_local/releases/tag/v$version
@@ -85,7 +93,7 @@ $rows = @($vbsZip, $exeZip) | ForEach-Object {
 }
 [IO.File]::WriteAllText($checksums, (($rows -join "`n") + "`n"), $utf8)
 $report = [ordered]@{version=$version; vbsZip=$vbsZip; exeZip=$exeZip; checksums=$checksums;
-    identicalSourceFiles=$compared; exeSha256=$exeHash; stage=$stage}
+    identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage}
 $json = $report | ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $repoRoot ('build\workspace-release-' + $version + '.json')), $json, $utf8)
 $json

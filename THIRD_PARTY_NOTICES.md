@@ -9,15 +9,13 @@ Company Workspace includes **Noto Sans KR**, distributed under the **SIL Open Fo
 
 The font is served locally or embedded in the guide. It is not installed into Windows, and these assets do not require a Google Fonts request.
 
-## Python in the standalone EXE
+## Python as an external prerequisite
 
-The **EXE release** includes the official **Python 3.13.15 Windows x64 embeddable distribution**. The VBS release uses an existing Python installation and does not redistribute that runtime.
+Starting with **0.12.10**, both the EXE and VBS releases require an **existing Python 3.11 or later installation**. They do not redistribute, download or install a Python runtime or Python installer. The EXE payload and its app cache contain application files only.
 
-The upstream `LICENSE.txt`, containing Python's licensing terms and incorporated-software notices, is retained inside the EXE payload at `Company-Workspace/runtime/LICENSE.txt`. After the EXE prepares its private runtime cache, the same file is available under that application's `runtime` directory. The original license is not replaced by this summary.
+The app checks the existing installation before starting. It does not replace that installation or register a new Python on the system PATH. Licensing and incorporated-software notices for the separately installed Python are supplied with that installation.
 
-[deploy/New-WorkspaceStandalone.ps1](deploy/New-WorkspaceStandalone.ps1) records the official download URL and pinned SHA-256. The extracted runtime also includes `SOURCE.json` with its version, source URL and checksum. The app does not register this Python in the system PATH or replace the user's Python installation.
-
-Upstream references: [Python 3.13.15 distribution](https://www.python.org/downloads/release/python-31315/) and [embeddable distribution documentation](https://docs.python.org/3.13/using/windows.html#the-embeddable-package).
+This notice describes the current 0.12.10 release. Historical 0.12.9 release packages and their embedded-runtime notices remain unchanged.
 
 ## External applications
 

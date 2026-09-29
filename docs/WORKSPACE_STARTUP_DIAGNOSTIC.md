@@ -1,20 +1,24 @@
 # Workspace 시작 오류 확인하기
 
-대상: **Workspace 0.12.9**. 결과 파일의 `diagnosticVersion`은 `ws33-12`, `targetSource`는 `workspace-0.12.9`입니다. 오래된 진단 파일과 새 실행기를 섞지 마세요.
+대상: **Workspace 0.12.10**. 결과 파일의 `diagnosticVersion`은 `ws33-13`, `targetSource`는 `workspace-0.12.10`입니다. 오래된 진단 파일과 새 실행기를 섞지 마세요.
 
 `WS-33`은 Windows 실행 권한 검사에서 중단됐다는 뜻입니다. 다운로드 폴더에서 실행했다는 이유만으로 표시되는 코드는 아니며, 이 번호만으로 회사 정책 문제라고 단정할 수 없습니다.
 
 VBS의 일반 종료 코드 `1` 역시 원인을 확정하는 코드가 아닙니다. 실행 정책·스크립트 구문·시작 프로필 등 원래 실행 과정 중 어느 단계에서 실패했는지는 별도로 확인해야 합니다. 다른 PC에서 프로세스 한정 Bypass로 해결됐다는 사례만으로 같은 원인이라고 판단하지 않습니다.
 
+EXE와 VBS 실행은 모두 이미 설치된 Python 3.11 이상이 필요합니다. 배포 파일에 Python 실행 환경·설치 프로그램은 없으며 자동 다운로드·설치하지 않습니다. 이 진단은 Python이나 Claude를 실행하지 않으므로 진단 통과만으로 해당 준비 조건을 확인했다고 판단하지 마세요.
+
+시작 실행기의 `WS-37`은 설치된 Python을 찾지 못한 경우, `WS-38`은 Python 실행·최소 버전·필수 기본 모듈을 확인하지 못한 경우의 안내입니다. 두 경우 모두 자동 설치나 PATH 변경을 하지 않습니다. 실제 메시지와 함께 기존 설치 상태를 확인하세요.
+
 ## 실행 방법
 
-1. VBS 방식은 실행한 0.12.9 Workspace ZIP 전체를 압축 해제합니다. 단일 EXE 방식은 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`에서 실행한 0.12.9 폴더 아래 `Company-Workspace`를 엽니다. [EXE 실행 캐시 안내](WORKSPACE_STANDALONE_EXE.md)를 참고하세요.
+1. VBS 방식은 실행한 0.12.10 Workspace ZIP 전체를 압축 해제합니다. 단일 EXE 방식은 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`에서 실행한 0.12.10 폴더 아래 `Company-Workspace`를 엽니다. [EXE 실행 캐시 안내](WORKSPACE_STANDALONE_EXE.md)를 참고하세요.
 2. 해당 묶음의 **`Check-Workspace.cmd`를 일반 더블클릭**합니다. 관리자 권한으로 실행하지 마세요.
 3. 같은 폴더에 생긴 **`Workspace-Diagnostic-….json`**을 확인한 뒤 담당자에게 전달합니다. 결과가 자동 전송되지는 않습니다.
 
 별도로 받은 진단 ZIP을 쓰는 경우에는 **같은 Workspace 버전을 위한** `Check-Workspace.cmd`와 `Check-Workspace.ps1` 두 파일을 오류가 난 `Company-Workspace.vbs` 옆에 복사해 실행합니다. 실행기 도우미 내용이 기준과 다르면 `DIAGNOSTIC_SOURCE_MISMATCH`로 멈춥니다. 두 진단 파일을 서로 다른 폴더에 두거나 압축 파일 미리보기 안에서 실행하지 마세요.
 
-CMD나 PowerShell 실행이 차단되면 표시된 화면을 담당자에게 전달하세요. 0.12.9의 CMD는 `-ExecutionPolicy Bypass`를 전달하며 이번 실행의 PowerShell 프로세스와 그 자식 프로세스 계열에만 적용합니다. 영구 실행 정책·다운로드 표시·UAC를 변경하거나 관리자 실행·보안 프로그램 예외 등록을 요구하는 도구가 아닙니다. 조직의 그룹 정책이 우선하며 AppLocker·WDAC·WSH 차단까지 이 옵션으로 해제하지 않습니다. 결과를 저장하지 못하면 화면에 출력된 내용을 전달하면 됩니다.
+CMD나 PowerShell 실행이 차단되면 표시된 화면을 담당자에게 전달하세요. 0.12.10의 CMD는 `-ExecutionPolicy Bypass`를 전달하며 이번 실행의 PowerShell 프로세스와 그 자식 프로세스 계열에만 적용합니다. 영구 실행 정책·다운로드 표시·UAC를 변경하거나 관리자 실행·보안 프로그램 예외 등록을 요구하는 도구가 아닙니다. 조직의 그룹 정책이 우선하며 AppLocker·WDAC·WSH 차단까지 이 옵션으로 해제하지 않습니다. 결과를 저장하지 못하면 화면에 출력된 내용을 전달하면 됩니다.
 
 ## 확인하는 것과 바꾸지 않는 것
 
@@ -60,7 +64,7 @@ CMD나 PowerShell 실행이 차단되면 표시된 화면을 담당자에게 전
 
 | 값 | 다음 확인 |
 | --- | --- |
-| `use_matching_workspace_bundle` | 같은 0.12.9 묶음의 실행기와 진단 파일인지 확인합니다. |
+| `use_matching_workspace_bundle` | 같은 0.12.10 묶음의 실행기와 진단 파일인지 확인합니다. |
 | `replace_invalid_workspace_scripts` | 구문 오류가 표시된 파일을 확인하고 정상 묶음과 대조합니다. 진단이 파일을 자동 교체하지는 않습니다. |
 | `review_current_user_and_token` | 사용자·세션·토큰 판정과 실제 경고를 함께 확인합니다. |
 | `review_effective_group_policy` | 조회된 조직 정책과 유효 정책을 확인합니다. 정책 변경을 지시하는 값이 아닙니다. |
@@ -68,13 +72,13 @@ CMD나 PowerShell 실행이 차단되면 표시된 화면을 담당자에게 전
 
 ## 진단 범위
 
-이 진단은 `Check-Workspace.ps1`에 기록한 **Workspace 0.12.9 시작 파일 네 개의 고정 SHA-256**과 내용이 일치할 때만 해당 코드를 읽어 사용합니다. 대상은 `Start-CompanyWorkspace.ps1`, `CompanyWorkspace.Startup.ps1`, `CompanyWorkspace.NormalToken.cs`, `CompanyAgent.UserContext.ps1`입니다. 줄바꿈 방식과 UTF-8 BOM 차이는 허용하지만 다른 내용은 실행하지 않습니다. 스크립트 존재·다운로드 표시·구문은 실행 전에 읽기만 하므로, 그 증거가 있더라도 해시 불일치 코드를 실행한 것은 아닙니다. 이후 실행기가 변경되면 진단 버전·고정 해시·시험도 함께 갱신해야 합니다. 과거 `ws33-9` 등 이전 버전의 진단과 섞지 않습니다.
+이 진단은 `Check-Workspace.ps1`에 기록한 **Workspace 0.12.10 시작 파일 네 개의 고정 SHA-256**과 내용이 일치할 때만 해당 코드를 읽어 사용합니다. 대상은 `Start-CompanyWorkspace.ps1`, `CompanyWorkspace.Startup.ps1`, `CompanyWorkspace.NormalToken.cs`, `CompanyAgent.UserContext.ps1`입니다. 줄바꿈 방식과 UTF-8 BOM 차이는 허용하지만 다른 내용은 실행하지 않습니다. 스크립트 존재·다운로드 표시·구문은 실행 전에 읽기만 하므로, 그 증거가 있더라도 해시 불일치 코드를 실행한 것은 아닙니다. 이후 실행기가 변경되면 진단 버전·고정 해시·시험도 함께 갱신해야 합니다. 과거 `ws33-9` 등 이전 버전의 진단과 섞지 않습니다.
 
 CMD로 실행한 진단과 처음 더블클릭한 VBS는 서로 다른 프로세스입니다. `normal_process_accepted`, `linked_candidate_accepted_launch_not_tested`, `restricted_candidate_required_launch_not_tested` 중 어느 값도 원래 VBS → Python → 실제 Claude 업무의 성공을 뜻하지 않습니다. 결과의 `notTested`에도 토큰 복제·제한 토큰 생성·자식 프로세스 실행 등을 표시합니다. 회사 보안 제품 전체 동작이나 `EnableLUA`만으로 정확한 실패 원인을 단정하지 않습니다.
 
-0.12.9 실행기는 기존 일반 권한 연결 토큰을 우선 사용합니다. UAC 비활성화가 확인된 허용 원본에서는 제한 복사본을 만들고 관리자 SID·남은 권한·Medium 무결성·실제 자식 프로세스를 검증합니다. 실패하면 중단하며 관리자 원본 권한을 그대로 허용하지 않습니다. 기존 UAC·영구 보안 정책·계정·Claude 및 Company Agent 개인 설정은 진단으로 변경하지 않습니다. [Microsoft의 제한 토큰 API 설명](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)은 토큰을 제한하는 방법의 근거이며, 특정 회사 PC에서 이 실행기가 성공했다는 증거는 아닙니다.
+0.12.10 실행기는 기존 일반 권한 연결 토큰을 우선 사용합니다. UAC 비활성화가 확인된 허용 원본에서는 제한 복사본을 만들고 관리자 SID·남은 권한·Medium 무결성·실제 자식 프로세스를 검증합니다. 실패하면 중단하며 관리자 원본 권한을 그대로 허용하지 않습니다. 기존 UAC·영구 보안 정책·계정·Claude 및 Company Agent 개인 설정은 진단으로 변경하지 않습니다. [Microsoft의 제한 토큰 API 설명](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken)은 토큰을 제한하는 방법의 근거이며, 특정 회사 PC에서 이 실행기가 성공했다는 증거는 아닙니다.
 
-이 도구는 시작 환경을 확인합니다. 0.12.9의 모델·Effort·승인 모드 적용, `/effort`·Shift+Tab 동작이나 실제 AI 응답을 시험하지 않습니다. 실행 설정은 앱이 연결한 Claude의 실제 보고와 적용 응답으로 확인합니다.
+이 도구는 시작 환경을 확인합니다. 0.12.10의 모델·Effort·승인 모드 적용, `/effort`·Shift+Tab 동작이나 실제 AI 응답을 시험하지 않습니다. 실행 설정은 앱이 연결한 Claude의 실제 보고와 적용 응답으로 확인합니다.
 
 문제가 발생한 회사 PC에서 전체 실행 경로는 아직 확인하지 못했습니다. 진단 파일의 `stage`, `predictedGuard`, `reason`, `nativeCode`, `sourceMatches`, `executionPolicy`, `scriptEvidence`, `nextStep`과 실제 경고 코드를 함께 확인하세요. 확인 없이 UAC나 회사 보안 설정을 변경할 필요는 없습니다.
 

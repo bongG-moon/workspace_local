@@ -1,11 +1,8 @@
 [CmdletBinding()]
-param([string]$OutputDirectory, [string]$PythonArchive)
+param([string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $utf8 = New-Object Text.UTF8Encoding($false)
-$pythonVersion = '3.13.15'
-$pythonSha256 = 'd1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf'
-$pythonUrl = 'https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip'
 $versionMatch = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"')
 if (-not $versionMatch.Success) { throw 'Workspace version not found.' }
 $version = $versionMatch.Groups[1].Value
@@ -14,15 +11,6 @@ $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 $exe = Join-Path $outputRoot ('Company-Workspace-' + $version + '.exe')
 if (Test-Path -LiteralPath $exe) { throw 'Output EXE exists; choose another output directory instead of overwriting a running release.' }
-if (-not $PythonArchive) {
-    $downloadRoot = Join-Path $repoRoot 'build\standalone-downloads'
-    New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
-    $PythonArchive = Join-Path $downloadRoot ('python-' + $pythonVersion + '-embed-amd64.zip')
-    if (-not (Test-Path -LiteralPath $PythonArchive)) {
-        Invoke-WebRequest -UseBasicParsing -Uri $pythonUrl -OutFile $PythonArchive
-    }
-}
-if ((Get-FileHash -LiteralPath $PythonArchive -Algorithm SHA256).Hash -ne $pythonSha256) { throw 'Python archive does not match the official pinned SHA-256.' }
 $stage = Join-Path $repoRoot ('build\standalone-build-' + [Guid]::NewGuid().ToString('N'))
 $bundleDirectory = Join-Path $stage 'bundle'
 New-Item -ItemType Directory -Path $bundleDirectory -Force | Out-Null
@@ -32,13 +20,9 @@ if ($bundle.Count -ne 1) { throw 'Expected exactly one source bundle.' }
 $payloadRoot = Join-Path $stage 'payload'
 Expand-Archive -LiteralPath $bundle[0].FullName -DestinationPath $payloadRoot
 $appRoot = Join-Path $payloadRoot 'Company-Workspace'
-$runtime = Join-Path $appRoot 'runtime'
-Expand-Archive -LiteralPath $PythonArchive -DestinationPath $runtime
-# Embeddable Python ignores CWD and PYTHONPATH. The app root is explicit;
-# no user site packages or Python registry/environment changes are required.
-[IO.File]::WriteAllText((Join-Path $runtime 'python313._pth'), "python313.zip`n.`n..`n", $utf8)
-$source = [ordered]@{ version=$pythonVersion; architecture='amd64'; url=$pythonUrl; sha256=$pythonSha256; documentation='https://docs.python.org/3.13/using/windows.html#the-embeddable-package'; isolated=$true }
-[IO.File]::WriteAllText((Join-Path $runtime 'SOURCE.json'), ($source | ConvertTo-Json), $utf8)
+# Package the same application-only files as the VBS delivery. Python remains
+# an existing-PC prerequisite and is checked by the shared launcher at runtime.
+if (Test-Path -LiteralPath (Join-Path $appRoot 'runtime')) { throw 'Application-only EXE must not contain an interpreter runtime.' }
 $manifestRows = @(Get-ChildItem -LiteralPath $payloadRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
     $relative = $_.FullName.Substring($payloadRoot.Length + 1).Replace('\','/')
     ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "`t" + $relative)
@@ -74,7 +58,7 @@ if ($verified.ExitCode -ne 0) { throw ('Embedded payload verification failed: ' 
 Move-Item -LiteralPath $stagedExe -Destination $exe -ErrorAction Stop
 $exeHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
 [IO.File]::WriteAllText(($exe + '.sha256'), ($exeHash + '  ' + [IO.Path]::GetFileName($exe) + "`n"), $utf8)
-$report = [ordered]@{ version=$version; exe=$exe; sha256=$exeHash; bytes=(Get-Item -LiteralPath $exe).Length; payloadSha256=$payloadHash; payloadFiles=$manifestRows.Count; embeddedPayloadVerified=$true; python=$source; stage=$stage; existingVbsBundleModified=$false }
+$report = [ordered]@{ version=$version; exe=$exe; sha256=$exeHash; bytes=(Get-Item -LiteralPath $exe).Length; payloadSha256=$payloadHash; payloadFiles=$manifestRows.Count; embeddedPayloadVerified=$true; pythonBundled=$false; pythonRequirement='Existing Python 3.11 or later'; installsDependencies=$false; downloadsDependencies=$false; stage=$stage; existingVbsBundleModified=$false }
 $reportPath = Join-Path $repoRoot ('build\workspace-standalone-' + $version + '-build.json')
 [IO.File]::WriteAllText($reportPath, ($report | ConvertTo-Json -Depth 4), $utf8)
 $report | ConvertTo-Json -Depth 4

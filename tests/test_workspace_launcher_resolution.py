@@ -1,5 +1,6 @@
 """Copied launcher resolution fixtures; no real UI, CLI or server is started."""
 import json
+import base64
 import os
 from pathlib import Path
 import subprocess
@@ -47,13 +48,16 @@ function Get-Command {
     }
     Microsoft.PowerShell.Core\Get-Command @PSBoundParameters
 }
-function Invoke-FixturePython {
-    # A real native Python writes the production probe output through the
-    # redirected PS 5.1 byte channel. Only sys.executable's reported value is
-    # isolated, so this fixture needs no additional embedded distribution.
-    $forwardArgs = @($args)
-    $forwardArgs[-1] = PYTHON_PRELUDE + [string]$forwardArgs[-1]
-    & REAL_PYTHON @forwardArgs
+$originalPythonQuery = ${function:Invoke-WorkspacePythonQuery}
+function Invoke-WorkspacePythonQuery {
+    param($Executable,$Arguments,$TimeoutMilliseconds)
+    # Use the production hidden native-process query, changing only the
+    # reported sys.executable. The ASCII JSON path must survive CP949 hosts.
+    if ($Executable -eq 'Invoke-FixturePython') {
+        $Executable = REAL_PYTHON
+        $Arguments = $Arguments.Replace('-c "', ('-c "' + PYTHON_PRELUDE))
+    }
+    & $originalPythonQuery -Executable $Executable -Arguments $Arguments -TimeoutMilliseconds $TimeoutMilliseconds
 }
 function Start-Process {
     param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)
@@ -193,6 +197,126 @@ function Start-Process {
     def test_hidden_cp949_launcher_finds_unicode_pythonw_path(self):
         self.launch("throw 'Automatic discovery should not run'", explicit=True,
                     unicode_python=True, windowless=True)
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows PowerShell dependency checks')
+class PythonDependencyTests(unittest.TestCase):
+    def powershell(self, body, *, env=None):
+        source = LAUNCHER.read_text(encoding='utf-8-sig')
+        functions = source[source.index('function Invoke-WorkspacePythonQuery'):source.index('\ntry {\n    $startupHelper')]
+        return subprocess.run(['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive',
+                               '-ExecutionPolicy', 'Bypass', '-Command',
+                               '[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\n' + functions + '\n' + body],
+                              env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=25,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+    def resolve(self, python_status=None, listed_status=1, *, explicit=False, list_installed=True):
+        with tempfile.TemporaryDirectory(prefix='workspace-existing-python-한글 & ') as raw:
+            installed = Path(raw) / '기존 Python 3.12' / 'python.exe'
+            installed.parent.mkdir(); installed.touch()
+            transcript = Path(raw) / 'queries.jsonl'
+            listing = '-V:3.12 * ' + str(installed) if list_installed else 'No installed Pythons found!'
+            body = r'''
+function Get-Command {
+    param($Name,$CommandType,$ErrorAction)
+    if ($Name -eq 'python' -and PYTHON_FOUND) { return [pscustomobject]@{Source='path-python'} }
+    if ($Name -eq 'py') { return [pscustomobject]@{Source='registered-py'} }
+    throw [System.Management.Automation.CommandNotFoundException]::new('fixture missing command')
+}
+function Invoke-WorkspacePythonQuery {
+    param($Executable,$Arguments,$TimeoutMilliseconds)
+    [IO.File]::AppendAllText(TRANSCRIPT, (($Executable + '|' + $Arguments | ConvertTo-Json -Compress) + "`n"))
+    if ($Executable -eq 'registered-py') {
+        if ($Arguments -ne '-0p') { throw 'Must only list installed runtimes' }
+        return LISTING
+    }
+    $status = if ($Executable -eq 'path-python') { PYTHON_STATUS } else { LISTED_STATUS }
+    return PATH_JSON + "`n" + $status
+}
+try { Get-WorkspacePythonExecutable -Command SELECTED }
+catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+'''
+            for key, value in {
+                'PYTHON_FOUND': '$true' if python_status is not None else '$false',
+                'PYTHON_STATUS': str(python_status or 0), 'LISTED_STATUS': str(listed_status),
+                'TRANSCRIPT': ps_quote(transcript), 'LISTING': ps_quote(listing),
+                'PATH_JSON': ps_quote(json.dumps(str(installed))),
+                'SELECTED': ps_quote('python' if explicit else 'auto'),
+            }.items():
+                body = body.replace(key, value)
+            result = self.powershell(body)
+            queries = [json.loads(line) for line in transcript.read_text().splitlines()] if transcript.exists() else []
+            return result, queries, str(installed)
+
+    def test_default_existing_python_is_preferred_without_calling_py(self):
+        result, queries, installed = self.resolve(python_status=1)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(installed, result.stdout.strip())
+        self.assertEqual(1, len(queries))
+        self.assertTrue(queries[0].startswith('path-python|'))
+
+    def test_py_only_installation_uses_listed_exact_unicode_path(self):
+        result, queries, installed = self.resolve()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(installed, result.stdout.strip())
+        self.assertEqual('registered-py|-0p', queries[0])
+        self.assertTrue(queries[1].startswith(installed + '|-B -X utf8 -c'))
+
+    def test_old_or_incomplete_path_python_can_use_an_existing_compatible_runtime(self):
+        for status in (0, 2):
+            with self.subTest(status=status):
+                result, queries, installed = self.resolve(python_status=status)
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual(installed, result.stdout.strip())
+                self.assertEqual(3, len(queries))
+                self.assertEqual('registered-py|-0p', queries[1])
+
+    def test_explicit_missing_old_or_incomplete_python_never_uses_another_runtime(self):
+        for status, code in ((None, '37'), (0, '38'), (2, '38')):
+            with self.subTest(status=status):
+                result, queries, _ = self.resolve(python_status=status, explicit=True)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn('WORKSPACE_STARTUP:' + code, result.stderr)
+                self.assertFalse(any('registered-py' in query for query in queries))
+
+    def test_missing_installed_runtime_stops_after_listing_without_launch_or_install(self):
+        result, queries, _ = self.resolve(list_installed=False)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('WORKSPACE_STARTUP:37', result.stderr)
+        self.assertEqual(['registered-py|-0p'], queries)
+
+    def test_probe_child_disables_auto_install_and_parent_environment_is_preserved(self):
+        names = ('PYTHON_MANAGER_AUTOMATIC_INSTALL', 'PYLAUNCHER_ALLOW_INSTALL',
+                 'PYLAUNCHER_ALWAYS_INSTALL', 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_MODEL')
+        payload = ('import os,json; print(json.dumps({name:os.environ.get(name) for name in ' + repr(names) + '}))')
+        code = base64.b64encode(payload.encode()).decode()
+        args = '-B -c "import base64;exec(base64.b64decode(\'' + code + '\'))"'
+        body = ('$raw = Invoke-WorkspacePythonQuery -Executable ' + ps_quote(sys.executable)
+                + ' -Arguments ' + ps_quote(args) + '\n'
+                + '$parent = @{}\n'
+                + 'foreach ($name in @(' + ','.join(ps_quote(name) for name in names) + ')) '
+                  '{ $parent[$name] = [Environment]::GetEnvironmentVariable($name) }\n'
+                + '@{child=($raw | ConvertFrom-Json);parent=$parent} | ConvertTo-Json -Compress')
+        injected = {name: 'fixture-parent-preserved' for name in names}
+        result = self.powershell(body, env={**os.environ, **injected})
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertEqual(injected, value['parent'])
+        self.assertEqual('false', value['child']['PYTHON_MANAGER_AUTOMATIC_INSTALL'])
+        self.assertIsNone(value['child']['PYLAUNCHER_ALLOW_INSTALL'])
+        self.assertIsNone(value['child']['PYLAUNCHER_ALWAYS_INSTALL'])
+        for name in ('CLAUDE_CONFIG_DIR', 'ANTHROPIC_MODEL'):
+            self.assertEqual(injected[name], value['child'][name])
+
+    def test_probe_timeout_is_bounded_and_returns_no_valid_interpreter(self):
+        body = ('$clock = [Diagnostics.Stopwatch]::StartNew(); $answer = Invoke-WorkspacePythonQuery -Executable '
+                + ps_quote(sys.executable) + ' -Arguments \'-B -c "import time;time.sleep(5)"\' -TimeoutMilliseconds 100\n'
+                + '@{empty=($null -eq $answer);elapsed=$clock.Elapsed.TotalSeconds} | ConvertTo-Json -Compress')
+        result = self.powershell(body)
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(result.stdout)
+        self.assertTrue(value['empty'])
+        self.assertLess(value['elapsed'], 3)
 
 
 if __name__ == '__main__':
