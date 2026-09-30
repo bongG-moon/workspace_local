@@ -1,6 +1,6 @@
 "use strict";
 globalThis.WorkspaceSessionImport = (() => {
-  let generation=0, loading=false, selected=null;
+  let generation=0, loading=false, selected=null, returnFocus=null;
   const dialog=$("import-dialog"), message=$("import-message"), list=$("import-sessions"), preview=$("import-preview");
   function status(text){message.textContent=text||"";}
   function busy(value){loading=value;$("import-find").disabled=value;$("import-refresh").disabled=value;$("import-apply").disabled=value||!selected||selected.workspaceAvailable===false;}
@@ -39,9 +39,24 @@ globalThis.WorkspaceSessionImport = (() => {
       status((result.warnings||[]).join(" ")||((result.sessions||[]).length?"대화를 선택하거나 세션 ID로 찾을 수 있어요.":"확인할 수 있는 대화가 없습니다. 현재 Claude 계정과 설정 위치를 확인해 주세요."));
     }catch(e){if(ticket===generation)status(e.message);}finally{if(ticket===generation)busy(false);}
   }
-  $("import-open").onclick=()=>{if(appClosed)return;reset();status("");showDialog("import-dialog");refresh();};
+  $("import-open").onclick=()=>{
+    if(appClosed||dialog.open)return;
+    const folder=$("folder-dialog");
+    if(folder.open&&$("folder-form").dataset.resume==="yes")return;
+    const caller=document.activeElement, owner=caller?.closest?.("dialog");
+    returnFocus=folder.open||caller===$("import-open")||owner===$("palette-dialog")?$("new-chat"):caller;
+    if(folder.open){folderChoiceGeneration++;folder.close();}
+    reset();status("");showDialog("import-dialog");$("import-id").focus();refresh();
+  };
   $("import-close").onclick=()=>dialog.close();
-  dialog.addEventListener("close",()=>{generation++;busy(false);});
+  dialog.addEventListener("close",()=>{
+    generation++;busy(false);
+    const caller=returnFocus;returnFocus=null;
+    if(appClosed||!caller)return;
+    const owner=caller.closest?.("dialog");
+    const target=caller.isConnected&&!caller.disabled&&!caller.hidden&&(!owner||owner.open)?caller:$("new-chat");
+    if(target.isConnected&&!target.disabled)target.focus({preventScroll:true});
+  });
   $("import-refresh").onclick=refresh;
   $("import-form").onsubmit=e=>{e.preventDefault();const id=$("import-id").value.trim();if(id)inspect(id);};
   $("import-apply").onclick=async()=>{
@@ -50,7 +65,7 @@ globalThis.WorkspaceSessionImport = (() => {
       const result=await api("/api/claude-sessions/import",{sessionId:id});
       if(ticket!==generation||appClosed)return;
       const bootResult=await api("/api/bootstrap");if(ticket!==generation||!dialog.open||appClosed)return;
-      sessions=bootResult.sessions;renderSessions();dialog.close();
+      sessions=bootResult.sessions;renderSessions();returnFocus=null;dialog.close();
       await selectSession(result.session.id);
       render();$("prompt").focus();
       toast(result.existing?"이미 불러온 업무를 열었어요. 아래 입력창에서 이어서 요청하세요.":"같은 Claude 세션을 업무에 추가했어요. 아래 입력창에서 이어서 요청하세요. 기존 터미널에서는 이 세션의 작업을 먼저 마쳐 주세요.");

@@ -79,6 +79,76 @@ class WorkspaceContinuityFrontendTests(unittest.TestCase):
           assert.equal($('import-preview').querySelector('script'),null);assert.match($('import-message').textContent,/실행하지 않습니다/);
         })()""", ("session-import",))
 
+    def test_new_task_session_entry_opens_only_import_dialog_without_creating_or_trusting(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {sessions:[imported]};};
+          chooseFolder();$('task-name').value='';$('trust').checked=false;$('import-open').focus();
+          assert.equal($('import-open').hidden,false);
+          $('import-open').onclick();await settle();
+          assert.equal($('folder-dialog').open,false);assert.equal($('import-dialog').open,true);
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/claude-sessions');
+          assert.equal(calls[0].body,undefined);assert.equal(active.id,'A');assertDraft();
+        })()""", ("session-import",))
+
+    def test_session_entry_is_hidden_for_trust_only_dialog_and_restored_for_new_task(self):
+        self.run_case(r"""(async()=>{
+          let calls=0;api=async()=>{calls++;return {sessions:[imported]};};
+          chooseFolder(true);assert.equal($('import-open').hidden,true);
+          assert.equal($('folder-form').dataset.resume,'yes');
+          $('import-open').onclick();await settle();
+          assert.equal(calls,0);assert.equal($('folder-dialog').open,true);
+          assert.notEqual($('import-dialog').open,true);
+          $('folder-dialog').close();chooseFolder();
+          assert.equal($('import-open').hidden,false);assert.equal($('folder-form').dataset.resume,'no');
+          assert.equal($('trust').checked,false);assertDraft();
+        })()""", ("session-import",))
+
+    def test_picker_reply_after_switching_to_import_cannot_change_later_new_task_location(self):
+        self.run_case(r"""(async()=>{
+          let reply;api=async(path)=>path==='/api/pick'?new Promise(resolve=>reply=resolve):{sessions:[imported]};
+          chooseFolder();const pending=browseWorkspace(true);
+          $('import-open').onclick();await settle();$('import-dialog').close();chooseFolder();
+          $('task-name').focus();const focused=document.activeElement,location=$('new-workspace-location').textContent;
+          reply({paths:['C:/fixture/stale-location']});await pending;
+          assert.equal(managedRootChoice,null);assert.equal($('new-workspace-location').textContent,location);
+          assert.equal(document.activeElement,focused);assertDraft();
+        })()""", ("session-import",))
+
+    def test_cancel_import_from_new_task_returns_focus_to_visible_new_task_button(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({sessions:[imported]});
+          chooseFolder();$('import-open').focus();$('import-open').onclick();await settle();
+          $('import-close').onclick();await settle();
+          assert.equal($('import-dialog').open,false);assert.equal($('folder-dialog').open,false);
+          assert.equal(document.activeElement,$('new-chat'));assert.equal(active.id,'A');assertDraft();
+          chooseFolder();$('import-open').focus();$('import-open').onclick();await settle();
+          // Native Escape closes the dialog and dispatches the same close event.
+          $('import-dialog').close();await settle();
+          assert.equal(document.activeElement,$('new-chat'));assert.equal($('folder-dialog').open,false);
+        })()""", ("session-import",))
+
+    def test_direct_import_entry_restores_visible_caller_without_opening_new_task_form(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({sessions:[imported]});$('prompt').focus();
+          $('import-open').onclick();await settle();$('import-dialog').close();await settle();
+          assert.equal(document.activeElement,$('prompt'));assert.notEqual($('folder-dialog').open,true);
+          assert.equal(active.id,'A');assertDraft();
+        })()""", ("session-import",))
+
+    def test_successful_import_from_new_task_focuses_composer_after_dialog_close(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];api=async(path,body)=>{calls.push({path,body});
+            if(path==='/api/claude-sessions/import')return {session:{id:'imported'}};
+            if(path==='/api/bootstrap')return {sessions:[{id:'imported',title:imported.title,workspace:imported.workspace}]};
+            return path.includes('?')?imported:{sessions:[imported]};};
+          let selected=null;selectSession=async id=>{selected=id;};
+          chooseFolder();$('import-open').focus();$('import-open').onclick();await settle();
+          $('import-sessions').children[0].onclick();await settle();await $('import-apply').onclick();await settle();
+          assert.equal(selected,'imported');assert.equal($('import-dialog').open,false);
+          assert.equal($('folder-dialog').open,false);assert.equal(document.activeElement,$('prompt'));
+          assert.deepEqual(calls.filter(call=>call.body).map(call=>call.path),['/api/claude-sessions/import']);
+        })()""", ("session-import",))
+
     def test_closed_preview_response_cannot_replace_reopened_dialog(self):
         self.run_case(r"""(async()=>{
           let reply;api=async(path)=>path.includes('?')?new Promise(resolve=>reply=resolve):{sessions:[imported]};
