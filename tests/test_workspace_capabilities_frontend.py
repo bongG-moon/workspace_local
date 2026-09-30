@@ -109,7 +109,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           await $('capabilities-refresh').onclick();
           WorkspaceCapabilities.close();
           assert.equal(calls.length,2);
-          assert.ok(calls.every(call=>call.path==='/api/capabilities?scope=common'&&call.body===undefined));
+          assert.ok(calls.every(call=>call.path==='/api/capabilities?scope=common&id=A'&&call.body===undefined));
           assert.equal(active.state,'idle');
         })()""")
 
@@ -169,7 +169,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           for(const type of ['tools','mcp','commands']) {
             assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 전');
             $('capabilities-'+type+'-tab').onclick();
-            assert.match($('capabilities-empty').textContent,/첫 요청으로 Claude에 연결/);
+            assert.match($('capabilities-empty').textContent,/선택한 업무의 Claude 연결이 준비/);
           }
         })()""")
 
@@ -276,7 +276,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           const calls=[];
           api=async(path,body)=>{calls.push({path,body});return modern(null,{status:'installed-only'});};
           WorkspaceCapabilities.open();await flush();
-          assert.equal(calls[0].path,'/api/capabilities?scope=common');
+          assert.equal(calls[0].path,'/api/capabilities?scope=common&id=A');
           active={...active,id:'B',title:'업무 B',workspace:'C:\\fixture\\B'};
           sessions.push({...active});
           WorkspaceCapabilities.contextChanged(true);await flush();
@@ -290,6 +290,71 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.match($('capabilities-context').textContent,/업무 B/);
           assert.doesNotMatch($('capabilities-context').textContent,/업무 C/);
           assert.equal(active.id,'C');assert.ok(calls.every(call=>call.body===undefined));
+        })()""")
+
+    def test_common_shows_connection_counts_without_claiming_global_tools(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];
+          api=async(path,body)=>{
+            calls.push({path,body});const reply=modern('A');reply.context={scope:'common',workspace:null};
+            reply.runtime.source={sessionId:'A',title:'업무 A',workspace:'C:\\fixture\\A'};
+            reply.installed={state:'discovered',skills:[{name:'common-skill',invocation:'common',candidateId:'user:1',kind:'skill',source:'user',userInvocable:true}],
+              diagnostics:{code:'metadata_read',summary:'정상 메타데이터'}};return reply;
+          };
+          WorkspaceCapabilities.open();await flush();
+          assert.equal(calls[0].path,'/api/capabilities?scope=common&id=A');
+          assert.equal($('capabilities-folder-label').textContent,'연결 기준 업무');assert.equal($('capabilities-folder').hidden,false);
+          assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'1');
+          for(const type of ['tools','mcp','commands']){
+            $('capabilities-'+type+'-tab').onclick();
+            assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'1');
+            assert.match(flatText($('capabilities-summary')),/연결 기준 · 업무 A/);
+          }
+          assert.match($('capabilities-context').textContent,/공통 설치 스킬.*연결 근거: 업무 A/);
+          assert.ok(calls.every(call=>call.body===undefined));assert.equal(active.id,'A');
+        })()""")
+
+    def test_common_connection_select_keeps_same_folder_sessions_distinct_and_rejects_old_reply(self):
+        self.run_case(r"""(async()=>{
+          const pending=[];sessions.push({id:'A2',title:'같은 폴더의 다른 연결',workspace:active.workspace},
+            {id:'B',title:'다른 폴더 연결',workspace:'D:\\other'});
+          $('prompt').value='보존할 질문';attachments=['keep.csv'];const original=active;
+          selectSession=()=>{throw Error('must not select a task');};
+          api=(path,body,signal)=>new Promise(resolve=>pending.push({path,body,signal,resolve}));
+          WorkspaceCapabilities.open();const selector=$('capabilities-folder');
+          assert.equal(selector.children.filter(row=>row.value).length,3);
+          selector.value='A2';selector.onchange();assert.match(pending[1].path,/scope=common&id=A2$/);
+          selector.value='B';selector.onchange();assert.match(pending[2].path,/scope=common&id=B$/);
+          assert.equal(pending[0].signal.aborted,true);assert.equal(pending[1].signal.aborted,true);
+          pending[2].resolve(modern('B'));await flush();pending[1].resolve(modern('A2'));pending[0].resolve(modern('A'));await flush();
+          assert.match(flatText($('capabilities-list')),/B-skill/);assert.doesNotMatch(flatText($('capabilities-list')),/A-skill|A2-skill/);
+          assert.match($('capabilities-context').textContent,/다른 폴더 연결/);
+          assert.equal(active,original);assert.equal($('prompt').value,'보존할 질문');assert.equal(attachments[0],'keep.csv');
+          assert.ok(pending.every(call=>call.body===undefined));
+        })()""")
+
+    def test_removed_common_connection_clears_pending_source_and_returns_to_current_task(self):
+        self.run_case(r"""(async()=>{
+          const pending=[];sessions.push({id:'B',title:'조회 연결',workspace:'D:\\other'});
+          api=(path,body,signal)=>new Promise(resolve=>pending.push({path,signal,resolve}));
+          WorkspaceCapabilities.open();$('capabilities-folder').value='B';$('capabilities-folder').onchange();
+          sessions=sessions.filter(row=>row.id!=='B');WorkspaceCapabilities.contextChanged();
+          assert.equal(pending.length,3);assert.match(pending[2].path,/id=A$/);assert.equal(pending[1].signal.aborted,true);
+          pending[2].resolve(modern('A'));await flush();pending[1].resolve(modern('B'));await flush();
+          assert.equal($('capabilities-folder').value,'A');assert.match(flatText($('capabilities-list')),/A-skill/);
+          assert.doesNotMatch(flatText($('capabilities-list')),/B-skill/);
+        })()""")
+
+    def test_common_refreshes_selected_runtime_when_connection_reports_arrive(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];let live=false,timer;
+          api=async path=>{calls.push(path);return live?modern('A'):modern('A',{status:'awaiting-runtime',state:'unavailable',groups:{
+            tools:{reported:false,items:[]},mcp:{reported:false,items:[]},commands:{reported:false,items:[]}}});};
+          WorkspaceCapabilities.open();await flush();assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'연결 전');
+          live=true;setTimeout=fn=>{timer=fn;return 1;};WorkspaceCapabilities.contextChanged(true);
+          assert.equal(typeof timer,'function');await timer();await flush();
+          assert.equal(calls.length,2);assert.ok(calls.every(path=>path==='/api/capabilities?scope=common&id=A'));
+          for(const kind of ['tools','mcp','commands'])assert.equal($('capabilities-'+kind+'-tab').querySelector('[data-count]').textContent,'1');
         })()""")
 
     def test_scope_switch_ignores_late_reply_and_empty_folder_does_not_request_task(self):

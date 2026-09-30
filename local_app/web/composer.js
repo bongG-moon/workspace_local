@@ -148,15 +148,18 @@ globalThis.WorkspaceComposer = (() => {
     renderAttachments(); saveDraft();
   }
   function keydown(event) {
+    if (event.defaultPrevented) return false;
     if (composing || event.isComposing || event.keyCode === 229) return true;
     if (box.hidden) return false;
-    if (event.key === "Escape") { event.preventDefault(); dismissed = true; close(); return true; }
+    const plain = !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+    if (event.key === "Escape" && plain) { event.preventDefault(); dismissed = true; close(); return true; }
     if (!rows.length) return false;
-    if (["ArrowDown","ArrowUp"].includes(event.key) || (event.ctrlKey && ["n","p"].includes(event.key))) {
+    if ((plain && ["ArrowDown","ArrowUp"].includes(event.key))
+        || (event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && ["n","p"].includes(event.key))) {
       const next = event.key === "ArrowDown" || event.key === "n";
       event.preventDefault(); selected = (selected + (next ? 1 : rows.length - 1)) % rows.length; activeOption(); return true;
     }
-    if (["Enter","Tab"].includes(event.key) && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); choose(selected); return true; }
+    if (["Enter","Tab"].includes(event.key) && plain) { event.preventDefault(); choose(selected); return true; }
     return false;
   }
   $("composer-connect").onmousedown = event => event.preventDefault();
@@ -167,7 +170,11 @@ globalThis.WorkspaceComposer = (() => {
     preparationAttempts.add(context.id);
     $("composer-connect").disabled = true; $("composer-connect").textContent = "명령 불러오는 중…";
     try {
-      const response = await api("/api/connect", {id:context.id});
+      // Completion and Shift+Tab can ask for the same connection in one key
+      // sequence. Share only the in-flight request for this exact task/view.
+      context.promise = globalThis.WorkspaceInlineControls?.waitForPreparation?.()
+        || api("/api/connect", {id:context.id});
+      const response = await context.promise;
       if (active?.id !== context.id || selectionGeneration !== context.selection || appClosed) return;
       active.connection = response.connection; renderConnection(response.connection);
       if (!automatic) input.focus();
@@ -215,5 +222,8 @@ globalThis.WorkspaceComposer = (() => {
     if (!dismissed && document.activeElement === input && trigger()) return refresh();
     close();
   }
-  return {refresh, keydown, close, beforeSubmit, removeFileReference, prepareConnection, connectionChanged, contextChanged:close};
+  function waitForPreparation() {
+    return preparing?.id === active?.id && preparing?.selection === selectionGeneration ? preparing.promise : null;
+  }
+  return {refresh, keydown, close, beforeSubmit, removeFileReference, prepareConnection, waitForPreparation, connectionChanged, contextChanged:close};
 })();

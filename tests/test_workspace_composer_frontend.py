@@ -99,6 +99,30 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal(attachments.length,1);
         })()""")
 
+    def test_modified_navigation_keeps_native_selection_and_system_shortcuts(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({items:[{id:'a',invocation:'/a',supported:true},{id:'b',invocation:'/b',supported:true}]});
+          type('/');await WorkspaceComposer.refresh();const selected=$('prompt').attributes['aria-activedescendant'];
+          for(const key of ['ArrowUp','ArrowDown','Escape'])for(const modifier of ['shiftKey','ctrlKey','altKey','metaKey']){
+            const event={key,[modifier]:true,preventDefault(){this.prevented=true;}};$('prompt').onkeydown(event);
+            assert.notEqual(event.prevented,true);assert.equal($('prompt').attributes['aria-activedescendant'],selected);
+            assert.equal($('composer-suggestions').hidden,false);assert.equal($('prompt').value,'/');
+          }
+          const plain={key:'ArrowDown',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(plain);
+          assert.equal(plain.prevented,true);assert.notEqual($('prompt').attributes['aria-activedescendant'],selected);
+        })()""")
+
+    def test_ctrl_enter_sends_without_accepting_suggestion_and_respects_prevented_event(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({items:[{id:'a',invocation:'/skills',supported:true}]});let sends=0;submit=async()=>sends++;
+          type('/sk');await WorkspaceComposer.refresh();
+          const prevented=enter({ctrlKey:true,defaultPrevented:true});$('prompt').onkeydown(prevented);
+          assert.equal(sends,0);assert.equal($('prompt').value,'/sk');
+          const send=enter({ctrlKey:true});$('prompt').onkeydown(send);
+          assert.equal(send.prevented,true);assert.equal(sends,1);assert.equal($('prompt').value,'/sk');
+          assert.equal(attachments.length,0);
+        })()""")
+
     def test_late_task_and_cursor_replies_never_replace_current_candidates(self):
         self.run_case(r"""(async()=>{
           const pending=[];api=(path,body,signal)=>new Promise(resolve=>pending.push({body,signal,resolve}));

@@ -278,13 +278,13 @@ class ServerTests(unittest.TestCase):
             for directive in ('default-src', 'script-src', 'connect-src', 'object-src', 'base-uri', 'frame-ancestors'):
                 self.assertEqual(["'none'"], policy[directive], directive)
 
-        canonical = (ROOT / 'docs/Company-Agent-사용자-안내서.html').read_bytes()
+        canonical = (ROOT / 'docs/WORKSPACE_USER_GUIDE.html').read_bytes()
         docs = self.root / 'docs'
         docs.mkdir()
-        (docs / 'Company-Agent-사용자-안내서.html').write_bytes(canonical)
+        (docs / 'WORKSPACE_USER_GUIDE.html').write_bytes(canonical)
         # A bundle containing only the canonical document must serve all links.
         with patch('local_app.server.ASSETS', self.root / 'local_app/web'):
-            for route in ('guide', 'Company-Agent-사용자-안내서.html'):
+            for route in ('guide', 'WORKSPACE_USER_GUIDE.html', 'Company-Agent-사용자-안내서.html'):
                 with self.request('/manual/' + quote(route), token=False) as response:
                     self.assertEqual(canonical, response.read())
                     self.assertIn('text/html', response.headers['Content-Type'])
@@ -297,8 +297,8 @@ class ServerTests(unittest.TestCase):
                     assert_manual_policy(response)
         body = canonical.decode('utf-8')
         self.assertIn('<html lang="ko">', body)
-        self.assertIn("script-src 'none'", body)
-        self.assertIn('data:font/woff;base64,', body)
+        self.assertIn("기존 Claude Code", body)
+        self.assertNotIn("<script", body.lower())
         self.assertNotIn('<script', body.lower())
         self.assertNotIn(self.app.token, body)
         for route in ('../server.py','COMPANY_AGENT_HANDBOOK.md','../../.claude.json','%2e%2e%2fserver.py',
@@ -342,31 +342,25 @@ class ServerTests(unittest.TestCase):
             self.request('/manual/handbook', token=False, headers={'Origin': 'https://invalid.test'})
         self.assertEqual(403, caught.exception.code)
 
-    def test_removed_screen_control_routes_cannot_execute(self):
-        body={'id':self.id,'action':'computer-check'}
+    def test_removed_harness_routes_cannot_execute(self):
+        body = {'id': self.id, 'action': 'computer-check'}
         with self.assertRaises(HTTPError) as caught:
-            self.request('/api/companion',body,token=False)
-        self.assertEqual(403,caught.exception.code)
-        with patch('local_app.server.ClaudeSession') as cli, patch.object(self.app.companion.client,'call') as harness:
-            before=self.app.companion.records(str(self.workspace))
-            for path,data in (('/api/companion',body),
-                              ('/api/companion?id='+self.id+'&view=computer',None)):
-                with self.assertRaises(HTTPError) as caught:
-                    self.request(path,data)
-                self.assertEqual(400,caught.exception.code)
+            self.request('/api/companion', body, token=False)
+        self.assertEqual(403, caught.exception.code)
+        with patch('local_app.server.ClaudeSession') as cli, patch('local_app.harness_client.HarnessClient.call') as harness:
+            for path, data in (('/api/companion', body), ('/api/companion?id='+self.id, None), ('/api/course', None)):
+                with self.subTest(path=path), self.assertRaises(HTTPError) as caught:
+                    self.request(path, data)
+                self.assertEqual(404, caught.exception.code)
                 caught.exception.close()
             cli.assert_not_called()
             harness.assert_not_called()
-            self.assertEqual(before,self.app.companion.records(str(self.workspace)))
-        self.app.get(self.id)['trusted']=False
-        with self.assertRaises(HTTPError) as caught:
-            self.request('/api/companion',body)
-        self.assertEqual(400,caught.exception.code)
+        self.assertFalse(hasattr(self.app, 'companion'))
 
     def test_bootstrap_identifies_shared_cli_without_claiming_login_success(self):
         with self.request("/api/bootstrap") as response:
             value = json.load(response)
-        self.assertEqual(value["workspaceVersion"], "0.14.0")
+        self.assertEqual(value["workspaceVersion"], "0.15.0")
         self.assertEqual(value["appRoot"], str(ROOT))
         self.assertEqual(value["runtime"]["authentication"], "shared-with-cli")
         self.assertNotIn("loggedIn", value["runtime"])
@@ -484,16 +478,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.app.get(self.id)['state'],'done')
         self.assertEqual(self.app.get(self.id)['events'][-1]['data']['state'],'done')
 
-    def test_companion_endpoints_require_auth_trust_and_no_running_writes(self):
-        with self.assertRaises(HTTPError):self.request('/api/companion?id='+self.id,token=False)
-        self.app.get(self.id)['trusted']=False
-        with self.assertRaises(HTTPError):self.request('/api/companion?id='+self.id)
-        self.request('/api/trust',{'id':self.id,'trusted':True}).close()
-        self.app.get(self.id)['state']='running'
-        for action in ('apply','learning','rollback','share'):
-            with self.assertRaises(HTTPError):
-                self.request('/api/companion',{'id':self.id,'action':action,'confirmed':True})
-        with self.request('/api/course') as response:self.assertEqual(len(json.load(response)['steps']),5)
+    def test_removed_harness_mutations_stay_unavailable_in_every_task_state(self):
+        for state in ('idle', 'running', 'approval'):
+            self.app.get(self.id)['state'] = state
+            for action in ('apply', 'learning', 'rollback', 'share'):
+                with self.subTest(state=state, action=action), self.assertRaises(HTTPError) as caught:
+                    self.request('/api/companion', {'id': self.id, 'action': action, 'confirmed': True})
+                self.assertEqual(404, caught.exception.code)
+                caught.exception.close()
 
     def test_only_explicit_demo_mode_can_simulate(self):
         self.assertFalse(self.app.demo)

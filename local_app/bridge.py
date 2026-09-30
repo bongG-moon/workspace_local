@@ -858,11 +858,9 @@ class ClaudeSession:
                         if isinstance(tool_id, str) and isinstance(command, str) and 'html-choices' in command:
                             from .choices import command_is_helper
                             try:
-                                if self.choice_helper is None:
-                                    from .harness_client import HarnessClient
-                                    origin = HarnessClient().choice_helper(self.cwd)
-                                else:
-                                    origin = self.choice_helper()
+                                # Legacy adapters may explicitly inject an origin. The
+                                # generic app never discovers or invokes a harness.
+                                origin = self.choice_helper() if self.choice_helper else None
                                 accepted = command_is_helper(command, origin)
                             except (ValueError, OSError, KeyError, TypeError, UnicodeError):
                                 accepted = False

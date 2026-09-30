@@ -70,7 +70,7 @@ class DispatchRoutesTests(unittest.TestCase):
         return value
 
     def test_plain_cli_queue_uses_existing_send_history_and_one_delivery(self):
-        with patch.object(self.app.companion.client, '_installation', side_effect=AssertionError('No harness needed')):
+        with patch('local_app.harness_client.HarnessClient._installation', side_effect=AssertionError('No harness needed')):
             value = self.enqueue('follow-up')
             identifier = value['queue'][0]['id']
             self.enqueue('follow-up')

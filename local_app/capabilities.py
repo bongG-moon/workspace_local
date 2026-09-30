@@ -154,7 +154,8 @@ def _installed(item, client, demo, validate_workspace, *, scope=None, workspace=
     try:
         if scope is None:
             validate_workspace(item)
-            snapshot = client.skill_inventory(item['workspace'])
+            discover = getattr(client, 'skill_inventory', None) or client.discovery_inventory
+            snapshot = discover(item['workspace'])
         else:
             snapshot = client.discovery_inventory(workspace if scope == 'folder' else None)
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get('skills'), list):
@@ -237,13 +238,14 @@ def _installed(item, client, demo, validate_workspace, *, scope=None, workspace=
                 'notice': '이 폴더의 설치된 스킬 목록을 확인하지 못했습니다. Claude 연결에서 보고한 목록은 계속 볼 수 있습니다.'}, []
 
 
-def catalog(item=None, *, client, demo=False, validate_workspace=lambda item: None, scope=None, workspace=None):
+def catalog(item=None, *, client=None, demo=False, validate_workspace=lambda item: None, scope=None, workspace=None):
     if scope not in {None, 'common', 'folder'}:
         raise ValueError('확인할 목록 범위를 선택해 주세요.')
     if scope == 'folder' and (not isinstance(workspace, str) or not workspace):
         raise ValueError('목록을 확인할 폴더를 선택해 주세요.')
-    if scope == 'common':
-        item = None
+    if client is None:
+        from .claude_inventory import ClaudeInventory
+        client = ClaudeInventory()
     connection = item.get('connection') if item else None
     connection = connection if isinstance(connection, dict) else {}
     state = 'live' if connection.get('connected') is True else 'last-seen' if connection else 'unavailable'
@@ -251,7 +253,7 @@ def catalog(item=None, *, client, demo=False, validate_workspace=lambda item: No
     notices = {
         'no-session': '먼저 업무를 선택해 주세요. 업무 폴더에 따라 사용할 수 있는 스킬과 도구가 달라집니다.',
         'demo': '체험 화면입니다. 실제 Claude의 현재 기능 목록이 아닙니다.',
-        'awaiting-runtime': '아직 이 업무의 Claude 연결 목록이 없습니다. 첫 요청을 보내 연결이 준비되면 확인할 수 있습니다.',
+        'awaiting-runtime': '아직 이 업무의 Claude 연결 목록이 없습니다. 이 업무의 연결이 준비되면 확인할 수 있습니다.',
         'live': '현재 Claude 연결이 시작될 때 보고한 목록입니다. 도구 사용에는 별도의 권한 확인이 필요할 수 있습니다.',
         'last-seen': '연결이 종료되어 마지막 연결의 목록을 표시합니다. 다음 업무 요청에서 목록이 달라질 수 있습니다.',
     }
@@ -260,15 +262,20 @@ def catalog(item=None, *, client, demo=False, validate_workspace=lambda item: No
     if any(group['limited'] for group in groups.values()):
         warnings.append('연결 목록이 많거나 일부 항목 형식을 확인하지 못해 확인된 항목만 표시합니다. 각 분류는 최대 1,000개입니다.')
     if scope is not None:
-        if scope == 'common':
+        if scope == 'common' and not item:
             status = 'demo' if demo else 'installed-only'
-            notices['installed-only'] = '회사·개인 공통 설치 목록입니다. 실제 업무 연결의 로드 여부와 실행 권한은 별도로 확인합니다.'
+            notices['installed-only'] = '사용자 공통 설치 스킬입니다. 도구·연결 서버·명령은 연결 기준 업무를 선택해 확인합니다.'
         elif not item:
             status = 'demo' if demo else 'installed-only'
             notices['installed-only'] = '선택한 폴더의 설치 목록입니다. 업무를 시작하거나 실행 권한을 부여하지 않습니다.'
+    if scope == 'common' and item and not demo:
+        notices[status] = '공통 범위는 설치 스킬에 적용됩니다. 도구·연결 서버·명령은 선택한 업무 연결의 보고 목록입니다. ' + notices[status]
+    inventory_workspace = workspace if scope == 'folder' else item.get('workspace') if scope is None and item else None
     return {'schemaVersion': 1 if scope is None else 2, 'sessionId': item.get('id') if item else None,
-            'context': {'scope': scope or 'legacy', 'workspace': workspace if scope == 'folder' else item.get('workspace') if item else None},
-            'workspace': workspace if scope == 'folder' else item.get('workspace') if item else None,
+            'context': {'scope': scope or 'legacy', 'workspace': inventory_workspace},
+            'workspace': inventory_workspace,
             'status': status, 'notice': notices[status],
-            'runtime': {'state': state, 'model': _text(connection.get('model')), 'groups': groups},
+            'runtime': {'state': state, 'model': _text(connection.get('model')), 'groups': groups,
+                        'source': {'sessionId': item.get('id'), 'title': _text(item.get('title')),
+                                   'workspace': item.get('workspace')} if item else None},
             'installed': installed, 'warnings': warnings}

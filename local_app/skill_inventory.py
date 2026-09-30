@@ -1,8 +1,8 @@
-"""Read-only skill metadata adapter for an already installed Company Agent.
+"""Read-only Claude skill and plugin metadata discovery.
 
-Runs in the registered interpreter, never in the Workspace server process.
-Only the installed registry chooses files; skill bodies are never executed or
-returned. Existing core versions need no profile or installation changes.
+Native discovery reads metadata in the Workspace process without executing or
+returning skill bodies. The legacy registered-core CLI adapter below is retained
+for source compatibility and is not invoked by the application.
 """
 from __future__ import annotations
 
@@ -412,8 +412,8 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
                 roots.append(_metadata_path(plugin / relative))
             except (ValueError, OSError):
                 fail('plugin_manifest_invalid')
-        source = 'company' if plugin_id.split('@', 1)[0] == 'company-agent' else 'plugin'
-        label = 'Company Agent 플러그인' if source == 'company' else '플러그인 ' + _text(namespace, 100)
+        source = 'plugin'
+        label = '플러그인 ' + _text(namespace, 100)
         installation = plugin_id + '\0' + os.path.normcase(str(plugin)) + '\0' + scope
         for root in dict.fromkeys(roots):
             scan(root, source, scope, namespace, installation, label)

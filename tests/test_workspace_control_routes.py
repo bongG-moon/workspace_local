@@ -92,35 +92,18 @@ class ControlRoutesTests(unittest.TestCase):
             self.post('/api/choice', payload)
         self.bridge.send.assert_called_once()
 
-    @unittest.skipUnless(CORE is not None, CORE_SKIP)
-    def test_registered_core_choice_round_trip_through_real_child_and_http(self):
-        root = Path(__file__).resolve().parents[1]
-        command = [sys.executable, '-X', 'utf8', str(root / 'tests/fixtures/workspace_fake_cli.py')]
-        self.app.command = command
-        self.app.info = probe_cli(command)
+    def test_app_connection_does_not_inject_harness_choice_helpers(self):
+        from unittest.mock import patch
+        from local_app.bridge import ClaudeSession
         self.item['bridge'] = None
-        self.app.companion.client = Mock()
-        self.app.companion.client.choice_helper.return_value = {
-            'python': sys.executable, 'script': str(CORE / 'scripts/harness_cli.py')}
-        def wait_done():
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                if self.item['state'] in {'done', 'error'}:
-                    break
-                time.sleep(.01)
-            self.assertEqual('done', self.item['state'])
-        self.post('/api/send', {'id': self.sid, 'text': 'HTML_CHOICES_PROTOCOL_TEST'})
-        self.addCleanup(lambda: self.item.get('bridge') and self.item['bridge'].close())
-        wait_done()
-        self.assertEqual(10, len(self.item['choice']['options']))
-        choice_id = self.item['choice']['id']
-        process = self.item['bridge'].process
-        self.post('/api/choice', {'id': self.sid, 'choiceId': choice_id, 'optionId': 'neumorphism'})
-        wait_done()
-        self.assertIs(process, self.item['bridge'].process)
-        self.assertNotIn('choice', self.item)
-        self.assertEqual(2, sum(row['role'] == 'user' for row in self.item['messages']))
-        self.assertIn('선택한 디자인을 확인했습니다', self.item['messages'][-1]['text'])
+        command = [sys.executable, '-X', 'utf8', str(ROOT / 'tests/fixtures/workspace_bypass_cli.py')]
+        self.app.command, self.app.info = command, probe_cli(command)
+        with patch('local_app.harness_client.HarnessClient', side_effect=AssertionError('No harness')):
+            result = self.app.connect(self.sid)
+            self.assertTrue(result['ok'])
+            self.assertIsNone(self.item['bridge'].choice_helper)
+            self.assertFalse(self.item['messages'])
+            self.item['bridge'].close()
 
 
 if __name__ == '__main__':

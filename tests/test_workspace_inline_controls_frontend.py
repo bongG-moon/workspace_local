@@ -175,6 +175,31 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal(modes.length,4);assert.equal($('prompt'),document.activeElement);
         })()""")
 
+    def test_shift_tab_joins_completion_connection_preparation_instead_of_rejecting_duplicate_connect(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;let finishConnect;const paths=[];
+          const ready={...connection(),permissionModeCycle:['default','auto']};
+          api=(path,body)=>{
+            paths.push(path);
+            if(path==='/api/connect'){
+              if(paths.filter(p=>p===path).length>1)return Promise.reject(Error('이미 연결 준비 중입니다'));
+              return new Promise(resolve=>finishConnect=resolve);
+            }
+            if(path==='/api/permission-mode')return Promise.resolve({permissionMode:'auto',permissionModeOverride:'auto'});
+            return Promise.resolve(active.connection ? {items:[]} : {items:[],connectRequired:true});
+          };
+          $('prompt').focus();$('prompt').value='/sk';$('prompt').setSelectionRange(3,3);
+          const autocomplete=WorkspaceComposer.refresh();for(let i=0;i<12;i++)await Promise.resolve();
+          assert.equal(typeof finishConnect,'function');
+          const key={key:'Tab',shiftKey:true,preventDefault(){this.prevented=true;}};$('prompt').onkeydown(key);
+          for(let i=0;i<12;i++)await Promise.resolve();assert.equal(key.prevented,true);
+          assert.equal(paths.filter(path=>path==='/api/connect').length,1);
+          finishConnect({connection:ready});await autocomplete;for(let i=0;i<24;i++)await Promise.resolve();
+          assert.equal(paths.filter(path=>path==='/api/permission-mode').length,1);
+          assert.equal(active.connection.permissionMode,'auto');assert.equal(active.messages.length,0);
+          assert.equal($('prompt').value,'/sk');assert.equal(attachments.length,1);assert.equal(document.activeElement,$('prompt'));
+        })()""")
+
     def test_manual_default_aliases_select_actual_choice_and_cycle_using_supported_protocol_name(self):
         self.run_case(r"""(async()=>{
           for(const [offered,actual] of [['manual','default'],['default','manual']]){
@@ -195,6 +220,128 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
             $('prompt').focus();await WorkspaceInlineControls.cyclePermission();assert.equal(modes[1],'acceptEdits');
             assert.equal(active.state,'done');assertDraft();
           }
+        })()""")
+
+    def test_completion_joins_shortcut_connection_without_a_second_initialization(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;let finish;const calls=[];
+          api=(path,body)=>{
+            calls.push(path);
+            if(path==='/api/connect')return new Promise(resolve=>finish=resolve);
+            if(path==='/api/permission-mode')return Promise.resolve({permissionMode:'auto',permissionModeOverride:'auto'});
+            return Promise.resolve(active.connection?{items:[]}:{items:[],connectRequired:true});
+          };
+          $('prompt').focus();const mode=WorkspaceInlineControls.cyclePermission();
+          $('prompt').value='/sk';$('prompt').setSelectionRange(3,3);
+          const complete=WorkspaceComposer.refresh();for(let i=0;i<12;i++)await Promise.resolve();
+          assert.equal(calls.filter(path=>path==='/api/connect').length,1);
+          finish({connection:{...connection(),permissionModeCycle:['default','auto']}});await Promise.all([mode,complete]);
+          assert.equal(calls.filter(path=>path==='/api/permission-mode').length,1);
+          assert.equal(active.connection.permissionMode,'auto');assert.equal(active.messages.length,0);assert.equal($('prompt').value,'/sk');
+        })()""")
+
+    def test_escape_from_prompt_cancels_preparing_mode_intent_but_preserves_connection_and_draft(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;let finish;const calls=[];
+          api=(path)=>{calls.push(path);return new Promise(resolve=>finish=resolve);};$('prompt').focus();
+          const mode=WorkspaceInlineControls.cyclePermission();assert.equal($('composer-controls-panel').hidden,false);
+          const escape={key:'Escape',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(escape);
+          assert.equal(escape.prevented,true);assert.equal($('composer-controls-panel').hidden,true);
+          finish({connection:{...connection(),permissionModeCycle:['default','auto']}});await mode;
+          assert.equal(calls.join(','),'/api/connect');assert.equal(active.connection.permissionMode,'default');
+          assert.equal(connectionPreparing,false);assert.equal($('composer-controls-panel').hidden,true);
+          assert.equal(document.activeElement,$('prompt'));assert.equal(active.messages.length,0);assertDraft();
+        })()""")
+
+    def test_shared_initialization_failure_does_not_retry_or_apply_a_mode(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;let fail;const calls=[];
+          api=(path)=>{calls.push(path);return path==='/api/connect'?new Promise((resolve,reject)=>fail=reject):Promise.resolve({items:[],connectRequired:true});};
+          $('prompt').focus();$('prompt').value='/sk';$('prompt').setSelectionRange(3,3);
+          const complete=WorkspaceComposer.refresh();for(let i=0;i<12;i++)await Promise.resolve();
+          const mode=WorkspaceInlineControls.cyclePermission();fail(Error('연결 준비 실패'));await Promise.all([complete,mode]);
+          assert.equal(calls.filter(path=>path==='/api/connect').length,1);assert.equal(calls.includes('/api/permission-mode'),false);
+          assert.equal(connectionPreparing,false);assert.equal(active.connection,null);assert.equal(active.messages.length,0);
+          assert.equal($('prompt').value,'/sk');assert.match($('runtime-panel-error').textContent,/연결 준비 실패/);
+        })()""")
+
+    def test_shortcut_does_not_join_a_different_tasks_pending_completion_connection(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;const replies={},calls=[];
+          api=(path,body)=>{
+            calls.push({path,...body});
+            if(path==='/api/connect')return new Promise(resolve=>replies[body.id]=resolve);
+            if(path==='/api/permission-mode')return Promise.resolve({permissionMode:'auto',permissionModeOverride:'auto'});
+            return Promise.resolve({items:[],connectRequired:true});
+          };
+          $('prompt').focus();$('prompt').value='/sk';$('prompt').setSelectionRange(3,3);
+          const completion=WorkspaceComposer.refresh();for(let i=0;i<12;i++)await Promise.resolve();
+          active={...active,id:'B',workspace:'C:/fixture/B'};selectionGeneration++;WorkspaceComposer.contextChanged();
+          const shortcut=WorkspaceInlineControls.cyclePermission();
+          assert.equal(calls.filter(row=>row.path==='/api/connect').map(row=>row.id).join(','),'A,B');
+          replies.A({connection:{...connection(),permissionModeCycle:['default','auto'],model:'A-model'}});await completion;
+          assert.equal(active.connection,null);
+          replies.B({connection:{...connection(),permissionModeCycle:['default','auto'],model:'B-model'}});await shortcut;
+          assert.equal(active.connection.model,'B-model');assert.equal(active.connection.permissionMode,'auto');
+          assert.equal(calls.filter(row=>row.path==='/api/permission-mode').map(row=>row.id).join(','),'B');
+          assert.equal(active.messages.length,0);assert.equal($('prompt').value,'/sk');
+        })()""")
+
+    def test_escape_after_folder_confirmation_cancels_waiting_cycle_intent(self):
+        self.run_case(r"""(async()=>{
+          active.trusted=false;active.connection=null;let finish;const calls=[];
+          api=(path)=>{calls.push(path);return path==='/api/connect'?new Promise(resolve=>finish=resolve):Promise.resolve({ok:true});};
+          $('prompt').focus();await WorkspaceInlineControls.cyclePermission();$('trust').checked=true;
+          const trust=$('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          for(let i=0;i<12;i++)await Promise.resolve();assert.equal(typeof finish,'function');
+          $('prompt').focus();const escape={key:'Escape',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(escape);
+          assert.equal(escape.prevented,true);
+          finish({connection:{...connection(),permissionModeCycle:['default','auto']}});await trust;
+          assert.equal(calls.join(','),'/api/trust,/api/connect');assert.equal(active.connection.permissionMode,'default');
+          assert.equal($('composer-controls-panel').hidden,true);assert.equal(active.messages.length,0);assertDraft();
+        })()""")
+
+    def test_shift_tab_after_folder_confirmation_preserves_draft_and_returns_input_focus(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;active.trusted=false;const calls=[];
+          api=async(path,body)=>{calls.push(path);return path==='/api/connect'?{connection:{...connection(),permissionModeCycle:['default','auto']}}
+            :path==='/api/permission-mode'?{permissionMode:'auto',permissionModeOverride:'auto'}:{ok:true};};
+          $('prompt').focus();await WorkspaceInlineControls.cyclePermission();assert.equal(calls.length,0);
+          assert.equal($('folder-dialog').open,true);$('trust').focus();$('trust').checked=true;
+          await $('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          assert.equal(calls.join(','),'/api/trust,/api/connect,/api/permission-mode');
+          assert.equal(document.activeElement,$('prompt'));assert.equal(active.connection.permissionMode,'auto');
+          assert.equal(active.messages.length,0);assert.equal(active.state,'done');assertDraft();
+        })()""")
+
+    def test_shift_tab_with_suggestions_waits_for_actual_mode_and_ignores_key_repeat(self):
+        self.run_case(r"""(async()=>{
+          active.connection.permissionModeCycle=['default','auto'];let finish;const calls=[];
+          api=(path,body)=>{calls.push({path,body});return path==='/api/permission-mode'?new Promise(resolve=>finish=resolve)
+            :Promise.resolve({items:[{id:'s',invocation:'/skills',label:'/skills',supported:true}]});};
+          $('prompt').focus();$('prompt').value='/sk';$('prompt').setSelectionRange(3,3);await WorkspaceComposer.refresh();
+          const key=()=>({key:'Tab',shiftKey:true,preventDefault(){this.prevented=true;}});
+          $('prompt').onkeydown(key());$('prompt').onkeydown({...key(),repeat:true});$('prompt').onkeydown(key());
+          assert.equal(calls.filter(row=>row.path==='/api/permission-mode').length,1);
+          assert.equal(active.connection.permissionMode,'default');assert.equal($('prompt').value,'/sk');
+          finish({permissionMode:'default',permissionModeOverride:'auto',permissionModeLabel:'manual mode on'});
+          for(let i=0;i<16;i++)await Promise.resolve();
+          assert.equal(active.connection.permissionMode,'default');assert.equal(textFor('composer-permission'),'manual mode on');
+          assert.equal(active.messages.length,0);assert.equal(active.state,'done');assert.equal(attachments.length,1);
+        })()""")
+
+    def test_ime_model_enter_and_modified_escape_do_not_apply_or_close_picker(self):
+        self.run_case(r"""(async()=>{
+          await $('composer-model').onclick();const input=$('runtime-panel-extra').children[0].querySelector('input');input.value='한글 모델';
+          let calls=0;api=async()=>{calls++;};input.focus();
+          for(const flags of [{isComposing:true},{keyCode:229},{defaultPrevented:true}]){
+            const event={key:'Enter',...flags,preventDefault(){this.prevented=true;}};input.onkeydown(event);assert.notEqual(event.prevented,true);
+          }
+          for(const flags of [{isComposing:true},{keyCode:229},{ctrlKey:true},{altKey:true},{shiftKey:true},{metaKey:true}]){
+            const event={key:'Escape',...flags,preventDefault(){this.prevented=true;}};$('composer-controls-panel').onkeydown(event);
+            assert.notEqual(event.prevented,true);assert.equal($('composer-controls-panel').hidden,false);
+          }
+          assert.equal(calls,0);assert.equal(document.activeElement,input);assertDraft();
         })()""")
 
     def test_open_permission_menu_tracks_control_events_without_rebuilding_or_losing_focus(self):

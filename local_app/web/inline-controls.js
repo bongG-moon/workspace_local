@@ -5,7 +5,7 @@ globalThis.WorkspaceInlineControls = (() => {
   const panel = $("composer-controls-panel"), options = $("runtime-panel-options"), extra = $("runtime-panel-extra");
   const buttons = {model:$("composer-model"), effort:$("composer-effort"), permission:$("composer-permission")};
   const titles = {model:"모델 선택", effort:"Effort · 사고 수준", permission:"승인 모드"};
-  let view = null, pending = false, notice = null, trustReturn = null;
+  let view = null, pending = false, notice = null, trustReturn = null, preparation = null;
   const context = () => ({id:active?.id || null, selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
@@ -86,7 +86,7 @@ globalThis.WorkspaceInlineControls = (() => {
         input.id = "inline-model-name"; input.type = "text"; input.maxLength = 200; input.placeholder = "회사 모델 이름";
         input.setAttribute("aria-label","모델 이름 직접 입력"); applyButton.type = "button";
         const send = () => input.value.trim() ? apply(input.value.trim()) : failure("모델 이름을 입력해 주세요.");
-        applyButton.onclick = send; input.onkeydown = event => { if (event.key === "Enter" && !event.isComposing) {event.preventDefault();send();} };
+        applyButton.onclick = send; input.onkeydown = event => { if (event.key === "Enter" && !event.defaultPrevented && !event.isComposing && event.keyCode !== 229) {event.preventDefault();send();} };
         row.append(input,applyButton); box.append(label,row); extra.append(box);
       }
     } else if (view.kind === "permission") {
@@ -111,8 +111,11 @@ globalThis.WorkspaceInlineControls = (() => {
     }
     pending = true; connectionPreparing = true; options.replaceChildren(); extra.replaceChildren(); failure("");
     message("기존 Claude 연결을 준비하고 있어요. AI 질문은 보내지 않습니다."); setStatus(active.state);
+    const request = {...source};
     try {
-      const response = await api("/api/connect",{id:source.id});
+      request.promise = globalThis.WorkspaceComposer?.waitForPreparation?.() || api("/api/connect",{id:source.id});
+      preparation = request;
+      const response = await request.promise;
       if (!same(source)) return false;
       active.connection = response.connection; renderConnection(active.connection);
     } catch (err) {
@@ -121,7 +124,10 @@ globalThis.WorkspaceInlineControls = (() => {
         action("다시 불러오기", () => prepare({...view}));
       }
       return false;
-    } finally { pending = false; connectionPreparing = false; setStatus(active?.state || "idle"); }
+    } finally {
+      if (preparation === request) preparation = null;
+      pending = false; connectionPreparing = false; setStatus(active?.state || "idle");
+    }
     if (view && same(source)) draw();
     return same(source) && active?.connection?.connected === true;
   }
@@ -129,8 +135,10 @@ globalThis.WorkspaceInlineControls = (() => {
     if (view?.kind === kind && !intent.commandDraft && !intent.cycle) return close({focus:true});
     if (appClosed || pending || (active && blocked())) return;
     globalThis.WorkspaceComposer?.close(); view = {...context(),kind,...intent}; panel.hidden = false; notice = null; render();
+    const opened = view;
     $("runtime-panel-title").textContent = titles[kind];
     if (active && (!active.trusted || active.connection?.connected !== true)) await prepare({...view}); else draw();
+    return view === opened ? opened : null;
   }
   async function apply(value, request=view) {
     if (!request || !same(request) || blocked() || pending) return null;
@@ -164,7 +172,7 @@ globalThis.WorkspaceInlineControls = (() => {
     const source = trustReturn; trustReturn = null;
     if (same(source)) {
       view = source; panel.hidden = false; render();
-      if (!await prepare(source)) return;
+      if (!await prepare(source) || view !== source) return;
       if (source.cycle) await nextPermission(source);
       else if (source.commandValue && $("prompt").value === source.commandDraft) await apply(source.commandValue === "auto" ? null : source.commandValue,source);
     }
@@ -198,12 +206,17 @@ globalThis.WorkspaceInlineControls = (() => {
     const source = {...context(),kind:"permission",cycle:true};
     if (!active || blocked() || pending) return;
     if (!active.trusted || active.connection?.connected !== true) {
-      await open("permission",{cycle:true});
-      if (!same(source) || active?.connection?.connected !== true || !active.trusted) return;
+      const opened = await open("permission",{cycle:true});
+      if (!opened || view !== opened || !same(source) || active?.connection?.connected !== true || !active.trusted) return;
     } else globalThis.WorkspaceComposer?.close();
     await nextPermission(source);
   }
   function keydown(event) {
+    if (event.defaultPrevented) return false;
+    if (event.key === "Escape" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
+        && !event.isComposing && event.keyCode !== 229 && document.activeElement === $("prompt") && view && !panel.hidden) {
+      event.preventDefault(); close(); return true;
+    }
     if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.keyCode === 229
         || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || appClosed || busyStates.has(active.state)) return false;
     event.preventDefault();
@@ -213,6 +226,8 @@ globalThis.WorkspaceInlineControls = (() => {
   for (const [kind,button] of Object.entries(buttons)) button.onclick = () => open(kind);
   $("runtime-panel-close").onclick = () => close({focus:true});
   panel.onkeydown = event => {
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     if (event.key === "Escape") {event.preventDefault();close({focus:true});return;}
     const items = [...options.children].filter(node => !node.disabled), index = items.indexOf(document.activeElement);
     if (index >= 0 && ["ArrowDown","ArrowUp","Home","End"].includes(event.key)) {
@@ -223,5 +238,8 @@ globalThis.WorkspaceInlineControls = (() => {
   document.addEventListener("pointerdown", event => {
     if (view && !panel.contains?.(event.target) && !Object.values(buttons).some(button => button.contains?.(event.target))) close();
   });
-  render(); return {render,close,open,resumeAfterTrust,handleCommand,keydown,cyclePermission};
+  function waitForPreparation() {
+    return same(preparation) ? preparation.promise : null;
+  }
+  render(); return {render,close,open,resumeAfterTrust,handleCommand,keydown,cyclePermission,waitForPreparation};
 })();

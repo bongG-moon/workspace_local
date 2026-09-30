@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory)
+param([string]$OutputDirectory, [string]$VerificationDirectory)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -52,7 +52,7 @@ $compileArgs = @('/nologo','/target:winexe','/platform:x64','/optimize+','/codep
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $stagedExe)) { throw 'Standalone EXE compilation failed.' }
 # Exercise the exact embedded production archive, not only synthetic ZIPs.
 # This prepares files only: no launcher, Claude, user state or settings are used.
-$verifyCache = Join-Path $stage 'extraction-check'
+$verifyCache = if ($VerificationDirectory) { [IO.Path]::GetFullPath($VerificationDirectory) } else { Join-Path $stage 'extraction-check' }
 $verified = Start-Process -FilePath $stagedExe -ArgumentList @('--verify-only','--cache-root',('"' + $verifyCache + '"')) -WindowStyle Hidden -PassThru -Wait
 if ($verified.ExitCode -ne 0) { throw ('Embedded payload verification failed: ' + $verified.ExitCode) }
 Move-Item -LiteralPath $stagedExe -Destination $exe -ErrorAction Stop

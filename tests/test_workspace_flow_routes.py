@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from local_app.server import LocalApp, Server
 from local_app.bridge import probe_cli
 from local_app.completions import CompletionDiscovery
-from local_app.harness_client import HarnessClient
+from local_app.claude_inventory import ClaudeInventory
 
 
 class FlowRoutesTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class FlowRoutesTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.work = self.root / 'work'; self.work.mkdir()
         self.app = LocalApp(self.root / 'state', command=['never-start'], managed_workspace_root=self.root / 'managed')
-        self.app.completion_discovery = CompletionDiscovery(HarnessClient(config=self.root / 'config', registrations=self.root / 'registrations'))
+        self.app.completion_discovery = CompletionDiscovery(ClaudeInventory(config=self.root / 'config'))
         self.addCleanup(self.app.close)
         self.a = self.app.create(str(self.work), True, title='A')['id']
         other = self.root / 'other'; other.mkdir()

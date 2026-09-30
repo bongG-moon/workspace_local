@@ -63,20 +63,123 @@ function setStatus(state,label){
 }
 setInterval(()=>{$("elapsed").textContent=["question","approval"].includes(active?.state)?"응답 대기":started?`${Math.floor((Date.now()-started)/1000)}초`:"";},1000);
 function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
-function orderedSessions(){return [...sessions].sort((a,b)=>Number(!!b.pinned)-Number(!!a.pinned)||(b.updated||b.created||0)-(a.updated||a.created||0));}
+let sessionDragId=null, sessionOrderSaving=false, sessionPointerDrag=null;
+function orderedSessions(){
+  const order=boot.sessionOrder||{},ranks=new Map((order.ids||[]).map((id,index)=>[id,index]));
+  return [...sessions].sort((a,b)=>Number(!!b.pinned)-Number(!!a.pinned)||
+    (order.manual?(Number(ranks.has(a.id))-Number(ranks.has(b.id))||
+      (ranks.has(a.id)?ranks.get(a.id)-ranks.get(b.id):(b.created||0)-(a.created||0))):
+      (b.updated||b.created||0)-(a.updated||a.created||0))||a.id.localeCompare(b.id));
+}
+function clearSessionDrop(){for(const id of ["sessions","home-recents","all-sessions"])for(const row of $(id).children){row.classList.remove("drop-before","drop-after");row.classList.toggle("dragging",!!sessionPointerDrag?.active&&row.dataset.sessionId===sessionDragId);}}
+function focusSessionHandle(id,container){const row=[...$(container).children].find(row=>row.dataset.sessionId===id);row?.querySelector(".session-drag")?.focus();row?.scrollIntoView({block:"nearest"});}
+function sessionDragArea(container){
+  const rect=container.getBoundingClientRect(),area={left:Math.max(0,rect.left),top:Math.max(0,rect.top),right:Math.min(globalThis.innerWidth||Infinity,rect.right),bottom:Math.min(globalThis.innerHeight||Infinity,rect.bottom)};
+  for(let node=container;node;node=node.parentElement){const style=globalThis.getComputedStyle?.(node)||{},bounds=node.getBoundingClientRect();
+    if(/auto|scroll|hidden|clip/.test(style.overflowX||"")){area.left=Math.max(area.left,bounds.left);area.right=Math.min(area.right,bounds.right);}
+    if(/auto|scroll|hidden|clip/.test(style.overflowY||"")){area.top=Math.max(area.top,bounds.top);area.bottom=Math.min(area.bottom,bounds.bottom);}
+  }return area;
+}
+function sessionDragTarget(drag){
+  const container=$(drag.container),area=sessionDragArea(container),{x,y}=drag;
+  if(x<area.left||x>area.right||y<area.top||y>area.bottom||area.right<=area.left||area.bottom<=area.top)return null;
+  const hit=document.elementFromPoint(x,y);if(!hit||!container.contains(hit))return null;
+  let row=hit.closest(".session-row");
+  if(!row||row.parentElement!==container){
+    // Small gaps between cards still expose the nearest visible insertion edge.
+    row=[...container.children].filter(candidate=>candidate.dataset.sessionId).map(candidate=>{
+      const bounds=candidate.getBoundingClientRect();return {candidate,distance:y<bounds.top?bounds.top-y:y>bounds.bottom?y-bounds.bottom:0,bounds};
+    }).filter(value=>value.bounds.bottom>area.top&&value.bounds.top<area.bottom&&value.distance<=12)
+      .sort((a,b)=>a.distance-b.distance)[0]?.candidate;
+  }
+  const source=sessions.find(item=>item.id===drag.id),target=sessions.find(item=>item.id===row?.dataset.sessionId);
+  if(!source||!target||source.id===target.id||!!source.pinned!==!!target.pinned)return null;
+  const bounds=row.getBoundingClientRect();return {row,id:target.id,position:y<bounds.top+bounds.height/2?"before":"after"};
+}
+function paintSessionDrag(drag){clearSessionDrop();drag.target=sessionDragTarget(drag);drag.target?.row.classList.add("drop-"+drag.target.position);}
+function scrollSessionDrag(drag){
+  if(sessionPointerDrag!==drag||!drag.active)return;drag.frame=null;
+  if(!$(drag.container).contains(document.elementFromPoint(drag.x,drag.y)))return;
+  const area=sessionDragArea($(drag.container));if(drag.x<area.left||drag.x>area.right||drag.y<area.top||drag.y>area.bottom)return;
+  const edge=Math.min(36,(area.bottom-area.top)/4),step=drag.y<area.top+edge?-12:drag.y>area.bottom-edge?12:0;if(!step)return;
+  for(let node=$(drag.container);node;node=node.parentElement){const style=globalThis.getComputedStyle?.(node)||{};
+    if(!/auto|scroll/.test(style.overflowY||"")||node.scrollHeight<=node.clientHeight+1)continue;
+    const before=node.scrollTop;node.scrollTop=Math.max(0,Math.min(node.scrollHeight-node.clientHeight,before+step));
+    if(node.scrollTop!==before){paintSessionDrag(drag);drag.frame=requestAnimationFrame(()=>scrollSessionDrag(drag));return;}
+  }
+}
+function finishSessionDrag(event,cancel=false){
+  const drag=sessionPointerDrag;if(!drag||(event?.pointerId!==undefined&&event.pointerId!==drag.pointerId))return;
+  if(drag.active)event?.preventDefault?.();
+  if(Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)){drag.x=event.clientX;drag.y=event.clientY;}
+  const target=!cancel&&drag.active?sessionDragTarget(drag):null;
+  sessionPointerDrag=null;sessionDragId=null;if(drag.frame!==null)globalThis.cancelAnimationFrame?.(drag.frame);
+  globalThis.removeEventListener?.("blur",drag.cancel);
+  try{if(drag.handle.hasPointerCapture(drag.pointerId))drag.handle.releasePointerCapture(drag.pointerId);}catch(_){}
+  clearSessionDrop();renderSessions();
+  if(target)return moveSession(drag.id,target.id,target.position,drag.container);
+  focusSessionHandle(drag.id,drag.container);
+}
+function startSessionDrag(event,item,handle,container){
+  if(handle.disabled||sessionOrderSaving||appClosed||sessionPointerDrag||event.isPrimary===false||event.button!==0)return;
+  const drag={id:item.id,handle,container,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,active:false,target:null,frame:null};
+  drag.cancel=()=>finishSessionDrag(null,true);sessionPointerDrag=drag;sessionDragId=item.id;
+  try{handle.setPointerCapture(event.pointerId);}catch(_){sessionPointerDrag=null;sessionDragId=null;return;}
+  handle.focus({preventScroll:true});globalThis.addEventListener?.("blur",drag.cancel);
+}
+function moveSessionDrag(event){
+  const drag=sessionPointerDrag;if(!drag||event.pointerId!==drag.pointerId)return;
+  drag.x=event.clientX;drag.y=event.clientY;
+  if(!drag.active&&Math.hypot(drag.x-drag.startX,drag.y-drag.startY)<6)return;
+  drag.active=true;event.preventDefault();paintSessionDrag(drag);
+  if(drag.frame===null)drag.frame=requestAnimationFrame(()=>scrollSessionDrag(drag));
+}
+async function moveSession(id,targetId,position,container="sessions"){
+  if(sessionOrderSaving||appClosed||boot.sessionOrder?.warning)return false;
+  const rows=orderedSessions(),source=rows.find(row=>row.id===id),target=rows.find(row=>row.id===targetId);
+  if(!source||!target||id===targetId||!!source.pinned!==!!target.pinned)return false;
+  const previous=boot.sessionOrder,ids=rows.filter(row=>row.id!==id).map(row=>row.id);
+  ids.splice(ids.indexOf(targetId)+(position==="after"?1:0),0,id);
+  sessionOrderSaving=true;boot.sessionOrder={manual:true,ids,warning:null};renderSessions();
+  try{const result=await api("/api/session/reorder",{id,targetId,position});boot.sessionOrder=result.sessionOrder;toast("업무 순서를 저장했어요.");return true;}
+  catch(e){boot.sessionOrder=previous;toast(e.message);return false;}
+  finally{sessionOrderSaving=false;renderSessions();focusSessionHandle(id,container);}
+}
+function sessionRow(item,button,container){
+  const row=el("div",null,"session-row"+(container==="home-recents"?" recent-row":""));row.dataset.sessionId=item.id;
+  const handle=el("button",null,"session-drag"),grip=el("span",null,"session-drag-grip");
+  handle.type="button";handle.draggable=false;handle.disabled=sessionOrderSaving||appClosed||!!boot.sessionOrder?.warning;
+  handle.setAttribute("aria-label",`${item.title} 순서 이동. Alt와 위 또는 아래 방향키로 이동`);handle.setAttribute("aria-keyshortcuts","Alt+ArrowUp Alt+ArrowDown");
+  handle.title="끌어서 순서 변경 · Alt+↑/↓";grip.setAttribute("aria-hidden","true");handle.append(grip);
+  handle.onpointerdown=event=>startSessionDrag(event,item,handle,container);handle.onpointermove=moveSessionDrag;
+  handle.onpointerup=event=>finishSessionDrag(event);handle.onpointercancel=event=>finishSessionDrag(event,true);
+  handle.onlostpointercapture=event=>finishSessionDrag(event,true);
+  handle.onkeydown=event=>{if(event.key==="Escape"&&sessionPointerDrag){event.preventDefault();finishSessionDrag(null,true);return;}if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||!["ArrowUp","ArrowDown"].includes(event.key))return;
+    event.preventDefault();const visible=new Set([...$(container).children].map(row=>row.dataset.sessionId)),group=orderedSessions().filter(other=>visible.has(other.id)&&!!other.pinned===!!item.pinned),index=group.findIndex(other=>other.id===item.id),target=group[index+(event.key==="ArrowUp"?-1:1)];
+    if(target)return moveSession(item.id,target.id,event.key==="ArrowUp"?"before":"after",container);};
+  const pin=el("button",null,"session-pin"),icon=el("span",null,"session-pin-icon");pin.type="button";pin.disabled=sessionOrderSaving||appClosed;
+  pin.setAttribute("aria-label",`${item.title} ${item.pinned?"고정 해제":"고정"}`);pin.setAttribute("aria-pressed",String(!!item.pinned));pin.title=item.pinned?"고정 해제":"상단에 고정";icon.setAttribute("aria-hidden","true");pin.append(icon);
+  pin.onclick=async()=>{try{await updateSession(item.id,{pinned:!item.pinned});}catch(e){toast(e.message);}finally{const next=[...$(container).children].find(row=>row.dataset.sessionId===item.id);next?.querySelector(".session-pin")?.focus();}};
+  row.append(handle,button,pin);return row;
+}
 function renderSessions(){
+  // Polling must not replace the native drag source before its drop event.
+  if(sessionDragId)return;
+  let focused=null;for(const container of ["sessions","home-recents","all-sessions"])for(const row of $(container).children)for(const selector of [".session-drag",".session-pin"])if(row.querySelector(selector)===document.activeElement)focused={container,id:row.dataset.sessionId,selector};
   const query=$("session-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
   $("sessions").replaceChildren();$("home-recents").replaceChildren();
-  for(const item of items){const b=el("button",null,"session"+(item.id===active?.id?" active":""));b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}`);if(item.id===active?.id)b.setAttribute("aria-current","page");b.append(el("span",item.pinned?"고정":"업무","session-kicker"),el("strong",item.title,"session-title"));const meta=el("span",null,"session-meta");meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));const waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;if(waiting)b.append(el("span",`응답 대기 ${waiting}`,"session-attention"));b.append(meta);b.title=item.workspace;b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("sessions").append(b);}
+  if(boot.sessionOrder?.warning)$("sessions").append(el("p",boot.sessionOrder.warning,"sidebar-empty"));
+  for(const item of items){const b=el("button",null,"session"+(item.id===active?.id?" active":""));b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}`);if(item.id===active?.id)b.setAttribute("aria-current","page");b.append(el("span",item.pinned?"고정":"업무","session-kicker"),el("strong",item.title,"session-title"));const meta=el("span",null,"session-meta");meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));const waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;if(waiting)b.append(el("span",`응답 대기 ${waiting}`,"session-attention"));b.append(meta);b.title=item.workspace;b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("sessions").append(sessionRow(item,b,"sessions"));}
   if(!items.length)$("sessions").append(el("p",query?"찾는 업무가 없어요":"시작한 업무가 여기에 모여요","sidebar-empty"));
-  for(const item of items.slice(0,4)){const b=el("button",null,"recent-card");b.type="button";b.append(el("span",item.pinned?"고정한 업무":"이어서 하기","recent-kicker"),el("strong",item.title),el("span",`${basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",stateNames[item.state]||"대기","recent-status"));b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(b);}
+  for(const item of items.slice(0,4)){const b=el("button",null,"recent-card");b.type="button";b.append(el("span",item.pinned?"고정한 업무":"이어서 하기","recent-kicker"),el("strong",item.title),el("span",`${basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",stateNames[item.state]||"대기","recent-status"));b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(sessionRow(item,b,"home-recents"));}
   if(!items.length)$("home-recents").append(el("p",query?"검색어를 바꾸어 다시 찾아보세요.":"첫 업무를 시작하면, 다음에 이곳에서 이어갈 수 있어요.","empty-recents"));
   $("tasks-open").hidden=!sessions.length;renderAllSessions();globalThis.WorkspaceCapabilities?.contextChanged();
+  if(focused){const row=[...$(focused.container).children].find(row=>row.dataset.sessionId===focused.id);row?.querySelector(focused.selector)?.focus({preventScroll:true});}
 }
 function renderAllSessions(){
   const query=$("task-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
   $("all-sessions").replaceChildren();$("tasks-empty").hidden=!!items.length;
-  for(const item of items){const button=el("button",null,"session all-session"),meta=el("span",null,"session-meta");button.type="button";button.title=item.workspace;button.append(el("span",item.pinned?"고정한 업무":"업무","session-kicker"),el("strong",item.title,"session-title"),el("span",item.workspace,"all-session-path"));meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));button.append(meta);if(item.id===active?.id)button.setAttribute("aria-current","page");button.onclick=async()=>{const pending=selectSession(item.id),ticket=selectionGeneration;try{if(await pending&&ticket===selectionGeneration)$("tasks-dialog").close();}catch(e){if(ticket===selectionGeneration)toast(e.message);}};$("all-sessions").append(button);}
+  for(const item of items){const button=el("button",null,"session all-session"),meta=el("span",null,"session-meta");button.type="button";button.title=item.workspace;button.append(el("span",item.pinned?"고정한 업무":"업무","session-kicker"),el("strong",item.title,"session-title"),el("span",item.workspace,"all-session-path"));meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));button.append(meta);if(item.id===active?.id)button.setAttribute("aria-current","page");button.onclick=async()=>{const pending=selectSession(item.id),ticket=selectionGeneration;try{if(await pending&&ticket===selectionGeneration)$("tasks-dialog").close();}catch(e){if(ticket===selectionGeneration)toast(e.message);}};$("all-sessions").append(sessionRow(item,button,"all-sessions"));}
 }
 // Untrusted model text becomes text nodes only, never HTML or remote content.
 function inlineText(parent,text){const pattern=/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;let pos=0;for(const match of text.matchAll(pattern)){parent.append(document.createTextNode(text.slice(pos,match.index)));const code=match[0][0]==="`";parent.append(el(code?"code":"strong",match[0].slice(code?1:2,code?-1:-2)));pos=match.index+match[0].length;}parent.append(document.createTextNode(text.slice(pos)));}
@@ -115,11 +218,11 @@ function effortOptions(){return (Array.isArray(active?.connection?.availableEffo
 function renderConnectionOptions(){
   const model=$("model-select"),previousModel=model.value;model.replaceChildren();const custom=el("option","직접 입력");custom.value="";model.append(custom);
   const seen=new Set();for(const item of modelOptions()){if(seen.has(item.value))continue;seen.add(item.value);const option=el("option",item.displayName||item.value);option.value=item.value;model.append(option);}model.value=seen.has(previousModel)?previousModel:"";
-  $("model-list-note").textContent=seen.size?"현재 연결이 제공한 모델 목록입니다. 회사 모델 이름을 직접 입력할 수도 있어요.":"연결에서 모델 목록을 제공하지 않았어요. 회사에서 사용하는 모델 이름을 직접 입력할 수 있어요.";
+  $("model-list-note").textContent=seen.size?"현재 연결이 제공한 모델 목록입니다. 사용할 모델 이름을 직접 입력할 수도 있어요.":"연결에서 모델 목록을 제공하지 않았어요. 연결에서 사용할 모델 이름을 직접 입력할 수 있어요.";
   const mode=$("permission-mode-select"),previousMode=mode.value;mode.replaceChildren();const inherit=el("option","기존 설정 사용");inherit.value="";mode.append(inherit);
   for(const item of permissionOptions()){const option=el("option",item.displayName||item.value);option.value=item.value;mode.append(option);}mode.value=permissionOptions().some(item=>item.value===previousMode)?previousMode:"";
 }
-function updateModelControls(){const capable=!!active?.connection?.capabilities?.setModel,disabled=connectionLocked()||!capable;$("model-apply").disabled=disabled;$("model-reset").disabled=disabled||!active?.modelOverride;$("model-input").disabled=disabled;$("model-select").disabled=disabled;$("model-message").textContent=modelChanging?"모델 변경을 확인하고 있어요.":!active?"업무를 시작하면 이 대화에서 사용할 모델을 확인할 수 있어요.":!capable?"현재 연결에서 모델 변경을 확인하지 못했어요. 기존 모델을 그대로 사용합니다.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 모델을 바꿀 수 있어요.":`현재: ${active.connection?.model||"기존 모델"} · 이 연결에만 적용하며 회사 기본 설정은 바꾸지 않아요.`;}
+function updateModelControls(){const capable=!!active?.connection?.capabilities?.setModel,disabled=connectionLocked()||!capable;$("model-apply").disabled=disabled;$("model-reset").disabled=disabled||!active?.modelOverride;$("model-input").disabled=disabled;$("model-select").disabled=disabled;$("model-message").textContent=modelChanging?"모델 변경을 확인하고 있어요.":!active?"업무를 시작하면 이 대화에서 사용할 모델을 확인할 수 있어요.":!capable?"현재 연결에서 모델 변경을 확인하지 못했어요. 기존 모델을 그대로 사용합니다.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 모델을 바꿀 수 있어요.":`현재: ${active.connection?.model||"기존 모델"} · 이 연결에만 적용하며 Claude 기본 설정은 바꾸지 않아요.`;}
 function updatePermissionControls(){
   const info=active?.connection,capable=info?.capabilities?.setPermissionMode===true,locked=connectionLocked();
   $("permission-mode-select").disabled=$("permission-mode-apply").disabled=locked||!capable;
@@ -273,7 +376,7 @@ async function submit(){
     // discard partial messages received before the POST acknowledgement.
   }catch(e){pending.remove();error(e.message);}finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
-$("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{if(e.isComposing||e.keyCode===229)return;if(globalThis.WorkspaceComposer?.keydown(e))return;if(globalThis.WorkspaceInlineControls?.keydown(e))return;if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();return submit();}};
+$("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;if(globalThis.WorkspaceComposer?.keydown(e))return;if(globalThis.WorkspaceInlineControls?.keydown(e))return;if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();return submit();}};
 $("folder-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();if(!$("trust").checked)return;const button=e.submitter;button.disabled=true;try{if($("folder-form").dataset.resume==="yes"){const id=active.id;await api("/api/trust",{id,trusted:true});if(active?.id!==id)return;active.trusted=true;}else{const draft={text:$("prompt").value,attachments:[...attachments]},managed=$("folder-mode-new").checked;if(managed&&!managedRootChoice&&!boot.managedWorkspaceRoot)throw Error("새 업무를 저장할 위치를 먼저 선택해 주세요.");const item=await api("/api/create",{workspace:managed?undefined:$("folder-input").value,managed,managedRoot:managed?managedRootChoice||undefined:undefined,title:$("task-name").value.trim()||undefined,trusted:true});sessions.unshift(item);drafts.set(item.id,draft);await selectSession(item.id);drafts.delete("home");}$("folder-dialog").close();if($("folder-form").dataset.afterTrust==="choice"){renderWorkspaceChoice();toast("폴더 확인을 마쳤어요. 원하는 디자인을 선택해 주세요.");}else if($("folder-form").dataset.afterTrust==="commands"){await globalThis.WorkspaceComposer?.prepareConnection();}else if($("folder-form").dataset.afterTrust==="schedule"){globalThis.WorkspaceWorkflow?.openEditor("schedule");}else if($("folder-form").dataset.afterTrust==="controls"){await globalThis.WorkspaceInlineControls?.resumeAfterTrust();}else if($("prompt").value.trim())await submit();}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $("folder-mode-new").onchange=$("folder-mode-existing").onchange=folderMode;
 async function browseWorkspace(managed){const button=$(managed?"choose-managed":"browse-folder"),label=button.textContent,ticket=folderChoiceGeneration;button.disabled=true;button.textContent="선택 창 열림…";try{const initial=managed?managedRootChoice||boot.defaultWorkspace:$("folder-input").value||boot.defaultWorkspace;const d=await api("/api/pick",{kind:"folder",initialDirectory:initial||undefined});if(ticket!==folderChoiceGeneration||!$("folder-dialog").open)return;if(d.paths.length){if(managed){managedRootChoice=d.paths[0];folderMode();}else $("folder-input").value=d.paths[0];$("trust").checked=false;}}catch(e){toast(e.message);}finally{button.textContent=label;button.disabled=$("folder-form").dataset.resume==="yes";if($("folder-dialog").open&&ticket===folderChoiceGeneration)button.focus();}}
@@ -289,7 +392,6 @@ $("stop").onclick=async()=>{try{await api("/api/stop",{id:active.id});toast("중
 $("refresh-files").onclick=()=>{refreshFiles();refreshResults();};$("files-tab").onclick=()=>setPanel("sources");$("results-tab").onclick=()=>setPanel("results");
 $("materials-button").onclick=()=>document.querySelector(".inspector").classList.add("open");$("close-materials").onclick=()=>document.querySelector(".inspector").classList.remove("open");
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
-$("help-learn-open").onclick=()=>{$("help-dialog").close();$("learn-open").click();};
 $("help").onclick=()=>showDialog("help-dialog");$("close-help").onclick=()=>$("help-dialog").close();
 function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
@@ -347,7 +449,13 @@ async function setEffort(effort){
   finally{effortChanging=false;setStatus(active?.state||"idle");}
 }
 $("task-title").onclick=()=>{if(!active)return;$("rename-input").value=active.title;showDialog("rename-dialog");};
-async function updateSession(id,change){const response=await api("/api/session/update",{id,...change}),updated=response.session||response,metadata={title:updated.title,pinned:updated.pinned,updated:updated.updated};sessions=sessions.map(s=>s.id===id?{...s,...metadata}:s);if(active?.id===id){Object.assign(active,metadata);taskHeader();}renderSessions();return updated;}
+async function updateSession(id,change){
+  const pinning=typeof change.pinned==="boolean";
+  if(pinning&&(sessionOrderSaving||sessionDragId))throw new Error("업무 순서 변경을 마친 뒤 고정해 주세요.");
+  if(pinning){sessionOrderSaving=true;renderSessions();}
+  try{const response=await api("/api/session/update",{id,...change}),updated=response.session||response,metadata={title:updated.title,pinned:updated.pinned,updated:updated.updated};sessions=sessions.map(s=>s.id===id?{...s,...metadata}:s);if(active?.id===id){Object.assign(active,metadata);taskHeader();}renderSessions();return updated;}
+  finally{if(pinning){sessionOrderSaving=false;renderSessions();}}
+}
 $("rename-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();const id=active?.id;if(!id)return;try{await updateSession(id,{title:$("rename-input").value.trim()});$("rename-dialog").close();}catch(e){toast(e.message);}};
 $("task-pin").onclick=async()=>{if(!active)return;const id=active.id,pinned=!active.pinned;try{await updateSession(id,{pinned});}catch(e){toast(e.message);}};
 let nativeOpening=false;

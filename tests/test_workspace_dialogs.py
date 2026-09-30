@@ -87,7 +87,7 @@ class WorkspaceDialogTests(unittest.TestCase):
           assert.equal($('all-sessions').children.length,1);
           assert.equal($('all-sessions').children[0].querySelector('.session-title').textContent,'업무 5');
           let selected;selectSession=async id=>{selected=id;return true;};
-          await $('all-sessions').children[0].onclick();
+          await $('all-sessions').children[0].querySelector('.all-session').onclick();
           assert.equal(selected,'5');assert.equal($('tasks-dialog').open,false);
         })()""")
 
@@ -97,8 +97,8 @@ class WorkspaceDialogTests(unittest.TestCase):
             state:'done',messages:[],updated:1}));
           renderSessions();$('tasks-open').onclick();
           const pending=[];api=path=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}));
-          const first=$('all-sessions').children[0].onclick();
-          const second=$('all-sessions').children[1].onclick();
+          const first=$('all-sessions').children[0].querySelector('.all-session').onclick();
+          const second=$('all-sessions').children[1].querySelector('.all-session').onclick();
           pending[0].resolve(sessions[0]);await first;
           assert.equal(active,null);assert.equal($('tasks-dialog').open,true);
           pending[1].reject(new Error('최근 선택 연결 실패'));await second;
@@ -114,8 +114,8 @@ class WorkspaceDialogTests(unittest.TestCase):
           renderSessions();$('tasks-open').onclick();
           refreshFiles=async()=>{};refreshResults=async()=>{};poll=async()=>{};
           const pending=[];api=path=>new Promise((resolve,reject)=>pending.push({path,resolve,reject}));
-          const first=$('all-sessions').children[0].onclick();
-          const second=$('all-sessions').children[1].onclick();
+          const first=$('all-sessions').children[0].querySelector('.all-session').onclick();
+          const second=$('all-sessions').children[1].querySelector('.all-session').onclick();
           pending[1].resolve(sessions[1]);await second;
           assert.equal(active.id,'B');assert.equal($('tasks-dialog').open,false);
           toast('현재 업무 B');pending[0].reject(new Error('오래된 A 실패'));await first;

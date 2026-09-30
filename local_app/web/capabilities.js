@@ -5,6 +5,7 @@ globalThis.WorkspaceCapabilities = (() => {
   let opened = false, kind = "skills", data = null, generation = 0;
   let controller = null, loading = false, refreshTimer = null;
   let scope = "common", selectedFolder = "", selectedSession = null, folderOptionsKey = "";
+  let commonSession = null;
   const kinds = ["skills", "tools", "mcp", "commands"];
   const names = {skills:"스킬", tools:"도구", mcp:"연결 서버", commands:"명령"};
   const sources = {
@@ -16,10 +17,11 @@ globalThis.WorkspaceCapabilities = (() => {
   const app = () => document.querySelector(".app");
   const expanded = {internal:false, reference:false, runtime:false, builtin:false};
   const invocationKey = row => (row.invocation || "").trim().replace(/^\/+/, "");
-  const beforeConnection = () => data ? ["awaiting-runtime", "no-session", "installed-only"].includes(data.status) : !selectedSession;
+  const runtimeSession = () => scope === "common" ? commonSession : selectedSession;
+  const beforeConnection = () => data ? ["awaiting-runtime", "no-session", "installed-only"].includes(data.status) : !runtimeSession();
   const installedAvailable = () => ["discovered", "partial"].includes(data?.installed?.state);
   const installedPartial = () => data?.installed?.state === "partial" || data?.installed?.limited === true;
-  const contextKey = () => scope === "common" ? scope : [scope, pathKey(selectedFolder), selectedSession?.id || ""].join("\n");
+  const contextKey = () => [scope, scope === "folder" ? pathKey(selectedFolder) : "", runtimeSession()?.id || ""].join("\n");
   const pathKey = value => (value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   function sessionFolders() {
     const folders = new Map();
@@ -40,8 +42,9 @@ globalThis.WorkspaceCapabilities = (() => {
     selectedSession = match ? {id:match.id, title:match.title} : null;
   }
   function syncFolders(chooseDefault = false) {
+    if (scope === "common") return syncConnections();
     const folders = sessionFolders(), select = $("capabilities-folder");
-    const key = JSON.stringify(folders.map(item => item.workspace));
+    const key = "folders:" + JSON.stringify(folders.map(item => item.workspace));
     if (key !== folderOptionsKey || !select.children.length) {
       folderOptionsKey = key;
       const placeholder = el("option", folders.length ? "업무 폴더를 선택하세요" : "등록된 업무 폴더가 없어요");
@@ -56,6 +59,23 @@ globalThis.WorkspaceCapabilities = (() => {
     selectFolder(exists ? selectedFolder : chooseDefault ? folders[0]?.workspace : "");
     select.value = selectedFolder; select.disabled = folders.length === 0;
   }
+  function syncConnections() {
+    const rows = sessionFolders().flatMap(folder => folder.sessions);
+    const previous = rows.find(item => item.id === commonSession?.id);
+    const selected = previous || rows.find(item => item.id === active?.id) || rows[0];
+    commonSession = selected ? {id:selected.id, title:selected.title, workspace:selected.workspace} : null;
+    const select = $("capabilities-folder"), key = "connections:" + JSON.stringify(rows.map(item => [item.id,item.title,item.workspace]));
+    if (key !== folderOptionsKey || !select.children.length) {
+      folderOptionsKey = key;
+      const placeholder = el("option", rows.length ? "연결 목록의 기준 업무를 선택하세요" : "등록된 업무가 없어요");
+      placeholder.value = ""; placeholder.disabled = true; select.replaceChildren(placeholder);
+      for (const item of rows) {
+        const option = el("option", `${item.title || "업무"} — ${item.workspace}`);
+        option.value = item.id; option.title = item.workspace; select.append(option);
+      }
+    }
+    select.value = commonSession?.id || ""; select.disabled = rows.length === 0;
+  }
   const emptyFolderNotice = () => sessionFolders().length
     ? "목록을 확인할 업무 폴더를 드롭다운에서 선택해 주세요."
     : "등록된 업무 폴더가 없어요. 새 업무를 만들면 이곳에서 폴더를 선택할 수 있어요.";
@@ -63,14 +83,15 @@ globalThis.WorkspaceCapabilities = (() => {
   function group() { return data?.runtime?.groups?.[kind] || {reported:false, items:[]}; }
   function contextLine() {
     $("capabilities-scope-select").value = scope;
-    $("capabilities-folder").value = selectedFolder;
-    $("capabilities-folder").title = selectedFolder;
-    $("capabilities-folder").hidden = scope !== "folder";
-    $("capabilities-folder-label").hidden = scope !== "folder";
+    $("capabilities-folder").value = scope === "common" ? commonSession?.id || "" : selectedFolder;
+    $("capabilities-folder").title = scope === "common" ? commonSession?.workspace || "" : selectedFolder;
+    $("capabilities-folder").hidden = false;
+    $("capabilities-folder-label").hidden = false;
+    $("capabilities-folder-label").textContent = scope === "common" ? "연결 기준 업무" : "업무 폴더";
     $("capabilities-context").textContent = data?.schemaVersion === 1 ? active
       ? `${active.title} · ${basename(active.workspace)}`
       : "선택된 업무가 없어요. 업무 폴더에 따라 사용할 수 있는 기능이 달라집니다."
-      : scope === "common" ? "회사·개인 공통 목록"
+      : scope === "common" ? `사용자 공통 설치 스킬${commonSession ? ` · 연결 근거: ${commonSession.title} · ${commonSession.workspace}` : " · 연결 기준 업무 없음"}`
       : selectedFolder ? `${selectedFolder}${selectedSession ? ` · 연결 근거: ${selectedSession.title}` : " · 설치 정보만 조회"}`
       : emptyFolderNotice();
   }
@@ -80,7 +101,7 @@ globalThis.WorkspaceCapabilities = (() => {
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
     $("capabilities-status").textContent = loading
       ? "기능 목록을 확인하고 있어요. AI 요청은 보내지 않습니다." + attention
-      : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "회사·개인 공통 목록을 확인합니다.")) + attention;
+      : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "공통 설치 스킬과 선택한 업무 연결의 보고 목록을 구분해 확인합니다.")) + attention;
   }
   function skillInventory() {
     if (data?.schemaVersion === 2) {
@@ -199,7 +220,7 @@ globalThis.WorkspaceCapabilities = (() => {
       if (row.scopeLabel) metadata.append(el("span", row.scopeLabel));
       if (row._duplicateOrigin && row.candidateId) metadata.append(el("span", `설치 항목 구분: ${row.candidateId.split(":").pop().slice(0, 8)}`));
       if (kind === "tools") {
-        const labels = {builtin:"Claude 기본 도구", harness:"하네스 제공 도구", mcp:"연결 서버 도구", unknown:"종류 미확인"};
+        const labels = {builtin:"Claude 기본 도구", harness:"외부 제공 도구", mcp:"연결 서버 도구", unknown:"종류 미확인"};
         metadata.append(el("span", `${labels[row.kind] || labels.unknown}${row.server ? " · " + row.server : ""}`));
         metadata.append(el("span", row.descriptionSource === "runtime" ? "설명: 연결에서 제공"
           : row.descriptionSource === "reference" ? "설명: Claude 공식 도구 안내" : "설명: 미제공"));
@@ -236,7 +257,7 @@ globalThis.WorkspaceCapabilities = (() => {
         addSection("연결 보고 목록", rows, "runtime", "runtime");
       }
     } else if (kind === "tools" && data?.schemaVersion === 2) {
-      for (const [type, label] of [["harness", "하네스 도구"], ["mcp", "연결 서버 도구"], ["unknown", "종류 미확인 도구"], ["builtin", "Claude 기본 도구"]]) {
+      for (const [type, label] of [["harness", "외부 제공 도구"], ["mcp", "연결 서버 도구"], ["unknown", "종류 미확인 도구"], ["builtin", "Claude 기본 도구"]]) {
         const rows = filtered((current.items || []).filter(row => (row.kind || "unknown") === type));
         visibleCount += rows.length; addSection(label, rows, "runtime", type);
       }
@@ -255,10 +276,10 @@ globalThis.WorkspaceCapabilities = (() => {
         : "확인한 설치 목록에 일반 스킬이 없어요."
       : current.reported ? `CLI가 보고한 ${names[kind]} 목록이 비어 있어요.`
       : data?.schemaVersion === 2 && data?.status === "installed-only" ? "이 범위의 업무 연결 보고가 없어요. 설치 정보와 실제 연결 목록은 별도로 확인합니다."
-      : beforeConnection() ? `첫 요청으로 Claude에 연결하면 ${names[kind]} 목록을 확인할 수 있어요.`
+      : beforeConnection() ? `선택한 업무의 Claude 연결이 준비되면 ${names[kind]} 목록을 확인할 수 있어요.`
       : `현재 Claude 연결에서 ${names[kind]} 목록을 전달받지 못했어요. 항목이 없다는 뜻은 아닙니다.`;
     const notes = [...(data?.warnings || [])];
-    if (kind === "skills" && data?.installed?.diagnostics?.summary && data.installed.diagnostics.code !== "ready") notes.push(data.installed.diagnostics.summary);
+    if (kind === "skills" && data?.installed?.diagnostics?.summary && !["ready", "metadata_read"].includes(data.installed.diagnostics.code)) notes.push(data.installed.diagnostics.summary);
     if (current.limited) notes.push("목록이 길어 일부 항목만 표시합니다.");
     if (kind === "skills" && data?.installed?.limited) notes.push("설치 정보는 확인 범위 내의 일부 항목입니다.");
     if (data && !current.reported && active && !beforeConnection() && !(kind === "skills" && data.installed?.state === "discovered")) {
@@ -280,6 +301,8 @@ globalThis.WorkspaceCapabilities = (() => {
     const summary = $("capabilities-summary");
     summary.replaceChildren(); summary.hidden = !data;
     const model = data?.runtime?.model;
+    const source = data?.runtime?.source;
+    if (source) summary.append(el("span", `연결 기준 · ${source.title || source.sessionId} · ${source.workspace || ""}`, "capability-summary-item"));
     if (model) summary.append(el("span", `모델 · ${model}`, "capability-summary-item"));
     if (kind === "skills") {
       if (data?.schemaVersion === 2) {
@@ -315,6 +338,7 @@ globalThis.WorkspaceCapabilities = (() => {
     try {
       let query = `?scope=${scope}`;
       if (scope === "folder") query += `&workspace=${encodeURIComponent(selectedFolder)}` + (selectedSession ? `&id=${encodeURIComponent(selectedSession.id)}` : "");
+      else if (commonSession) query += `&id=${encodeURIComponent(commonSession.id)}`;
       const response = await api("/api/capabilities" + query, undefined, controller.signal);
       if (!opened || ticket !== generation || contextKey() !== key) return;
       data = response; loading = false; render();
@@ -352,9 +376,9 @@ globalThis.WorkspaceCapabilities = (() => {
     if (!opened) return;
     const previous = contextKey();
     syncFolders();
-    if (scope === "folder" && contextKey() !== previous) { data = null; render(); refresh(); return; }
+    if (contextKey() !== previous) { data = null; render(); refresh(); return; }
     statusLine();
-    if (reload && scope === "folder" && active?.id === selectedSession?.id) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 100); }
+    if (reload && active?.id === runtimeSession()?.id) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 100); }
   }
   $("capabilities-scope-select").onchange = () => {
     scope = $("capabilities-scope-select").value === "folder" ? "folder" : "common";
@@ -362,8 +386,12 @@ globalThis.WorkspaceCapabilities = (() => {
     data = null; render(); refresh();
   };
   $("capabilities-folder").onchange = () => {
-    if (!opened || scope !== "folder") return;
-    selectFolder($("capabilities-folder").value);
+    if (!opened) return;
+    if (scope === "common") {
+      const item = sessionFolders().flatMap(folder => folder.sessions).find(row => row.id === $("capabilities-folder").value);
+      if (!item) return syncConnections();
+      commonSession = {id:item.id, title:item.title, workspace:item.workspace};
+    } else selectFolder($("capabilities-folder").value);
     data = null; render(); return refresh();
   };
   $("capabilities-open").onclick = open;

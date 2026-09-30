@@ -18,8 +18,9 @@ import uuid
 import webbrowser
 
 from .bridge import ClaudeSession, HIDDEN, probe_cli, resolve_cli, runtime_context
-from .companion import Companion, begin_turn, course, observe
+from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
+from .session_order import SessionOrder
 from .artifacts import changes, linked, snapshot
 from .capabilities import catalog
 from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES
@@ -35,8 +36,8 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.14.0"
-MANUAL_FILENAME = "Company-Agent-사용자-안내서.html"
+WORKSPACE_VERSION = "0.15.0"
+MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
     "img-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; "
@@ -44,6 +45,7 @@ MANUAL_CSP = (
 )
 # Closed URL aliases only: legacy documents need not exist on disk.
 MANUAL_ALIASES = {
+    '/manual/Company-Agent-사용자-안내서.html': '',
     '/manual/handbook': '#handbook',
     '/manual/onboarding': '#onboarding',
     '/manual/usage': '#usage',
@@ -144,8 +146,8 @@ class LocalApp:
         self._isolated_workspace_root = managed_workspace_root is not None or demo
         self.reconnect_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
-        self.companion = Companion(state, demo=demo)
-        self.completion_discovery = CompletionDiscovery(self.companion.client)
+        self.inventory_client = ClaudeInventory()
+        self.completion_discovery = CompletionDiscovery(self.inventory_client)
         if command is None and not demo:
             try:
                 self.command = resolve_cli()
@@ -229,6 +231,7 @@ class LocalApp:
         for item in self.history.load():
             item.update(bridge=None, requests={}, events=[], seq=0, trusted=False, state='idle')
             self.sessions[item['id']] = item
+        self.session_order = SessionOrder(self.state)
 
     def save(self, sid=None):
         with self.lock:
@@ -273,13 +276,13 @@ class LocalApp:
 
     def bootstrap(self):
         with self.lock:
-            sessions = sorted(self.sessions.values(), key=lambda item: (item.get('pinned') is True,
-                              item.get('updated', item['created'])), reverse=True)
+            sessions = self.session_order.ordered(self.sessions.values())
             return {"application": "company-workspace", "version": self.info.get("version"), "error": self.error, "demo": self.demo,
                     "workspaceVersion": WORKSPACE_VERSION, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
                                  {"artifactCount": len(item.get('artifacts', []))} for item in sessions],
+                    "sessionOrder": self.session_order.snapshot(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
                     "workspaceLocationError": self.workspace_location_error,
@@ -396,13 +399,27 @@ class LocalApp:
             raise ValueError('업무 고정 여부를 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            previous = {key: item.get(key) for key in ('title', 'pinned', 'updated')}
             if title is not None:
                 item['title'] = title
             if 'pinned' in data:
                 item['pinned'] = data['pinned']
             item['updated'] = time.time()
-            self.save(sid)
+            try:
+                self.save(sid)
+            except (OSError, ValueError):
+                item.update(previous)
+                raise
             return self.public(item)
+
+    def reorder_session(self, sid, target, position):
+        with self.lock:
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            return {'ok': True, 'sessionOrder': self.session_order.move(
+                self.sessions.values(), sid, target, position)}
 
     def _finish_observation(self, item):
         before = item.pop('_artifactSnapshot', None)
@@ -523,7 +540,7 @@ class LocalApp:
                     item['_allowBypass'] = True
                     bridge = ClaudeSession(self.command, self.info, root,
                         lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
-                        choice_helper=lambda: self.companion.client.choice_helper(root), allow_bypass_permissions=True)
+                        allow_bypass_permissions=True)
                     item['bridge'] = bridge
                     item['_needsControlRestore'] = bool(item.get('_sessionControls'))
                 bridge.prepare()
@@ -575,7 +592,6 @@ class LocalApp:
                     raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
                 bridge = ClaudeSession(self.command, self.info, root,
                     lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
-                    choice_helper=lambda: self.companion.client.choice_helper(root),
                     **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                 item['bridge'] = bridge
                 item['modelOverride'] = None
@@ -742,7 +758,6 @@ class LocalApp:
                 data['lastRunId'] = item.get('lastRunId')
             if kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal:
                 item['updated'] = time.time()
-            observe(item, kind, data)
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
@@ -833,7 +848,6 @@ class LocalApp:
                         raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
                                            lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get("sessionId"),
-                                           choice_helper=lambda: self.companion.client.choice_helper(Path(item['workspace'])),
                                            **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                     item["bridge"] = bridge
                     item['modelOverride'] = None
@@ -854,7 +868,6 @@ class LocalApp:
             item['lastRunId'] = uuid.uuid4().hex
             item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
             item['artifactObservation'] = item['_artifactSnapshot'].public()
-            begin_turn(item)
             self.save(sid)
             if _dispatch_claim is not None:
                 self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
@@ -1080,21 +1093,13 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('목록을 확인할 실제 폴더를 선택해 주세요.')
                         if selected and Path(selected['workspace']).resolve(strict=True) != folder:
                             raise ValueError('선택한 목록 폴더와 연결 업무의 폴더가 다릅니다.')
-                    elif sid or 'workspace' in query:
-                        raise ValueError('공통 목록에는 업무나 폴더를 지정하지 않습니다.')
-                    return self.reply(catalog(selected, client=app.companion.client,
+                    elif 'workspace' in query:
+                        raise ValueError('공통 설치 스킬에는 폴더를 지정하지 않습니다. 업무는 연결 목록의 출처로만 사용됩니다.')
+                    return self.reply(catalog(selected, client=app.inventory_client,
                                               demo=app.demo, scope=scope,
                                               workspace=str(folder) if folder else None))
-                return self.reply(catalog(selected, client=app.companion.client,
+                return self.reply(catalog(selected, client=app.inventory_client,
                                           demo=app.demo, validate_workspace=workspace_folder))
-            if route.path == "/api/course":
-                return self.reply(course())
-            if route.path == "/api/companion":
-                item = app.get(sid)
-                if not item.get('trusted'):
-                    raise ValueError('작업 폴더를 다시 확인한 뒤 관리 화면을 열어 주세요.')
-                workspace_folder(item)
-                return self.reply(app.companion.snapshot(item, query.get('view', ['checks'])[0]))
             if route.path == "/api/files":
                 return self.reply({"files": app.files(sid)})
             if route.path == "/api/results":
@@ -1144,7 +1149,6 @@ class Handler(BaseHTTPRequestHandler):
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
-                      "/companion.js": ("companion.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),
                       "/fonts/NotoSansKR-Variable.woff": ("fonts/NotoSansKR-Variable.woff", "font/woff"),
@@ -1231,6 +1235,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot')))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
+        if route == '/api/session/reorder':
+            return self.reply(app.reorder_session(sid, data.get('targetId'), data.get('position')))
         if route == '/api/reconnect':
             return self.reply(app.reconnect(sid))
         if route == '/api/connect':
@@ -1292,14 +1298,6 @@ class Handler(BaseHTTPRequestHandler):
             workspace_folder(app.get(sid))
             app.get(sid)['trusted'] = True
             return self.reply({'ok': True})
-        if route == '/api/companion':
-            item = app.get(sid)
-            if not item.get('trusted'):
-                raise ValueError('작업 폴더를 확인한 뒤 진행해 주세요.')
-            workspace_folder(item)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} and data.get('action') in {'apply', 'learning', 'rollback', 'share'}:
-                raise ValueError('진행 중인 업무를 마치거나 중지한 뒤 기억·지침을 변경해 주세요.')
-            return self.reply(app.companion.action(item, data))
         if route == "/api/send":
             app.send(sid, data.get("text"), data.get("attachments", []), data.get("trusted"))
         elif route == "/api/respond":

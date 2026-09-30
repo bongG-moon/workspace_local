@@ -1,5 +1,6 @@
 """Capability discovery must remain observational and never start model work."""
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -164,17 +165,42 @@ class ScopedCatalogTests(unittest.TestCase):
         return catalog(self.item, client=self.client, scope=scope,
                        workspace='fixture-folder' if scope == 'folder' else None)
 
-    def test_common_ignores_active_task_and_never_requires_trust(self):
+    def test_common_keeps_selected_runtime_but_discovers_only_common_installations(self):
         result = self.result('common')
         self.assertEqual(2, result['schemaVersion'])
         self.assertEqual({'scope': 'common', 'workspace': None}, result['context'])
-        self.assertEqual('installed-only', result['status'])
-        self.assertIsNone(result['sessionId'])
-        self.assertFalse(result['runtime']['groups']['tools']['reported'])
+        self.assertEqual('live', result['status'])
+        self.assertEqual('task-a', result['sessionId'])
+        self.assertTrue(result['runtime']['groups']['tools']['reported'])
+        self.assertEqual('fixture-folder', result['runtime']['source']['workspace'])
+        self.assertIsNone(result['workspace'])
         self.client.discovery_inventory.assert_called_once_with(None)
         self.client.skill_inventory.assert_not_called()
         self.client.call.assert_not_called()
         self.assertFalse(self.item['trusted'])
+
+    def test_common_without_runtime_has_no_fake_tools_or_folder_context(self):
+        result = catalog(client=self.client, scope='common')
+        self.assertEqual('installed-only', result['status'])
+        self.assertIsNone(result['runtime']['source'])
+        self.assertFalse(result['runtime']['groups']['tools']['reported'])
+        self.client.discovery_inventory.assert_called_once_with(None)
+
+    def test_default_client_reads_native_skill_metadata_without_harness_or_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = Path(temp).resolve() / '.claude'
+            skill = config / 'skills' / 'ordinary' / 'SKILL.md'
+            skill.parent.mkdir(parents=True)
+            skill.write_text('---\nname: ordinary\ndescription: Native skill\n---\nPRIVATE BODY', encoding='utf-8')
+            before = skill.read_bytes()
+            with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(config)}), \
+                 patch('subprocess.Popen', side_effect=AssertionError('must not execute')):
+                result = catalog(scope='common', client=None)
+            self.assertEqual(['ordinary'], [row['name'] for row in result['installed']['skills']])
+            self.assertEqual('user', result['installed']['skills'][0]['source'])
+            self.assertNotIn('PRIVATE BODY', json.dumps(result))
+            self.assertNotIn('registration', json.dumps(result))
+            self.assertEqual(before, skill.read_bytes())
 
     def test_folder_metadata_does_not_validate_or_grant_task_trust(self):
         validator = Mock(side_effect=AssertionError('task execution validation must not run'))
@@ -310,8 +336,8 @@ class CatalogRouteTests(unittest.TestCase):
         self.work.mkdir()
         self.app = LocalApp(self.root / 'state', command=['must-not-start'])
         self.addCleanup(self.app.close)
-        self.app.companion.client = Mock()
-        self.app.companion.client.skill_inventory.return_value = {'skills': []}
+        self.app.inventory_client = Mock()
+        self.app.inventory_client.skill_inventory.return_value = {'skills': []}
         self.sid = self.app.create(str(self.work), True)['id']
         self.server = Server(self.app, 0)
         self.worker = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -340,7 +366,7 @@ class CatalogRouteTests(unittest.TestCase):
                 with self.subTest(kwargs=kwargs), self.assertRaises(HTTPError) as caught:
                     self.request('/api/capabilities?id=' + self.sid, **kwargs)
                 self.assertEqual(403, caught.exception.code)
-        self.app.companion.client.skill_inventory.assert_called_once_with(str(self.work))
+        self.app.inventory_client.skill_inventory.assert_called_once_with(str(self.work))
         self.assertIsNone(self.app.get(self.sid)['bridge'])
 
     def test_live_state_is_from_actual_bridge_not_stored_connected_flag(self):
@@ -355,7 +381,7 @@ class CatalogRouteTests(unittest.TestCase):
         self.app.get(self.sid)['trusted'] = False
         result = self.request('/api/capabilities?id=' + self.sid)
         self.assertEqual('needs-trust', result['installed']['state'])
-        self.app.companion.client.skill_inventory.assert_not_called()
+        self.app.inventory_client.skill_inventory.assert_not_called()
 
 
 if __name__ == '__main__':

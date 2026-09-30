@@ -161,7 +161,7 @@ class PlainClaudeWindowServerTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.app = LocalApp(self.root / 'state', command=['plain-claude-fixture'],
                             managed_workspace_root=self.root / 'tasks')
-        self.harness = patch.object(self.app.companion.client, '_installation',
+        self.harness = patch('local_app.harness_client.HarnessClient._installation',
                                     side_effect=AssertionError('Window/upload must not require Company Agent'))
         self.harness.start()
         self.native = native_window()
