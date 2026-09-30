@@ -31,7 +31,7 @@ class WorkspaceReopenTests(unittest.TestCase):
 
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
-                       probe_dialog_mutex=False):
+                       probe_dialog_mutex=False, reopen_supported=True):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -73,10 +73,10 @@ function Invoke-RestMethod {
   param($Uri,$Headers,$TimeoutSec)
   if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap' -or $Headers.Authorization -ne ('Bearer ' + ('a' * 43))) {throw 'incorrect endpoint'}
   Write-FixtureEvent 'health' $Uri
-  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; appRoot=APPROOT; closing=CLOSING}
+  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; appRoot=APPROOT; closing=CLOSING; window=[pscustomobject]@{reopenSupported=REOPEN}}
 }
 function Open-WorkspaceWindow {
-  param([Uri]$Uri)
+  param([Uri]$Uri,[bool]$ReuseSupported)
   Write-FixtureEvent 'open' $Uri.AbsoluteUri
   OPEN_RESULT
 }
@@ -94,6 +94,7 @@ function Wait-WorkspaceShutdown {
 function Start-Process { throw 'unexpected process launch' }
 """
             substitutions = {
+                "REOPEN": "$true" if reopen_supported else "$false",
                 "EVENTS": ps_quote(events), "SID": ps_quote("fixture-" + directory.name),
                 "ROOT": ps_quote(directory), "VERSION": ps_quote(version if same_version else "old-build"),
                 "APPROOT": ps_quote(directory if same_root else directory / "other-app"),
@@ -170,6 +171,12 @@ function Start-Process { throw 'unexpected process launch' }
         result, events, _ = self.fixture_launch(same_version=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "open"])
+
+    def test_legacy_server_without_reopen_api_never_launches_a_browser(self):
+        result, events, _ = self.fixture_launch(reopen_supported=False)
+        self.assertEqual(20, result.returncode)
+        self.assertEqual(['health', 'dialog'], [item['kind'] for item in events])
+        self.assertIn('WS-39', events[-1]['value'])
 
     def test_window_launch_failure_does_not_fall_through_to_start_another_server(self):
         result, events, _ = self.fixture_launch(same_version=True, open_failure=True, relaunched=True)

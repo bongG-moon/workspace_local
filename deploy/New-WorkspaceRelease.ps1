@@ -76,7 +76,10 @@ Company Workspace $version - single EXE edition
    preserved. Company policy may block scripts or executables; this package
    does not bypass those restrictions.
 
-Windows 10/11 x64, Windows PowerShell and .NET Framework 4 are required.
+Windows 10/11 x64, Windows PowerShell, .NET Framework 4.6.2+ and the existing
+Microsoft Edge WebView2 Evergreen Runtime are required. The dedicated app
+window embeds WebView2; it does not open an Edge or Chrome browser window.
+This package does not download or install the WebView2 Runtime.
 The EXE extracts only its application files to a per-user cache on first run.
 Keep the EXE as the entry point; README and hash are for reference.
 Existing Python and Claude remain installed and managed separately on the PC.

@@ -12,6 +12,9 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'local_app\web') -Force |
 New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
+    'local_app\native_window.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',
+    'deploy\New-WorkspaceDesktop.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
+    'docs\WORKSPACE_0.18.0_NATIVE_WINDOW.md',
     'Company-Workspace.vbs',
     'Check-Workspace.cmd', 'Check-Workspace.ps1',
     'deploy\Start-CompanyWorkspace.ps1',
@@ -45,7 +48,13 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
     if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.17.0-' + $stamp + '.zip')
+$desktopBuild = & (Join-Path $PSScriptRoot 'New-WorkspaceDesktop.ps1')
+$desktopPayload = Join-Path $payload 'desktop'
+New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
+foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
+    Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
+}
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.18.0-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

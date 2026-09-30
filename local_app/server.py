@@ -39,7 +39,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.17.0"
+WORKSPACE_VERSION = "0.18.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -128,6 +128,7 @@ class LocalApp:
         self.notifier = AttentionNotifier(enabled=not demo and not self._injected_command)
         self.tray = None
         self._open_window_callback = None
+        self._desktop_window = None
         self._navigation = None
         self._viewed_session = None
         self._viewed_until = 0
@@ -335,7 +336,9 @@ class LocalApp:
         available = self.tray is not None and self.tray.available is True
         return {'traySupported': available, 'hideSupported': available and self.notifier.native_state['supported'],
                 'reopenSupported': self._open_window_callback is not None,
-                'closeBehavior': 'background' if available else 'browser'}
+                'mode': 'desktop' if self._desktop_window is not None else 'headless',
+                'engine': 'WebView2' if self._desktop_window is not None else None,
+                'closeBehavior': 'background' if available else 'quit' if self._desktop_window is not None else 'browser'}
 
     def hide_window(self):
         if not self.window_state()['hideSupported']:
@@ -1475,11 +1478,6 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply({"ok": True})
 
 
-def open_window(url):
-    from .app_window import launch
-    return launch(url)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "CompanyAgent/local-ui")
@@ -1495,31 +1493,41 @@ def main():
     server = Server(app, args.port)
     url = server.origin + "/#token=" + app.token
     runtime = args.state / "runtime.json"
-    runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
-    app.dispatch.start()
-    from .app_window import AppWindow
-    window = AppWindow(app.notifier, url, opener=open_window)
-    app._open_window_callback = window.open
+    from .native_window import DesktopHost, DesktopError
+    if args.demo and not args.no_browser:
+        app.notifier = AttentionNotifier(enabled=True)
+    serving = threading.Event()
+    def quit_from_tray():
+        if not serving.wait(35) or not app.close():
+            return False
+        server.shutdown()
+        return True
+    window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray)
+    def reopen():
+        result = window.open()
+        app._desktop_window = window
+        return result
+    app._open_window_callback = reopen
     if not args.no_browser and not args.demo:
         from .tray import WorkspaceTray
-        def reopen():
-            return window.open()
-        def quit_from_tray():
-            if not app.close():
-                return False
-            server.shutdown()
-            return True
-        app._open_window_callback = reopen
         app.tray = WorkspaceTray(str(args.state.resolve()), reopen, quit_from_tray, ASSETS / 'app-icon.ico')
         app.tray.start()
-    if not args.no_browser:
-        window.open()
+        window.background = app.tray.available is True
     try:
+        if not args.no_browser:
+            reopen()
+        # Publish readiness only after the desktop host passed initialization.
+        runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
+        app.dispatch.start()
+        serving.set()
         server.serve_forever(poll_interval=.3)
+    except DesktopError as exc:
+        raise SystemExit(exc.code)
     except KeyboardInterrupt:
         pass
     finally:
         closed = app.close()
+        window.close()
         if app.tray is not None:
             app.tray.stop()
         server.server_close()

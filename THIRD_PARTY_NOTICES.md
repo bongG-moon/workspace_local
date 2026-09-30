@@ -15,8 +15,24 @@ Starting with **0.12.10**, both the EXE and VBS releases require an **existing P
 
 The app checks the existing installation before starting. It does not replace that installation or register a new Python on the system PATH. Licensing and incorporated-software notices for the separately installed Python are supplied with that installation.
 
-This notice describes the current 0.12.11 release. Historical 0.12.9 release packages and their embedded-runtime notices remain unchanged.
+Historical 0.12.9 release packages and their embedded-runtime notices remain unchanged.
+
+## Microsoft WebView2
+
+Starting with 0.18.0, the dedicated Windows window uses Microsoft WebView2.
+Builds download the official `Microsoft.Web.WebView2` NuGet SDK, pinned by version
+and SHA256 in [deploy/WebView2.lock.json](deploy/WebView2.lock.json). Releases
+redistribute its Core and WinForms managed assemblies and x64 WebView2Loader,
+with the original package LICENSE and NOTICE as `desktop/WebView2-LICENSE.txt`
+and `desktop/WebView2-NOTICE.txt`. The build manifest records their hashes.
+
+The WebView2 Evergreen Runtime is a separately installed prerequisite. Neither
+it nor a runtime installer is redistributed, downloaded or installed by the app.
+The app uses its own user-data folder, not the user's Edge or Chrome profile.
 
 ## External applications
 
-Claude Code and Microsoft Edge are external dependencies and are not redistributed in this repository or these release packages. Company Agent core is resolved from a separate installation; only static onboarding and user-guide resources are included here. Microsoft Office and other default applications used to open files remain separately installed products.
+Claude Code, Microsoft Office and other default applications used to open files
+remain separately installed products. The current app does not require Company
+Agent or an Edge/Chrome browser window. The external WebView2 Runtime remains
+subject to its own Microsoft terms and the organization's installation policy.

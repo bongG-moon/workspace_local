@@ -20,6 +20,8 @@ function Get-WorkspaceStartupMessage {
         40 { return 'Workspace 창을 여는 데 필요한 서버 준비를 확인하지 못했습니다. 창이 열렸는지 먼저 확인해 주세요. 담당자에게 실행 경로와 오류 코드를 전달해 주세요. 기존 Claude 설정은 변경하지 않았습니다.' }
         41 { return 'Workspace 실행 파일이 누락되었거나 읽을 수 없습니다. ZIP 전체를 새 폴더에 압축 해제한 뒤 실행해 주세요. 파일 한 개만 복사하면 실행할 수 없습니다.' }
         42 { return '일반 권한 실행에 전달할 경로 또는 인수가 너무 길거나 유효하지 않습니다. 압축 해제한 Workspace 폴더와 지정한 경로를 확인해 주세요. 값을 잘라서 실행하지 않았습니다.' }
+        46 { return '전용 앱 창에 필요한 Microsoft Edge WebView2 Runtime을 찾지 못했습니다. 회사에서 허용한 WebView2 Runtime이 설치되어 있는지 담당자에게 확인해 주세요. 브라우저 실행, 자동 설치 또는 PC 설정 변경은 하지 않았습니다.' }
+        47 { return '전용 앱 창을 준비하지 못했습니다. 배포 파일이 모두 있는지, Microsoft Edge WebView2 Runtime 실행이 회사 정책에서 허용되는지 확인해 주세요. Python이나 Claude 인증 문제로 단정하지 않았습니다. 기존 설정은 변경하지 않았습니다.' }
         default { return 'Workspace 실행을 완료하지 못했습니다. ZIP 전체를 압축 해제했는지 확인하고, 담당자에게 아래 오류 코드를 전달해 주세요. 기존 로그인과 개인 설정은 변경하지 않았습니다.' }
     }
 }
@@ -66,7 +68,7 @@ function Write-WorkspacePythonDiagnostic {
         $null = [IO.Directory]::CreateDirectory($directory)
         if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         $path = Join-Path $directory ('python-check-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
-        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.17.0';
+        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.18.0';
             createdUtc=[DateTime]::UtcNow.ToString('o'); sourceRoot=[IO.Path]::GetFullPath($AppRoot);
             powershellVersion=$PSVersionTable.PSVersion.ToString(); attemptId=$AttemptId; code=('WS-' + $Code); checks=$clean }
         # Allowlisted metadata only: no stderr, wrapper/profile bodies, auth,
@@ -91,7 +93,7 @@ function Read-WorkspaceRecentPythonDiagnostic {
         foreach ($file in $files) {
             try {
                 $report = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.17.0' -or
+                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.18.0' -or
                     $report.sourceRoot -ne [IO.Path]::GetFullPath($AppRoot) -or $report.code -ne ('WS-' + $Code) -or $report.attemptId -ne $AttemptId) { continue }
                 return [pscustomobject]@{ path=$file.FullName; checks=@(ConvertTo-WorkspacePythonChecks -Checks $report.checks) }
             } catch {}

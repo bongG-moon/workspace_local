@@ -15,6 +15,12 @@ globalThis.WorkspaceAttention = (() => {
     try { const saved = JSON.parse(sessionStorage.getItem("workspaceAttentionSeen:" + value) || "[]"); if (Array.isArray(saved)) seen = new Set(saved.filter(id => typeof id === "string").slice(-300)); } catch (_) {}
   }
   function notificationSettings() {
+    if (boot.window?.mode === "desktop") {
+      $("notifications-toggle").hidden = true;
+      $("notifications-message").textContent = "PC 알림은 아래 ‘데스크톱 알림’ 설정에서 관리할 수 있어요. 브라우저 알림 권한은 필요하지 않습니다.";
+      $("native-attention-message").textContent = native.bound ? "앱 창의 작업 표시줄 강조가 연결됐어요. 다른 앱의 포커스는 바꾸지 않습니다." : "PC 알림과 앱의 알림함에서 완료·응답 대기를 확인할 수 있어요.";
+      return;
+    }
     const supported = typeof globalThis.Notification === "function", permission = supported ? Notification.permission : "unsupported";
     const key=JSON.stringify([supported,permission,enabled,native.bound]);
     if(key===settingsKey)return;settingsKey=key;
@@ -98,6 +104,7 @@ globalThis.WorkspaceAttention = (() => {
     if (running || appClosed) return;
     running = true; generation++;
     try { enabled = sessionStorage.getItem(preferenceKey) === "yes"; } catch (_) {}
+    if (boot.window?.mode === "desktop") enabled = false;
     notificationSettings(); refresh();
   }
   $("attention-open").onclick = () => { if(globalThis.WorkspaceDesktop?.open)return WorkspaceDesktop.open("attention"); showDialog("attention-dialog");render(); };

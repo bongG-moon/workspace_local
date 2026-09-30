@@ -290,7 +290,7 @@ try {
                 -PythonCommand $PythonCommand -Demo ([bool]$Demo) -NoBrowser ([bool]$NoBrowser) -StateRoot $StateRoot
         } finally { [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $previousAttempt, 'Process') }
         if ($childCode -eq 0) { return }
-        if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45)) { $childCode = 35 }
+        if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45,46,47)) { $childCode = 35 }
         throw ('WORKSPACE_STARTUP:' + $childCode)
     }
     Assert-WorkspaceNormalProcess -Context $context
@@ -319,7 +319,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.17.0' -and $health.appRoot -eq $appRoot
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.18.0' -and $health.appRoot -eq $appRoot
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -336,7 +336,10 @@ try {
         # Open only the authenticated, validated endpoint above; never kill it.
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
-        if (-not $NoBrowser) { Open-WorkspaceWindow -Uri $liveWorkspaceUri -ReuseSupported ([bool]$canReuseWindow) }
+        if (-not $NoBrowser) {
+            if (-not $canReuseWindow) { throw 'WORKSPACE_STARTUP:39' }
+            Open-WorkspaceWindow -Uri $liveWorkspaceUri -ReuseSupported $true
+        }
         if (-not $sameWorkspaceRunning) { throw 'WORKSPACE_STARTUP:39' }
         return
     }
@@ -423,7 +426,13 @@ try {
         Start-Sleep -Milliseconds 200
         $workspaceProcess.Refresh()
     }
-    if (-not $workspaceReady) { throw 'WORKSPACE_STARTUP:40' }
+    if (-not $workspaceReady) {
+        $workspaceProcess.Refresh()
+        if ($workspaceProcess.HasExited -and $workspaceProcess.ExitCode -in @(46,47)) {
+            throw ('WORKSPACE_STARTUP:' + $workspaceProcess.ExitCode)
+        }
+        throw 'WORKSPACE_STARTUP:40'
+    }
 } catch {
     $code = 41
     $message = 'Workspace 실행 파일을 읽지 못했습니다. ZIP 전체를 새 폴더에 압축 해제한 뒤 다시 실행해 주세요.'

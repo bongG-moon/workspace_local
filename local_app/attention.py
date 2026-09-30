@@ -120,6 +120,8 @@ class WindowsAttention:
         signature(self.user, 'FlashWindowEx', [ptr(FlashInfo)], wt.BOOL)
         from .app_window import browser_candidates
         self.allowed_images = {os.path.normcase(str(path)) for _, path in browser_candidates()}
+        from .native_window import desktop_executable
+        self.allowed_images.add(os.path.normcase(str(desktop_executable())))
         self.EnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
         signature(self.user, 'EnumWindows', [self.EnumProc, wt.LPARAM], wt.BOOL)
         own = self._process(os.getpid())
@@ -187,6 +189,14 @@ class WindowsAttention:
     def bind(self, title):
         return self._window(self.user.GetForegroundWindow(), title)
 
+    def owned(self, hwnd, pid):
+        from .native_window import desktop_executable
+        binding = self._window(hwnd, 'Workspace', allow_hidden=True)
+        if (binding is not None and binding.pid == pid
+                and binding.image == os.path.normcase(str(desktop_executable()))):
+            return binding
+        return None
+
     def find(self, title):
         # Used only for an explicit reopen click. The random per-run title plus
         # SID/session/image/creation checks exclude unrelated browser windows.
@@ -241,6 +251,7 @@ class AttentionNotifier:
         self.window_title = 'Company Workspace · ' + secrets.token_urlsafe(16)
         self._lock = threading.RLock()
         self._binding = None
+        self._owned = False
         self._revision = None
         self._pending = set()
         self._closed = False
@@ -259,11 +270,31 @@ class AttentionNotifier:
         with self._lock:
             return {'supported': self._native is not None, 'bound': self._binding is not None and not self._closed}
 
+    @property
+    def binding_title(self):
+        return 'Workspace' if self._owned else self.window_title
+
+    def bind_owned(self, hwnd, pid):
+        with self._lock:
+            if self._closed or self._native is None:
+                return False
+            try:
+                if self._native is _AUTO:
+                    self._native = WindowsAttention()
+                binding = self._native.owned(hwnd, pid)
+                if binding is None:
+                    return False
+                self._binding, self._owned = binding, True
+                self.theme_state = self._native.theme(binding, self.binding_title)
+                return True
+            except (OSError, AttributeError, ValueError):
+                return False
+
     def _flash(self, *, stop=False):
         if self._native is None or self._binding is None:
             return
         try:
-            result = self._native.flash(self._binding, self.window_title, stop=stop)
+            result = self._native.flash(self._binding, self.binding_title, stop=stop)
             if result == 'invalid':
                 self._binding = None
         except (OSError, AttributeError, ValueError):
@@ -271,6 +302,8 @@ class AttentionNotifier:
 
     def bind(self):
         with self._lock:
+            if self._owned:
+                return self.native_state
             if not self._closed and self._native is _AUTO:
                 try:
                     self._native = WindowsAttention()
@@ -295,7 +328,7 @@ class AttentionNotifier:
             if self._closed or self._binding is None or self._native in (None, _AUTO):
                 return False
             try:
-                return self._native.foreground(self._binding, self.window_title) is True
+                return self._native.foreground(self._binding, self.binding_title) is True
             except (OSError, AttributeError, ValueError):
                 return False
 
@@ -325,9 +358,9 @@ class AttentionNotifier:
             if self._native in (None, _AUTO):
                 return False
             try:
-                if self._binding is not None and self._native.visibility(self._binding, self.window_title, show=show) is True:
+                if self._binding is not None and self._native.visibility(self._binding, self.binding_title, show=show) is True:
                     return True
-                if show and callable(getattr(self._native, 'find', None)):
+                if show and not self._owned and callable(getattr(self._native, 'find', None)):
                     binding = self._native.find(self.window_title)
                     if binding is not None:
                         self._binding = binding

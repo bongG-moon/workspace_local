@@ -30,6 +30,21 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
 seen = set()
+expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','deploy/WebView2.lock.json',
+                 'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',
+                 'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})
+generated = {'desktop/' + name for name in ('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll',
+             'Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')}
+expected.update(generated)
+import json
+desktop = json.loads((root/'build/desktop-host/desktop-build.json').read_text())
+lock = json.loads((root/'deploy/WebView2.lock.json').read_text())
+assert desktop['sdkSha256'] == lock['sha256'] and desktop['sdkVersion'] == lock['version']
+assert set(desktop['files']) == {Path(name).name for name in generated} - {'desktop-build.json'}
+for relative, digest in desktop['sources'].items():
+    assert hashlib.sha256((root/relative).read_bytes()).hexdigest() == digest, relative
+for name, digest in desktop['files'].items():
+    assert hashlib.sha256((root/'build/desktop-host'/name).read_bytes()).hexdigest() == digest, name
 with zipfile.ZipFile(args.bundle) as bundle:
     for entry in bundle.infolist():
         if entry.is_dir():
@@ -41,7 +56,7 @@ with zipfile.ZipFile(args.bundle) as bundle:
         seen.add(relative)
         assert ".." not in Path(relative).parts and not relative.startswith("/"), name
         assert not any(part in {"__pycache__", "history.json", "runtime.json", ".env", ".claude"} for part in Path(relative).parts), name
-        source = root / relative
+        source = root / 'build/desktop-host' / Path(relative).name if relative in generated else root / relative
         assert source.is_file(), name
         assert bundle.read(entry) == source.read_bytes(), "Stale bundle content: " + name
         count += 1
@@ -57,5 +72,5 @@ with zipfile.ZipFile(args.bundle) as bundle:
         source_text = bundle.read("Company-Workspace/" + relative).decode("utf-8-sig").replace("\r\n", "\n")
         assert hashlib.sha256(source_text.encode("utf-8")).hexdigest() == expected_hash, (
             "Startup diagnostic is incompatible with the bundled helper: " + relative)
-print(f"Verified {count} source-identical files; no runtime state or credentials bundled.")
+print(f"Verified {count-len(generated)} source files and {len(generated)} pinned build assets; no runtime state or credentials bundled.")
 print("SHA256: " + hashlib.sha256(args.bundle.read_bytes()).hexdigest())

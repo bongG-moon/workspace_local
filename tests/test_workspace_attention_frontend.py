@@ -53,6 +53,18 @@ class WorkspaceAttentionFrontendTests(unittest.TestCase):
           await $('notifications-toggle').onclick();assert.equal(requests,1);assert.match($('notifications-toggle').textContent,/켜기/);
         })()""")
 
+    def test_native_host_uses_existing_desktop_notifications_without_browser_prompt(self):
+        self.run_case(r"""(async()=>{
+          let requests=0,notices=0;
+          globalThis.Notification=class {static permission='granted';static async requestPermission(){requests++;return 'granted';}constructor(){notices++;}close(){}};
+          sessionStorage.setItem('workspaceBrowserNotifications','yes');boot.window={mode:'desktop'};
+          api=async()=>attention([pending],{supported:true,bound:true});
+          WorkspaceAttention.start();await flush();
+          assert.equal($('notifications-toggle').hidden,true);
+          assert.match($('notifications-message').textContent,/데스크톱 알림/);
+          assert.equal(requests,0);assert.equal(notices,0);assert.equal($('attention-count').textContent,'1');
+        })()""")
+
     def test_notifications_are_deduplicated_and_closed_when_request_resolves(self):
         self.run_case(r"""(async()=>{
           const notices=[];let focusCalls=0;globalThis.focus=()=>focusCalls++;
