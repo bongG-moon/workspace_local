@@ -24,6 +24,8 @@ learning-progress/
 company-agent-install.json
 Workspace-Diagnostic-*.json
 python-check-*.json
+Workspace-Python-Diagnostic-*.json
+scripts/test-lab/ws38-diagnostic/reportRun/
 *.pem
 *.key
 # Optional upstream sources and generated duplicate manual output.
