@@ -258,7 +258,8 @@ function renderConnection(info){
   const names=list=>(Array.isArray(list)?list:[]).map(x=>typeof x==="string"?x:x?.name||x?.id||"이름 미제공").join(", ");
   $("settings-runtime").textContent=boot.runtime?`실행 위치: ${boot.runtime.entry}\n설정 위치: ${boot.runtime.configRoot}`:"실행 위치를 아직 확인하지 않았어요.";
   $("settings-status").textContent=boot.demo?"화면 체험 연결 · 실제 AI 호출 없음":boot.error?"기존 Claude 연결 확인이 필요해요":connected?"이 업무의 Claude 연결이 확인됐어요":info?"이전 연결이 종료됐어요. 다음 요청에서 다시 연결합니다":"실행 파일 확인 완료 · 실제 응답은 업무를 시작한 뒤 확인합니다";
-  $("connection-badge").textContent=boot.demo?"화면 체험":boot.error?"연결 확인 필요":connected?"업무 연결됨":info?"다음 요청 대기":"기존 Claude 연결";
+  $("connection-badge").textContent=boot.demo?"화면 체험":boot.error?"연결 확인 필요":connected?"업무 연결됨":info?"업무 연결 종료":"Claude 실행 준비됨";
+  $("connection-badge").title=boot.demo?"실제 Claude를 호출하지 않는 체험 화면입니다.":boot.error?"설정에서 Claude 실행 환경을 확인해 주세요.":connected?"선택한 업무의 Claude 연결이 활성화되어 있습니다.":info?"다음 요청을 보내면 이 업무에 다시 연결합니다.":"Claude 실행 파일을 확인했습니다. 업무를 시작하거나 스킬·도구의 ‘연결하고 목록 확인’을 누르면 해당 업무에 연결합니다.";
   $("diagnostics").textContent=info?`현재 모델: ${info.model||"미제공"}\n사용 가능한 스킬: ${names(info.skills)||"CLI 목록 미제공"}\n연결 도구: ${(info.mcp||[]).map(x=>`${x.name}: ${x.status}`).join(", ")||"CLI 목록 미제공"}\n플러그인: ${names(info.plugins)||"CLI 목록 미제공"}`:"업무를 시작하면 현재 모델과 연결 도구를 표시해요.";renderConnectionOptions();updateModelControls();updatePermissionControls();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceSessionImport?.render();
 }
 function connectionLocked(){return !active||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed;}

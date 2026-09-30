@@ -74,6 +74,9 @@ internal sealed class DesktopWindow : Form
     private string runtimeVersion;
     private WorkspaceNotificationCard notificationCard;
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr window, int command);
+
     internal DesktopWindow(Dictionary<string, object> config)
     {
         home = new Uri((string)config["url"]);
@@ -92,6 +95,7 @@ internal sealed class DesktopWindow : Form
         var area = Screen.PrimaryScreen.WorkingArea;
         Size = new Size(Math.Min(1440, area.Width - 32), Math.Min(940, area.Height - 32));
         StartPosition = FormStartPosition.CenterScreen;
+        WindowState = FormWindowState.Maximized;
         Shown += async delegate { await InitializeView(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e)
         {
@@ -283,6 +287,15 @@ internal sealed class DesktopWindow : Form
             notificationAccepted = reason == null, notificationReason = reason });
     }
 
+    private void ActivateWindow()
+    {
+        Show();
+        // SW_RESTORE keeps Windows' normal/maximized state from before minimize.
+        if (WindowState == FormWindowState.Minimized) ShowWindow(Handle, 9);
+        Activate();
+        if (view != null) view.Focus();
+    }
+
     private void ReadCommands()
     {
         try
@@ -297,7 +310,7 @@ internal sealed class DesktopWindow : Form
                 {
                     if (command == "close") { Exit(); return; }
                     if (command == "notify") { Notify(input, id); return; }
-                    if (command == "activate") { Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Activate(); if (view != null) view.Focus(); }
+                    if (command == "activate") ActivateWindow();
                     else if (command == "hide" && background) Hide();
                     else { DesktopProgram.Emit(new { type = "ack", id = id, ok = false }); return; }
                     DesktopProgram.Emit(new { type = "ack", id = id, ok = true, visible = Visible });
