@@ -2,3 +2,4 @@
 * -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Preserve the upstream font license byte-for-byte, including its whitespace.
 local_app/web/fonts/OFL.txt -whitespace
+deploy/fonts/OFL.txt -whitespace

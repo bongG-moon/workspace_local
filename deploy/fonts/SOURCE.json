@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "family": "Noto Sans KR",
+  "source": "local_app/web/fonts/NotoSansKR-Variable.woff",
+  "sourceSha256": "4f0769528a12c78397fea9dd32f979de67c77898342e5b4797956dfc8ae04c93",
+  "upstreamSource": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf",
+  "upstreamSourceSha256": "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252",
+  "sourceVersion": "Version 2.004-H2;hotconv 1.0.118;makeotfexe 2.5.65603",
+  "generator": "scripts/test-lab/build-notification-fonts.py",
+  "fontToolsVersion": "4.63.0",
+  "format": "Static TrueType instances in deterministic gzip containers; no glyph subset",
+  "coverage": {
+    "sourceCmapRetained": true,
+    "codepoints": 23174,
+    "modernHangulSyllables": 11172,
+    "glyphs": 24964
+  },
+  "license": "SIL Open Font License 1.1",
+  "licenseFile": "OFL.txt",
+  "licenseSha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9",
+  "fonts": [
+    {
+      "file": "NotoSansKR-Regular.ttf.gz",
+      "weight": 400,
+      "family": "Noto Sans KR",
+      "style": "Regular",
+      "postScriptName": "NotoSansKR-Regular",
+      "bytes": 3017087,
+      "sha256": "8c1d2537b6054fcab9b36a36ae02b2ca79220ba3a6ec4cd88d3815d15a5a573c",
+      "uncompressedBytes": 6224868,
+      "uncompressedSha256": "683e26445df547acaaa1a006d15642a6fdaa54e5013b4df2b6a758bac9b6fe49"
+    },
+    {
+      "file": "NotoSansKR-SemiBold.ttf.gz",
+      "weight": 600,
+      "family": "Noto Sans KR SemiBold",
+      "style": "Regular",
+      "postScriptName": "NotoSansKR-SemiBold",
+      "bytes": 3040570,
+      "sha256": "c66f8da6e2d84c7f751dce07e5acee46ba4fcd15265a09692077b9b6427a6c87",
+      "uncompressedBytes": 6221044,
+      "uncompressedSha256": "8f5b48b979b235fb871dcd4d7e10d4d6e140656ac87e62892527c2f9187b06b5"
+    }
+  ]
+}

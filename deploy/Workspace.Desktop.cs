@@ -310,13 +310,112 @@ internal sealed class DesktopWindow : Form
     private void Exit() { exiting = true; Close(); }
 }
 
+// Two embedded static font faces, loaded only when the first card is arranged.
+// GDI+ retains these private families directly: no installed font, registry entry,
+// GDI font-name mapping or extra renderer is involved.
+internal sealed class WorkspaceNotificationFonts : IDisposable
+{
+    private const int MaximumFontBytes = 32 * 1024 * 1024;
+    private static readonly Lazy<WorkspaceNotificationFonts> Cache = new Lazy<WorkspaceNotificationFonts>(Create);
+    private readonly Face regular, semibold;
+    private readonly FontFamily fallback;
+    private bool disposed;
+
+    private static WorkspaceNotificationFonts Create()
+    {
+        var fonts = new WorkspaceNotificationFonts();
+        Application.ApplicationExit += delegate { fonts.Dispose(); };
+        return fonts;
+    }
+    private WorkspaceNotificationFonts()
+    {
+        regular = Load("Workspace.NotoSansKR.Regular.ttf.gz");
+        semibold = Load("Workspace.NotoSansKR.SemiBold.ttf.gz");
+        try { fallback = new FontFamily("Malgun Gothic"); }
+        catch
+        {
+            try { fallback = new FontFamily("Segoe UI"); }
+            catch { fallback = new FontFamily(FontFamily.GenericSansSerif.Name); }
+        }
+    }
+    internal static Font CreateFont(float pixels, bool emphasized)
+    {
+        var fonts = Cache.Value;
+        var face = emphasized ? fonts.semibold : fonts.regular;
+        if (!fonts.disposed && face != null)
+            return new Font(face.Family, Math.Max(1, pixels), FontStyle.Regular, GraphicsUnit.Pixel);
+        return new Font(fonts.fallback, Math.Max(1, pixels), emphasized ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
+    }
+    internal static bool EmbeddedAvailable { get { return Cache.Value.regular != null && Cache.Value.semibold != null; } }
+
+    private static Face Load(string resource)
+    {
+        Face face = null;
+        try
+        {
+            using (var source = typeof(WorkspaceNotificationFonts).Assembly.GetManifestResourceStream(resource))
+            {
+                if (source == null) return null;
+                using (var zip = new System.IO.Compression.GZipStream(source, System.IO.Compression.CompressionMode.Decompress))
+                using (var bytes = new MemoryStream())
+                {
+                    var buffer = new byte[32768];
+                    int count;
+                    while ((count = zip.Read(buffer, 0, buffer.Length)) != 0)
+                    {
+                        if (bytes.Length + count > MaximumFontBytes) throw new InvalidDataException();
+                        bytes.Write(buffer, 0, count);
+                    }
+                    if (bytes.Length == 0) throw new InvalidDataException();
+                    face = new Face();
+                    face.Memory = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)bytes.Length);
+                    System.Runtime.InteropServices.Marshal.Copy(bytes.GetBuffer(), 0, face.Memory, (int)bytes.Length);
+                    face.Collection = new System.Drawing.Text.PrivateFontCollection();
+                    face.Collection.AddMemoryFont(face.Memory, (int)bytes.Length);
+                    var families = face.Collection.Families;
+                    if (families.Length == 0) throw new InvalidDataException();
+                    face.Family = families[0];
+                    for (int index = 1; index < families.Length; index++) families[index].Dispose();
+                    if (!face.Family.IsStyleAvailable(FontStyle.Regular)) throw new InvalidDataException();
+                    return face;
+                }
+            }
+        }
+        catch
+        {
+            if (face != null) face.Dispose();
+            return null;
+        }
+    }
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        if (regular != null) regular.Dispose();
+        if (semibold != null) semibold.Dispose();
+        if (fallback != null) fallback.Dispose();
+    }
+    private sealed class Face : IDisposable
+    {
+        internal IntPtr Memory;
+        internal System.Drawing.Text.PrivateFontCollection Collection;
+        internal FontFamily Family;
+        public void Dispose()
+        {
+            if (Family != null) { Family.Dispose(); Family = null; }
+            if (Collection != null) { Collection.Dispose(); Collection = null; }
+            if (Memory != IntPtr.Zero) { System.Runtime.InteropServices.Marshal.FreeHGlobal(Memory); Memory = IntPtr.Zero; }
+        }
+    }
+}
+
 // Lightweight notification surface: no renderer, profile or additional process.
 // The private parent protocol supplies only a receipt and bounded display text.
 internal sealed class WorkspaceNotificationCard : Form
 {
     private readonly string receipt, kind;
     private readonly Action<WorkspaceNotificationCard, bool> completed;
-    private readonly Label statusLabel, brandLabel, titleLabel, messageLabel, hintLabel;
+    private readonly Label statusLabel, titleLabel;
     private readonly NotificationButton openButton, closeButton;
     private readonly System.Windows.Forms.Timer lifetime;
     private readonly Stopwatch elapsed = Stopwatch.StartNew();
@@ -382,16 +481,13 @@ internal sealed class WorkspaceNotificationCard : Form
         Text = "Workspace 알림";
         AccessibleName = kind == "completed" ? "작업 완료 알림" : kind == "attention" ? "응답 대기 알림" : "작업 확인 알림";
         AccessibleDescription = title + ". " + message;
-        statusLabel = MakeLabel(kind == "completed" ? "작업 완료" : kind == "attention" ? "응답이 필요해요" : "확인해 주세요", ink);
-        brandLabel = MakeLabel("WORKSPACE", muted);
+        statusLabel = MakeLabel(kind == "completed" ? "작업 완료" : kind == "attention" ? "응답 대기" : "확인 필요", muted);
         titleLabel = MakeLabel(title, ink);
         titleLabel.AutoEllipsis = true;
         titleLabel.AccessibleName = title;
-        messageLabel = MakeLabel(message, muted);
-        hintLabel = MakeLabel("알림함에 보관돼요", muted);
-        openButton = new NotificationButton(kind == "completed" ? "결과 보기  →" : "업무 열기  →", accent,
+        openButton = new NotificationButton(kind == "completed" ? "결과" : "열기", accent,
             highContrast ? SystemColors.HighlightText : Color.White, false);
-        closeButton = new NotificationButton("×", surface, muted, true);
+        closeButton = new NotificationButton("", surface, muted, true);
         openButton.AccessibleName = kind == "completed" ? "완료된 업무의 결과 보기" : "해당 업무 열기";
         closeButton.AccessibleName = "알림 닫기";
         openButton.Click += delegate { Finish(true); };
@@ -415,23 +511,43 @@ internal sealed class WorkspaceNotificationCard : Form
         {
             var value = base.CreateParams;
             value.ExStyle |= 0x08000000 | 0x00000080; // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
-            value.ClassStyle |= 0x00020000; // CS_DROPSHADOW
+            value.ClassStyle &= ~0x00020000; // One app-owned contour, no legacy CS_DROPSHADOW.
             return value;
         }
     }
 
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        DisableSystemFrame();
+    }
+    private void DisableSystemFrame()
+    {
+        // Apply before the first visible frame. Region owns the only curve on
+        // both Windows 10 and 11; unsupported DWM attributes are harmless.
+        try
+        {
+            int disabled = 1, noBorder = unchecked((int)0xfffffffe);
+            DwmSetWindowAttribute(Handle, 2, ref disabled, 4); // DWMNCRP_DISABLED
+            DwmSetWindowAttribute(Handle, 33, ref disabled, 4); // DWMWCP_DONOTROUND
+            DwmSetWindowAttribute(Handle, 34, ref noBorder, 4); // DWMWA_COLOR_NONE
+        }
+        catch { }
+    }
+
     private Label MakeLabel(string text, Color color)
     {
-        var label = new Label { Text = text, ForeColor = color, BackColor = surface,
-            AutoSize = false, UseMnemonic = false, TabStop = false, TextAlign = ContentAlignment.MiddleLeft };
+        var label = new NotificationLabel { Text = text, ForeColor = color, BackColor = surface,
+            AutoSize = false, UseMnemonic = false, TabStop = false, UseCompatibleTextRendering = true,
+            TextAlign = ContentAlignment.MiddleLeft };
         Controls.Add(label);
         return label;
     }
 
     private int Px(float value) { return Math.Max(1, (int)Math.Round(value * scale)); }
-    private void SetFont(Control control, float pixels, FontStyle style)
+    private void SetFont(Control control, float pixels, bool emphasized)
     {
-        var font = new Font("Segoe UI", Math.Max(1, pixels * scale), style, GraphicsUnit.Pixel);
+        var font = WorkspaceNotificationFonts.CreateFont(Math.Max(1, pixels * scale), emphasized);
         ownedFonts.Add(font); control.Font = font;
     }
     private static System.Drawing.Drawing2D.GraphicsPath Rounded(RectangleF box, float radius)
@@ -454,7 +570,6 @@ internal sealed class WorkspaceNotificationCard : Form
         // Do not assign an owner: a hidden/minimized main window must not hide
         // this notification. Its lifetime is explicitly owned by DesktopWindow.
         Show();
-        try { int preference = highContrast ? 1 : 2; DwmSetWindowAttribute(Handle, 33, ref preference, 4); } catch { }
         elapsed.Restart(); lastTick = 0; lifetime.Start();
     }
 
@@ -467,23 +582,18 @@ internal sealed class WorkspaceNotificationCard : Form
         {
             float intended = Math.Max(.25f, dpi / 96f);
             int gap = Math.Max(0, Math.Min((int)Math.Round(16 * intended), Math.Min(area.Width, area.Height) / 12));
-            scale = Math.Max(.01f, Math.Min(intended, Math.Min((area.Width - gap * 2) / 368f, (area.Height - gap * 2) / 190f)));
-            ClientSize = new Size(Math.Min(area.Width, Px(368)), Math.Min(area.Height, Px(190)));
+            scale = Math.Max(.01f, Math.Min(intended, Math.Min((area.Width - gap * 2) / 340f, (area.Height - gap * 2) / 96f)));
+            ClientSize = new Size(Math.Min(area.Width, Px(340)), Math.Min(area.Height, Px(96)));
             Location = new Point(Math.Max(area.Left, area.Right - Width - gap), Math.Max(area.Top, area.Bottom - Height - gap));
             var previousFonts = ownedFonts.ToArray(); ownedFonts.Clear();
-            SetFont(statusLabel, 12, FontStyle.Bold); SetFont(brandLabel, 10, FontStyle.Regular);
-            SetFont(titleLabel, 16, FontStyle.Bold); SetFont(messageLabel, 12.5f, FontStyle.Regular);
-            SetFont(hintLabel, 11, FontStyle.Regular); SetFont(openButton, 12, FontStyle.Bold); SetFont(closeButton, 22, FontStyle.Regular);
+            SetFont(statusLabel, 11, false); SetFont(titleLabel, 14, true); SetFont(openButton, 12, true);
             foreach (var font in previousFonts) font.Dispose();
-            statusLabel.SetBounds(Px(58), Px(16), Px(255), Px(19));
-            brandLabel.SetBounds(Px(58), Px(35), Px(255), Px(14));
-            titleLabel.SetBounds(Px(20), Px(64), Px(328), Px(26));
-            messageLabel.SetBounds(Px(20), Px(96), Px(328), Px(37));
-            hintLabel.SetBounds(Px(20), Px(151), Px(162), Px(27));
-            openButton.SetBounds(Px(210), Px(146), Px(138), Px(32));
-            closeButton.SetBounds(Px(326), Px(9), Px(30), Px(30));
-            openButton.CornerRadius = Px(10); closeButton.CornerRadius = Px(8);
-            using (var path = Rounded(new RectangleF(0, 0, Width, Height), highContrast ? 0 : Px(18)))
+            statusLabel.SetBounds(Px(56), Px(20), Px(232), Px(18));
+            titleLabel.SetBounds(Px(56), Px(44), Px(194), Px(26));
+            openButton.SetBounds(Px(260), Px(43), Px(64), Px(28));
+            closeButton.SetBounds(Px(304), Px(10), Px(20), Px(20));
+            openButton.CornerRadius = Px(7); closeButton.CornerRadius = Px(5);
+            using (var path = Rounded(new RectangleF(0, 0, Width, Height), highContrast ? 0 : Px(10)))
             {
                 var previousRegion = Region;
                 Region = new Region(path);
@@ -505,6 +615,7 @@ internal sealed class WorkspaceNotificationCard : Form
             Arrange(screen.WorkingArea, dpi == 0 ? 96 : dpi); message.Result = IntPtr.Zero; return;
         }
         base.WndProc(ref message);
+        if (message.Msg == 0x031E && IsHandleCreated) DisableSystemFrame(); // DWM composition changed
         if ((message.Msg == 0x007E || message.Msg == 0x001A) && IsHandleCreated && !finished && !arranging)
         {
             uint dpi = (uint)Math.Round(scale * 96);
@@ -520,21 +631,23 @@ internal sealed class WorkspaceNotificationCard : Form
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-        using (var outline = Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), highContrast ? 0 : Px(18)))
-        using (var pen = new Pen(border, Math.Max(1, scale))) g.DrawPath(pen, outline);
+        float stroke = Math.Max(1, (float)Math.Round(scale)), inset = stroke / 2;
+        // Keep the stroke's arc centers identical to the single outer Region.
+        using (var outline = Rounded(new RectangleF(inset, inset, Width - stroke, Height - stroke), highContrast ? 0 : Px(10) - inset))
+        using (var pen = new Pen(border, stroke)) g.DrawPath(pen, outline);
         Color tone = highContrast ? accent : kind == "completed" ? Color.FromArgb(87, 141, 121)
             : kind == "error" ? Color.FromArgb(176, 116, 88) : accent;
-        using (var badge = Rounded(new RectangleF(Px(20), Px(18), Px(28), Px(28)), Px(9)))
+        using (var badge = Rounded(new RectangleF(Px(16), Px(32), Px(28), Px(28)), Px(8)))
         using (var brush = new SolidBrush(highContrast ? SystemColors.Window : Color.FromArgb(238, 237, 248))) g.FillPath(brush, badge);
         using (var pen = new Pen(tone, Math.Max(1, 1.8f * scale)))
         {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
-            if (kind == "completed") g.DrawLines(pen, new[] { new Point(Px(27), Px(32)), new Point(Px(32), Px(37)), new Point(Px(41), Px(27)) });
+            if (kind == "completed") g.DrawLines(pen, new[] { new Point(Px(23), Px(46)), new Point(Px(28), Px(51)), new Point(Px(37), Px(41)) });
             else
             {
-                g.DrawEllipse(pen, Px(26), Px(24), Px(16), Px(16));
-                g.DrawLine(pen, Px(34), Px(28), Px(34), Px(32));
-                g.DrawLine(pen, Px(34), Px(36), Px(34), Px(36.3f));
+                g.DrawEllipse(pen, Px(22), Px(38), Px(16), Px(16));
+                g.DrawLine(pen, Px(30), Px(42), Px(30), Px(46));
+                g.DrawLine(pen, Px(30), Px(50), Px(30), Px(50.3f));
             }
         }
     }
@@ -570,6 +683,15 @@ internal sealed class WorkspaceNotificationCard : Form
         }
     }
 
+    private sealed class NotificationLabel : Label
+    {
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            base.OnPaint(e);
+        }
+    }
+
     private sealed class NotificationButton : Button
     {
         private readonly Color fill, text;
@@ -597,7 +719,7 @@ internal sealed class WorkspaceNotificationCard : Form
             private readonly NotificationButton button;
             internal NotificationButtonAccessibleObject(NotificationButton owner) : base(owner) { button = owner; }
             public override AccessibleRole Role { get { return AccessibleRole.PushButton; } }
-            public override string DefaultAction { get { return "Open"; } }
+            public override string DefaultAction { get { return button.AccessibleName; } }
             public override void DoDefaultAction()
             {
                 // Button.PerformClick checks CanSelect. This surface is deliberately
@@ -613,8 +735,31 @@ internal sealed class WorkspaceNotificationCard : Form
             if (!quiet || hover)
                 using (var path = Rounded(new RectangleF(0, 0, Width - 1, Height - 1), CornerRadius))
                 using (var brush = new SolidBrush(background)) e.Graphics.FillPath(brush, path);
-            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+            float unit = Height / (quiet ? 20f : 28f);
+            if (quiet)
+            {
+                float centerX = Width / 2f, centerY = Height / 2f, half = 3.5f * unit;
+                using (var pen = new Pen(text, Math.Max(1, 1.3f * unit)))
+                {
+                    pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                    e.Graphics.DrawLine(pen, centerX - half, centerY - half, centerX + half, centerY + half);
+                    e.Graphics.DrawLine(pen, centerX + half, centerY - half, centerX - half, centerY + half);
+                }
+                return;
+            }
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center,
+                Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            using (var brush = new SolidBrush(text))
+                e.Graphics.DrawString(Text, Font, brush, new RectangleF(8 * unit, 0, Width - 29 * unit, Height), format);
+            using (var pen = new Pen(text, Math.Max(1, 1.25f * unit)))
+            {
+                pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
+                float right = Width - 10 * unit, middle = Height / 2f;
+                e.Graphics.DrawLine(pen, right - 8 * unit, middle, right, middle);
+                e.Graphics.DrawLines(pen, new[] { new PointF(right - 3.5f * unit, middle - 3.5f * unit),
+                    new PointF(right, middle), new PointF(right - 3.5f * unit, middle + 3.5f * unit) });
+            }
         }
     }
 }

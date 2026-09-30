@@ -18,6 +18,7 @@ if ((Get-FileHash -LiteralPath $SdkPackage -Algorithm SHA256).Hash.ToLowerInvari
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'The .NET Framework x64 compiler is required on the build PC.' }
 $sourceFiles = @('deploy/Workspace.Desktop.cs','deploy/CompanyWorkspace.Standalone.manifest','deploy/WebView2.lock.json','deploy/New-WorkspaceDesktop.ps1','local_app/web/app-icon.ico')
+$sourceFiles += @('deploy/fonts/NotoSansKR-Regular.ttf.gz','deploy/fonts/NotoSansKR-SemiBold.ttf.gz','deploy/fonts/SOURCE.json','deploy/fonts/OFL.txt')
 $sources = [ordered]@{}
 foreach ($relative in $sourceFiles) { $sources[$relative] = (Get-FileHash -LiteralPath (Join-Path $repoRoot $relative) -Algorithm SHA256).Hash.ToLowerInvariant() }
 $sourceJson = $sources | ConvertTo-Json -Compress
@@ -47,6 +48,8 @@ $arguments = @('/nologo','/target:winexe','/platform:x64','/optimize+','/codepag
     '/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
     ('/reference:' + (Join-Path $output 'Microsoft.Web.WebView2.Core.dll')),
     ('/reference:' + (Join-Path $output 'Microsoft.Web.WebView2.WinForms.dll')),
+    ('/resource:' + (Join-Path $PSScriptRoot 'fonts\NotoSansKR-Regular.ttf.gz') + ',Workspace.NotoSansKR.Regular.ttf.gz'),
+    ('/resource:' + (Join-Path $PSScriptRoot 'fonts\NotoSansKR-SemiBold.ttf.gz') + ',Workspace.NotoSansKR.SemiBold.ttf.gz'),
     (Join-Path $PSScriptRoot 'Workspace.Desktop.cs'))
 $compileOutput = & $compiler @arguments 2>&1
 if ($LASTEXITCODE -ne 0) { throw ($compileOutput -join [Environment]::NewLine) }
