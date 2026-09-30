@@ -1,23 +1,28 @@
-# Company Workspace 0.19.1
+# Company Workspace 0.20.0
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.19.1/Company-Workspace-0.19.1-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.19.1/Company-Workspace-0.19.1-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.20.0/Company-Workspace-0.20.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.20.0/Company-Workspace-0.20.0-vbs.zip)**
 
-[0.19.1 변경 안내](docs/VALIDATION_0.19.1.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.19.1.md)
+[0.20.0 변경 안내](docs/VALIDATION_0.20.0.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.20.0.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.19.1.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.20.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
 
-## 0.19.1 변경
+## 0.20.0 변경
+
+- 완료·승인·질문·오류 알림을 앱 색감에 맞춘 전용 카드로 표시합니다. 해당 업무 열기와 닫기를 제공하며 다른 앱의 입력 포커스를 유지합니다.
+- 기존 알림 설정과 알림함은 유지합니다. 카드마다 새 브라우저나 프로세스를 만들지 않습니다. [알림 카드 안내](docs/WORKSPACE_0.20.0_NOTIFICATIONS.md)를 확인하세요.
+
+## 0.19.1에서 개선된 기능
 
 - 이전 대화는 **새 업무 → 기존 세션 활용하기**에서 불러옵니다. 기존 팝업과 세션 이어가기 동작을 유지합니다.
 - 불러오기 팝업의 주요 버튼을 앱 공통 보라색 버튼 스타일로 통일했습니다.

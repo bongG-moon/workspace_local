@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import subprocess
 import threading
 import time
+import unicodedata
 
 
 class DesktopError(OSError):
@@ -39,6 +41,43 @@ class DesktopHost:
         self.sequence = 0
         self.presentation = {'mode': 'desktop', 'engine': 'WebView2'}
         self.last_event = None
+        # The reader must never wait for the command lock while the caller waits
+        # for its acknowledgement. Only one visible card/callback is retained.
+        self.notification_lock = threading.Lock()
+        self._notification_capable = False
+        self._notification = None
+
+    @property
+    def notification_available(self):
+        with self.notification_lock:
+            return bool(not self.closed and self._notification_capable
+                        and self.process is not None and self.process.poll() is None
+                        and self.reader is not None and self.reader.is_alive())
+
+    def _clear_notification(self, process):
+        with self.notification_lock:
+            if self._notification and self._notification[0] is process:
+                self._notification = None
+            if self.process is process:
+                self._notification_capable = False
+
+    def _notification_event(self, process, event):
+        with self.notification_lock:
+            pending = self._notification
+            if (self.closed or process is not self.process or not pending
+                    or pending[0] is not process or event.get('notificationId') != pending[1]):
+                return
+            self._notification = None
+        if event.get('type') == 'notification_opened':
+            def opened():
+                # A delayed click from a retired host must not reopen the app.
+                if self.closed or self.process is not process:
+                    return
+                try:
+                    pending[2]()
+                except Exception:
+                    pass  # Notification navigation must not stop IPC delivery.
+            threading.Thread(target=opened, name='workspace-notification-open', daemon=True).start()
 
     def _read(self, process, responses):
         try:
@@ -52,6 +91,8 @@ class DesktopHost:
                 kind = event.get('type')
                 if kind in {'ready', 'ack', 'error'}:
                     responses.put_nowait(event)
+                elif kind in {'notification_opened', 'notification_dismissed'}:
+                    self._notification_event(process, event)
                 elif kind == 'close_requested' and self.on_close and not self.closed:
                     threading.Thread(target=self.on_close, name='workspace-desktop-close', daemon=True).start()
                 if process is self.process:
@@ -59,6 +100,7 @@ class DesktopHost:
         except (OSError, ValueError, queue.Full):
             pass
         finally:
+            self._clear_notification(process)
             try:
                 responses.put_nowait({'type': 'exited'})
             except queue.Full:
@@ -68,10 +110,10 @@ class DesktopHost:
         self.process.stdin.write(json.dumps(value, ensure_ascii=True) + '\n')
         self.process.stdin.flush()
 
-    def _command(self, command):
+    def _command(self, command, **payload):
         self.sequence += 1
         sequence = self.sequence
-        self._write({'command': command, 'id': sequence})
+        self._write({**payload, 'command': command, 'id': sequence})
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             event = self.responses.get(timeout=max(.01, deadline - time.monotonic()))
@@ -80,8 +122,40 @@ class DesktopHost:
             if event.get('type') == 'ack' and event.get('id') == sequence:
                 if event.get('ok') is not True:
                     raise DesktopError()
-                return
+                return event
         raise DesktopError()
+
+    def notify(self, *, title, message, kind, notification_id, on_click):
+        """Offer a card without starting a host; None alone permits fallback."""
+        if (not isinstance(notification_id, str) or not re.fullmatch(r'[0-9a-f]{64}', notification_id)
+                or not isinstance(kind, str) or kind not in {'completed', 'attention', 'error'}
+                or not isinstance(title, str) or not isinstance(message, str) or not callable(on_click)):
+            return False
+        def clean(value, limit):
+            return ''.join(' ' if unicodedata.category(char).startswith('C') else char
+                           for char in value).strip()[:limit]
+        with self.lock:
+            if not self.notification_available:
+                return None
+            process = self.process
+            pending = (process, notification_id, on_click)
+            with self.notification_lock:
+                if self._notification is not None:
+                    return False
+                self._notification = pending
+            try:
+                reply = self._command('notify', notificationId=notification_id, kind=kind,
+                                      title=clean(title, 100), message=clean(message, 255))
+                accepted = reply.get('notificationAccepted') is True
+            except (OSError, ValueError, queue.Empty):
+                # The card may already be visible after an acknowledgement was
+                # lost. Do not cause a second Windows balloon in that case.
+                accepted = False
+            if not accepted:
+                with self.notification_lock:
+                    if self._notification is pending:
+                        self._notification = None
+            return accepted
 
     def open(self):
         with self.lock:
@@ -116,6 +190,8 @@ class DesktopHost:
                 if not self.notifier.bind_owned(hwnd, self.process.pid):
                     raise DesktopError()
                 self.presentation['runtime'] = str(ready.get('runtime', ''))[:100]
+                with self.notification_lock:
+                    self._notification_capable = ready.get('notificationCards') is True
                 return {'ok': True, 'action': 'opened', **self.presentation}
             except (OSError, ValueError, queue.Empty) as exc:
                 self._dispose()
@@ -125,6 +201,9 @@ class DesktopHost:
 
     def _dispose(self):
         process, reader = self.process, self.reader
+        with self.notification_lock:
+            self._notification_capable = False
+            self._notification = None
         self.process, self.reader = None, None
         if process is not None:
             try:

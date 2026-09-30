@@ -39,7 +39,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.19.1"
+WORKSPACE_VERSION = "0.20.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -166,6 +166,13 @@ class LocalApp:
             is_foreground=self._viewing_task, on_open=self.open_task)
 
     def _notify_desktop(self, payload, on_click):
+        if self._desktop_window is not None:
+            result = self._desktop_window.notify(title=payload['title'], message=payload['message'],
+                kind=payload['kind'], notification_id=payload['id'], on_click=on_click)
+            # A busy or suppressed card must not escape through a second channel.
+            # None means this host cannot offer cards (e.g. an older native host).
+            if result is not None:
+                return result is True
         return bool(self.tray and self.tray.notify(title=payload['title'], message=payload['message'], on_click=on_click))
 
     def _viewing_task(self, sid):
@@ -361,7 +368,9 @@ class LocalApp:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
-                    'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(), 'nativeAvailable': bool(self.tray and self.tray.available)},
+                    'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
+                        'nativeAvailable': bool((self._desktop_window and self._desktop_window.notification_available)
+                                                or (self.tray and self.tray.available))},
                     'navigation': self._navigation}
 
     def shutdown_status(self):

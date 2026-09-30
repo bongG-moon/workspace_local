@@ -118,7 +118,7 @@ class DesktopNotifications:
                     'inbox': deepcopy(list(reversed(self.data['inbox']))),
                     'unreadCount': sum(not row['read'] for row in self.data['inbox']),
                     'warning': self.warning,
-                    'deliveryNote': 'PC 알림은 Windows 알림 설정에 따라 표시되지 않을 수 있어요. 기록은 이 목록에서 확인할 수 있어요.'}
+                    'deliveryNote': '다른 작업 중에는 앱 알림 카드로 알려드려요. 표시가 제한되거나 알림이 겹쳐도 기록은 이 목록에 남아요.'}
 
     def configure(self, preferences):
         if (not isinstance(preferences, dict) or not preferences or set(preferences) - set(DEFAULTS)
