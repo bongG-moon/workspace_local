@@ -2,9 +2,9 @@
 
 기존 Claude Code를 화면에서 사용하는 기능에 집중했습니다. Company Agent 전용 학습·기억 관리·설치 등록 기능은 앱에서 제외하고, 공통 설치 스킬과 선택한 업무의 실제 연결 목록을 구분합니다. 사용자의 기존 플러그인·인증·개인 설정은 유지합니다.
 
-**공개 게시 준비 중입니다.** 코드 회귀·포인터 드래그 화면 검사·빌드·실제 EXE와 기존 Claude 연결 초기화를 확인했습니다. 아래 링크는 예정 공개 경로이며 GitHub 게시와 익명 다운로드 검증은 아직 남아 있습니다.
+**v0.15.0 사전 배포를 공개했습니다.** 코드·화면·EXE 실행과 기존 Claude 연결을 확인하고, 아래 ZIP과 체크섬을 인증 없이 다시 다운로드해 해시 일치를 검증했습니다.
 
-| 예정 배포 파일 | 실행 방법 |
+| 배포 파일 | 실행 방법 |
 | --- | --- |
 | [EXE ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/Company-Workspace-0.15.0-exe.zip) | 압축을 풀고 `Company-Workspace-0.15.0.exe` 실행 |
 | [VBS ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/Company-Workspace-0.15.0-vbs.zip) | ZIP 전체를 풀고 `Company-Workspace.vbs` 실행 |
@@ -31,4 +31,4 @@ EXE·VBS의 앱 파일 **69개**가 소스와 일치하고 진단 핀 검사를 
 
 [현재 사용법](LOCAL_WORKSPACE.md) · [0.15.0 변경 범위](WORKSPACE_0.15.0_CLAUDE.md) · [검증 결과와 남은 확인](VALIDATION_0.15.0.md)
 
-예정 공개 위치: [v0.15.0 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.15.0), [SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/SHA256SUMS.txt). 위 해시는 로컬 배포 파일의 측정값입니다. 소스 커밋·공개 게시·익명 다운로드 결과는 최종 확인 후 기록합니다.
+공개 위치: [v0.15.0 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.15.0), [SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/SHA256SUMS.txt). 위 해시는 공개 파일을 다시 다운로드해 확인한 값입니다. 소스와 배포 태그의 커밋은 `a048f7d60b30c25f558b73352896f6f3d8222257`이며 이후 검증 문서 커밋과 구분합니다.
