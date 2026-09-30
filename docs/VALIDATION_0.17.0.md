@@ -51,3 +51,5 @@
 - 격리 화면의 브라우저 오류 로그는 0개였습니다.
 
 운영 PC의 WSH/VBS 더블클릭 및 Windows 알림 배너의 실제 표시는 별도 확인이 필요합니다.
+
+공개 배포 확인: 소스 커밋 `fdc953b7ad4d8cefafb98d35dadd91fcfc9ace16`이 원격 main에 반영됐고 [v0.17.0 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.17.0)의 EXE ZIP·VBS ZIP·체크섬을 인증 없이 다시 내려받아 로컬 SHA-256과 모두 같음을 확인했습니다. EXE ZIP SHA-256은 `5aa96accb98e9d210a9aad3f4748b6cc08946289e5a9fa8270103d90e0aecc01`입니다.
