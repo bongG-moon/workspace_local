@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -21,11 +22,12 @@ def ps_literal(value):
 
 @unittest.skipUnless(os.name == 'nt' and PS.is_file(), 'Windows PowerShell 5.1 native token checks')
 class NormalTokenTests(unittest.TestCase):
-    """Real read-only native probes; synthetic identity fixtures never launch.
+    """Native probes with explicitly opted-in disposable restricted descendants.
 
-    The only test child is an ordinary PowerShell process running a temporary
-    argument-echo script. No elevation, linked-token launch, profile/config
-    edits, credentials, or production application startup is performed.
+    Synthetic identity snapshots never launch. The DACL regression modifies
+    only a test-created restricted host's copied token, never the real user's
+    original token. No elevation, linked-token launch, profile/config edits,
+    credentials, or production application startup is performed.
     """
 
     @classmethod
@@ -274,6 +276,171 @@ try {
                                 capture_output=True, encoding='utf-8', timeout=75)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({'exitCode': 73}, json.loads(result.stdout))
+
+    @unittest.skipUnless(os.environ.get('COMPANY_WORKSPACE_TEST_RESTRICTED_TOKEN') == '1',
+                         'Opt in outside the sandbox: disposable copied-token DACL and Python descendants')
+    def test_admin_only_default_dacl_copy_can_run_restricted_python_and_grandchild(self):
+        fixture = ROOT / 'tests/fixtures/workspace_restricted_dacl.cs'
+        native_dll = Path(self.temp.name) / 'restricted-native.dll'
+        fixture_dll = Path(self.temp.name) / 'restricted-fixture.dll'
+        child = Path(self.temp.name) / '제한 자식 & 검사.ps1'
+        child_report = Path(self.temp.name) / '제한 자식 결과.json'
+        host = Path(self.temp.name) / '복사 토큰 부모 & 검사.ps1'
+        host_report = Path(self.temp.name) / '복사 토큰 부모 결과.json'
+        python_probe = Path(self.temp.name) / '기본 모듈 & 검사.py'
+        grandchild = Path(self.temp.name) / '한글 공백 & grandchild.py'
+        marker = '한글 공백 경로 확인'
+        grandchild.write_text(f'print({marker!r})\n', encoding='utf-8')
+        python_probe.write_text(
+            'import http.server, ssl, ctypes, subprocess, pathlib, threading, zipfile, urllib.request\n'
+            'import json, sys\n'
+            f'child = subprocess.run([sys.executable, "-B", "-X", "utf8", {str(grandchild)!r}], '
+            'capture_output=True, text=True, encoding="utf-8", timeout=6)\n'
+            'print(json.dumps({"version":list(sys.version_info[:3]), "modules":True, '
+            '"grandchildExit":child.returncode, "grandchildOutput":child.stdout.strip()}, ensure_ascii=True))\n',
+            encoding='utf-8',
+        )
+        child.write_text(r"""
+param([switch]$NormalTokenRelaunch,[string]$PythonCommand,[switch]$NoBrowser)
+$ErrorActionPreference='Stop'
+Add-Type -Path NATIVE_DLL
+Add-Type -Path FIXTURE_DLL
+$native=[CompanyAgent.WorkspaceNormalToken]
+$token=$native::InspectCurrentToken()
+$pipe=[WorkspaceRestrictedDaclFixture]::Pipe()
+$self=[WorkspaceRestrictedDaclFixture]::SelfDuplicateAccess()
+$probe=[WorkspaceRestrictedDaclFixture]::RedirectedPython($PythonCommand, PYTHON_PROBE)
+@{normal=$native::ValidateNormalProcess($token,$token.UserSid,$token.SessionId);
+  administrator=$token.IsAdministrator; elevated=$token.IsElevated; integrity=$token.IntegrityRid;
+  pipeCode=$pipe; selfDuplicateCode=$self; python=$probe} |
+  ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath REPORT_PATH -Encoding UTF8
+exit 73
+""".replace('NATIVE_DLL', ps_literal(native_dll)).replace('FIXTURE_DLL', ps_literal(fixture_dll))
+            .replace('PYTHON_PROBE', ps_literal(python_probe)).replace('REPORT_PATH', ps_literal(child_report)),
+            encoding='utf-8-sig')
+        host_script = r"""
+param([switch]$NormalTokenRelaunch,[string]$PythonCommand,[switch]$NoBrowser,[string]$StateRoot)
+$ErrorActionPreference='Stop'
+Add-Type -Path NATIVE_DLL
+Add-Type -Path FIXTURE_DLL
+$native=[CompanyAgent.WorkspaceNormalToken]
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$source=$null; $restricted=$null; $result=@{}
+try {
+    $process=$native.GetMethod('GetCurrentProcess',$flags).Invoke($null,@())
+    $tokenArgs=[object[]]@($process,[uint32]139,$null)
+    if (-not $native.GetMethod('OpenProcessToken',$flags).Invoke($null,$tokenArgs)) {throw 'Cannot query fixture host token'}
+    $source=$tokenArgs[2]
+    # This is the test-created restricted host, not the original user's token.
+    # The parent passes its TokenId only to reject accidental original mutation.
+    [WorkspaceRestrictedDaclFixture]::AdminOnlyCopy($StateRoot,$source.DangerousGetHandle())
+    $before=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+    $beforeDacl=[WorkspaceRestrictedDaclFixture]::DaclHash($source.DangerousGetHandle())
+    $result.sourceHasUser=[WorkspaceRestrictedDaclFixture]::DaclHasUser($source.DangerousGetHandle())
+    $result.sourcePipeCode=[WorkspaceRestrictedDaclFixture]::Pipe()
+    $restricted=$native.GetMethod('CreateRestrictedNormalToken',$flags).Invoke($null,@($source))
+    $native.GetMethod('ValidateRestrictedCandidate',$flags).Invoke($null,@($restricted,$before.UserSid,$before.SessionId))
+    $result.restrictedHasUser=[WorkspaceRestrictedDaclFixture]::DaclHasUser($restricted.DangerousGetHandle())
+    $command=$native::BuildCommandLine(CHILD_PATH,$PythonCommand,$false,$true,$null).Replace(' -NoLogo ',' -NoLogo -NoProfile -NonInteractive ')
+    $result.childExit=$native.GetMethod('StartAndWait',$flags).Invoke($null,@($restricted,PS_PATH,$command,$before.UserSid,$before.SessionId,$true))
+} catch {
+    $failure=$_.Exception
+    while($failure.InnerException){$failure=$failure.InnerException}
+    $result.errorType=$failure.GetType().Name
+    if($failure -is [ComponentModel.Win32Exception]){$result.nativeCode=$failure.NativeErrorCode}
+    if($failure.PSObject.Properties['ReasonCode']){$result.reason=$failure.ReasonCode;$result.nativeCode=$failure.NativeErrorCode}
+} finally {
+    if($source) {
+        $after=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+        $result.sourceUnchanged=(($before | ConvertTo-Json -Compress) -eq ($after | ConvertTo-Json -Compress))
+        $result.sourceDaclUnchanged=$beforeDacl -eq [WorkspaceRestrictedDaclFixture]::DaclHash($source.DangerousGetHandle())
+    }
+    if($restricted){$restricted.Dispose()}; if($source){$source.Dispose()}
+}
+$result | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath HOST_REPORT -Encoding UTF8
+exit 74
+"""
+        for name, path in {'NATIVE_DLL': native_dll, 'FIXTURE_DLL': fixture_dll, 'CHILD_PATH': child,
+                           'PS_PATH': PS, 'HOST_REPORT': host_report}.items():
+            host_script = host_script.replace(name, ps_literal(path))
+        host.write_text(host_script, encoding='utf-8-sig')
+        script = r"""
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
+Add-Type -Path SOURCE_PATH -OutputAssembly NATIVE_DLL
+Add-Type -Path NATIVE_DLL
+Add-Type -Path FIXTURE_PATH -OutputAssembly FIXTURE_DLL
+Add-Type -Path FIXTURE_DLL
+$native=[CompanyAgent.WorkspaceNormalToken]
+$flags=[Reflection.BindingFlags]'NonPublic,Static'
+$source=$null; $synthetic=$null; $result=@{}
+try {
+    $process=$native.GetMethod('GetCurrentProcess',$flags).Invoke($null,@())
+    # CreateRestrictedToken preserves handle access. ADJUST_DEFAULT is needed
+    # only for the returned copy; no setter ever receives the source handle.
+    $tokenArgs=[object[]]@($process,[uint32]139,$null)
+    if (-not $native.GetMethod('OpenProcessToken',$flags).Invoke($null,$tokenArgs)) {throw 'Cannot query own token'}
+    $source=$tokenArgs[2]
+    $before=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+    $beforeDacl=[WorkspaceRestrictedDaclFixture]::DaclHash($source.DangerousGetHandle())
+    $synthetic=$native.GetMethod('CreateRestrictedNormalToken',$flags).Invoke($null,@($source))
+    $native.GetMethod('ValidateRestrictedCandidate',$flags).Invoke($null,@($synthetic,$before.UserSid,$before.SessionId))
+    $originalId=[WorkspaceRestrictedDaclFixture]::TokenId($source.DangerousGetHandle())
+    $result.originalSetterRejected=$false
+    try {[WorkspaceRestrictedDaclFixture]::AdminOnlyCopy($originalId,$source.DangerousGetHandle())}
+    catch {$result.originalSetterRejected=$true}
+    $command=$native::BuildCommandLine(HOST_PATH,PYTHON_PATH,$false,$true,$originalId).Replace(' -NoLogo ',' -NoLogo -NoProfile -NonInteractive ')
+    $result.hostExit=$native.GetMethod('StartAndWait',$flags).Invoke($null,@($synthetic,PS_PATH,$command,$before.UserSid,$before.SessionId,$true))
+} catch {
+    $failure=$_.Exception
+    while($failure.InnerException){$failure=$failure.InnerException}
+    $result.errorType=$failure.GetType().Name
+    if($failure -is [ComponentModel.Win32Exception]){$result.nativeCode=$failure.NativeErrorCode}
+    if($failure.PSObject.Properties['ReasonCode']){$result.reason=$failure.ReasonCode;$result.nativeCode=$failure.NativeErrorCode}
+} finally {
+    if($source) {
+        $after=$native.GetMethod('ReadToken',$flags).Invoke($null,@($source))
+        $result.sourceUnchanged=(($before | ConvertTo-Json -Compress) -eq ($after | ConvertTo-Json -Compress))
+        $result.sourceDaclUnchanged=$beforeDacl -eq [WorkspaceRestrictedDaclFixture]::DaclHash($source.DangerousGetHandle())
+    }
+    if($synthetic){$synthetic.Dispose()}; if($source){$source.Dispose()}
+}
+$result | ConvertTo-Json -Depth 5 -Compress
+"""
+        for name, path in {'SOURCE_PATH': SOURCE, 'NATIVE_DLL': native_dll, 'FIXTURE_PATH': fixture,
+                           'FIXTURE_DLL': fixture_dll, 'HOST_PATH': host, 'PYTHON_PATH': sys.executable,
+                           'PS_PATH': PS}.items():
+            script = script.replace(name, ps_literal(path))
+        encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+        result = subprocess.run([str(PS), '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+                                capture_output=True, encoding='utf-8', timeout=80)
+        self.assertEqual(0, result.returncode, result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertTrue(evidence['sourceUnchanged'], evidence)
+        self.assertTrue(evidence['sourceDaclUnchanged'], evidence)
+        self.assertNotIn('errorType', evidence, evidence)
+        self.assertTrue(evidence['originalSetterRejected'], evidence)
+        self.assertEqual(74, evidence.get('hostExit'), evidence)
+        host_evidence = json.loads(host_report.read_text(encoding='utf-8-sig'))
+        self.assertFalse(host_evidence['sourceHasUser'], host_evidence)
+        self.assertEqual(5, host_evidence['sourcePipeCode'], host_evidence)
+        self.assertTrue(host_evidence['sourceUnchanged'], host_evidence)
+        self.assertTrue(host_evidence['sourceDaclUnchanged'], host_evidence)
+        self.assertTrue(host_evidence['restrictedHasUser'], host_evidence)
+        self.assertEqual(73, host_evidence.get('childExit'), host_evidence)
+        observed = json.loads(child_report.read_text(encoding='utf-8-sig'))
+        self.assertTrue(observed['normal'], observed)
+        self.assertFalse(observed['administrator'], observed)
+        self.assertFalse(observed['elevated'], observed)
+        self.assertEqual(8192, observed['integrity'], observed)
+        self.assertEqual(0, observed['pipeCode'], observed)
+        self.assertEqual(0, observed['selfDuplicateCode'], observed)
+        self.assertEqual('accepted', observed['python']['Status'], observed)
+        python = json.loads(observed['python']['Output'])
+        self.assertGreaterEqual(tuple(python['version']), (3, 11))
+        self.assertTrue(python['modules'])
+        self.assertEqual(0, python['grandchildExit'])
+        self.assertEqual(marker, python['grandchildOutput'])
 
     def test_native_probe_matches_windows_identity_without_handle_leaks(self):
         native = self.result['native']

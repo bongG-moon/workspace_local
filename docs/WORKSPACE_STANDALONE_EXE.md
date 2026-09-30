@@ -1,12 +1,12 @@
 # Company Workspace 단일 EXE
 
-`Company-Workspace-0.12.11.exe`를 원하는 폴더에 두고 더블클릭합니다. EXE ZIP으로 받았다면 먼저 압축을 풉니다. **이미 설치된 Python 3.11 이상이 필요합니다.** EXE는 앱 파일만 포함하며 Python 실행 환경·설치 프로그램을 동봉하거나 다운로드·자동 설치하지 않습니다. 기존 `Company-Workspace.vbs`와 이전 배포 폴더는 자동 변경하거나 삭제하지 않습니다. 새 동작은 새 0.12.11 실행 파일을 사용해야 적용됩니다.
+`Company-Workspace-0.12.12.exe`를 원하는 폴더에 두고 더블클릭합니다. EXE ZIP으로 받았다면 먼저 압축을 풉니다. **이미 설치된 Python 3.11 이상이 필요합니다.** EXE는 앱 파일만 포함하며 Python 실행 환경·설치 프로그램을 동봉하거나 다운로드·자동 설치하지 않습니다. 기존 `Company-Workspace.vbs`와 이전 배포 폴더는 자동 변경하거나 삭제하지 않습니다. 새 동작은 새 0.12.12 실행 파일을 사용해야 적용됩니다.
 
 ## 기존 Python 확인
 
 보통은 더블클릭하면 됩니다. 자동 탐색은 PATH에 등록된 여러 Python 실행 파일, `py`의 기존 설치 목록, Windows의 Python 등록 정보(PEP 514)에서 후보를 확인합니다. 레지스트리는 읽기만 하며 다른 사용자 프로필을 뒤지거나 설치 등록·PATH를 바꾸지 않습니다. 후보의 실제 실행 파일·3.11 이상 버전·필수 기본 모듈을 확인한 뒤 사용합니다. 실제 `.exe`를 가리키는 Python 별칭은 확인하지만, 함수나 `.cmd`·`.bat` 래퍼는 검사 목적으로 실행하지 않습니다. 이 경우 확인된 기존 `python.exe` 경로를 직접 지정할 수 있습니다.
 
-Python 검사에서는 ASCII JSON 표식이 있는 응답을 읽으므로 다른 시작 안내 문구가 섞였다는 이유만으로 정상 응답을 버리지 않습니다. 올바른 응답을 확인하지 못하면 계속 실행하지 않고 실패 이유를 구분합니다. Python 3.11.5가 설치되어 있다는 정보만으로 이전 `WS-38`의 원인을 확정한 것은 아닙니다.
+Python 검사에서는 ASCII JSON 표식이 있는 응답을 읽으므로 다른 시작 안내 문구가 섞였다는 이유만으로 정상 응답을 버리지 않습니다. 올바른 응답을 확인하지 못하면 계속 실행하지 않고 실패 이유를 구분합니다. 별도 운영 비교 진단에서는 기존 Python 3.11.5의 문제 없이, 앱이 제한 권한으로 재실행한 뒤 파이프·자기 프로세스 접근이 거부된 경로를 확인했습니다. 0.12.12는 앱용 제한 복사 토큰 준비를 수정합니다. 원본 토큰이나 PC 설정을 바꾸지 않으며, 수정본의 운영 PC 재실행 성공은 아직 미확인입니다.
 
 담당자가 확인한 기존 Python 경로를 직접 지정해야 할 때에는 EXE의 **`--python "<기존 python.exe의 절대 경로>"`** 옵션을 사용할 수 있습니다. 지정한 파일이 조건을 통과하지 못하면 다른 설치로 자동 대체하지 않습니다. 옵션은 이번 실행에만 적용하며 개인 기본 설정에 저장하지 않습니다. 자세한 명령 예시는 [시작 진단](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요.
 
@@ -48,7 +48,7 @@ Windows 10/11 x64와 Windows PowerShell, 기존 Python 3.11 이상이 필요합�
 `WS-37`·`WS-38` 안내에는 확인한 Python 후보 경로와 실패 상태가 표시됩니다. 저장에 성공하면 기본 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치도 안내합니다. 이 `python-1` 기록은 실제 시작 실패의 증거이며, 로컬 설치·앱 경로가 포함될 수 있으니 공유 전 확인하세요. 인증·프로필·표준 오류 원문은 저장하지 않습니다.
 
 
-시작 오류가 계속되면 파일 탐색기 주소창에 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`을 입력하세요. 실행한 버전의 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 열면 읽기 전용 진단을 실행할 수 있습니다. 0.12.11의 진단 버전은 `ws33-14`, 대상 소스는 `workspace-0.12.11`입니다. EXE에 포함된 도구이므로 별도 VBS 배포본은 필요하지 않습니다. 이 위치가 아직 만들어지지 않았다면 표시된 `EXE-` 오류 코드를 전달하세요. 진단은 PC의 영구 보안 정책이나 Claude 개인 설정을 변경하지 않습니다. [진단 결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요.
+시작 오류가 계속되면 파일 탐색기 주소창에 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`을 입력하세요. 실행한 버전의 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 열면 읽기 전용 진단을 실행할 수 있습니다. 0.12.12의 진단 버전은 `ws33-15`, 대상 소스는 `workspace-0.12.12`입니다. EXE에 포함된 도구이므로 별도 VBS 배포본은 필요하지 않습니다. 이 위치가 아직 만들어지지 않았다면 표시된 `EXE-` 오류 코드를 전달하세요. 진단은 PC의 영구 보안 정책이나 Claude 개인 설정을 변경하지 않습니다. [진단 결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요.
 
 ## 개발 및 검증
 
@@ -58,6 +58,6 @@ VBS 묶음과 같은 앱 파일을 넣고 `.NET Framework` C# 컴파일러로 Wi
 
 실행 경로 지정: `--python <기존 Python exe의 절대 경로>`. 검증용 옵션: `--no-browser`, `--state <절대 경로>`, `--cache-root <절대 경로>`, `--demo`, `--verify-only`. 보통 사용할 때에는 옵션이 필요하지 않습니다. `--verify-only`는 내장 앱 파일의 준비와 해시 검증만 하고 앱·Claude를 시작하지 않습니다. Python·Claude 등 실제 실행 준비 조건을 확인하는 옵션은 아닙니다.
 
-0.12.11의 실제 검증 결과와 남은 현장 확인은 저장소의 `docs/VALIDATION_0.12.11.md`에 기록합니다. 이 사용법은 새 버전의 모든 시험이 완료됐다는 기록이 아닙니다.
+0.12.12의 실제 검증 결과와 남은 현장 확인은 저장소의 `docs/VALIDATION_0.12.12.md`에 기록합니다. 이 사용법은 새 버전의 모든 시험이 완료됐다는 기록이 아닙니다.
 
-실행 파일 구조는 `deploy/New-WorkspaceStandalone.ps1`과 `deploy/CompanyWorkspace.Standalone.cs`에서 확인할 수 있습니다. 앱의 기존 승인 화면 검증은 저장소의 `docs/VALIDATION_0.12.9.md`에 남아 있으며, 0.12.11 실행 준비 검사 결과와 구분합니다.
+실행 파일 구조는 `deploy/New-WorkspaceStandalone.ps1`과 `deploy/CompanyWorkspace.Standalone.cs`에서 확인할 수 있습니다. 앱의 기존 승인 화면 검증은 저장소의 `docs/VALIDATION_0.12.9.md`에 남아 있으며, 0.12.12 실행 준비 검사 결과와 구분합니다.

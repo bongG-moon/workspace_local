@@ -5,6 +5,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -320,9 +321,11 @@ namespace CompanyAgent
                     new StringBuilder(commandLine), CreateSuspended | CreateUnicodeEnvironment,
                     environment, null, ref startup, out information);
                 int createError = created ? 0 : Marshal.GetLastWin32Error();
+                // Failed creation does not transfer ownership of output
+                // handles. Never close indeterminate failure outputs.
+                if (!created) throw Failure("create_process", createError);
                 process = new SafeNativeHandle(information.hProcess);
                 thread = new SafeNativeHandle(information.hThread);
-                if (!created) throw Failure("create_process", createError);
                 createdSuspended = true;
 
                 uint childSession;
@@ -372,6 +375,9 @@ namespace CompanyAgent
 
         private static SafeNativeHandle CreateRestrictedNormalToken(SafeNativeHandle source)
         {
+            string sourceSid;
+            using (TokenBuffer user = QueryToken(source, 1))
+                sourceSid = new SecurityIdentifier(Marshal.ReadIntPtr(user.Pointer)).Value;
             // DISABLE_MAX_PRIVILEGE | LUA_TOKEN. SANDBOX_INERT is deliberately
             // absent: AppLocker and Software Restriction Policies still apply.
             SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
@@ -402,10 +408,91 @@ namespace CompanyAgent
                             Marshal.SizeOf(typeof(SidAndAttributes)) + labelBytes.Length))
                             throw LastFailure("restricted_token_integrity");
                     }
+                    EnsureRestrictedDefaultDacl(restricted, sourceSid);
                     return restricted;
                 }
                 catch { restricted.Dispose(); throw; }
             }
+        }
+
+        private static void EnsureRestrictedDefaultDacl(SafeNativeHandle restricted, string expectedSid)
+        {
+            // CreateRestrictedToken(LUA_TOKEN) can retain an admin-only default
+            // DACL even after its administrator SID becomes deny-only. Objects
+            // created by that token (including redirected pipes) then deny the
+            // same user. Adjust only this disposable token COPY's new-object
+            // default; never the original token or any existing object/file ACL.
+            using (TokenBuffer user = QueryToken(restricted, 1))
+            {
+                string actualSid = new SecurityIdentifier(Marshal.ReadIntPtr(user.Pointer)).Value;
+                if (!String.Equals(actualSid, expectedSid, StringComparison.OrdinalIgnoreCase))
+                    throw Failure("restricted_token_default_dacl_identity", 0);
+            }
+            byte[] current = ReadDefaultDacl(restricted);
+            byte[] updated = BuildRestrictedDefaultDacl(current, expectedSid);
+            // Preserve a null DACL's existing meaning rather than constructing
+            // a new access policy for that distinct, non-admin-only case.
+            if (updated == null) return;
+            using (TokenBuffer acl = new TokenBuffer(updated.Length))
+            {
+                Marshal.Copy(updated, 0, acl.Pointer, updated.Length);
+                TokenDefaultDacl information = new TokenDefaultDacl { Dacl = acl.Pointer };
+                if (!SetTokenDefaultDaclInformation(restricted, 6, ref information,
+                    Marshal.SizeOf(typeof(TokenDefaultDacl))))
+                    throw LastFailure("restricted_token_default_dacl");
+            }
+            byte[] observed = ReadDefaultDacl(restricted);
+            if (observed == null || observed.Length != updated.Length)
+                throw Failure("restricted_token_default_dacl_verify", 0);
+            for (int index = 0; index < observed.Length; index++)
+                if (observed[index] != updated[index])
+                    throw Failure("restricted_token_default_dacl_verify", 0);
+        }
+
+        private static byte[] ReadDefaultDacl(SafeNativeHandle token)
+        {
+            using (TokenBuffer information = QueryToken(token, 6))
+            {
+                IntPtr pointer = Marshal.ReadIntPtr(information.Pointer);
+                if (pointer == IntPtr.Zero) return null;
+                if (!IsValidAcl(pointer)) throw Failure("restricted_token_default_dacl", 0);
+                int size = (ushort)Marshal.ReadInt16(pointer, 2);
+                if (size < 8) throw Failure("restricted_token_default_dacl", 0);
+                byte[] result = new byte[size];
+                Marshal.Copy(pointer, result, 0, size);
+                return result;
+            }
+        }
+
+        private static byte[] BuildRestrictedDefaultDacl(byte[] existing, string expectedSid)
+        {
+            try
+            {
+                SecurityIdentifier user = new SecurityIdentifier(expectedSid);
+                if (existing == null) return null;
+                RawAcl acl = new RawAcl(existing, 0);
+                const int GenericAll = 0x10000000;
+                bool userAlreadyAllowed = false;
+                foreach (GenericAce entry in acl)
+                {
+                    CommonAce ace = entry as CommonAce;
+                    if (ace != null && !ace.IsCallback && ace.AceQualifier == AceQualifier.AccessAllowed &&
+                        (ace.AceFlags & AceFlags.InheritOnly) == 0 &&
+                        ace.SecurityIdentifier.Equals(user) && (ace.AccessMask & GenericAll) != 0)
+                        userAlreadyAllowed = true;
+                }
+                // Preserve every original ACE and its ordering, including deny
+                // ACEs. Appending this grant does not override an earlier deny.
+                // GENERIC_ALL maps to the newly created object's own rights; it
+                // does not restore groups, privileges, or access to other files.
+                if (!userAlreadyAllowed)
+                    acl.InsertAce(acl.Count, new CommonAce(AceFlags.None,
+                        AceQualifier.AccessAllowed, GenericAll, user, false, null));
+                byte[] result = new byte[acl.BinaryLength];
+                acl.GetBinaryForm(result, 0);
+                return result;
+            }
+            catch (Exception) { throw Failure("restricted_token_default_dacl", 0); }
         }
 
         private static void ValidateRestrictedCandidate(SafeNativeHandle token, string expectedSid, int expectedSession)
@@ -518,7 +605,8 @@ namespace CompanyAgent
             int error;
             // Fixed-size classes (notably TokenSessionId) can report
             // ERROR_BAD_LENGTH instead of a sizing response for a zero buffer.
-            if (informationClass == 1 || informationClass == 2 || informationClass == 3 || informationClass == 25)
+            if (informationClass == 1 || informationClass == 2 || informationClass == 3 ||
+                informationClass == 6 || informationClass == 25)
             {
                 bool measured = GetTokenInformation(token, informationClass, IntPtr.Zero, 0, out needed);
                 error = Marshal.GetLastWin32Error();
@@ -586,6 +674,8 @@ namespace CompanyAgent
         [StructLayout(LayoutKind.Sequential)]
         private struct SidAndAttributes { internal IntPtr Sid; internal uint Attributes; }
         [StructLayout(LayoutKind.Sequential)]
+        private struct TokenDefaultDacl { internal IntPtr Dacl; }
+        [StructLayout(LayoutKind.Sequential)]
         private struct Luid { internal uint LowPart; internal int HighPart; }
         [StructLayout(LayoutKind.Sequential)]
         private struct LuidAndAttributes { internal Luid Luid; internal uint Attributes; }
@@ -614,6 +704,11 @@ namespace CompanyAgent
         [DllImport("advapi32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetTokenInformation(
             SafeNativeHandle token, int informationClass, ref SidAndAttributes information, int length);
+        [DllImport("advapi32.dll", EntryPoint = "SetTokenInformation", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetTokenDefaultDaclInformation(
+            SafeNativeHandle token, int informationClass, ref TokenDefaultDacl information, int length);
+        [DllImport("advapi32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsValidAcl(IntPtr acl);
         [DllImport("advapi32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)] private static extern bool LookupPrivilegeValueW(
             string system, string name, out Luid luid);
