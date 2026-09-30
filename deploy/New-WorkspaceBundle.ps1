@@ -39,6 +39,9 @@ $files = @(
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\capabilities.js',
     'local_app\web\composer.js', 'local_app\web\inline-controls.js', 'local_app\web\attention.js',
     'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\layout.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
+    'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
+    'local_app\file_preview.py', 'local_app\executions.py',
+    'local_app\web\rich-content.js', 'local_app\web\rich-content.css', 'local_app\web\execution-view.js', 'local_app\web\execution-view.css',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
     'local_app\web\app-icon-192.png', 'local_app\web\app-icon-512.png'
 )
@@ -55,7 +58,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.20.2-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.0-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

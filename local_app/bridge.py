@@ -656,6 +656,7 @@ class ClaudeSession:
                          "session_id": self.session_id or "", "parent_tool_use_id": None})
         except Exception as exc:
             if not self.stopping and not self.closed:
+                self._interrupt_executions()
                 self.emit("error", {"message": str(exc)})
             self.close()
 
@@ -683,9 +684,11 @@ class ClaudeSession:
                     self.handle(data)
         except Exception as exc:
             if not self.closed and not self.stopping:
+                self._interrupt_executions()
                 self.emit("error", {"message": str(exc)})
         finally:
             if not self.closed and not self.stopping:
+                self._interrupt_executions()
                 self.emit("error", {"message": "CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요."})
             self.close()
             self.process.stdout.close()
@@ -768,6 +771,24 @@ class ClaudeSession:
         return [descriptions.get(row, row) if isinstance(row, str)
                 else {**descriptions.get(row.get('name') if isinstance(row.get('name'), str) else '', {}), **row}
                 if isinstance(row, dict) else row for row in names]
+
+    def _execution_capture(self):
+        # Lazy initialization also supports small protocol-only test fixtures.
+        with self.lock:
+            capture = getattr(self, '_execution_capture_state', None)
+            if capture is None:
+                from .executions import ExecutionCapture
+                capture = self._execution_capture_state = ExecutionCapture(lambda value: self.emit('execution', value))
+                if getattr(self, '_execution_closed', False):
+                    capture.interrupt(closed=True)
+            return capture
+
+    def _interrupt_executions(self, *, closed=False):
+        if closed:
+            self._execution_closed = True
+        capture = getattr(self, '_execution_capture_state', None)
+        if capture is not None:
+            capture.interrupt(closed=closed)
 
     def handle(self, data: dict):
         if self.closed:
@@ -945,12 +966,17 @@ class ClaudeSession:
                 self.session_id = data.get("session_id") or self.session_id
             parent = data.get("parent_tool_use_id")
             message = data.get("message", {})
-            for index, block in enumerate(message.get("content", [])):
+            blocks = message.get('content', []) if isinstance(message, dict) else []
+            for index, block in enumerate(blocks if isinstance(blocks, list) else []):
+                if not isinstance(block, dict):
+                    continue
                 if block.get("type") == "text" and not parent:
                     self._assistant_text(block.get("text", ""), message.get("id"), index)
                 elif block.get("type") == "tool_use":
-                    if not parent and block.get('name') in {'Bash', 'PowerShell'}:
-                        command = block.get('input', {}).get('command')
+                    if not parent and isinstance(block.get('name'), str) and block['name'] in {'Bash', 'PowerShell'}:
+                        self._execution_capture().request(block)
+                        inputs = block.get('input') if isinstance(block.get('input'), dict) else {}
+                        command = inputs.get('command')
                         tool_id = block.get('id')
                         if isinstance(tool_id, str) and isinstance(command, str) and 'html-choices' in command:
                             from .choices import command_is_helper
@@ -967,14 +993,18 @@ class ClaudeSession:
                             if accepted and len(choices) < 100:
                                 choices.add(tool_id)
                     self.emit("activity", {"tool": block.get("name"), "id": block.get("id"),
-                        "skill": block.get("input", {}).get("skill") if block.get("name") == "Skill" else None})
+                        "skill": block.get("input", {}).get("skill") if block.get("name") == "Skill" and isinstance(block.get('input'), dict) else None})
         elif kind == 'user' and not data.get('parent_tool_use_id'):
             from .choices import from_tool_output
-            blocks = data.get('message', {}).get('content', [])
+            message = data.get('message')
+            blocks = message.get('content', []) if isinstance(message, dict) else []
             if isinstance(blocks, list):
                 for block in blocks:
-                    if (not isinstance(block, dict) or block.get('type') != 'tool_result'
-                            or block.get('is_error') or block.get('tool_use_id') not in getattr(self, '_choice_tools', set())):
+                    if not isinstance(block, dict) or block.get('type') != 'tool_result':
+                        continue
+                    self._execution_capture().result(block)
+                    if (block.get('is_error') or not isinstance(block.get('tool_use_id'), str)
+                            or block.get('tool_use_id') not in getattr(self, '_choice_tools', set())):
                         continue
                     choice = from_tool_output(block.get('content'))
                     if choice:
@@ -987,6 +1017,7 @@ class ClaudeSession:
         elif kind == "result":
             if data.get('parent_tool_use_id'):
                 return
+            self._interrupt_executions()
             self.last_result = data
             self.session_id = data.get("session_id") or self.session_id
             text = data.get("result", "")
@@ -1061,6 +1092,7 @@ class ClaudeSession:
         self.emit("request_closed", {"id": rid})
 
     def close(self):
+        self._interrupt_executions(closed=True)
         current = threading.current_thread()
         with self.lock:
             if self.closed:
@@ -1136,6 +1168,7 @@ class ClaudeSession:
         # Stop only this app-owned process. Never kill arbitrary claude/Office processes.
         if self.closed:
             return
+        self._interrupt_executions(closed=True)
         self.stopping = True
         if self.process is None:
             if self.close():

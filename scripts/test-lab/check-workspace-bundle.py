@@ -34,6 +34,7 @@ expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','dep
                  'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',
                  'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})
 expected.add('docs/WORKSPACE_0.20.0_NOTIFICATIONS.md')
+expected.update({'local_app/file_preview.py','local_app/executions.py','local_app/web/rich-content.js','local_app/web/rich-content.css','local_app/web/execution-view.js','local_app/web/execution-view.css','docs/WORKSPACE_0.21.0_RICH_CHAT.md'})
 generated = {'desktop/' + name for name in ('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll',
              'Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')}
 expected.update(generated)

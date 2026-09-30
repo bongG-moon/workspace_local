@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import uuid
 
+from .executions import normalize_executions, safe_run_id
+
 KEYS = ('id','title','workspace','created','updated','pinned','sessionId')
 MAX_SESSIONS = 500
 MAX_ARTIFACTS = 100
@@ -55,6 +57,9 @@ def row(item):
         if not isinstance(message, dict) or message.get('role') not in {'user','assistant'} or not isinstance(message.get('text'),str):
             raise ValueError('대화 메시지를 확인하지 못했습니다.')
         clean = {'role':message['role'], 'text':message['text'][:100000]}
+        run_id = safe_run_id(message.get('runId'))
+        if run_id is not None:
+            clean['runId'] = run_id
         if message.get('role') == 'user' and isinstance(message.get('files'),list):
             clean['files'] = [value[:4096] for value in message['files'][:12] if isinstance(value,str)]
         if (message.get('role') == 'user' and isinstance(message.get('requestId'), str)
@@ -80,6 +85,7 @@ def row(item):
         artifacts.append({key: artifact[key] for key in ('path', 'name', 'change', 'runId', 'observedAt')} |
                          {'size': artifact.get('size') if type(artifact.get('size')) is int and artifact['size'] >= 0 else None})
     result['artifacts'] = artifacts
+    result['executions'] = normalize_executions(item.get('executions'))
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
     if 'branch' in item:
@@ -116,6 +122,7 @@ class HistoryStore:
         item['_artifactCount'] = len(item.get('artifacts', []))
         item.pop('messages', None)
         item.pop('artifacts', None)
+        item.pop('executions', None)
         item['_historyUnloaded'] = True
         return item
 
@@ -129,6 +136,7 @@ class HistoryStore:
                 raise ValueError('대화 파일과 목록이 다릅니다.')
             item['messages'] = value['messages']
             item['artifacts'] = value['artifacts']
+            item['executions'] = normalize_executions(value['executions'], interrupted=True)
             item.pop('_historyUnloaded', None)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             self.warning = '대화 기록을 다시 읽지 못해 원본을 보존했습니다. 앱을 다시 열어 기록 위치를 확인해 주세요.'
@@ -152,6 +160,7 @@ class HistoryStore:
                     item = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
                     if item['id'] != sid:
                         raise ValueError('대화 파일과 목록이 다릅니다.')
+                    item['executions'] = normalize_executions(item['executions'], interrupted=True)
                     if lazy:
                         item['_historySaved'] = True
                     result.append(self.compact(item) if lazy else item)
@@ -160,6 +169,8 @@ class HistoryStore:
                 if not isinstance(old, list) or len(old) > MAX_SESSIONS:
                     raise ValueError('기존 기록 형식을 확인하지 못했습니다.')
                 result = [row(item) for item in old]
+                for item in result:
+                    item['executions'] = normalize_executions(item['executions'], interrupted=True)
                 self.migrate = True
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             # Do not overwrite a damaged index or silently destroy its entries.

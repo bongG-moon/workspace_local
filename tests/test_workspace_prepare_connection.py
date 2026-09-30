@@ -235,7 +235,17 @@ class PrepareConnectionTests(unittest.TestCase):
         blocked = self.root / 'program.exe'
         blocked.write_bytes(b'not executable')
         self.assertIn('.py', REFERENCE_FILE_TYPES)
-        self.assertNotIn('.py', SAFE_FILES)
+        self.assertIn('.py', SAFE_FILES)
+        from local_app.file_preview import build_preview
+        from local_app.external_apps import open_document
+        preview = build_preview(self.app.allowed_file(self.sid, source))
+        self.assertEqual('code', preview['kind'])
+        self.assertEqual('python', preview['language'])
+        self.assertEqual('raise AssertionError("never execute")', preview['text'])
+        with patch('local_app.external_apps.os.startfile', create=True) as launch:
+            with self.assertRaises(ValueError):
+                open_document(source)
+            launch.assert_not_called()
         with self.assertRaises(ValueError):
             self.app.send(self.sid, 'read it', [str(blocked)])
         self.app.send(self.sid, 'Explain @example.py', [str(source)])

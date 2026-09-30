@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from contextlib import contextmanager
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,7 +22,8 @@ from .bridge import ClaudeSession, HIDDEN, probe_cli, resolve_cli, runtime_conte
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .session_order import SessionOrder
-from .artifacts import changes, linked, snapshot
+from .artifacts import changes, linked, snapshot, PREVIEW_TYPES
+from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .capabilities import catalog
 from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES
@@ -36,10 +36,9 @@ from .attachments import AttachmentStore, MAX_UPLOAD
 from .app_dispatch import DispatchController
 
 ASSETS = Path(__file__).parent / "web"
-SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
+SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.20.2"
+WORKSPACE_VERSION = "0.21.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -295,6 +294,7 @@ class LocalApp:
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification", "branch") } | {
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
+            "executions": list(item.get("executions", [])),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
@@ -807,8 +807,19 @@ class LocalApp:
     def emit(self, sid, kind, data):
         with self.lock:
             item = self.get(sid)
+            if kind in {'assistant', 'assistant_delta', 'queued_user'}:
+                data = dict(data, runId=item.get('lastRunId'))
+            if kind == 'execution':
+                from .executions import merge_execution, normalize_execution
+                clean = normalize_execution(data, run_id=item.get('lastRunId'))
+                if clean is None:
+                    return
+                item['executions'] = merge_execution(item.get('executions', []), clean)
+                data = next((row for row in item['executions'] if row['id'] == clean['id'] and row.get('runId') == clean.get('runId')), None)
+                if data is None:
+                    return
             if kind == "assistant":
-                item["messages"].append({"role": "assistant", "text": str(data["text"])[:100000]})
+                item["messages"].append({"role": "assistant", "text": str(data["text"])[:100000], 'runId':item.get('lastRunId')})
                 item["messages"] = item["messages"][-150:]
                 # Keep the UI mirror bounded; the CLI owns the full transcript.
                 while len(item["messages"]) > 1 and sum(len(row.get("text", "")) for row in item["messages"]) > 500000:
@@ -879,6 +890,8 @@ class LocalApp:
                     item["sessionId"] = data["resumeSessionId"]
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
             if terminal:
+                from .executions import normalize_executions
+                item['executions'] = normalize_executions(item.get('executions', []), interrupted=True)
                 self._finish_observation(item)
                 data['artifacts'] = list(item.get('artifacts', []))
                 data['lastRunId'] = item.get('lastRunId')
@@ -887,7 +900,7 @@ class LocalApp:
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
-            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed'} or terminal:
+            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed', 'execution'} or terminal:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
                 pending = attention_snapshot(self.sessions.values())
@@ -995,6 +1008,7 @@ class LocalApp:
             item["state"] = "starting"
             item['updated'] = time.time()
             item['lastRunId'] = uuid.uuid4().hex
+            item['messages'][-1]['runId'] = item['lastRunId']
             item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
             self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
             item['artifactObservation'] = item['_artifactSnapshot'].public()
@@ -1242,34 +1256,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.results(sid))
             if route.path == "/api/preview":
                 path = app.allowed_file(sid, query.get("path", [""])[0])
-                if path.stat().st_size > MAX_PREVIEW:
-                    return self.reply({"kind": "external", "name": path.name, "message": "큰 파일은 원래 앱에서 열어 주세요."})
-                if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-                    mime = {".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
-                    raw = path.read_bytes()
-                    if app.get(sid).get('observation'):
-                        app.get(sid)['observation']['previewed'].add(str(path))
-                    return self.reply({"kind": "image", "name": path.name, "data": "data:" + mime + ";base64," + base64.b64encode(raw).decode()})
-                if path.suffix.lower() in {".md", ".txt", ".csv", ".tsv", ".html", ".htm"}:
-                    raw = path.read_bytes()
-                    try:
-                        text = raw.decode('utf-16' if raw.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
-                    except UnicodeError:
-                        try:
-                            text = raw.decode('cp949')
-                        except UnicodeError:
-                            return self.reply({'kind': 'external', 'name': path.name,
-                                'message': '문자 인코딩을 확인하지 못했습니다. 원래 앱이나 메모장에서 확인해 주세요.'})
-                    if app.get(sid).get('observation'):
-                        app.get(sid)['observation']['previewed'].add(str(path))
-                    if path.suffix.lower() in {'.html', '.htm'}:
-                        from .html_preview import render
-                        preview = render(text)
-                        if preview:
-                            return self.reply({'kind':'html', 'name':path.name, 'html':preview,
-                                               'message':'정적 미리보기입니다. 모든 구역을 표시하며 스크립트·외부 연결은 실행하지 않습니다. 선택은 채팅으로 알려 주세요.'})
-                    return self.reply({"kind": "text", "name": path.name, "text": text})
-                return self.reply({"kind": "external", "name": path.name, "message": "Office·PDF 원본은 원래 앱에서 열어 확인해 주세요."})
+                if not source_preview_allowed(path, workspace_folder(app.get(sid))):
+                    raise ValueError('숨김 설정 또는 인증 정보로 보이는 소스 파일은 미리보기에서 제외합니다.')
+                preview = build_preview(path)
+                if preview['kind'] != 'external' and app.get(sid).get('observation'):
+                    app.get(sid)['observation']['previewed'].add(str(path))
+                return self.reply(preview)
             manual_path = unquote(route.path)
             if manual_path in {'/manual/guide', '/manual/' + MANUAL_FILENAME}:
                 return self.reply((ASSETS.parent.parent / 'docs' / MANUAL_FILENAME).read_bytes(),
@@ -1282,6 +1274,10 @@ class Handler(BaseHTTPRequestHandler):
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
                       "/desktop.js": ("desktop.js", "text/javascript; charset=utf-8"),
                       "/session-import.js": ("session-import.js", "text/javascript; charset=utf-8"),
+                      "/rich-content.js": ("rich-content.js", "text/javascript; charset=utf-8"),
+                      "/execution-view.js": ("execution-view.js", "text/javascript; charset=utf-8"),
+                      "/rich-content.css": ("rich-content.css", "text/css; charset=utf-8"),
+                      "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
