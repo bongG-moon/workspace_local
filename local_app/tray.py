@@ -7,6 +7,7 @@ terminates a process. Only counts are shown, never task text or credentials.
 from __future__ import annotations
 
 import ctypes
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -209,6 +210,21 @@ class WorkspaceTray:
             thread.join(timeout=3)
 
 
+@contextmanager
+def _tray_dpi_context(user):
+    # The hidden owner must be created in this context too: Windows restores
+    # a window's creation-time DPI context whenever it calls its window proc.
+    change = user.SetThreadDpiAwarenessContext
+    change.argtypes, change.restype = [ctypes.c_void_p], ctypes.c_void_p
+    previous = change(-4) or change(-3)  # per-monitor v2, then Windows 10 1607
+    if not previous:
+        raise OSError('Tray DPI context unavailable.')
+    try:
+        yield
+    finally:
+        change(previous)  # thread only; never change the process or PC settings
+
+
 class _WindowsTray:
     CALLBACK = 0x8001
     UPDATE = 0x8002
@@ -245,7 +261,10 @@ class _WindowsTray:
                         ('info', wt.WCHAR * 256), ('version', wt.UINT), ('title', wt.WCHAR * 64),
                         ('infoFlags', wt.DWORD), ('guid', Guid), ('balloonIcon', wt.HICON)]
 
-        self.WindowClass, self.NotifyIcon = WindowClass, NotifyIcon
+        class IconIdentifier(ctypes.Structure):
+            _fields_ = [('size', wt.DWORD), ('window', wt.HWND), ('id', wt.UINT), ('guid', Guid)]
+
+        self.WindowClass, self.NotifyIcon, self.IconIdentifier = WindowClass, NotifyIcon, IconIdentifier
         def signature(library, name, arguments, result):
             fn = getattr(library, name)
             fn.argtypes, fn.restype = arguments, result
@@ -281,6 +300,7 @@ class _WindowsTray:
         signature(self.user, 'TrackPopupMenu', [wt.HMENU, wt.UINT, ctypes.c_int, ctypes.c_int,
                   ctypes.c_int, wt.HWND, ctypes.c_void_p], wt.UINT)
         signature(self.shell, 'Shell_NotifyIconW', [wt.DWORD, ptr(NotifyIcon)], wt.BOOL)
+        signature(self.shell, 'Shell_NotifyIconGetRect', [ptr(IconIdentifier), ptr(wt.RECT)], ctypes.c_long)
         self.instance = self.kernel.GetModuleHandleW(None)
         self.taskbar_created = self.user.RegisterWindowMessageW('TaskbarCreated')
         if not self.instance or not self.taskbar_created:
@@ -310,6 +330,10 @@ class _WindowsTray:
         self.owner._mark_ready(self._added, '' if self._added else 'shell_unavailable')
 
     def run(self):
+        with _tray_dpi_context(self.user):
+            self._run()
+
+    def _run(self):
         try:
             ctypes.set_last_error(0)
             self.mutex = self.kernel.CreateMutexW(None, False, 'Local\\CompanyWorkspace.Tray.' + self.owner._key)
@@ -416,7 +440,7 @@ class _WindowsTray:
                 elif event in (0x400, 0x401) or (not self._version4 and event == 0x202):
                     self.owner._dispatch('open')
                 elif event == 0x7B or (not self._version4 and event == 0x205):
-                    self._menu(wparam if self._version4 else None)
+                    self._menu()
                 return 0
             if message == 0x10:
                 self.owner._stopping.set()
@@ -430,7 +454,25 @@ class _WindowsTray:
             return 0
         return self.user.DefWindowProcW(hwnd, message, wparam, lparam)
 
-    def _menu(self, coordinates=None):
+    def _menu_anchor(self):
+        # Ask the shell for our icon's current location (including overflow).
+        # WM_CONTEXTMENU's version-4 wParam is not a guaranteed mouse anchor;
+        # using it also mixes Explorer's coordinates with a DPI-unaware owner.
+        identity = self.IconIdentifier()
+        identity.size, identity.window, identity.id = ctypes.sizeof(identity), self.hwnd, self.ICON_ID
+        rect = self.wt.RECT()
+        if (self.shell.Shell_NotifyIconGetRect(ctypes.byref(identity), ctypes.byref(rect)) == 0
+                and rect.right > rect.left and rect.bottom > rect.top):
+            return self.wt.POINT(rect.left, rect.bottom)
+        point = self.wt.POINT()
+        if self.user.GetCursorPos(ctypes.byref(point)):
+            return point
+        return None
+
+    def _menu(self):
+        point = self._menu_anchor()
+        if point is None:
+            return
         menu = self.user.CreatePopupMenu()
         if not menu:
             return
@@ -441,12 +483,6 @@ class _WindowsTray:
             with self.owner._lock:
                 closing = 'exit' in self.owner._pending
             self.user.AppendMenuW(menu, 1 if closing else 0, self.EXIT, '완전 종료')
-            point = self.wt.POINT()
-            if coordinates is not None:
-                point.x = ctypes.c_short(coordinates & 0xFFFF).value
-                point.y = ctypes.c_short((coordinates >> 16) & 0xFFFF).value
-            if coordinates is None or (point.x == -1 and point.y == -1):
-                self.user.GetCursorPos(ctypes.byref(point))
             self.user.SetForegroundWindow(self.hwnd)
             command = self.user.TrackPopupMenu(menu, 0x100 | 2, point.x, point.y, 0, self.hwnd, None)
             self.user.PostMessageW(self.hwnd, 0, 0, 0)

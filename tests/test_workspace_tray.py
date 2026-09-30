@@ -5,11 +5,12 @@ import os
 from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
-from local_app.tray import WorkspaceTray, summary
+from local_app.tray import WorkspaceTray, _WindowsTray, summary
 
 
 def eventually(predicate, seconds=3):
@@ -156,9 +157,126 @@ class WorkspaceTrayTests(unittest.TestCase):
         self.assertFalse(tray.available)
 
 
+class WorkspaceTrayMenuTests(unittest.TestCase):
+    def native(self, bounds=(140, 100, 180, 140), result=0, cursor=(600, 400)):
+        from ctypes import wintypes as wt
+        native = object.__new__(_WindowsTray)
+        native.wt = wt
+        class Identity(ctypes.Structure):
+            _fields_ = [('size', wt.DWORD), ('window', wt.HWND), ('id', wt.UINT)]
+        native.IconIdentifier, native.hwnd = Identity, 123
+        native.owner = WorkspaceTray('menu-test', lambda: None, lambda: None)
+        def rectangle(identity, output):
+            self.assertEqual(123, identity._obj.window)
+            self.assertEqual(native.ICON_ID, identity._obj.id)
+            output._obj.left, output._obj.top, output._obj.right, output._obj.bottom = bounds
+            return result
+        def position(output):
+            if cursor is None:
+                return False
+            output._obj.x, output._obj.y = cursor
+            return True
+        native.shell = SimpleNamespace(Shell_NotifyIconGetRect=Mock(side_effect=rectangle))
+        native.user = SimpleNamespace(GetCursorPos=Mock(side_effect=position), CreatePopupMenu=Mock(return_value=321),
+            AppendMenuW=Mock(), DestroyMenu=Mock(), SetForegroundWindow=Mock(),
+            TrackPopupMenu=Mock(return_value=0), PostMessageW=Mock())
+        native._notify = Mock()
+        native.taskbar_created = 0xC001
+        return native
+
+    def test_shell_icon_anchor_is_used_for_mouse_and_keyboard_not_callback_payload(self):
+        # Physical-pixel icon rectangles for different scales and a left monitor.
+        for bounds in ((100, 100, 120, 120), (200, 200, 240, 240), (-1820, 700, -1780, 740)):
+            for payload in (0, 0x7FFFFFFF, -1):
+                with self.subTest(bounds=bounds, payload=payload):
+                    native = self.native(bounds=bounds)
+                    native._version4 = True
+                    native._window_proc(native.hwnd, native.CALLBACK, payload, 0x7B | (native.ICON_ID << 16))
+                    self.assertEqual((bounds[0], bounds[3]), native.user.TrackPopupMenu.call_args.args[2:4])
+                    native.user.GetCursorPos.assert_not_called()
+                    native.user.DestroyMenu.assert_called_once_with(321)
+
+    def test_legacy_right_click_uses_the_same_icon_anchor(self):
+        native = self.native()
+        native._version4 = False
+        native._window_proc(native.hwnd, native.CALLBACK, native.ICON_ID, 0x205)
+        self.assertEqual((140, 140), native.user.TrackPopupMenu.call_args.args[2:4])
+
+    def test_shell_failure_or_empty_rectangle_falls_back_to_cursor_in_same_context(self):
+        for result, bounds in ((-2147467259, (0, 0, 0, 0)), (0, (0, 0, 0, 0))):
+            native = self.native(result=result, bounds=bounds, cursor=(-600, 720))
+            native._menu()
+            self.assertEqual((-600, 720), native.user.TrackPopupMenu.call_args.args[2:4])
+
+    def test_no_location_does_not_show_menu_at_arbitrary_origin(self):
+        native = self.native(result=-1, cursor=None)
+        native._menu()
+        native.user.CreatePopupMenu.assert_not_called()
+
+    def test_dpi_scope_covers_window_lifetime_and_restores_on_failure(self):
+        native = self.native()
+        calls = []
+        previous = 0xFFFFFFFFFFFFFFF1
+        def change(value):
+            calls.append(value)
+            return previous
+        native.user.SetThreadDpiAwarenessContext = Mock(side_effect=change)
+        def fail():
+            self.assertEqual([-4], calls)
+            raise OSError('window initialization failed')
+        native._run = fail
+        with self.assertRaises(OSError):
+            native.run()
+        self.assertEqual([-4, previous], calls)
+        self.assertIs(ctypes.c_void_p, native.user.SetThreadDpiAwarenessContext.restype)
+
+    def test_dpi_v1_fallback_and_unavailable_context(self):
+        for results, expected, started in (([None, 17, 1], [-4, -3, 17], True),
+                                          ([None, None], [-4, -3], False)):
+            native = self.native()
+            native.user.SetThreadDpiAwarenessContext = Mock(side_effect=results)
+            native._run = Mock()
+            if started:
+                native.run()
+                native._run.assert_called_once()
+            else:
+                with self.assertRaises(OSError):
+                    native.run()
+                native._run.assert_not_called()
+            self.assertEqual(expected, [call.args[0] for call in native.user.SetThreadDpiAwarenessContext.call_args_list])
+
+
 @unittest.skipUnless(os.name == 'nt' and os.environ.get('COMPANY_WORKSPACE_TEST_TRAY') == '1',
                      'Opt in on the interactive Windows desktop: one temporary owned tray icon')
 class WorkspaceTrayNativeTests(unittest.TestCase):
+    def test_native_window_and_menu_callback_are_per_monitor_without_changing_caller(self):
+        user = ctypes.WinDLL('user32', use_last_error=True)
+        user.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user.GetWindowDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user.GetWindowDpiAwarenessContext.restype = ctypes.c_void_p
+        user.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        user.AreDpiAwarenessContextsEqual.restype = ctypes.c_bool
+        before = user.GetThreadDpiAwarenessContext()
+        tray = WorkspaceTray('native-dpi-' + uuid.uuid4().hex, lambda: None, lambda: None)
+        self.addCleanup(tray.stop)
+        self.assertTrue(tray.start(), tray.status())
+        native = tray._backend
+        self.assertTrue(user.AreDpiAwarenessContextsEqual(user.GetWindowDpiAwarenessContext(native.hwnd), -4))
+        seen, result = threading.Event(), {}
+        # Observe the real callback on our HWND, but suppress the blocking menu.
+        def track(menu, flags, x, y, reserved, hwnd, rectangle):
+            result.update(context=user.GetThreadDpiAwarenessContext(), point=(x, y), hwnd=hwnd)
+            seen.set()
+            return 0
+        with patch.object(native.user, 'TrackPopupMenu', side_effect=track):
+            self.assertTrue(native.user.PostMessageW(native.hwnd, native.CALLBACK, 0, 0x7B | (native.ICON_ID << 16)))
+            self.assertTrue(seen.wait(3))
+        self.assertTrue(user.AreDpiAwarenessContextsEqual(result['context'], -4))
+        self.assertEqual(native.hwnd, result['hwnd'])
+        self.assertTrue(user.AreDpiAwarenessContextsEqual(before, user.GetThreadDpiAwarenessContext()))
+        tray.stop()
+        self.assertTrue(user.AreDpiAwarenessContextsEqual(before, user.GetThreadDpiAwarenessContext()))
+
     def test_native_icon_lifecycle_duplicate_guard_and_shell_recovery(self):
         key = 'native-tray-test-' + uuid.uuid4().hex
         opened, closed = threading.Event(), threading.Event()
