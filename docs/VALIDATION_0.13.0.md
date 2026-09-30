@@ -43,7 +43,9 @@
 | `Company-Workspace-0.13.0-vbs.zip` | 5,924,454 | `1f2510c8fba1be98b44928f287329cb77982e404e12c4ffa14af61a18d109f62` |
 | `Company-Workspace-0.13.0-exe.zip` | 5,960,207 | `fd8ffa42855dffb9927375476c927d0cee80a62551a7af96bd4116e1fc11c45b` |
 
-현재 표는 최종 로컬 산출물 기준입니다. 공개 다운로드 검증은 완료 후 별도 기록합니다.
+위 크기와 SHA-256은 최종 로컬 산출물 기준입니다. [v0.13.0 공개 사전 배포](https://github.com/bongG-moon/workspace_local/releases/tag/v0.13.0)에 등록한 EXE ZIP·VBS ZIP·SHA256SUMS.txt 3개를 인증 없이 다시 다운로드하여 모두 일치함을 확인했습니다. Release는 초안이 아니며, 소스 및 태그 커밋은 `bb9535fbf5fbfbe8eb469fc5af8ebf17d0339f04`입니다. 후속 검증 문서 커밋과 관계없이 ZIP과 태그는 이 소스 기준입니다.
+
+공개 전 점검에서 배포 파일 72개와 공개 저장소 인덱스의 바이트 일치, ZIP CRC, EXE ZIP의 3개 파일 구성, 추가된 인증정보 패턴 0건, 추적된 개인 실행 상태·인증 경로 0건을 확인했습니다. 공개 다운로드 결과는 `build/qa-workspace-0.13.0-public-downloads.json`, 출판 점검은 `build/qa-workspace-0.13.0-publication.json`에 보관합니다.
 
 
 ## 설계 경계

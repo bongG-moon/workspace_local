@@ -29,4 +29,4 @@
 
 [기능 사용법·설계 이유·추가 개선 제안](WORKSPACE_0.13.0_DESKTOP.md), [검증 기록](VALIDATION_0.13.0.md), [시작 진단](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 확인하세요. 이전 0.12.12의 운영 PC 실행 성공은 사용자에게 확인받았으며 이번 신규 기능의 모든 회사 환경 검증과는 구분합니다.
 
-공개 배포와 다운로드 검증 상태는 검증 기록에 기록합니다. [Release 페이지](https://github.com/bongG-moon/workspace_local/releases/tag/v0.13.0)와 [ZIP 체크섬](https://github.com/bongG-moon/workspace_local/releases/download/v0.13.0/SHA256SUMS.txt)을 함께 제공합니다.
+공개 사전 배포와 EXE ZIP·VBS ZIP·체크섬 파일의 익명 다운로드 및 해시 대조를 완료했습니다. 소스·태그 커밋은 `bb9535fbf5fbfbe8eb469fc5af8ebf17d0339f04`입니다. [Release 페이지](https://github.com/bongG-moon/workspace_local/releases/tag/v0.13.0)와 [ZIP 체크섬](https://github.com/bongG-moon/workspace_local/releases/download/v0.13.0/SHA256SUMS.txt)을 함께 제공합니다.
