@@ -82,6 +82,9 @@ def row(item):
     result['artifacts'] = artifacts
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
+    imported = item.get('importedConfigRoot')
+    if isinstance(imported, str) and 0 < len(imported) <= 8192 and Path(imported).is_absolute():
+        result['importedConfigRoot'] = imported
     # A display-only business question may survive a restart. It never restores
     # trust, pending tool permission, or permission-mode overrides.
     if isinstance(item.get('choice'), dict):

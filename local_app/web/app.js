@@ -109,7 +109,7 @@ function renderConnection(info){
 }
 function connectionLocked(){return !active||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed;}
 function modelOptions(){return (Array.isArray(active?.connection?.availableModels)?active.connection.availableModels:[]).slice(0,100).map(item=>typeof item==="string"?{value:item,displayName:item}:item).filter(item=>item&&typeof item.value==="string"&&item.value);}
-function permissionOptions(){const rows=(Array.isArray(active?.connection?.availablePermissionModes)?active.connection.availablePermissionModes:[]).filter(item=>item&&["manual","default","plan","acceptEdits","auto"].includes(item.value));return rows.filter(item=>item.value!=="manual"||!rows.some(row=>row.value==="default"));}
+function permissionOptions(){const rows=(Array.isArray(active?.connection?.availablePermissionModes)?active.connection.availablePermissionModes:[]).filter(item=>item&&["manual","default","plan","acceptEdits","auto","bypassPermissions"].includes(item.value)&&(item.value!=="bypassPermissions"||active.connection.bypassPermissions?.available===true));return rows.filter(item=>item.value!=="manual"||!rows.some(row=>row.value==="default"));}
 function permissionOptionValue(mode,rows=permissionOptions()){if(mode==="manual"||mode==="default")return rows.find(row=>row.value==="default")?.value||rows.find(row=>row.value==="manual")?.value||mode;return mode;}
 function effortOptions(){return (Array.isArray(active?.connection?.availableEfforts)?active.connection.availableEfforts:[]).filter(item=>item&&["low","medium","high","xhigh","max"].includes(item.value));}
 function renderConnectionOptions(){
@@ -316,9 +316,14 @@ async function setPermissionMode(mode){
   if(mode===null&&active.connection?.permissionModeResetAvailable===false)return {ok:false,error:"변경 전 승인 모드를 확인하지 못해 복원할 수 없어요. 목록에서 지원하는 모드를 선택해 주세요."};
   if(mode!==null&&!permissionOptions().some(item=>item.value===mode)){const message="현재 연결이 제공하는 승인 모드를 선택해 주세요.";toast(message);return {ok:false,error:message};}
   const id=active.id,ticket=selectionGeneration,stillCurrent=()=>active?.id===id&&selectionGeneration===ticket&&!appClosed;
+  let bypassConfirmed=false;
+  if(mode==="bypassPermissions"){
+    bypassConfirmed=await confirmAction({title:"⚠ Bypass 모드를 사용할까요?",message:"Claude가 파일 수정과 명령 실행의 승인 확인을 생략합니다. 이 업무 폴더와 연결된 도구를 신뢰할 때만 사용하세요. 기존 거절 규칙·회사 정책은 CLI가 적용합니다. 현재 앱에서 이 업무를 이어가는 동안 적용하며, 개인 기본 설정은 바꾸지 않습니다.",confirmLabel:"위험을 이해하고 Bypass 사용",danger:true});
+    if(!bypassConfirmed||!stillCurrent())return null;
+  }
   permissionChanging=true;setStatus(active.state);let failure="";
   try{
-    const response=await api("/api/permission-mode",{id,mode});if(!stillCurrent())return null;
+    const response=await api("/api/permission-mode",{id,mode,...(bypassConfirmed?{bypassConfirmed:true}:{})});if(!stillCurrent())return null;
     applyConnectionState(response);renderConnection(active.connection);$("permission-mode-select").value=active.connection?.permissionModeOverride||"";
     toast(response.reconnectRequired?"다음 요청에서 기존 승인 설정으로 다시 연결합니다.":"이 연결의 승인 모드를 변경했어요. 기존 설정은 유지됩니다.");return {ok:true,response};
   }catch(e){if(!stillCurrent())return null;failure=e.message;return {ok:false,error:failure};}

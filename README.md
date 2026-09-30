@@ -1,21 +1,30 @@
-# Company Workspace 0.13.0
+# Company Workspace 0.14.0
 
 터미널 명령이나 `cd`에 익숙하지 않은 사용자가 기존 Claude Code 업무 환경을 창, 버튼, 자연어 요청으로 사용하는 Windows 로컬 앱입니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.13.0/Company-Workspace-0.13.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.13.0/Company-Workspace-0.13.0-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.14.0/Company-Workspace-0.14.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.14.0/Company-Workspace-0.14.0-vbs.zip)**
 
-[0.13.0 배포 안내](docs/WORKSPACE_RELEASE_0.13.0.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.13.0.md)
+[0.14.0 배포 안내](docs/WORKSPACE_RELEASE_0.14.0.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.14.0.md)
 
 ## 어떤 파일을 받으면 되나요?
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| `Company-Workspace-0.13.0-exe.zip` | ZIP을 풀고 `Company-Workspace-0.13.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 이미 설치된 Python 3.11 이상 |
-| `Company-Workspace-0.13.0-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.14.0-exe.zip` | ZIP을 풀고 `Company-Workspace-0.14.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 이미 설치된 Python 3.11 이상 |
+| `Company-Workspace-0.14.0-vbs.zip` | ZIP 전체를 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 설치된 Python 3.11 이상 |
 
 **앱 전용 로그인·API 키는 없습니다. AI 업무에는 같은 Windows 사용자의 기존 Claude Code와 인증이 필요합니다.** 두 방식 모두 기존 PowerShell 프로필과 Claude 호출 환경을 사용합니다. EXE는 앱 파일만 묶은 실행기이며 VBS와 같은 시작 검사·PowerShell 경로를 사용합니다. 두 배포본 모두 Python 실행 환경이나 설치 프로그램을 포함하지 않고, 다운로드·자동 설치도 하지 않습니다. 기존 Python을 확인하지 못하면 안내 후 중단합니다. 회사의 VBS·EXE·PowerShell 허용 정책이 서로 다를 수 있으므로 모든 PC에서의 실행을 보장하지 않습니다.
 
 EXE는 서명되지 않은 자체 제작 실행 파일입니다. 앱은 UAC·계정·영구 실행 정책을 자동 변경하지 않으며, 회사가 정한 배포 정책을 따릅니다. 상세 조건은 [단일 EXE 안내](docs/WORKSPACE_STANDALONE_EXE.md)와 [시작 진단](docs/WORKSPACE_STARTUP_DIAGNOSTIC.md)을 확인하세요.
+
+## 0.14.0 대화 이어가기와 알림
+
+- 왼쪽 **이전 Claude 대화 불러오기**에서 목록 또는 세션 UUID로 대화를 찾고 원래 작업 폴더를 함께 불러옵니다. 가져오기는 원본을 읽기만 하며, 이어 실행하기 전에 폴더 확인을 받습니다.
+- 완료·승인·질문·오류를 상단 **알림**에 모읍니다. 백그라운드에서는 Windows 트레이 알림을 요청하고 클릭하면 해당 업무를 엽니다. Windows 설정에 따라 배너가 표시되지 않을 수 있습니다.
+- **승인 → ⚠ Bypass permissions**는 위험 확인 후 현재 업무에만 적용합니다. CLI의 실제 적용 응답을 확인하고 개인 기본 설정은 바꾸지 않습니다. Shift+Tab으로 Bypass에 진입하지는 않으며, 켜진 Bypass에서는 일반 모드로 돌아갈 수 있습니다.
+- 지원되는 Windows 제목 표시줄에 앱과 어울리는 색상을 요청합니다. Windows 10·Edge 자체 제목 표시줄에서는 기존 색이 남을 수 있으며 창 버튼 기능은 유지합니다.
+
+[0.14.0 사용법과 구현 범위](docs/WORKSPACE_0.14.0_CONTINUITY.md) · [검증 기록](docs/VALIDATION_0.14.0.md)
 
 ## 0.13.0 앱 사용 흐름 개선
 
@@ -27,7 +36,7 @@ EXE는 서명되지 않은 자체 제작 실행 파일입니다. 앱은 UAC·계
 
 **Company Agent 하네스는 필수가 아닙니다.** 후속 요청과 예약은 일반 Claude Code 연결과 기존 승인 경로를 사용합니다. [사용법·설계 이유·추가 제안](docs/WORKSPACE_0.13.0_DESKTOP.md)을 참고하세요.
 
-0.12.12의 WS-38 수정 이후 운영 PC 실행 성공을 사용자가 확인했습니다. 그 권한·Python 탐색 코드는 유지합니다. 이번 0.13.0의 새 기능은 [별도 검증 기록](docs/VALIDATION_0.13.0.md)으로 범위를 구분합니다.
+0.12.12의 WS-38 수정 이후 운영 PC 실행 성공을 사용자가 확인했습니다. 그 권한·Python 탐색 코드는 유지합니다. 현재 0.14.0의 새 기능은 [별도 검증 기록](docs/VALIDATION_0.14.0.md)으로 범위를 구분합니다.
 
 ## 시작과 업데이트
 

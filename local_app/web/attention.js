@@ -40,6 +40,8 @@ globalThis.WorkspaceAttention = (() => {
     notificationSettings(); renderSessions();
   }
   function apply(snapshot) {
+    globalThis.WorkspaceDesktop?.apply(snapshot.desktop);
+    globalThis.WorkspaceDesktop?.follow(snapshot.navigation);
     setWindowTitle(snapshot.windowTitle);
     native = snapshot.native && typeof snapshot.native === "object" ? snapshot.native : {};
     const unique = new Set();
@@ -52,7 +54,7 @@ globalThis.WorkspaceAttention = (() => {
     for (const item of items) {
       if (seen.has(item.id)) continue;
       seen.add(item.id);
-      if (!enabled || typeof globalThis.Notification !== "function" || Notification.permission !== "granted" || (visible() && active?.id === item.sessionId)) continue;
+      if ((snapshot.desktop?.nativeAvailable && snapshot.desktop?.preferences?.enabled && snapshot.desktop?.preferences?.attention) || !enabled || typeof globalThis.Notification !== "function" || Notification.permission !== "granted" || (visible() && active?.id === item.sessionId)) continue;
       try {
         const notice = new Notification("Company Workspace · 응답이 필요해요", {body:`${item.title || "업무"} · ${waitingLabel(item.kind)}`, tag:item.id});
         notifications.set(item.id, notice);
@@ -75,7 +77,7 @@ globalThis.WorkspaceAttention = (() => {
     try {
       const snapshot = await api("/api/attention", undefined, controller.signal);
       if (!running || ticket !== generation || appClosed) return;
-      apply(snapshot); await bindIfFocused();
+      apply(snapshot); await bindIfFocused(); await globalThis.WorkspaceDesktop?.presence();
     } catch (err) {
       if (err.name !== "AbortError" && running && ticket === generation) $("native-attention-message").textContent = "대기 알림 연결을 다시 확인하고 있어요. 업무 요청을 다시 보내지는 않습니다.";
     } finally { if (readInFlight === request) readInFlight = null; if (running && ticket === generation && !appClosed) timer = setTimeout(refresh, 2000); }

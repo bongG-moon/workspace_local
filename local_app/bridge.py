@@ -15,7 +15,7 @@ import time
 import uuid
 from collections import deque
 
-from .permission_contract import help_permission_modes, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
+from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
 
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
@@ -88,11 +88,19 @@ def probe_cli(command: list[str]) -> dict:
     return info
 
 
-def cli_arguments(command: list[str], info: dict, resume: str | None = None) -> list[str]:
+def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, allow_bypass_permissions=False) -> list[str]:
+    if type(allow_bypass_permissions) is not bool:
+        raise ValueError('Bypass 선택 준비 여부를 확인해 주세요.')
+    if allow_bypass_permissions and not help_bypass_opt_in(info.get('help', '')):
+        raise BridgeError('bypass_unavailable', '설치된 CLI에서 Bypass 선택 준비 옵션을 확인하지 못했습니다.', '기존 승인 모드 사용')
     args = command + ["--print", "--verbose", "--input-format", "stream-json",
                       "--output-format", "stream-json", "--permission-prompt-tool", "stdio"]
     # Only the I/O changes. Let Claude choose its existing settings, model,
     # authentication and permission mode; the UI must not create its own defaults.
+    # Only an explicitly confirmed app-session opt-in may enable the candidate;
+    # it does not activate bypass and never sets a starting permission mode.
+    if allow_bypass_permissions:
+        args.append('--allow-dangerously-skip-permissions')
     if "--include-partial-messages" in info.get("help", ""):
         args.append("--include-partial-messages")
     if resume:
@@ -101,8 +109,11 @@ def cli_arguments(command: list[str], info: dict, resume: str | None = None) -> 
 
 
 class ClaudeSession:
-    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None):
+    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None, allow_bypass_permissions=False):
+        if type(allow_bypass_permissions) is not bool:
+            raise ValueError('Bypass 선택 준비 여부를 확인해 주세요.')
         self.command, self.info, self.cwd, self.emit = command, info, cwd, emit
+        self.allow_bypass_permissions = allow_bypass_permissions
         self.choice_helper = choice_helper
         self.session_id = resume
         self.resume_id = resume
@@ -141,6 +152,9 @@ class ClaudeSession:
         self.permission_mode_override = None
         self._permission_init_seen = False
         self._permission_modes = help_permission_modes(info.get("help", ""))
+        self._bypass_supported = help_bypass_opt_in(info.get('help', ''))
+        if self._bypass_supported:
+            self._permission_modes.append(BYPASS_MODE)
         self._permission_rejected_modes = set()
         self._permission_control_supported = True
         self._permission_control_verified = False
@@ -229,6 +243,24 @@ class ClaudeSession:
     def _permission_available_modes(self):
         return [mode for mode in self._permission_modes if mode not in self._permission_rejected_modes]
 
+    def _bypass_enabled_for_connection(self):
+        # An inherited original bypass is existing CLI configuration, not an
+        # app opt-in. Display/restore that observed baseline without rewriting it.
+        return self.allow_bypass_permissions or self.original_permission_mode == BYPASS_MODE
+
+    def bypass_state(self):
+        rejected = BYPASS_MODE in self._permission_rejected_modes
+        available = self._bypass_supported and not rejected and self._permission_control_supported
+        enabled = self._bypass_enabled_for_connection()
+        reason = ('현재 CLI 연결에서 Bypass 전환이 거절되었습니다. 조직 정책과 설치 버전을 확인해 주세요.' if rejected
+                  else '설치된 CLI에서 Bypass 선택 준비 옵션을 확인하지 못했습니다.' if not self._bypass_supported
+                  else '현재 CLI 연결이 승인 모드 변경을 지원하지 않습니다.' if not self._permission_control_supported
+                  else '위험 확인 후 이 업무의 연결을 다시 준비해야 합니다.' if not enabled
+                  else '이 연결에서 선택할 수 있습니다. 적용할 때 위험을 확인해야 합니다.')
+        return {'available': available, 'enabledForConnection': enabled,
+                'requiresReconnect': available and not enabled, 'confirmationRequired': True,
+                'active': self.permission_mode == BYPASS_MODE, 'reason': reason}
+
     def model_state(self) -> dict:
         return {"model": self.model, "modelOverride": self.model_override,
                 "availableModels": self.available_models, "capabilities": self.capabilities,
@@ -246,7 +278,8 @@ class ClaudeSession:
                 "permissionModeLabel": mode_label(self.permission_mode),
                 "permissionModeSource": self._permission_source,
                 "permissionModeOverride": self.permission_mode_override,
-                "availablePermissionModes": mode_options(self._permission_available_modes()),
+                "bypassPermissions": self.bypass_state(),
+                "availablePermissionModes": mode_options(self._permission_available_modes(), include_bypass=True),
                 "permissionModeCycle": mode_cycle(self._permission_available_modes()),
                 "permissionModeSupport": ("unavailable" if not self.capabilities["setPermissionMode"] else
                                           "confirmed" if self._permission_control_verified else "unverified"),
@@ -394,7 +427,10 @@ class ClaudeSession:
             if mode is None and (original_wire is None or not self._permission_control_supported):
                 raise BridgeError('permission_mode_reset_unavailable', '변경 전 승인 모드의 복원을 확인할 수 없습니다. 현재 모델·추론 수준·승인 모드는 그대로 유지합니다.', '현재 연결에서 제공한 승인 모드 선택')
             selected = mode_wire_value(mode, self._permission_available_modes()) if mode is not None else original_wire
+            if selected == BYPASS_MODE and not self._bypass_enabled_for_connection():
+                raise BridgeError('bypass_opt_in_required', 'Bypass는 위험 확인 후 이 업무의 연결을 다시 준비해야 합니다. 현재 승인 모드는 유지했습니다.', 'Bypass 위험 확인')
             rid = "permission-mode-" + uuid.uuid4().hex
+            previous_override = self.permission_mode_override
             waiter = {"event": threading.Event(), "response": None}
             self._control_active = True
             self._permission_pending = {'reported': None}
@@ -424,6 +460,12 @@ class ClaudeSession:
                 reported = self._permission_pending['reported']
                 self._permission_pending = None
                 self.permission_mode, self.permission_mode_override = acknowledged or reported or selected, mode
+                bypass_declined = selected == BYPASS_MODE and self.permission_mode != BYPASS_MODE
+                if bypass_declined:
+                    # A successful control envelope can still report a policy-
+                    # clamped mode. Never retain/replay a bypass that did not apply.
+                    self._permission_rejected_modes.add(BYPASS_MODE)
+                    self.permission_mode_override = previous_override
                 self._permission_source = 'cli-control' if acknowledged or not reported else 'cli-status'
                 self._permission_control_verified = True
                 # A change before system/init means the original mode was never
@@ -431,6 +473,8 @@ class ClaudeSession:
                 self._permission_init_seen = True
                 state = self.model_state()
             self.emit("permission_mode_changed", state)
+            if bypass_declined:
+                raise BridgeError('permission_mode_rejected', 'CLI가 Bypass 대신 다른 승인 모드를 보고했습니다. 실제 모드를 표시하며 Bypass 선택은 적용하지 않았습니다.', '회사 정책과 연결 상태 확인')
             return state
         finally:
             with self.lock:
@@ -464,7 +508,8 @@ class ClaudeSession:
             env = dict(os.environ)
             # Encoding and a UI presentation signal only; Claude-owned settings stay untouched.
             env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", COMPANY_WORKSPACE_UI="1")
-            self.process = subprocess.Popen(cli_arguments(self.command, self.info, self.session_id),
+            self.process = subprocess.Popen(cli_arguments(self.command, self.info, self.session_id,
+                allow_bypass_permissions=self.allow_bypass_permissions),
                 cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, creationflags=HIDDEN)
             self._readers = [threading.Thread(target=self._read, daemon=True),

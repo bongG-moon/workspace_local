@@ -19,6 +19,10 @@ MODE_LABELS = {
     'auto': ('Auto', 'Claude가 작업 위험을 판단하는 자동 모드를 이 연결에 적용합니다.'),
 }
 
+BYPASS_MODE = 'bypassPermissions'
+BYPASS_LABEL = ('Bypass permissions',
+                '파일 변경·명령 실행 등의 일반 승인 확인을 생략합니다. 격리된 환경에서만 사용하고 위험을 직접 확인하세요. Claude의 조직 정책과 명시적 제한은 계속 적용됩니다.')
+
 # These are SDK PermissionUpdateDestination values. Claude owns the setting
 # location and enforcement; this module only offers its current suggestions.
 PERMISSION_SCOPES = {
@@ -33,7 +37,7 @@ PERMISSION_SCOPES = {
 }
 
 
-def help_permission_modes(help_text):
+def help_permission_modes(help_text, *, include_bypass=False):
     """Use the installed version's explicit choices; never translate aliases."""
     if not isinstance(help_text, str):
         return []
@@ -48,14 +52,31 @@ def help_permission_modes(help_text):
     names = set(re.findall(r'[\"\x27]([A-Za-z][A-Za-z0-9]*)[\"\x27]', choices.group(1)))
     if 'default' in names:
         names.discard('manual')
-    return [mode for mode in MODE_LABELS if mode in names]
+    supported = [*MODE_LABELS, *([BYPASS_MODE] if include_bypass else [])]
+    return [mode for mode in supported if mode in names]
 
 
-def mode_options(modes):
+def help_bypass_opt_in(help_text):
+    """Require both this installed CLI's mode name and explicit enable flag.
+
+    The allow flag only makes later switching possible. It must never be added
+    from a reported mode name, a preference file, or an ordinary connection.
+    """
+    return (isinstance(help_text, str)
+            and BYPASS_MODE in help_permission_modes(help_text, include_bypass=True)
+            and re.search(r'^\s*--allow-dangerously-skip-permissions(?:[ \t]|$)',
+                          help_text[:256 * 1024], re.MULTILINE) is not None)
+
+
+def mode_options(modes, *, include_bypass=False):
     modes = list(dict.fromkeys(modes))
-    return [{'value': mode, 'displayName': MODE_LABELS[mode][0],
+    ordinary = [{'value': mode, 'displayName': MODE_LABELS[mode][0],
              'description': MODE_LABELS[mode][1]} for mode in modes
             if mode in MODE_LABELS and not (mode == 'manual' and 'default' in modes)]
+    if include_bypass and BYPASS_MODE in modes:
+        ordinary.append({'value': BYPASS_MODE, 'displayName': BYPASS_LABEL[0],
+                         'description': BYPASS_LABEL[1], 'risk': 'high', 'requiresConfirmation': True})
+    return ordinary
 
 
 def mode_label(mode):

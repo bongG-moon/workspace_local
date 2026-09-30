@@ -212,6 +212,16 @@ class WindowsAttention:
             self.user.SetForegroundWindow(binding.hwnd)
         return bool(self.user.IsWindowVisible(binding.hwnd)) == show
 
+    def theme(self, binding, title):
+        if self._window(binding.hwnd, title, allow_hidden=True) != binding:
+            return {'applied': False, 'reason': 'invalid_window'}
+        from .window_theme import apply
+        return apply(binding.hwnd)
+
+    def foreground(self, binding, title):
+        return (self._window(binding.hwnd, title) == binding
+                and self.user.GetForegroundWindow() == binding.hwnd)
+
 
 _AUTO = object()
 
@@ -224,6 +234,7 @@ class AttentionNotifier:
         self._revision = None
         self._pending = set()
         self._closed = False
+        self.theme_state = {'applied': False, 'reason': 'not_bound'}
         if not enabled:
             native = None
         elif native is _AUTO and os.name != 'nt':
@@ -265,7 +276,18 @@ class AttentionNotifier:
                         self._flash(stop=True)
                     self._binding = binding
                     self._flash(stop=True)
+                    if hasattr(self._native, 'theme'):
+                        self.theme_state = self._native.theme(binding, self.window_title)
             return self.native_state
+
+    def is_foreground(self):
+        with self._lock:
+            if self._closed or self._binding is None or self._native in (None, _AUTO):
+                return False
+            try:
+                return self._native.foreground(self._binding, self.window_title) is True
+            except (OSError, AttributeError, ValueError):
+                return False
 
     def update(self, value):
         with self._lock:

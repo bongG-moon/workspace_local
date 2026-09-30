@@ -11,6 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 import threading
+import unicodedata
 
 
 def _count(value):
@@ -22,6 +23,14 @@ def summary(running=0, waiting=0):
     if not running and not waiting:
         return '준비됨 · 백그라운드 실행 중'
     return f'진행 중 {running}건 · 승인·질문 대기 {waiting}건'
+
+
+def _notification_text(value, units):
+    if not isinstance(value, str):
+        return ''
+    value = ''.join(' ' if unicodedata.category(char) in {'Cc', 'Cf', 'Cs'} else char for char in value)
+    # Windows arrays count UTF-16 code units, not Python Unicode characters.
+    return value.encode('utf-16-le')[:units * 2].decode('utf-16-le', errors='ignore').strip()
 
 
 class WorkspaceTray:
@@ -45,6 +54,7 @@ class WorkspaceTray:
         self._error = ''
         self._counts = (0, 0)
         self._pending = set()
+        self._notification = None
 
     @property
     def available(self):
@@ -85,6 +95,7 @@ class WorkspaceTray:
             with self._lock:
                 self._available = False
                 self._backend = None
+                self._notification = None
             self._ready.set()
 
     def _mark_ready(self, available, error=''):
@@ -102,6 +113,59 @@ class WorkspaceTray:
             backend = self._backend
         if backend is not None:
             backend.post_update()
+
+    def notify(self, *, title, message, on_click=None):
+        """Request one native banner; False means keep it in the app inbox.
+
+        Windows balloon callbacks carry no notification ID. Never overwrite an
+        active balloon's target with a newer task, or queue stale banners in
+        the Shell. Other events remain accessible in the caller's durable inbox.
+        """
+        title, message = _notification_text(title, 63), _notification_text(message, 255)
+        if not title or not message or (on_click is not None and not callable(on_click)):
+            return False
+        with self._lock:
+            if (not self.available or self._backend is None or self._notification is not None
+                    or 'exit' in self._pending):
+                return False
+            value = {'title': title, 'message': message, 'on_click': on_click,
+                     'sent': False, 'shown': False}
+            self._notification = value
+            backend = self._backend
+        try:
+            posted = backend.post_notification() is True
+        except Exception:
+            posted = False
+        if not posted:
+            self._discard_notification(value)
+        return posted
+
+    def _discard_notification(self, expected=None):
+        with self._lock:
+            if expected is None or self._notification is expected:
+                self._notification = None
+
+    def _notification_event(self, event):
+        with self._lock:
+            value = self._notification
+            if value is None or not value['sent']:
+                return
+            if event == 0x402:  # NIN_BALLOONSHOW
+                value['shown'] = True
+                return
+            if event not in (0x403, 0x404, 0x405):
+                return
+            self._notification = None
+            callback = value['on_click'] if event == 0x405 and value['shown'] else None
+            if self._stopping.is_set() or 'exit' in self._pending or callback is None:
+                return
+        def invoke():
+            try:
+                callback()
+            except Exception:
+                # The server may already be closing or the task may be gone.
+                pass
+        threading.Thread(target=invoke, name='WorkspaceTray-notification', daemon=True).start()
 
     def _text(self):
         with self._lock:
@@ -137,6 +201,7 @@ class WorkspaceTray:
     def stop(self):
         with self._lock:
             self._stopping.set()
+            self._notification = None
             backend, thread = self._backend, self._thread
         if backend is not None:
             backend.request_stop()
@@ -147,6 +212,7 @@ class WorkspaceTray:
 class _WindowsTray:
     CALLBACK = 0x8001
     UPDATE = 0x8002
+    NOTIFICATION = 0x8003
     TIMER = 1
     ICON_ID = 1
     OPEN, EXIT = 100, 101
@@ -301,6 +367,25 @@ class _WindowsTray:
         if self.hwnd:
             self.user.PostMessageW(self.hwnd, self.UPDATE, 0, 0)
 
+    def post_notification(self):
+        return bool(self.hwnd and self.user.PostMessageW(self.hwnd, self.NOTIFICATION, 0, 0))
+
+    def _show_notification(self):
+        with self.owner._lock:
+            value = self.owner._notification
+            if value is None or value['sent']:
+                return
+            if not self._added or self.owner._stopping.is_set():
+                self.owner._discard_notification(value)
+                return
+            value['sent'] = True
+            data = self._data()
+            data.flags = 0x10 | 0x40  # NIF_INFO | NIF_REALTIME: no delayed stale banner
+            data.title, data.info = value['title'], value['message']
+            data.infoFlags = 1 | 0x80  # NIIF_INFO | NIIF_RESPECT_QUIET_TIME
+        if not self.shell.Shell_NotifyIconW(1, ctypes.byref(data)):
+            self.owner._discard_notification(value)
+
     def request_stop(self):
         if self.hwnd:
             self.user.PostMessageW(self.hwnd, 0x10, 0, 0)  # wakes GetMessage on owner thread
@@ -308,6 +393,7 @@ class _WindowsTray:
     def _window_proc(self, hwnd, message, wparam, lparam):
         try:
             if message == self.taskbar_created:
+                self.owner._discard_notification()
                 self._added = False
                 self._add()
                 return 0
@@ -316,13 +402,18 @@ class _WindowsTray:
                     self._added = False
                     self.owner._mark_ready(False, 'shell_unavailable')
                 return 0
+            if message == self.NOTIFICATION:
+                self._show_notification()
+                return 0
             if message == 0x113 and wparam == self.TIMER:
                 if not self._added:
                     self._add()
                 return 0
             if message == self.CALLBACK:
                 event = lparam & 0xFFFF if self._version4 else lparam
-                if event in (0x400, 0x401) or (not self._version4 and event == 0x202):
+                if event in (0x402, 0x403, 0x404, 0x405):
+                    self.owner._notification_event(event)
+                elif event in (0x400, 0x401) or (not self._version4 and event == 0x202):
                     self.owner._dispatch('open')
                 elif event == 0x7B or (not self._version4 and event == 0x205):
                     self._menu(wparam if self._version4 else None)

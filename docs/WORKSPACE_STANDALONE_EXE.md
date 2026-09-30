@@ -1,8 +1,16 @@
 # Company Workspace 단일 EXE
 
-`Company-Workspace-0.13.0.exe`를 원하는 폴더에 두고 더블클릭합니다. EXE ZIP으로 받았다면 먼저 압축을 풉니다. **이미 설치된 Python 3.11 이상이 필요합니다.** EXE는 앱 파일만 포함하며 Python 실행 환경·설치 프로그램을 동봉하거나 다운로드·자동 설치하지 않습니다. 기존 `Company-Workspace.vbs`와 이전 배포 폴더는 자동 변경하거나 삭제하지 않습니다. 새 동작은 새 0.13.0 실행 파일을 사용해야 적용됩니다.
+`Company-Workspace-0.14.0.exe`를 원하는 폴더에 두고 더블클릭합니다. EXE ZIP으로 받았다면 먼저 압축을 풉니다. **이미 설치된 Python 3.11 이상이 필요합니다.** EXE는 앱 파일만 포함하며 Python 실행 환경·설치 프로그램을 동봉하거나 다운로드·자동 설치하지 않습니다. 기존 `Company-Workspace.vbs`와 이전 배포 폴더는 자동 변경하거나 삭제하지 않습니다. 새 동작은 새 0.14.0 실행 파일을 사용해야 적용됩니다.
 
 0.13.0의 창·트레이·후속 요청·예약·파일 끌기 사용법은 [데스크톱 사용 흐름](WORKSPACE_0.13.0_DESKTOP.md)에 정리했습니다. 실제 시험 결과와 확인 범위는 [0.13.0 검증 기록](https://github.com/bongG-moon/workspace_local/blob/main/docs/VALIDATION_0.13.0.md)을 참고하세요. 이 안내만으로 공개 배포 완료를 뜻하지는 않습니다.
+
+## 이전 대화·알림·승인 모드
+
+0.14.0은 **이전 Claude 대화 불러오기**에서 현재 Claude 설정 위치의 세션을 UUID로 찾아 원래 폴더와 함께 이어갑니다. Company Agent 없이 만든 일반 Claude 대화도 대상이며 가져오기만으로 원본 JSONL을 수정하거나 AI를 실행하지 않습니다. 폴더 확인은 별도로 진행하고, 다른 터미널에서 같은 세션의 작업을 마친 뒤 이어가세요.
+
+상단 **알림**에서 완료·확인 요청·오류를 모아 확인하고 **설정 → PC 알림**에서 종류별 트레이 알림을 조절합니다. Windows 설정에 따라 배너가 나타나지 않을 수 있습니다. 지원되는 Windows 11 제목 표시줄은 앱 색과 맞추지만 Windows 10·Edge 자체 제목 표시줄에서는 기존 표시가 남을 수 있습니다.
+
+**승인 → Bypass**는 명시적인 위험 확인과 CLI 적용 응답을 거쳐 현재 앱의 해당 업무에만 적용합니다. Shift+Tab에는 포함하지 않고 개인 기본 설정·회사 정책을 바꾸지 않습니다. 지원 조건과 원본 기록 보존, 알림 및 테스트 범위는 [0.14.0 사용법](WORKSPACE_0.14.0_CONTINUITY.md)을 참고하세요.
 
 ## 기존 Python 확인
 
@@ -60,7 +68,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 `WS-37`·`WS-38` 안내에는 확인한 Python 후보 경로와 실패 상태가 표시됩니다. 저장에 성공하면 기본 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치도 안내합니다. 이 `python-1` 기록은 실제 시작 실패의 증거이며, 로컬 설치·앱 경로가 포함될 수 있으니 공유 전 확인하세요. 인증·프로필·표준 오류 원문은 저장하지 않습니다.
 
 
-시작 오류가 계속되면 파일 탐색기 주소창에 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`을 입력하세요. 실행한 버전의 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 열면 읽기 전용 진단을 실행할 수 있습니다. 0.13.0의 진단 버전은 `ws33-16`, 대상 소스는 `workspace-0.13.0`입니다. EXE에 포함된 도구이므로 별도 VBS 배포본은 필요하지 않습니다. 이 위치가 아직 만들어지지 않았다면 표시된 `EXE-` 오류 코드를 전달하세요. 진단은 PC의 영구 보안 정책이나 Claude 개인 설정을 변경하지 않습니다. [진단 결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요.
+시작 오류가 계속되면 파일 탐색기 주소창에 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`을 입력하세요. 실행한 버전의 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 열면 읽기 전용 진단을 실행할 수 있습니다. 0.14.0의 진단 버전은 `ws33-17`, 대상 소스는 `workspace-0.14.0`입니다. EXE에 포함된 도구이므로 별도 VBS 배포본은 필요하지 않습니다. 이 위치가 아직 만들어지지 않았다면 표시된 `EXE-` 오류 코드를 전달하세요. 진단은 PC의 영구 보안 정책이나 Claude 개인 설정을 변경하지 않습니다. [진단 결과 읽는 법](WORKSPACE_STARTUP_DIAGNOSTIC.md)을 참고하세요.
 
 ## 개발 및 검증
 

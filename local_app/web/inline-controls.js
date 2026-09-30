@@ -34,6 +34,7 @@ globalThis.WorkspaceInlineControls = (() => {
     for (const [kind,button] of Object.entries(buttons)) {
       button.querySelector("strong").textContent = values[kind]; button.title = titles[kind] + ": " + values[kind];
       button.disabled = appClosed || pending || (active && blocked());
+      button.classList.toggle("bypass-active",kind==="permission"&&info.permissionMode==="bypassPermissions");
       button.setAttribute("aria-expanded", String(view?.kind === kind && !panel.hidden));
     }
     if (view && (!same(view) || appClosed || (active && busyStates.has(active.state)))) close();
@@ -92,7 +93,7 @@ globalThis.WorkspaceInlineControls = (() => {
       const can = info.capabilities?.setPermissionMode === true;
       message("선택한 방식은 이 업무에 적용해요. 기존 개인·회사 정책은 바꾸지 않습니다.");
       option(null,"기존 설정 사용",info.permissionModeResetRequiresReconnect ? "다음 요청에서 기존 승인 설정을 다시 불러옵니다." : "원래 승인 방식을 사용합니다.",!info.permissionModeOverride,info.permissionModeResetAvailable !== false && (can || !!info.permissionModeOverride));
-      for (const row of permissionOptions()) option(row.value,row.displayName || row.value,row.description || row.value,
+      for (const row of permissionOptions()) option(row.value,(row.risk === 'high' ? '⚠ ' : '')+(row.displayName || row.value),row.description || row.value,
         permissionOptionValue(info.permissionMode || info.permissionModeOverride) === row.value,can);
       if (!can) message("현재 연결은 승인 모드 변경을 제공하지 않아요. 기존 승인 흐름을 유지합니다.");
     } else {
@@ -185,12 +186,13 @@ globalThis.WorkspaceInlineControls = (() => {
     if (!same(source) || blocked() || pending) return;
     const info = active.connection || {}, supported = new Set(permissionOptions().map(row => row.value));
     const cycle = [...new Set((Array.isArray(info.permissionModeCycle) ? info.permissionModeCycle : []).map(mode=>permissionOptionValue(mode)))]
-      .filter(mode => supported.has(mode));
+      .filter(mode => mode !== 'bypassPermissions' && supported.has(mode));
     const current = permissionOptionValue(info.permissionMode);
-    if (!info.capabilities?.setPermissionMode || cycle.length < 2 || !cycle.includes(current)) {
+    if (!info.capabilities?.setPermissionMode || cycle.length < 2 || (!cycle.includes(current) && current !== 'bypassPermissions')) {
       status("현재 연결에서 승인 모드 순환을 확인하지 못했어요. 선택 목록에서 지원하는 모드를 확인해 주세요.",true,source); return;
     }
-    await apply(cycle[(cycle.indexOf(current) + 1) % cycle.length],source);
+    // Leaving Bypass is safe through the shortcut; entering it always requires the explicit choice.
+    await apply(current === 'bypassPermissions' ? cycle[0] : cycle[(cycle.indexOf(current) + 1) % cycle.length],source);
   }
   async function cyclePermission() {
     const source = {...context(),kind:"permission",cycle:true};

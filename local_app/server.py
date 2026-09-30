@@ -35,7 +35,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.13.0"
+WORKSPACE_VERSION = "0.14.0"
 MANUAL_FILENAME = "Company-Agent-사용자-안내서.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -122,6 +122,10 @@ class LocalApp:
         self._injected_command = command is not None
         self.notifier = AttentionNotifier(enabled=not demo and not self._injected_command)
         self.tray = None
+        self._open_window_callback = None
+        self._navigation = None
+        self._viewed_session = None
+        self._viewed_until = 0
         self.attachment_store = AttachmentStore(state)
         self.error = None
         self.workspace_location_error = None
@@ -150,6 +154,75 @@ class LocalApp:
                 self.error = str(exc)
         self._load()
         self.dispatch = DispatchController(self)
+        from .desktop_notifications import DesktopNotifications
+        self.desktop = DesktopNotifications(state, notify=self._notify_desktop,
+            is_foreground=self._viewing_task, on_open=self.open_task)
+
+    def _notify_desktop(self, payload, on_click):
+        return bool(self.tray and self.tray.notify(title=payload['title'], message=payload['message'], on_click=on_click))
+
+    def _viewing_task(self, sid):
+        return (self._viewed_session == sid and time.monotonic() < self._viewed_until
+                and self.notifier.is_foreground())
+
+    def _publish_notification(self, sid, title, kind, identity):
+        try:
+            self.desktop.publish(sid, title, kind, identity)
+        except (ValueError, OSError):
+            # A desktop delivery problem must not interrupt the CLI reader or
+            # turn a completed request into a transport failure.
+            pass
+
+    def open_task(self, sid):
+        with self.lock:
+            self.get(sid)
+            self._navigation = {'id': secrets.token_hex(16), 'sessionId': sid}
+        if self._open_window_callback:
+            self._open_window_callback()
+
+    def import_sessions(self, session_id=None):
+        if self.demo or not self.command:
+            raise ValueError('기존 Claude Code 연결을 먼저 확인해 주세요.')
+        from .session_import import SessionImporter
+        root = Path(runtime_context(self.command)['configRoot']).resolve()
+        reader = SessionImporter(root)
+        return reader.load(session_id) if session_id else reader.discover()
+
+    def import_session(self, session_id):
+        from .session_import import session_uuid
+        session_id = session_uuid(session_id)
+        record = self.import_sessions(session_id)
+        config_root = str(Path(runtime_context(self.command)['configRoot']).resolve())
+        with self.lock:
+            for item in self.sessions.values():
+                if (item.get('sessionId') == record['sessionId'] and item['workspace'] == record['workspace']
+                        and os.path.normcase(item.get('importedConfigRoot', config_root)) == os.path.normcase(config_root)):
+                    return {'ok': True, 'existing': True, 'session': self.public(item)}
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            if len(self.sessions) >= MAX_SESSIONS:
+                raise ValueError('업무는 최대 500개까지 저장할 수 있습니다.')
+            sid = record['id']
+            if sid in self.sessions:
+                raise ValueError('같은 세션의 업무 기록이 이미 존재합니다. 기존 업무를 확인해 주세요.')
+            item = {key: record[key] for key in ('id', 'sessionId', 'title', 'workspace', 'created', 'updated', 'messages')}
+            workspace_folder(item)
+            item.update(pinned=False, trusted=False, state='idle', seq=0, events=[], requests={},
+                        bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
+                        importedConfigRoot=str(Path(runtime_context(self.command)['configRoot']).resolve()))
+            self.sessions[sid] = item
+            try:
+                self.save(sid)
+            except (OSError, ValueError):
+                self.sessions.pop(sid, None)
+                raise
+            return {'ok': True, 'existing': False, 'session': self.public(item), 'warnings': record.get('warnings', [])}
+
+    def _check_import_context(self, item):
+        if item.get('importedConfigRoot'):
+            current = str(Path(runtime_context(self.command)['configRoot']).resolve()) if self.command else ''
+            if os.path.normcase(current) != os.path.normcase(item['importedConfigRoot']):
+                raise ValueError('이 대화를 가져온 Claude 설정 위치가 현재 연결과 다릅니다. 원래 환경으로 앱을 다시 열어 주세요.')
 
     def _load(self):
         self.history = HistoryStore(self.state)
@@ -169,6 +242,7 @@ class LocalApp:
 
     def public(self, item):
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification") } | {
+            'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
@@ -234,7 +308,9 @@ class LocalApp:
     def attention(self):
         with self.lock:
             return {**attention_snapshot(self.sessions.values()),
-                    'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title}
+                    'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
+                    'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(), 'nativeAvailable': bool(self.tray and self.tray.available)},
+                    'navigation': self._navigation}
 
     def shutdown_status(self):
         with self._lifecycle:
@@ -414,9 +490,11 @@ class LocalApp:
             with self.lock:
                 item['_modelUpdating'] = False
 
-    def set_permission_mode(self, sid, mode):
+    def set_permission_mode(self, sid, mode, *, bypass_confirmed=False):
         if mode is not None and (not isinstance(mode, str) or not mode or len(mode) > 40):
             raise ValueError('승인 모드를 확인해 주세요.')
+        if mode == 'bypassPermissions' and bypass_confirmed is not True:
+            raise ValueError('Bypass는 파일 수정·명령 실행의 승인을 생략합니다. 위험 안내를 확인한 뒤 직접 선택해 주세요.')
         with self.lock:
             item = self.get(sid)
             if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
@@ -425,7 +503,35 @@ class LocalApp:
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
                 raise ValueError('업무 연결이 준비된 뒤 승인 모드를 선택해 주세요.')
             item['_modelUpdating'] = True
+            previous_state = item['state']
         try:
+            if mode == 'bypassPermissions' and not getattr(bridge, 'allow_bypass_permissions', False):
+                if not bridge.model_state().get('bypassPermissions', {}).get('available'):
+                    raise ValueError('현재 Claude 연결은 Bypass 선택을 지원하지 않습니다.')
+                baseline_model = bridge.original_model
+                baseline_permission = bridge.original_permission_mode
+                baseline_efforts = dict(bridge._effort_baselines)
+                with self.lock:
+                    item['bridge'] = None
+                if bridge.close() is not True:
+                    with self.lock:
+                        item['bridge'] = bridge
+                    raise ValueError('이전 연결의 종료를 확인하지 못했습니다. 현재 요청을 다시 보내지 않았습니다.')
+                with self.lock:
+                    root = workspace_folder(item)
+                    self._check_import_context(item)
+                    item['_allowBypass'] = True
+                    bridge = ClaudeSession(self.command, self.info, root,
+                        lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
+                        choice_helper=lambda: self.companion.client.choice_helper(root), allow_bypass_permissions=True)
+                    item['bridge'] = bridge
+                    item['_needsControlRestore'] = bool(item.get('_sessionControls'))
+                bridge.prepare()
+                with bridge.lock:
+                    bridge.original_model = baseline_model
+                    bridge.original_permission_mode = baseline_permission
+                    bridge._effort_baselines.update(baseline_efforts)
+                self._restore_controls(item, bridge)
             result = bridge.set_permission_mode(mode)
             with self.lock:
                 item.setdefault('connection', {}).update(result)
@@ -441,11 +547,14 @@ class LocalApp:
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
+                if item['state'] not in {'error', 'running', 'question', 'approval'}:
+                    item['state'] = previous_state
 
     def connect(self, sid):
         """Explicitly prepare one trusted task's CLI; never send a prompt."""
         with self.lock:
             item = self.get(sid)
+            self._check_import_context(item)
             if not item.get('trusted'):
                 raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
             root = workspace_folder(item)
@@ -466,7 +575,8 @@ class LocalApp:
                     raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
                 bridge = ClaudeSession(self.command, self.info, root,
                     lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
-                    choice_helper=lambda: self.companion.client.choice_helper(root))
+                    choice_helper=lambda: self.companion.client.choice_helper(root),
+                    **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                 item['bridge'] = bridge
                 item['modelOverride'] = None
                 item['permissionModeOverride'] = None
@@ -639,8 +749,17 @@ class LocalApp:
             if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed'} or terminal:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
-                self.notifier.update(attention_snapshot(self.sessions.values()))
+                pending = attention_snapshot(self.sessions.values())
+                self.notifier.update(pending)
                 self.update_tray()
+                if hasattr(self, 'desktop'):
+                    for notice in pending['items']:
+                        self._publish_notification(notice['sessionId'], notice['title'], 'attention', notice['id'])
+                    if (kind in {'result', 'error'} and item.get('lastRunId') and not item.get('_modelUpdating') and not item.get('_connecting')
+                            and not (kind == 'result' and any(row['sessionId'] == sid for row in pending['items']))):
+                        notification_kind = 'error' if kind == 'error' or (data.get('verification') or {}).get('state') == 'needs-review' else 'completed'
+                        self._publish_notification(sid, item['title'], notification_kind,
+                                             kind + ':' + item['lastRunId'])
             if hasattr(self, 'dispatch'):
                 self.dispatch.observe(sid, kind, data)
 
@@ -698,6 +817,7 @@ class LocalApp:
             if not item.get("trusted") and trusted is not True:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
             workspace_folder(item)
+            self._check_import_context(item)
             if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating') or item.get('_connecting'):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
             paths = self.validate_attachments(attachments)
@@ -713,7 +833,8 @@ class LocalApp:
                         raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
                                            lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get("sessionId"),
-                                           choice_helper=lambda: self.companion.client.choice_helper(Path(item['workspace'])))
+                                           choice_helper=lambda: self.companion.client.choice_helper(Path(item['workspace'])),
+                                           **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                     item["bridge"] = bridge
                     item['modelOverride'] = None
                     item.pop('connection', None)  # no stale init evidence during reconnect
@@ -832,6 +953,8 @@ class LocalApp:
         if hasattr(self, 'dispatch'):
             self.dispatch.stop()
         self.notifier.close()
+        if hasattr(self, 'desktop'):
+            self.desktop.close()
         # Close admission immediately, including when another quit owns cleanup.
         with self._lifecycle:
             if self._shutdown_state in {'running', 'failed'}:
@@ -918,6 +1041,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.bootstrap())
             if route.path == '/api/attention':
                 return self.reply(app.attention())
+            if route.path == '/api/claude-sessions':
+                return self.reply(app.import_sessions(query.get('sessionId', [None])[0]))
             if route.path == '/api/dispatch':
                 return self.reply(app.dispatch.snapshot(sid))
             if route.path == "/api/events":
@@ -1014,6 +1139,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
+                      "/desktop.js": ("desktop.js", "text/javascript; charset=utf-8"),
+                      "/session-import.js": ("session-import.js", "text/javascript; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
@@ -1112,6 +1239,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.hide_window())
         if route == '/api/dispatch':
             return self.reply(app.dispatch.action(sid, data))
+        if route == '/api/claude-sessions/import':
+            return self.reply(app.import_session(data.get('sessionId')))
+        if route == '/api/notifications':
+            action = data.get('action')
+            if action == 'configure':
+                app.desktop.configure(data.get('preferences', {}))
+            elif action == 'read':
+                app.desktop.mark_read(data.get('notificationId'))
+            elif action == 'open':
+                app.desktop.open(data.get('notificationId'))
+            elif action == 'view':
+                with app.lock:
+                    if sid:
+                        app.get(sid)
+                    app._viewed_session = sid if data.get('visible') is True else None
+                    app._viewed_until = time.monotonic() + 6
+            else:
+                raise ValueError('알림 동작을 확인해 주세요.')
+            return self.reply({'ok': True, 'desktop': app.desktop.snapshot()})
         if route == '/api/attention/bind':
             # Never accept a client-provided HWND, PID, title, or auth token as
             # native window identity. bind() examines the current OS window.
@@ -1161,7 +1307,7 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/permission-mode':
             if 'mode' not in data:
                 raise ValueError('승인 모드 또는 기존 설정 복원을 선택해 주세요.')
-            return self.reply(app.set_permission_mode(sid, data['mode']))
+            return self.reply(app.set_permission_mode(sid, data['mode'], bypass_confirmed=data.get('bypassConfirmed') is True))
         elif route == '/api/choice':
             return self.reply(app.answer_choice(sid, data.get('choiceId'), option_id=data.get('optionId'), text=data.get('text')))
         elif route == "/api/stop":
@@ -1175,6 +1321,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(result)
         elif route == "/api/native":
             item = app.get(sid)
+            app._check_import_context(item)
             if item.get("bridge") and getattr(item['bridge'], 'cleanup_complete', False) is not True:
                 raise ValueError("같은 대화의 동시 실행을 막기 위해 먼저 연결을 중지해 주세요.")
             if not item.get("trusted") or not app.command or os.name != "nt" or app.demo:
@@ -1226,6 +1373,7 @@ def main():
                 return False
             server.shutdown()
             return True
+        app._open_window_callback = reopen
         app.tray = WorkspaceTray(str(args.state.resolve()), reopen, quit_from_tray, ASSETS / 'app-icon.ico')
         app.tray.start()
     if not args.no_browser:
