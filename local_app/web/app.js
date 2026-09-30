@@ -170,7 +170,17 @@ function renderSessions(){
   const query=$("session-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
   $("sessions").replaceChildren();$("home-recents").replaceChildren();
   if(boot.sessionOrder?.warning)$("sessions").append(el("p",boot.sessionOrder.warning,"sidebar-empty"));
-  for(const item of items){const b=el("button",null,"session"+(item.id===active?.id?" active":""));b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}`);if(item.id===active?.id)b.setAttribute("aria-current","page");b.append(el("span",item.pinned?"고정":"업무","session-kicker"),el("strong",item.title,"session-title"));const meta=el("span",null,"session-meta");meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));const waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;if(waiting)b.append(el("span",`응답 대기 ${waiting}`,"session-attention"));b.append(meta);b.title=item.workspace;b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("sessions").append(sessionRow(item,b,"sessions"));}
+  for(const item of items){
+    const b=el("button",null,"session"+(item.id===active?.id?" active":"")),waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;
+    b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}${waiting?` · 응답 대기 ${waiting}`:""}`);
+    if(item.id===active?.id)b.setAttribute("aria-current","page");
+    b.append(el("strong",item.title,"session-title"));
+    if(waiting){const badge=el("span",String(waiting),"session-attention");badge.setAttribute("aria-hidden","true");b.append(badge);}
+    else if(busyStates.has(item.state)||item.state==="error"){const dot=el("span",null,"session-state-dot");dot.dataset.state=item.state;dot.setAttribute("aria-hidden","true");b.append(dot);}
+    b.title=`${item.title}\n${stateNames[item.state]||"대기"} · ${when(item.updated||item.created)}\n${item.workspace}`;
+    b.onclick=async()=>{try{const selected=await selectSession(item.id);if(selected&&globalThis.WorkspaceLayout?.snapshot().sidebarOverlay)globalThis.WorkspaceLayout.closeSidebar();}catch(e){error(e.message);}};
+    $("sessions").append(sessionRow(item,b,"sessions"));
+  }
   if(!items.length)$("sessions").append(el("p",query?"찾는 업무가 없어요":"시작한 업무가 여기에 모여요","sidebar-empty"));
   for(const item of items.slice(0,4)){const b=el("button",null,"recent-card");b.type="button";b.append(el("span",item.pinned?"고정한 업무":"이어서 하기","recent-kicker"),el("strong",item.title),el("span",`${basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",stateNames[item.state]||"대기","recent-status"));b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(sessionRow(item,b,"home-recents"));}
   if(!items.length)$("home-recents").append(el("p",query?"검색어를 바꾸어 다시 찾아보세요.":"첫 업무를 시작하면, 다음에 이곳에서 이어갈 수 있어요.","empty-recents"));
@@ -432,7 +442,7 @@ $("choose-folder").onclick=$("workspace-button").onclick=$("workspace-summary").
 document.querySelectorAll(".task-card,[data-prompt].prompt-shortcut").forEach(button=>button.onclick=()=>{$("prompt").value=button.dataset.prompt;$("prompt").focus();});
 $("stop").onclick=async()=>{try{await api("/api/stop",{id:active.id});toast("중지 요청을 보냈어요. 완료된 파일 변경은 유지됩니다.");refreshResults();}catch(e){error(e.message);}};
 $("refresh-files").onclick=()=>{refreshFiles();refreshResults();};$("files-tab").onclick=()=>setPanel("sources");$("results-tab").onclick=()=>setPanel("results");
-$("materials-button").onclick=()=>document.querySelector(".inspector").classList.add("open");$("close-materials").onclick=()=>document.querySelector(".inspector").classList.remove("open");
+// Panel visibility is owned by layout.js, including compact viewports.
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
 $("help").onclick=()=>showDialog("help-dialog");$("close-help").onclick=()=>$("help-dialog").close();
 function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");}
@@ -547,5 +557,5 @@ $("quit").onclick=async()=>{
   }finally{quitting=false;}
 };
 async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.error)error(boot.error);}catch(e){error(e.message);$("send").disabled=true;}}
-document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));document.addEventListener("keydown",e=>{if(e.key==="Escape")document.querySelector(".inspector").classList.remove("open");});
+document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

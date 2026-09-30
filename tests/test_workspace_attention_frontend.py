@@ -36,7 +36,9 @@ class WorkspaceAttentionFrontendTests(unittest.TestCase):
           api=async()=>attention([pending]);WorkspaceAttention.start();await flush();
           assert.equal($('attention-count').textContent,'1');assert.equal($('attention-open').hidden,false);
           assert.equal(active.id,'A');assert.equal(sessions[1].state,'running');
-          assert.match(flatText($('sessions')),/응답 대기 1/);assert.equal(document.title,'Company Workspace [instance-test]');
+          const waitingRow=$('sessions').children.find(row=>row.dataset.sessionId==='B');
+          assert.equal(waitingRow.querySelector('.session-attention').textContent,'1');
+          assert.match(waitingRow.querySelector('.session').attributes['aria-label'],/응답 대기 1/);assert.equal(document.title,'Company Workspace [instance-test]');
           $('attention-open').onclick();assert.equal($('attention-dialog').open,true);
           let selected;selectSession=async id=>{selected=id;return true;};await $('attention-items').children[0].onclick();
           assert.equal(selected,'B');assert.equal($('attention-dialog').open,false);

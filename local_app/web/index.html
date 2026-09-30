@@ -26,6 +26,7 @@
   <script src="/capabilities.js" defer></script>
   <script src="/productivity.js" defer></script>
   <script src="/palette.js" defer></script>
+  <script src="/layout.js" defer></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -50,27 +51,30 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-box" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4v11l-9 4-9-4ZM3 7l9 4 9-4M12 11v11"/></symbol>
     <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v9M6 5a9 9 0 1 0 12 0"/></symbol>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-inspector" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 5v5h5M3 10a9 9 0 1 1 1 7M12 7v5l3 2"/></symbol>
   </defs></svg>
   <div class="app">
-    <aside class="sidebar" aria-label="업무 탐색">
-      <a class="brand" href="/" aria-label="Company Workspace 홈"><span class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></span><span class="brand-type">Workspace<small>for Claude Code</small></span></a>
-      <button id="new-chat" class="new-chat" aria-label="새 업무"><svg class="icon"><use href="#i-plus"/></svg><span>새 업무</span></button>
-      <button id="import-open" class="text-button import-open" type="button">이전 Claude 대화 불러오기</button>
-      <button id="palette-open" class="palette-launcher" type="button"><svg class="icon"><use href="#i-search"/></svg><span>빠른 실행</span><kbd>Ctrl K</kbd></button>
-      <nav class="primary-nav" aria-label="주 메뉴"><button id="home-button" class="nav-button active" aria-label="내 업무 공간" aria-current="page"><svg class="icon"><use href="#i-home"/></svg><span>내 업무 공간</span></button><button id="capabilities-open" class="nav-button" aria-label="스킬·도구" aria-current="false" title="스킬·도구"><svg class="icon"><use href="#i-box"/></svg><span>스킬·도구</span></button></nav>
+    <aside id="sidebar-panel" class="sidebar" aria-label="업무 탐색">
+      <div class="sidebar-head"><a class="brand" href="/" aria-label="Company Workspace 홈" title="업무 홈"><span class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></span><span class="brand-type">Workspace<small>for Claude Code</small></span></a><button id="sidebar-toggle" class="icon-button" type="button" aria-label="업무 목록 접기" title="업무 목록 접기" aria-expanded="true" aria-controls="sidebar-panel"><svg class="icon"><use href="#i-sidebar"/></svg></button></div>
+      <button id="new-chat" class="new-chat" aria-label="새 업무" title="새 업무"><svg class="icon"><use href="#i-plus"/></svg><span>새 업무</span></button>
+      <button id="import-open" class="nav-button import-open" type="button" aria-label="이전 Claude 대화 불러오기" title="이전 Claude 대화 불러오기"><svg class="icon"><use href="#i-history"/></svg><span>이전 대화</span></button>
+      <button id="palette-open" class="palette-launcher" type="button" aria-label="빠른 실행" title="빠른 실행 · Ctrl+K"><svg class="icon"><use href="#i-search"/></svg><span>빠른 실행</span><kbd>Ctrl K</kbd></button>
+      <nav class="primary-nav" aria-label="주 메뉴"><button id="home-button" class="nav-button active" aria-label="내 업무 공간" title="내 업무 공간" aria-current="page"><svg class="icon"><use href="#i-home"/></svg><span>내 업무 공간</span></button><button id="capabilities-open" class="nav-button" aria-label="스킬·도구" aria-current="false" title="스킬·도구"><svg class="icon"><use href="#i-box"/></svg><span>스킬·도구</span></button></nav>
       <label class="session-search"><svg class="icon"><use href="#i-search"/></svg><input id="session-search" type="search" placeholder="업무 찾기" aria-label="업무 검색" autocomplete="off"><span class="search-hint" aria-hidden="true">찾기</span></label>
       <div class="sidebar-label">최근 업무<span class="small-dot"></span></div>
       <nav id="sessions" class="session-list" aria-label="최근 업무"><p class="sidebar-empty">진행한 업무가 이곳에 모여요.</p></nav>
       <div class="sidebar-footer">
-        <button id="settings-open" class="nav-button" aria-label="설정"><svg class="icon"><use href="#i-settings"/></svg><span>설정</span></button>
-        <button id="help" class="nav-button"><svg class="icon"><use href="#i-help"/></svg><span>사용 도움말</span></button>
+        <button id="settings-open" class="nav-button" aria-label="설정" title="설정"><svg class="icon"><use href="#i-settings"/></svg><span>설정</span></button>
+        <button id="help" class="nav-button" aria-label="사용 도움말" title="사용 도움말"><svg class="icon"><use href="#i-help"/></svg><span>사용 도움말</span></button>
       </div>
     </aside>
 
     <main>
       <header class="topbar">
         <div class="topbar-context"><div class="title-row"><h1 id="chat-title">내 업무 공간</h1><button id="task-title" class="icon-button" aria-label="업무 이름 변경" title="업무 이름 변경" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button id="task-pin" class="icon-button" aria-label="업무 고정" title="업무 고정" aria-pressed="false" hidden><svg class="icon"><use href="#i-pin"/></svg></button><button id="branch-open" class="text-button branch-launch" type="button" hidden>대화 분기 ↗</button></div><button id="workspace-summary" class="workspace-summary">자료와 대화, 결과를 한곳에서</button></div>
-        <div class="top-actions"><button id="desktop-open" class="attention-button" type="button">알림 <span id="desktop-count" hidden>0</span></button><button id="attention-open" class="attention-button" type="button" hidden>응답 대기 <span id="attention-count">0</span></button><span id="connection-badge" class="pill">연결 확인 중</span><button id="materials-button" class="icon-button materials-button" aria-label="자료와 결과 열기" title="자료와 결과"><svg class="icon"><use href="#i-folder"/></svg></button><button id="workspace-button" class="icon-button" aria-label="업무 저장 위치 선택" title="업무 저장 위치"><svg class="icon"><use href="#i-folder"/></svg></button></div>
+        <div class="top-actions"><button id="desktop-open" class="attention-button" type="button">알림 <span id="desktop-count" hidden>0</span></button><button id="attention-open" class="attention-button" type="button" hidden>응답 대기 <span id="attention-count">0</span></button><span id="connection-badge" class="pill">연결 확인 중</span><button id="materials-button" class="icon-button materials-button" aria-label="자료와 결과 접기" title="자료와 결과 접기" aria-expanded="true" aria-controls="inspector-panel"><svg class="icon"><use href="#i-inspector"/></svg></button><button id="workspace-button" class="icon-button" aria-label="업무 저장 위치 선택" title="업무 저장 위치"><svg class="icon"><use href="#i-folder"/></svg></button></div>
       </header>
       <div id="demo-banner" class="demo-banner" hidden><svg class="icon"><use href="#i-spark"/></svg><span>화면 체험 중 · 가상의 업무로 둘러보세요. 실제 AI 실행이나 자료 읽기는 하지 않습니다.</span></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
@@ -108,7 +112,7 @@
       </div>
       <div class="composer-wrap">
         <button id="latest-response" type="button" class="latest-response" hidden>최신 응답으로 이동 ↓</button>
-        <div id="status" class="status" role="status"><span class="status-dot"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="elapsed"></span><button id="stop" class="text-button" hidden>작업 중지</button></div>
+        <div class="composer-heading"><div id="status" class="status" role="status"><span class="status-dot"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="elapsed"></span><button id="stop" class="text-button" hidden>작업 중지</button></div><div class="workflow-toolbar" role="group" aria-label="후속 업무"><button id="workflow-open" type="button" class="workflow-button">이어 할 일</button><button id="schedule-open" type="button" class="workflow-button">실행 예약</button></div></div>
         <form id="composer" class="composer">
           <section id="composer-suggestions" class="composer-suggestions" aria-label="입력 도움 목록" hidden><div class="composer-suggestion-heading"><strong id="composer-suggestion-title"></strong><span id="composer-suggestion-context"></span></div><div id="composer-suggestion-list" role="listbox" aria-label="스킬과 파일 추천"></div><p id="composer-suggestion-note" role="status"></p><div class="composer-suggestion-actions"><button id="composer-connect" class="quiet-button" type="button" hidden>Claude 명령 불러오기</button><button id="composer-native" class="text-button" type="button" hidden>원본 Claude Code 열기 ↗</button></div></section>
           <div id="attachments" class="attachments"></div>
@@ -132,13 +136,11 @@
           <div id="followup-actions" class="followup-actions" hidden><p id="followup-note"></p><div><button id="followup-now" type="button" class="quiet-button">지금 반영</button><button id="followup-queue" type="button" class="send-button">끝나고 이어서</button></div></div>
           <p id="composer-control-status" class="composer-control-status" role="status" hidden></p>
         </form>
-        <div class="workflow-toolbar"><button id="workflow-open" type="button" class="text-button">이어 할 일</button><button id="schedule-open" type="button" class="text-button">실행 예약</button><span>파일을 입력창으로 끌어 추가할 수 있습니다.</span></div>
-        <p class="composer-note">선택한 자료는 기존 Claude Code 연결로 처리돼요. 중요한 결과는 직접 확인해 주세요.</p>
       </div>
     </main>
 
-    <aside class="inspector" aria-label="자료와 결과">
-      <div class="inspector-head"><span class="eyebrow">ON YOUR DESK</span><button id="close-materials" class="icon-button materials-button" aria-label="자료와 결과 닫기"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <aside id="inspector-panel" class="inspector" aria-label="자료와 결과">
+      <div class="inspector-head"><span class="inspector-heading">자료와 결과</span><button id="close-materials" class="icon-button materials-button" aria-label="자료와 결과 접기" title="자료와 결과 접기"><svg class="icon"><use href="#i-inspector"/></svg></button></div>
       <div class="inspector-tabs" role="tablist" aria-label="자료와 결과 선택"><button id="files-tab" class="inspector-tab" role="tab" aria-selected="true" aria-controls="source-panel"><svg class="icon"><use href="#i-folder"/></svg>자료<span id="file-count">0</span></button><button id="results-tab" class="inspector-tab" role="tab" aria-selected="false" aria-controls="results-panel"><svg class="icon"><use href="#i-box"/></svg>이번 결과<span id="result-count">0</span></button></div>
       <section id="source-panel" class="inspector-panel" role="tabpanel" aria-labelledby="files-tab">
         <div class="folder-card"><span class="folder-card-icon"><svg class="icon"><use href="#i-folder"/></svg></span><span class="eyebrow">업무 저장 위치</span><strong id="folder-name">아직 시작한 업무가 없어요</strong><p id="folder-path">새 업무를 만들면 자료와 결과를 모아둘 공간이 준비돼요.</p><button id="choose-folder" class="text-button">저장 위치 선택 <span aria-hidden="true">↗</span></button></div>
@@ -148,6 +150,7 @@
       <section id="results-panel" class="inspector-panel" role="tabpanel" aria-labelledby="results-tab" hidden><div class="result-intro"><h2>이번 요청의 결과</h2><p>이번 요청 전후에 확인한 파일 변경을<br>여기서 바로 확인하세요.</p></div><button id="changes-open" class="quiet-button changes-launch" type="button">파일 변경 비교</button><div id="results-list" class="results-list"></div><div id="empty-results" class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-box"/></svg></div><strong>결과가 놓일 자리예요</strong><p>업무가 끝나면 새로 생기거나<br>달라진 파일을 모아 보여드릴게요.</p></div></section>
       <div class="inspector-foot"><div class="inspector-tip"><span class="tip-icon"><svg class="icon"><use href="#i-spark"/></svg></span><p>다음 작업도 자연스럽게<br><strong>“이 내용을 조금 더 다듬어줘”</strong></p></div><details class="details"><summary>진행 기록 보기</summary><ol id="activity"></ol><p class="muted">실행 중 확인한 활동이 표시돼요.</p></details></div>
     </aside>
+    <button id="layout-backdrop" class="layout-backdrop" type="button" aria-label="펼친 패널 닫기" tabindex="-1" hidden></button>
   </div>
 
   <dialog id="folder-dialog" aria-label="새 업무 시작" class="folder-dialog"><form method="dialog" id="folder-form"><div class="dialog-head"><span class="dialog-symbol"><svg class="icon"><use href="#i-folder"/></svg></span><button value="cancel" class="icon-button" aria-label="닫기" formnovalidate><svg class="icon"><use href="#i-close"/></svg></button></div><h2 id="folder-title">새 업무를 시작해 볼까요?</h2><p id="folder-description">이름을 정하면, 대화와 결과를 함께 모아둘게요.</p><label for="task-name">업무 이름 <span class="label-optional">선택</span></label><input id="task-name" maxlength="100" placeholder="예: 9월 실적 보고서" autocomplete="off"><fieldset class="folder-options"><legend>자료와 결과를 둘 곳</legend><label class="folder-option"><input type="radio" id="folder-mode-new" name="folder-mode" value="new" checked><span><strong>새 업무 공간 만들기</strong><small>알맞은 폴더를 자동으로 준비해요.</small></span><span class="recommend-tag">추천</span></label><label class="folder-option"><input type="radio" id="folder-mode-existing" name="folder-mode" value="existing"><span><strong>기존 폴더 사용하기</strong><small>이미 자료를 모아둔 폴더가 있다면</small></span></label></fieldset><div id="folder-new-fields" class="folder-location"><svg class="icon"><use href="#i-folder"/></svg><div><span>새 업무 기본 저장 위치</span><p id="new-workspace-location">바탕화면의 Company Workspace</p><small id="managed-location-note"></small></div><button type="button" id="choose-managed" class="text-button">위치 변경</button></div><div id="folder-existing-fields" hidden><label for="folder-input">기존 업무 폴더</label><div class="input-row"><input id="folder-input" placeholder="찾아보기에서 폴더를 선택하세요"><button type="button" id="browse-folder" class="quiet-button">찾아보기</button></div></div><label class="trust"><input id="trust" type="checkbox" required><span>이 업무 위치를 신뢰하고, 연결된 업무 도구와 자동 처리 설정의 실행을 허용합니다.<small>선택한 폴더의 기존 Claude 설정·후크·MCP가 적용돼요. 회사에서 AI 처리를 허용한 자료만 사용해 주세요.</small></span></label><div class="dialog-actions"><button value="cancel" class="quiet-button" formnovalidate>취소</button><button id="confirm-folder" value="ok" class="send-button"><span id="confirm-folder-label">업무 시작</span><svg class="icon"><use href="#i-arrow"/></svg></button></div></form></dialog>

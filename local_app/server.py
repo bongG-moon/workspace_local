@@ -39,7 +39,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.18.1"
+WORKSPACE_VERSION = "0.19.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -1279,6 +1279,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
                       "/productivity.js": ("productivity.js", "text/javascript; charset=utf-8"),
                       "/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
+                      "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
                       "/productivity.css": ("productivity.css", "text/css; charset=utf-8"),
                       "/review.css": ("review.css", "text/css; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),

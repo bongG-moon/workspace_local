@@ -11,6 +11,26 @@ Element.prototype.removeAttribute=function(name){delete this.attributes[name];};
 context.flush=()=>new Promise(resolve=>setImmediate(resolve));
 context.flatText=function flatText(node){return [node.textContent||'',...(node.children||[]).map(flatText)].join(' ');};
 vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'palette.js'});
+context.installLayout=(width=640)=>{
+  const listeners=new Map(),originalClosest=Element.prototype.closest;
+  Element.prototype.getAttribute=function(name){return this.attributes[name]??null;};
+  Element.prototype.addEventListener=function(name,fn){this.events??=new Map();this.events.set(name,fn);};
+  Element.prototype.contains=function(node){for(let item=node;item;item=item.parent)if(item===this)return true;return false;};
+  Element.prototype.querySelectorAll=function(){return [...nodes.values()].filter(node=>node!==this&&this.contains(node));};
+  Element.prototype.closest=function(selector){if(selector==='[hidden],[inert]'){for(let node=this;node;node=node.parent)if(node.hidden||node.inert)return node;return null;}return originalClosest.call(this,selector);};
+  Element.prototype.getClientRects=function(){return this.closest('[hidden],[inert]')?[]:[{}];};
+  Element.prototype.focus=function(){context.document.activeElement=this;for(const fn of listeners.get('focusin')||[])fn({target:this});};
+  context.document.querySelector=selector=>selector==='dialog[open]'?[...nodes.values()].find(node=>node.open):get(selector);
+  context.document.addEventListener=(name,fn)=>{if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn);};
+  context.layoutWrites=[];context.localStorage={getItem:()=>null,setItem:(_,value)=>context.layoutWrites.push(value)};
+  context.matchMedia=query=>({matches:width<=Number(query.match(/\d+/)[0]),addEventListener(){}});
+  get('main').append(get('prompt'),get('materials-button'));
+  get('sidebar-panel').append(get('sidebar-toggle'),get('palette-open'));
+  get('inspector-panel').append(get('close-materials'));
+  get('composer-controls-panel').hidden=get('composer-suggestions').hidden=true;
+  for(const node of nodes.values()){node.inert=false;node.tabIndex=0;}
+  vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'layout.js'});
+};
 const scenario=process.argv[3];
 """)
 SETUP = r"""
@@ -27,7 +47,7 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
     def run_case(self, script):
         result = subprocess.run(
             [NODE, '-', str(ROOT/'local_app/web/app.js'), SETUP+script,
-             str(ROOT/'local_app/web/palette.js')], input=HARNESS, text=True,
+             str(ROOT/'local_app/web/palette.js'),str(ROOT/'local_app/web/layout.js')], input=HARNESS, text=True,
             encoding='utf-8', capture_output=True, timeout=10,
         )
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
@@ -108,6 +128,36 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           WorkspacePalette.open();$('palette-search').value='지난';$('palette-search').oninput();await find('task:B').onclick();
           assert.equal(message,'선택한 업무를 찾지 못했어요.');assert.equal(document.activeElement,$('prompt'));
           assert.equal($('palette-dialog').open,false);
+        })()""")
+
+    def test_ctrl_k_closes_narrow_overlay_before_model_controls_and_restores_visible_focus(self):
+        self.run_case(r"""(async()=>{
+          installLayout();WorkspaceLayout.openInspector();assert.equal(document.activeElement,$('close-materials'));
+          assert.equal(document.querySelector('main').inert,true);
+          WorkspacePalette.keydown(keyEvent('k',{ctrlKey:true}));
+          assert.equal(WorkspaceLayout.snapshot().inspectorOverlay,false);assert.equal(document.querySelector('main').inert,false);
+          WorkspacePalette.keydown(keyEvent('Escape'));assert.equal(document.activeElement,$('materials-button'));
+          for(const kind of ['model','effort']){
+            WorkspaceLayout.toggleSidebar();assert.equal(WorkspaceLayout.snapshot().sidebarOverlay,true);
+            let opened;globalThis.WorkspaceInlineControls={close(){},open:value=>{opened=value;assert.equal(document.querySelector('main').inert,false);}};
+            WorkspacePalette.keydown(keyEvent('k',{ctrlKey:true}));await find(kind).onclick();
+            assert.equal(opened,kind);assert.equal(document.activeElement,$('prompt'));assert.equal(WorkspaceLayout.snapshot().sidebarOverlay,false);
+          }
+          assert.equal(layoutWrites.length,0);assert.equal(calls.length,0);
+        })()""")
+
+    def test_palette_dispatch_clears_late_overlay_and_preserves_desktop_panel_preferences(self):
+        self.run_case(r"""(async()=>{
+          installLayout();WorkspacePalette.open();WorkspaceLayout.openInspector();
+          let opened=false;globalThis.WorkspaceCapabilities={open(){opened=true;assert.equal(document.querySelector('main').inert,false);}};
+          await find('skills').onclick();assert.equal(opened,true);assert.equal(WorkspaceLayout.snapshot().inspectorOverlay,false);
+          assert.equal(layoutWrites.length,0);
+        })()""")
+        self.run_case(r"""(async()=>{
+          installLayout(1440);WorkspaceLayout.toggleSidebar();WorkspaceLayout.closeInspector();
+          const before=JSON.stringify(WorkspaceLayout.snapshot().preferences),writes=layoutWrites.length;
+          WorkspacePalette.open();await find('effort').onclick();
+          assert.equal(JSON.stringify(WorkspaceLayout.snapshot().preferences),before);assert.equal(layoutWrites.length,writes);
         })()""")
 
 

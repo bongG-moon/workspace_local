@@ -26,7 +26,7 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/fonts/NotoSansKR-Variable.woff", "local_app/web/fonts/OFL.txt", "local_app/web/fonts/SOURCE.json",
             "local_app/web/index.html", "local_app/web/app.css", "local_app/web/app.js", "local_app/web/capabilities.js",
             "local_app/web/composer.js", "local_app/web/inline-controls.js", "local_app/web/attention.js",
-            "local_app/web/desktop.js", "local_app/web/session-import.js", "local_app/web/rendering.js", "local_app/web/attachments.js", "local_app/web/workflow.js", "local_app/web/productivity.js", "local_app/web/palette.js", "local_app/web/productivity.css", "local_app/web/review.css",
+            "local_app/web/desktop.js", "local_app/web/session-import.js", "local_app/web/rendering.js", "local_app/web/attachments.js", "local_app/web/workflow.js", "local_app/web/productivity.js", "local_app/web/palette.js", "local_app/web/layout.js", "local_app/web/productivity.css", "local_app/web/review.css",
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
 seen = set()

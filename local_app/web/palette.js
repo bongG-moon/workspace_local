@@ -16,7 +16,7 @@ globalThis.WorkspacePalette = (() => {
     {id:"inbox",label:"통합 알림함",detail:"완료·응답 대기·확인할 일",keywords:"notification inbox 승인 알림",glyph:"◉",run:()=>globalThis.WorkspaceDesktop?.open()},
     {id:"tasks",label:"전체 업무 보기",detail:"업무 이름이나 저장 위치로 찾기",keywords:"tasks search 검색",glyph:"≡",run:()=>activate("tasks-open")},
     {id:"skills",label:"스킬·도구 보기",detail:"현재 Claude의 공통·폴더별 기능",keywords:"skills tools mcp 명령",glyph:"◇",run:()=>globalThis.WorkspaceCapabilities?.open()},
-    {id:"results",label:"이번 결과 보기",detail:"현재 업무에서 만든 결과물",keywords:"results files 파일",glyph:"▤",enabled:hasTask,run:()=>{taskView();setPanel("results");document.querySelector(".inspector")?.classList.add("open");}},
+    {id:"results",label:"이번 결과 보기",detail:"현재 업무에서 만든 결과물",keywords:"results files 파일",glyph:"▤",enabled:hasTask,run:()=>{taskView();setPanel("results");globalThis.WorkspaceLayout?.openInspector();}},
     {id:"changes",label:"파일 변경 비교",detail:"현재 업무의 요청 전후 변경 내용",keywords:"diff changes 비교 수정",glyph:"±",enabled:()=>hasTask()&&typeof globalThis.WorkspaceProductivityActions?.openChanges==="function",run:()=>globalThis.WorkspaceProductivityActions?.openChanges()},
     {id:"branch",label:"대화 분기 만들기",detail:"현재 대화를 이어갈 별도 업무",keywords:"branch fork 분기",glyph:"⑂",enabled:()=>hasTask()&&typeof globalThis.WorkspaceProductivityActions?.openBranch==="function"&&(globalThis.WorkspaceProductivityActions?.canBranch?.()??true),run:()=>globalThis.WorkspaceProductivityActions?.openBranch()},
     {id:"model",label:"모델 바꾸기",detail:"현재 연결이 제공하는 모델",keywords:"model Claude 모델",glyph:"◈",enabled:controlsReady,run:()=>control("model")},
@@ -50,7 +50,8 @@ globalThis.WorkspacePalette = (() => {
     // A queued keyboard/click event cannot apply an action to a newly selected task.
     if(row.sessionContext!==undefined&&row.sessionContext!==active?.id){refresh();return;}
     if(row.enabled&&!row.enabled()){refresh();return;}
-    const focus=returnFocus;running=true;close(false);
+    const focus=returnFocus;running=true;
+    globalThis.WorkspaceLayout?.dismissOverlays?.({focus:false});close(false);
     try{await row.run();}
     catch(error){toast(error.message||"선택한 기능을 열지 못했어요.");restoreFocus(focus);}
     finally{running=false;}
@@ -87,6 +88,9 @@ globalThis.WorkspacePalette = (() => {
     if(dialog.open){close();return true;}
     if(modalStack.some(item=>item.open&&item!==dialog))return false;
     globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();
+    // A palette command may open controls in the main area. Dismiss temporary
+    // panels first, and keep a visible return target if the palette is canceled.
+    globalThis.WorkspaceLayout?.dismissOverlays?.();
     returnFocus=document.activeElement;input.value="";composing=false;renderKey="";
     showDialog("palette-dialog");refresh();input.focus();return true;
   }

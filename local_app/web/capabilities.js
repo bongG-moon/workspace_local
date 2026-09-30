@@ -358,7 +358,7 @@ globalThis.WorkspaceCapabilities = (() => {
     }
   }
   function open() {
-    opened = true; app().classList.add("catalog-open");
+    opened = true; app().classList.add("catalog-open");globalThis.WorkspaceLayout?.refresh();
     globalThis.WorkspaceSessionImport?.render();
     $("capabilities-view").hidden = false;
     $("capabilities-open").setAttribute("aria-current", "page");
@@ -373,7 +373,7 @@ globalThis.WorkspaceCapabilities = (() => {
     opened = false; generation++; loading = false;
     if (controller) controller.abort();
     clearTimeout(refreshTimer);
-    app().classList.remove("catalog-open");
+    app().classList.remove("catalog-open");globalThis.WorkspaceLayout?.refresh();
     $("capabilities-view").hidden = true;
     $("capabilities-open").setAttribute("aria-current", "false");
     taskHeader();

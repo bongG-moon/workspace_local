@@ -22,7 +22,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('bundle', type=Path)
 args = parser.parse_args()
 bundle = args.bundle.resolve(strict=True)
-trial = Path(tempfile.mkdtemp(prefix='workspace-0.18.1-extracted-', dir=ROOT / 'build'))
+trial = Path(tempfile.mkdtemp(prefix='workspace-0.19.0-extracted-', dir=ROOT / 'build'))
 with zipfile.ZipFile(bundle) as archive:
     for member in archive.infolist():
         name = member.filename.replace('\\', '/')
@@ -71,7 +71,7 @@ with log_path.open('wb') as log:
         origin = address.scheme + '://' + address.netloc
         token = parse_qs(address.fragment)['token'][0]
         boot = request('/api/bootstrap')
-        assert boot['workspaceVersion'] == '0.18.1' and boot['demo'] is True
+        assert boot['workspaceVersion'] == '0.19.0' and boot['demo'] is True
         assert Path(boot['appRoot']).resolve() == payload.resolve()
         assert boot['sessions'] == []
         checks.append('fresh extracted entry point, version and empty isolated state')
@@ -117,6 +117,6 @@ with log_path.open('wb') as log:
 report = {'success': True, 'bundle': bundle.name,
           'sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(),
           'extractedRoot': str(payload), 'checks': checks}
-report_path = ROOT / 'build/qa-workspace-0.18.1-bundle.json'
+report_path = ROOT / 'build/qa-workspace-0.19.0-bundle.json'
 report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 print(json.dumps(report, ensure_ascii=False, indent=2))
