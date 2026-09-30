@@ -20,7 +20,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['start', 'prepare', 'prompt', 'status', 'finish'])
-parser.add_argument('--version', choices=['0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.4', '0.12.5', '0.12.6', '0.12.7', '0.12.8', '0.12.9', '0.12.10', '0.12.11', '0.12.12'], default='0.12.12')
+parser.add_argument('--version', choices=['0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.4', '0.12.5', '0.12.6', '0.12.7', '0.12.8', '0.12.9', '0.12.10', '0.12.11', '0.12.12', '0.13.0'], default='0.13.0')
 parser.add_argument('--run', default='', help='Optional distinct validation run name')
 args = parser.parse_args()
 if args.run and not re.fullmatch(r'[a-z0-9-]{1,30}', args.run):

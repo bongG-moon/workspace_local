@@ -57,6 +57,9 @@ def row(item):
         clean = {'role':message['role'], 'text':message['text'][:100000]}
         if message.get('role') == 'user' and isinstance(message.get('files'),list):
             clean['files'] = [value[:4096] for value in message['files'][:12] if isinstance(value,str)]
+        if (message.get('role') == 'user' and isinstance(message.get('requestId'), str)
+                and len(message['requestId']) == 32 and all(c in '0123456789abcdef' for c in message['requestId'])):
+            clean['requestId'] = message['requestId']
         messages.append(clean)
     def size(message):
         return len(message['text']) + sum(len(value) for value in message.get('files', []))

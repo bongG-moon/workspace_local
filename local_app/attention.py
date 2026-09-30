@@ -98,6 +98,8 @@ class WindowsAttention:
         signature(self.user, 'GetForegroundWindow', [], wt.HWND)
         signature(self.user, 'IsWindow', [wt.HWND], wt.BOOL)
         signature(self.user, 'IsWindowVisible', [wt.HWND], wt.BOOL)
+        signature(self.user, 'ShowWindow', [wt.HWND, ctypes.c_int], wt.BOOL)
+        signature(self.user, 'SetForegroundWindow', [wt.HWND], wt.BOOL)
         signature(self.user, 'GetAncestor', [wt.HWND, wt.UINT], wt.HWND)
         signature(self.user, 'GetWindowTextLengthW', [wt.HWND], ctypes.c_int)
         signature(self.user, 'GetWindowTextW', [wt.HWND, wt.LPWSTR, ctypes.c_int], ctypes.c_int)
@@ -164,8 +166,8 @@ class WindowsAttention:
                 self.kernel.CloseHandle(token)
             self.kernel.CloseHandle(handle)
 
-    def _window(self, hwnd, title):
-        if (not hwnd or not self.user.IsWindow(hwnd) or not self.user.IsWindowVisible(hwnd)
+    def _window(self, hwnd, title, *, allow_hidden=False):
+        if (not hwnd or not self.user.IsWindow(hwnd) or (not allow_hidden and not self.user.IsWindowVisible(hwnd))
                 or self.user.GetAncestor(hwnd, 2) != hwnd):  # GA_ROOT
             return None
         length = self.user.GetWindowTextLengthW(hwnd)
@@ -189,14 +191,26 @@ class WindowsAttention:
         return self._window(self.user.GetForegroundWindow(), title)
 
     def flash(self, binding, title, *, stop=False):
-        if self._window(binding.hwnd, title) != binding:
+        if self._window(binding.hwnd, title, allow_hidden=True) != binding:
             return 'invalid'
+        if not self.user.IsWindowVisible(binding.hwnd):
+            return 'hidden'
         foreground = self.user.GetForegroundWindow() == binding.hwnd
         flags = 0 if stop or foreground else 2  # FLASHW_STOP / FLASHW_TRAY
         info = self.FlashInfo(ctypes.sizeof(self.FlashInfo), binding.hwnd, flags, 0 if flags == 0 else 3, 0)
         # The BOOL reports the previous active state, NOT whether it succeeded.
         self.user.FlashWindowEx(ctypes.byref(info))
         return 'stopped' if stop else 'foreground' if foreground else 'requested'
+
+    def visibility(self, binding, title, *, show):
+        # Only an authenticated UI click or the owned tray's menu calls this.
+        # Recheck identity on every use, including a recycled native HWND.
+        if self._window(binding.hwnd, title, allow_hidden=True) != binding:
+            return False
+        self.user.ShowWindow(binding.hwnd, 9 if show else 0)
+        if show:
+            self.user.SetForegroundWindow(binding.hwnd)
+        return bool(self.user.IsWindowVisible(binding.hwnd)) == show
 
 
 _AUTO = object()
@@ -266,6 +280,15 @@ class AttentionNotifier:
             elif previous and not pending:
                 self._flash(stop=True)
             return self.native_state
+
+    def set_visible(self, show):
+        with self._lock:
+            if self._closed or self._binding is None or self._native in (None, _AUTO):
+                return False
+            try:
+                return self._native.visibility(self._binding, self.window_title, show=show) is True
+            except (OSError, AttributeError, ValueError):
+                return False
 
     def close(self):
         with self._lock:

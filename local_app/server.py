@@ -28,12 +28,14 @@ from .picker_channel import private_picker_directory
 from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
 from .windows_process import powershell_path
 from .attention import AttentionNotifier, snapshot as attention_snapshot
+from .attachments import AttachmentStore, MAX_UPLOAD
+from .app_dispatch import DispatchController
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.12.12"
+WORKSPACE_VERSION = "0.13.0"
 MANUAL_FILENAME = "Company-Agent-사용자-안내서.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -119,6 +121,8 @@ class LocalApp:
         self.command, self.info, self.demo = command, info or {}, demo
         self._injected_command = command is not None
         self.notifier = AttentionNotifier(enabled=not demo and not self._injected_command)
+        self.tray = None
+        self.attachment_store = AttachmentStore(state)
         self.error = None
         self.workspace_location_error = None
         self.managed_workspace_root = None
@@ -145,6 +149,7 @@ class LocalApp:
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.error = str(exc)
         self._load()
+        self.dispatch = DispatchController(self)
 
     def _load(self):
         self.history = HistoryStore(self.state)
@@ -205,7 +210,26 @@ class LocalApp:
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
                     "workspaceLocationError": self.workspace_location_error,
                     "windowTitle": self.notifier.window_title,
+                    "window": self.window_state(),
                     **self.shutdown_status()}
+
+    def window_state(self):
+        available = self.tray is not None and self.tray.available is True
+        return {'traySupported': available, 'hideSupported': available and self.notifier.native_state['supported'],
+                'closeBehavior': 'background' if available else 'browser'}
+
+    def hide_window(self):
+        if not self.window_state()['hideSupported']:
+            return {'hidden': False, 'supported': False, 'message': '트레이 연결을 확인하지 못했습니다. 현재 창에서 계속 사용해 주세요.'}
+        self.notifier.bind()
+        hidden = self.notifier.set_visible(False)
+        return {'hidden': hidden, 'supported': True,
+                'message': '트레이에서 계속 실행합니다.' if hidden else '앱 창을 확인하지 못했습니다. 창의 X를 눌러 닫아도 업무는 계속됩니다.'}
+
+    def update_tray(self):
+        if self.tray is not None:
+            self.tray.update(running=sum(item['state'] in {'starting', 'running'} for item in self.sessions.values()),
+                             waiting=attention_snapshot(self.sessions.values())['total'])
 
     def attention(self):
         with self.lock:
@@ -348,7 +372,7 @@ class LocalApp:
             raise ValueError('사용할 모델 이름을 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -370,7 +394,7 @@ class LocalApp:
             raise ValueError('추론 수준을 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무와 확인 요청이 끝난 뒤 추론 수준을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -395,7 +419,7 @@ class LocalApp:
             raise ValueError('승인 모드를 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무와 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -616,6 +640,9 @@ class LocalApp:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
                 self.notifier.update(attention_snapshot(self.sessions.values()))
+                self.update_tray()
+            if hasattr(self, 'dispatch'):
+                self.dispatch.observe(sid, kind, data)
 
     @staticmethod
     def _validate_choice_claim(item, claim):
@@ -625,13 +652,35 @@ class LocalApp:
         if claim is not None and (pending != claim or item.get('choice', {}).get('id') != claim[0]):
             raise ValueError('이미 답변했거나 만료된 선택 질문입니다.')
 
-    def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None):
+    @staticmethod
+    def validate_attachments(attachments):
+        if not isinstance(attachments, list) or len(attachments) > 12:
+            raise ValueError('파일은 한 번에 12개까지 선택할 수 있습니다.')
+        paths = []
+        for value in attachments:
+            if not isinstance(value, str) or not value:
+                raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
+            candidate = Path(value).expanduser()
+            if not candidate.is_absolute() or '..' in candidate.parts:
+                raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
+            path = workspace_path(candidate).resolve(strict=True)
+            if not path.is_file() or path.suffix.lower() not in REFERENCE_FILE_TYPES:
+                raise ValueError('문서·이미지 또는 소스 파일을 선택해 주세요.')
+            paths.append(str(path))
+        return list(dict.fromkeys(paths))
+
+    def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None, _dispatch_claim=None):
         if not isinstance(text, str) or not text.strip() or len(text) > 32000:
             raise ValueError("요청은 1~32,000자로 입력해 주세요.")
         if not isinstance(attachments, list) or len(attachments) > 12:
             raise ValueError("파일은 한 번에 12개까지 선택할 수 있습니다.")
         with self.lock:
             current = self.get(sid)
+            if current.get('_dispatchClaim') != _dispatch_claim:
+                raise ValueError('대기 요청을 전송하고 있습니다. 잠시 후 다시 보내 주세요.')
+            if sid in self.dispatch.steering or (getattr(current.get('bridge'), 'stopping', False) is True
+                    and getattr(current.get('bridge'), 'cleanup_complete', False) is not True):
+                raise ValueError('현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.')
             self._validate_choice_claim(current, _choice_claim)
             old_bridge = current.get('bridge')
             restore = (not self.demo and bool(current.get('_sessionControls'))
@@ -640,21 +689,18 @@ class LocalApp:
             self.connect(sid)
         with self.lock:
             item = self.get(sid)
+            if item.get('_dispatchClaim') != _dispatch_claim:
+                raise ValueError('대기 요청을 전송하고 있습니다. 잠시 후 다시 보내 주세요.')
+            if sid in self.dispatch.steering or (getattr(item.get('bridge'), 'stopping', False) is True
+                    and getattr(item.get('bridge'), 'cleanup_complete', False) is not True):
+                raise ValueError('현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.')
             self._validate_choice_claim(item, _choice_claim)
             if not item.get("trusted") and trusted is not True:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
             workspace_folder(item)
             if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating') or item.get('_connecting'):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
-            paths = []
-            for value in attachments:
-                candidate = Path(value).expanduser()
-                if not candidate.is_absolute() or '..' in candidate.parts:
-                    raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
-                path = workspace_path(candidate).resolve(strict=True)
-                if not path.is_file() or path.suffix.lower() not in REFERENCE_FILE_TYPES:
-                    raise ValueError("문서·이미지 또는 소스 파일을 선택해 주세요.")
-                paths.append(str(path))
+            paths = self.validate_attachments(attachments)
             if self.error:
                 raise ValueError(self.error)
             if not self.demo:
@@ -680,6 +726,8 @@ class LocalApp:
             if item["title"] == "새 업무":
                 item["title"] = text.strip().splitlines()[0][:35]
             item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
+            if _dispatch_claim is not None:
+                item['messages'][-1]['requestId'] = _dispatch_claim
             item["state"] = "starting"
             item['updated'] = time.time()
             item['lastRunId'] = uuid.uuid4().hex
@@ -687,6 +735,8 @@ class LocalApp:
             item['artifactObservation'] = item['_artifactSnapshot'].public()
             begin_turn(item)
             self.save(sid)
+            if _dispatch_claim is not None:
+                self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
             # No copied files, skill hardcode, auxiliary inference or rewritten user intent.
             prompt = text.strip()
             if paths:
@@ -717,6 +767,7 @@ class LocalApp:
                 bridge.respond(rid, allow, answers, permission_choice_id=permission_choice_id)
 
     def stop(self, sid):
+        self.dispatch.manual_stop(sid)
         bridge = self.get(sid).get("bridge")
         if bridge:
             bridge.interrupt()
@@ -778,6 +829,8 @@ class LocalApp:
             self.dialog_lock.release()
 
     def close(self):
+        if hasattr(self, 'dispatch'):
+            self.dispatch.stop()
         self.notifier.close()
         # Close admission immediately, including when another quit owns cleanup.
         with self._lifecycle:
@@ -865,6 +918,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.bootstrap())
             if route.path == '/api/attention':
                 return self.reply(app.attention())
+            if route.path == '/api/dispatch':
+                return self.reply(app.dispatch.snapshot(sid))
             if route.path == "/api/events":
                 after = int(query.get("after", ["0"])[0])
                 deadline = time.monotonic() + 20
@@ -959,6 +1014,9 @@ class Handler(BaseHTTPRequestHandler):
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
+                      "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
+                      "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
+                      "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                       "/companion.js": ("companion.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),
@@ -975,6 +1033,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"error": str(exc)}, 400)
 
     def do_POST(self):
+        if urlsplit(self.path).path == '/api/attachments/upload':
+            return self.upload_attachment()
         if not self.valid_request() or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             # Closing a socket with an unread POST body can reset the response
             # on Windows. Discard only a small, declared body; never parse it or
@@ -1016,6 +1076,27 @@ class Handler(BaseHTTPRequestHandler):
                 payload['nextAction'] = exc.next_action
             return self.reply(payload, 409 if isinstance(exc, AppClosing) else 400)
 
+    def upload_attachment(self):
+        self.close_connection = True
+        if (not self.valid_request() or self.headers.get('Content-Type', '').split(';')[0] != 'application/octet-stream'
+                or self.headers.get('Transfer-Encoding')):
+            return self.reply({'error': '허용되지 않은 파일 전송입니다.'}, 403)
+        try:
+            size = int(self.headers.get('Content-Length', '-1'))
+            if not 0 <= size <= MAX_UPLOAD:
+                return self.reply({'error': '끌어서 첨부하는 파일은 50 MB까지 지원합니다. 큰 파일은 경로로 추가해 주세요.'}, 413)
+            self.connection.settimeout(30)
+            query = parse_qs(urlsplit(self.path).query)
+            sid = query.get('id', [''])[0]
+            name = unquote(self.headers.get('X-File-Name', ''), errors='strict')
+            app = self.server.app
+            with app.operation():
+                with app.lock:
+                    app.get(sid)
+                return self.reply(app.attachment_store.save(sid, name, self.rfile, size))
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            return self.reply({'error': str(exc)}, 409 if isinstance(exc, AppClosing) else 400)
+
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
@@ -1027,6 +1108,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.reconnect(sid))
         if route == '/api/connect':
             return self.reply(app.connect(sid))
+        if route == '/api/window/hide':
+            return self.reply(app.hide_window())
+        if route == '/api/dispatch':
+            return self.reply(app.dispatch.action(sid, data))
         if route == '/api/attention/bind':
             # Never accept a client-provided HWND, PID, title, or auth token as
             # native window identity. bind() examines the current OS window.
@@ -1130,6 +1215,19 @@ def main():
     url = server.origin + "/#token=" + app.token
     runtime = args.state / "runtime.json"
     runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
+    app.dispatch.start()
+    if not args.no_browser and not args.demo:
+        from .tray import WorkspaceTray
+        def reopen():
+            if not app.notifier.set_visible(True):
+                open_window(url)
+        def quit_from_tray():
+            if not app.close():
+                return False
+            server.shutdown()
+            return True
+        app.tray = WorkspaceTray(str(args.state.resolve()), reopen, quit_from_tray, ASSETS / 'app-icon.ico')
+        app.tray.start()
     if not args.no_browser:
         open_window(url)
     try:
@@ -1138,6 +1236,8 @@ def main():
         pass
     finally:
         closed = app.close()
+        if app.tray is not None:
+            app.tray.stop()
         server.server_close()
         try:
             if closed and json.loads(runtime.read_text(encoding="utf-8")).get("pid") == os.getpid():
