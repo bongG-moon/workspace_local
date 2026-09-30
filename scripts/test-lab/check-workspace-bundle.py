@@ -30,6 +30,7 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
 seen = set()
+expected.update({'local_app/ui_health.py','local_app/web/startup-health.js','local_app/web/startup-health.css'})
 expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','deploy/WebView2.lock.json',
                  'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',
                  'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})

@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 from local_app.native_window import DesktopHost, DesktopError
 from local_app.attention import AttentionNotifier, WindowBinding, WindowsAttention
+from local_app.ui_health import UiHealthLog
 
 FAKE = r'''
 import json, os, sys
@@ -75,6 +76,78 @@ class NativeWindowTests(unittest.TestCase):
         self.host.close()
         self.assertEqual(0, self.processes[0].poll())
         with self.assertRaises(DesktopError): self.host.open()
+
+    def test_diagnostics_correlate_existing_host_without_breaking_pipe(self):
+        events = []
+        self.host.on_event = events.append
+        self.host.open()
+        self.host.open()
+        self.wait_for(lambda: any(row['type'] == 'activated' for row in events))
+        ready = next(row for row in events if row['type'] == 'ready')
+        activated = next(row for row in events if row['type'] == 'activated')
+        self.assertEqual(ready['pid'], activated['pid'])
+        self.assertEqual(123, activated['hwnd'])
+        self.assertNotIn(self.url, json.dumps(events))
+        self.host.on_event = failed_callback = Mock(side_effect=OSError('diagnostics unavailable'))
+        self.assertEqual('activated', self.host.open()['action'])
+        self.wait_for(lambda: failed_callback.called)
+        self.assertEqual(1, len(self.launches))
+
+    def test_blocked_diagnostic_storage_does_not_delay_ack_notifications_or_close(self):
+        entered, release = threading.Event(), threading.Event()
+        replace = os.replace
+        def blocked_replace(*args):
+            entered.set()
+            release.wait(10)
+            return replace(*args)
+        self.host.on_event = UiHealthLog(self.root, '0.21.1').native
+        try:
+            with patch('local_app.ui_health.os.replace', side_effect=blocked_replace):
+                self.assertEqual('opened', self.host.open()['action'])
+                self.assertTrue(entered.wait(2))
+                self.assertEqual('activated', self.host.open()['action'])
+                clicked = threading.Event()
+                self.assertTrue(self.notify(on_click=clicked.set))
+                self.emit('notification_opened')
+                self.assertTrue(clicked.wait(2))
+                before_close = time.monotonic()
+                self.host.close()
+                self.assertLess(time.monotonic() - before_close, 2)
+                self.assertFalse(release.is_set())
+                self.assertIsNotNone(self.processes[0].poll())
+                self.assertFalse(self.host.notification_available)
+        finally:
+            release.set()
+            if self.host._diagnostic_worker is not None:
+                self.host._diagnostic_worker.join(2)
+        self.assertFalse(self.host._diagnostic_worker.is_alive())
+
+    def test_slow_diagnostics_use_one_bounded_worker_and_drop_pending_on_close(self):
+        entered, release = threading.Event(), threading.Event()
+        delivered = []
+        def blocked_callback(row):
+            delivered.append(row)
+            entered.set()
+            release.wait(10)
+        self.host.on_event = blocked_callback
+        try:
+            self.host.open()
+            self.assertTrue(entered.wait(2))
+            worker = self.host._diagnostic_worker
+            for _ in range(1000):
+                self.host._diagnostic(self.host.process, {'type': 'loaded'})
+            self.assertIs(worker, self.host._diagnostic_worker)
+            self.assertEqual(64, len(self.host._diagnostic_rows))
+            self.assertEqual(1, len(delivered))
+            self.assertEqual('activated', self.host.open()['action'])
+            self.host.close()
+            self.assertEqual(0, len(self.host._diagnostic_rows))
+        finally:
+            release.set()
+            if self.host._diagnostic_worker is not None:
+                self.host._diagnostic_worker.join(2)
+        self.assertFalse(self.host._diagnostic_worker.is_alive())
+        self.assertEqual(1, len(delivered))
 
     def test_missing_runtime_reports_ws46_and_does_not_open_a_browser(self):
         self.mode = 'missing'

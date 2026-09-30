@@ -125,6 +125,37 @@ internal sealed class DesktopWindow : Form
             uri.Host == home.Host && uri.Port == home.Port && uri.UserInfo == "";
     }
 
+    internal static bool TryManualTarget(Uri home, string value, bool userInitiated, out Uri target)
+    {
+        target = null;
+        if (!userInitiated || home == null || !home.IsAbsoluteUri ||
+            home.Scheme != "http" || home.Host != "127.0.0.1" || home.IsDefaultPort || home.UserInfo != "") return false;
+        // This single bundled, public document is the only loopback exception.
+        // Reconstruct it without the app's authentication fragment. Exact text
+        // matching also rejects queries, fragments and URI-normalized traversal.
+        string canonical = home.GetLeftPart(UriPartial.Authority) + "/manual/guide";
+        if (!String.Equals(value, canonical, StringComparison.Ordinal)) return false;
+        target = new Uri(canonical, UriKind.Absolute);
+        return true;
+    }
+
+    private void OpenManual(Uri target)
+    {
+        // Leave the WebView2 callback before opening a program or an owned
+        // failure dialog. The existing app window and its navigation stay put.
+        BeginInvoke(new Action(delegate
+        {
+            if (exiting || IsDisposed) return;
+            try { Process.Start(new ProcessStartInfo(target.AbsoluteUri) { UseShellExecute = true }); }
+            catch
+            {
+                DesktopProgram.Emit(new { type = "manual_link_failed" });
+                MessageBox.Show(this, "사용자 안내서를 열지 못했습니다. 기본 브라우저가 실행되는지 확인한 뒤 다시 눌러 주세요.",
+                    "Workspace 사용자 안내서", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }));
+    }
+
     private async Task InitializeView()
     {
         if (initializing || exiting) return;
@@ -135,6 +166,7 @@ internal sealed class DesktopWindow : Form
             var options = new CoreWebView2EnvironmentOptions();
             options.ExclusiveUserDataFolderAccess = true;
             var environment = await CoreWebView2Environment.CreateAsync(null, profile, options);
+            runtimeVersion = environment.BrowserVersionString;
             if (exiting) return;
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor, AllowExternalDrop = true };
@@ -162,6 +194,11 @@ internal sealed class DesktopWindow : Form
             {
                 e.Handled = true;
                 Uri target;
+                if (TryManualTarget(home, e.Uri, e.IsUserInitiated, out target))
+                {
+                    OpenManual(target);
+                    return;
+                }
                 if (e.IsUserInitiated && Uri.TryCreate(e.Uri, UriKind.Absolute, out target) &&
                     (target.Scheme == "https" || target.Scheme == "http") && target.UserInfo == "" &&
                     !target.IsLoopback && !SameOrigin(e.Uri))
@@ -180,10 +217,10 @@ internal sealed class DesktopWindow : Form
                     e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", "");
             };
             core.DownloadStarting += Download;
-            core.ProcessFailed += delegate { ShowRecovery(); };
+            core.ProcessFailed += delegate { DesktopProgram.Emit(new { type = "process_failed" }); ShowRecovery(); };
             core.NavigationCompleted += delegate(object sender, CoreWebView2NavigationCompletedEventArgs e)
             {
-                if (!e.IsSuccess) { ShowRecovery(); return; }
+                if (!e.IsSuccess) { DesktopProgram.Emit(new { type = "navigation_failed", code = (int)e.WebErrorStatus }); ShowRecovery(); return; }
                 if (recovery != null) { Controls.Remove(recovery); recovery.Dispose(); recovery = null; }
                 view.BringToFront();
                 DesktopProgram.Emit(new { type = "loaded" });

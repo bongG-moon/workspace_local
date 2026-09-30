@@ -32,21 +32,23 @@ globalThis.WorkspaceRichContent = (() => {
     setTimeout(()=>{if(control.isConnected)control.textContent=original;},1800);
   }
   function appendInline(parent, source, options={}, depth=0) {
-    const text=String(source||"");if(depth>2){parent.append(make("span",text));return;}
+    const text=String(source||"");if(depth>2){parent.append(make("span",text));return text;}
     const pattern=/(`+)([^\n]*?)\1|\*\*([^*\n]+)\*\*|(!?)\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]+)\)/g;
-    let offset=0;
+    // Project copy text during the same parse that creates the displayed nodes.
+    // Do not render a second hidden tree: images can own observers and requests.
+    const plain=[];let offset=0;
     for(const match of text.matchAll(pattern)) {
-      parent.append(document.createTextNode(text.slice(offset,match.index)));offset=match.index+match[0].length;
-      if(match[1]){parent.append(make("code",match[2],"rich-inline-code"));continue;}
-      if(match[3]){const strong=make("strong");appendInline(strong,match[3],options,depth+1);parent.append(strong);continue;}
+      const prefix=text.slice(offset,match.index);parent.append(document.createTextNode(prefix));plain.push(prefix);offset=match.index+match[0].length;
+      if(match[1]){parent.append(make("code",match[2],"rich-inline-code"));plain.push(match[2]);continue;}
+      if(match[3]){const strong=make("strong");plain.push(appendInline(strong,match[3],options,depth+1));parent.append(strong);continue;}
       const destination=match[6].replace(/^<|>$/g,""), remote=safeUrl(destination);
       if(match[4]) {
-        if(remote){const link=make("a",match[5]||"외부 이미지 보기","rich-external-image");link.href=remote;link.target="_blank";link.rel="noopener noreferrer";link.title="클릭하면 외부 브라우저에서 엽니다";parent.append(link);}
-        else {const path=localPath(destination,options.workspace);if(path)image(parent,path,match[5],options);else parent.append(document.createTextNode(match[0]));}
-      } else if(remote) {const link=make("a",match[5]||destination);link.href=remote;link.target="_blank";link.rel="noopener noreferrer";parent.append(link);}
-      else {const path=localPath(destination,options.workspace);if(path&&options.sessionId){const link=button(match[5]||nameOf(path),path);link.className="rich-file-link";link.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{});parent.append(link);}else parent.append(document.createTextNode(match[0]));}
+        if(remote){const label=match[5]||"외부 이미지 보기",link=make("a",label,"rich-external-image");link.href=remote;link.target="_blank";link.rel="noopener noreferrer";link.title="클릭하면 외부 브라우저에서 엽니다";parent.append(link);plain.push(label);}
+        else {const path=localPath(destination,options.workspace);if(path)plain.push(image(parent,path,match[5],options));else {parent.append(document.createTextNode(match[0]));plain.push(match[0]);}}
+      } else if(remote) {const label=match[5]||destination,link=make("a",label);link.href=remote;link.target="_blank";link.rel="noopener noreferrer";parent.append(link);plain.push(label);}
+      else {const path=localPath(destination,options.workspace);if(path&&options.sessionId){const label=match[5]||nameOf(path),link=button(label,path);link.className="rich-file-link";link.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{});parent.append(link);plain.push(label);}else {parent.append(document.createTextNode(match[0]));plain.push(match[0]);}}
     }
-    parent.append(document.createTextNode(text.slice(offset)));
+    const suffix=text.slice(offset);parent.append(document.createTextNode(suffix));plain.push(suffix);return plain.join("");
   }
   const KEYWORDS = new Set(("as async await break case catch class const continue def del elif else except export extends false finally for from function if import in instanceof interface let new None null of pass raise return select SELECT from FROM where WHERE join JOIN on ON group GROUP by BY order ORDER insert INSERT into INTO update UPDATE set SET delete DELETE create CREATE table TABLE try true True False type typeof var void while with yield and or not print echo then fi do done param Write-Output").split(" "));
   function syntax(parent, text, language, budget={remaining:2000}) {
@@ -96,12 +98,13 @@ globalThis.WorkspaceRichContent = (() => {
     header.append(make("span",data.caption||`표 · ${rows.length}행${truncated?" 미리보기":""}`,"rich-language"),copyButton);
     // TSV keeps embedded separators/newlines inside quoted cells for spreadsheet paste.
     const tsvCell=value=>/[\t\r\n"]/.test(value)?'"'+value.replace(/"/g,'""')+'"':value;
-    copyButton.onclick=()=>copy([columns,...rows].map(row=>row.map(tsvCell).join("\t")).join("\n"),copyButton);
+    const copyColumns=[],copyRows=[];
+    copyButton.onclick=()=>copy([copyColumns,...copyRows].map(row=>row.map(tsvCell).join("\t")).join("\n"),copyButton);
     const scroll=make("div",null,"rich-table-scroll"), grid=make("table"), thead=make("thead"), head=make("tr"), tbody=make("tbody");
     scroll.tabIndex=0;scroll.setAttribute("role","region");scroll.setAttribute("aria-label",data.caption||"표. 가로로 스크롤할 수 있습니다");
-    for(const label of columns){const th=make("th");th.setAttribute("scope","col");if(options.markdown)appendInline(th,label,options);else th.textContent=label;head.append(th);}
+    for(const label of columns){const th=make("th");th.setAttribute("scope","col");if(options.markdown)copyColumns.push(appendInline(th,label,options));else {th.textContent=label;copyColumns.push(label);}head.append(th);}
     thead.append(head);grid.append(thead);
-    for(const row of rows){const tr=make("tr");for(const value of row){const td=make("td");if(options.markdown)appendInline(td,value,options);else td.textContent=value;tr.append(td);}tbody.append(tr);}
+    for(const row of rows){const tr=make("tr"),plainRow=[];for(const value of row){const td=make("td");if(options.markdown)plainRow.push(appendInline(td,value,options));else {td.textContent=value;plainRow.push(value);}tr.append(td);}copyRows.push(plainRow);tbody.append(tr);}
     grid.append(tbody);scroll.append(grid);card.append(header,scroll);
     if(truncated)card.append(make("p",`최대 ${LIMITS.rows}행 · ${LIMITS.columns}열까지 표시합니다. 복사는 표시된 범위에 적용됩니다.`,"rich-limit"));
     parent.append(card);return card;
@@ -137,11 +140,13 @@ globalThis.WorkspaceRichContent = (() => {
     } catch (_) {if(current(record)){record.failed=true;record.status.textContent="파일 열어 보기";}}
   }
   function image(parent,path,alt,options) {
-    if(!options.sessionId||images.length>=LIMITS.records){fileChip(parent,path,options);return;}
+    if(!options.sessionId||images.length>=LIMITS.records){fileChip(parent,path,options);return nameOf(path);}
     const node=button("",`이미지 확대: ${alt||nameOf(path)}`);node.className="rich-image";const media=make("span",null,"rich-image-media"),label=make("span",null,"rich-image-label"),status=make("small","미리보기 준비 중");
     label.append(make("span",alt||nameOf(path)),status);node.append(media,label);node.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{status.textContent="파일을 열 수 없습니다";});parent.append(node);
     const record={node,path,alt,options,label,media,status,epoch:generation,seenConnected:node.isConnected,visible:!globalThis.IntersectionObserver,loaded:false,pending:false,failed:false,img:null};images.push(record);ensureObserver();
     if(observer)observer.observe(node);else setTimeout(()=>enqueue(record),0);
+    // Status text changes as the image loads; table copy uses its stable label.
+    return alt||nameOf(path);
   }
   function fileChip(parent,path,options) {const chip=button(nameOf(path),path);chip.className="rich-file-chip";chip.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{chip.title="파일을 열 수 없습니다";});parent.append(chip);}
   function files(parent,paths,options={}) {

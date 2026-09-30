@@ -1,13 +1,15 @@
 "use strict";
 
 globalThis.WorkspaceWorkflow = (() => {
-  let snapshot = null, readGeneration = 0, controller = null, editor = null;
+  let snapshot = null, readGeneration = 0, controller = null, editor = null, trustReturn = null;
   const attempts = new Map(), mutations = new Map();
   const current = context => context?.id === active?.id && context.generation === selectionGeneration && !appClosed;
   const capture = () => ({id:active?.id,generation:selectionGeneration});
   const busy = () => busyStates.has(active?.state);
   const pending = () => (snapshot?.queue || []).filter(item => ["queued","needs_review","dispatching"].includes(item.state));
   const locked = () => mutations.has(active?.id);
+  const pausedByUser = item => typeof item?.pausedByUser === "boolean" ? item.pausedByUser
+    : item?.enabled === false && !(item.kind === "once" && item.nextRunAt == null && ["queued","submitted","done","missed","queue_full","needs_review","previous_pending"].includes(item.lastRun?.status || item.lastStatus));
   const dateLabel = value => value ? new Date(value*1000).toLocaleString("ko-KR") : "미정";
   const weekdayNames = ["월","화","수","목","금","토","일"];
   const scheduleLabel = item => item.kind === "once" ? dateLabel(item.runAt)
@@ -57,11 +59,11 @@ globalThis.WorkspaceWorkflow = (() => {
     $("schedule-list").replaceChildren();$("schedule-empty").hidden = schedules.length > 0;
     schedules.forEach(item => {
       const row=el("article",null,"workflow-row"),actions=el("div",null,"workflow-row-actions");
-      row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
+      row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
       row.append(el("small",item.nextRunAt?`다음 실행: ${dateLabel(item.nextRunAt)}`:"다음 실행 없음","workflow-files"));
       if (item.lastRun?.dueAt || item.lastRun?.status) row.append(el("small",`최근 실행: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
       if (item.lastError) row.append(el("p",item.lastError,"workflow-warning"));
-      for (const [label,fn] of [["수정",()=>openEditor("schedule",item)],[item.enabled ? "일시 정지" : "예약 재개",()=>mutate({action:item.enabled?"schedule_pause":"schedule_resume",requestId:item.id},context)],["삭제",()=>mutate({action:"schedule_cancel",requestId:item.id},context)]]) {
+      for (const [label,fn] of [["수정",()=>openEditor("schedule",item)],[item.enabled ? "일시 정지" : "예약 재개",()=>item.enabled?mutate({action:"schedule_pause",requestId:item.id},context):requestResume({action:"schedule_resume",requestId:item.id},context)],["삭제",()=>mutate({action:"schedule_cancel",requestId:item.id},context)]]) {
         const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||(label==="예약 재개"&&!item.nextRunAt);button.onclick=()=>{if(current(context))fn();};actions.append(button);
       }
       row.append(actions);$("schedule-list").append(row);
@@ -86,6 +88,22 @@ globalThis.WorkspaceWorkflow = (() => {
     try {const value=await api("/api/dispatch",payload);if(attempt)attempts.delete(attempt.fingerprint);apply(value,context);return value;}
     catch(err){if(current(context)){toast(err.message);$("workflow-message").textContent=err.message;}return null;}
     finally {if(mutations.get(context.id)===context)mutations.delete(context.id);render();setStatus(active?.state||"idle");}
+  }
+  async function requestResume(body={action:"resume"},context=capture()) {
+    if(!context.id||!current(context)||locked()||!["resume","schedule_resume"].includes(body.action))return null;
+    if(!active.trusted){
+      trustReturn=null;chooseFolder(true);$("folder-form").dataset.afterTrust="workflow";
+      trustReturn={...context,folderGeneration:folderChoiceGeneration,body:{...body}};
+      return null;
+    }
+    return mutate(body,context);
+  }
+  async function resumeAfterTrust(confirmed) {
+    const pending=trustReturn;
+    if(!pending||!confirmed||pending.id!==confirmed.id||pending.generation!==confirmed.generation||pending.folderGeneration!==confirmed.folderGeneration)return null;
+    trustReturn=null;
+    if(!current(pending)||!active.trusted||folderChoiceGeneration!==pending.folderGeneration)return null;
+    return mutate(pending.body,pending);
   }
   function sameDraft(context,text,files) {return current(context)&&$("prompt").value===text&&JSON.stringify(attachments)===JSON.stringify(files);}
   async function send(action) {
@@ -123,7 +141,7 @@ globalThis.WorkspaceWorkflow = (() => {
     const text=$("request-editor-text").value.trim();if(!text)return $("request-editor-text").focus();
     let schedule;
     if(context.kind!=="queue") {
-      const kind=$("schedule-kind").value;schedule={kind,enabled:context.item?.enabled!==false};
+      const kind=$("schedule-kind").value;schedule={kind,enabled:!pausedByUser(context.item)};
       if(kind==="once"){schedule.runAt=new Date($("schedule-at").value).getTime()/1000;if(!Number.isFinite(schedule.runAt)||schedule.runAt<=Date.now()/1000){$("request-editor-error").textContent="앞으로 실행할 날짜와 시간을 선택해 주세요.";return;}}
       else {schedule.time=$("schedule-time").value;if(!/^\d{2}:\d{2}$/.test(schedule.time))return;if(kind==="weekly"){schedule.weekdays=[...$("schedule-weekday-options").children].map(node=>node.children[0]).filter(input=>input.checked).map(input=>Number(input.value));if(!schedule.weekdays.length){$("request-editor-error").textContent="실행할 요일을 선택해 주세요.";return;}}}
     }
@@ -134,7 +152,7 @@ globalThis.WorkspaceWorkflow = (() => {
     } finally {$("request-editor-save").disabled=false;}
   }
   function contextChanged() {
-    readGeneration++;controller?.abort();snapshot=null;editor=null;
+    readGeneration++;controller?.abort();snapshot=null;editor=null;trustReturn=null;
     if($("request-editor-dialog").open)$("request-editor-dialog").close();
     if($("workflow-dialog").open)$("workflow-dialog").close();
     render();
@@ -142,11 +160,13 @@ globalThis.WorkspaceWorkflow = (() => {
   $("followup-queue").onclick=()=>send("enqueue");$("followup-now").onclick=()=>send("steer");
   $("workflow-open").onclick=()=>{render();$("workflow-message").textContent="";showDialog("workflow-dialog");refresh();};
   $("workflow-close").onclick=() => $("workflow-dialog").close();
-  $("workflow-resume").onclick=()=>mutate({action:"resume"});
+  $("workflow-resume").onclick=()=>requestResume();
+  $("folder-dialog").addEventListener?.("cancel",()=>{trustReturn=null;});
+  $("folder-form").addEventListener?.("submit",event=>{if(event.submitter?.value!=="ok")trustReturn=null;});
   $("schedule-open").onclick=$("schedule-add").onclick=()=>openEditor("schedule");
   $("request-editor-close").onclick=$("request-editor-cancel").onclick=()=>$("request-editor-dialog").close();
   $("request-editor-form").onsubmit=saveEditor;$("schedule-kind").onchange=editorMode;
   setInterval(refresh,4000);
   render();
-  return {render,refresh,send,mutate,openEditor,saveEditor,contextChanged,isSubmitting:locked};
+  return {render,refresh,send,mutate,openEditor,saveEditor,contextChanged,requestResume,resumeAfterTrust,isSubmitting:locked};
 })();

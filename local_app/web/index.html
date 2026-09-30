@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/productivity.css">
   <link rel="stylesheet" href="/review.css">
+  <link rel="stylesheet" href="/startup-health.css">
+  <script src="/startup-health.js"></script>
   <script src="/app.js" defer></script>
   <script src="/rich-content.js" defer></script>
   <script src="/execution-view.js" defer></script>
@@ -79,6 +81,7 @@
         <div class="topbar-context"><div class="title-row"><h1 id="chat-title">내 업무 공간</h1><button id="task-title" class="icon-button" aria-label="업무 이름 변경" title="업무 이름 변경" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button id="task-pin" class="icon-button" aria-label="업무 고정" title="업무 고정" aria-pressed="false" hidden><svg class="icon"><use href="#i-pin"/></svg></button><button id="branch-open" class="text-button branch-launch" type="button" hidden>대화 분기 ↗</button></div><button id="workspace-summary" class="workspace-summary">자료와 대화, 결과를 한곳에서</button></div>
         <div class="top-actions"><button id="desktop-open" class="attention-button" type="button">알림 <span id="desktop-count" hidden>0</span></button><button id="attention-open" class="attention-button" type="button" hidden>응답 대기 <span id="attention-count">0</span></button><span id="connection-badge" class="pill">연결 확인 중</span><button id="materials-button" class="icon-button materials-button" aria-label="자료와 결과 접기" title="자료와 결과 접기" aria-expanded="true" aria-controls="inspector-panel"><svg class="icon"><use href="#i-inspector"/></svg></button><button id="workspace-button" class="icon-button" aria-label="업무 저장 위치 선택" title="업무 저장 위치"><svg class="icon"><use href="#i-folder"/></svg></button></div>
       </header>
+      <div id="startup-health" class="startup-health" role="status" aria-live="polite" hidden><p id="startup-health-text"></p><button id="startup-health-check" type="button" hidden>다시 확인</button><button id="startup-health-reload" type="button" hidden>화면 다시 열기</button></div>
       <div id="demo-banner" class="demo-banner" hidden><svg class="icon"><use href="#i-spark"/></svg><span>화면 체험 중 · 가상의 업무로 둘러보세요. 실제 AI 실행이나 자료 읽기는 하지 않습니다.</span></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <div id="recovery-actions" class="recovery-actions" hidden><button id="reconnect" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>연결 다시 확인</button><button id="connection-settings" class="text-button">연결 설정 보기 <span aria-hidden="true">↗</span></button></div>

@@ -319,7 +319,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.0' -and $health.appRoot -eq $appRoot
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.1' -and $health.appRoot -eq $appRoot
             }
         } catch { # Stale runtime records never authorize process termination.
         }

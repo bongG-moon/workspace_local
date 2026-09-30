@@ -38,7 +38,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.0"
+WORKSPACE_VERSION = "0.21.1"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -116,6 +116,8 @@ class LocalApp:
         self.state = state
         self.state.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
+        from .ui_health import UiHealthLog
+        self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
         self.lock = threading.RLock()
         self._lifecycle = threading.Condition()
         self._active_operations = 0
@@ -689,10 +691,23 @@ class LocalApp:
                 if item['state'] not in {'error', 'running', 'question', 'approval'}:
                     item['state'] = previous_state
 
-    def connect(self, sid):
+    def connection_capacity_available(self, item):
+        """Call while holding self.lock; reservations and live bridges share slots."""
+        if self.demo:
+            return True
+        bridge = item.get('bridge')
+        if bridge is not None and not bridge.closed:
+            return True
+        occupied = sum(1 for row in self.sessions.values() if row is not item and (
+            row.get('_dispatchClaim') or (row.get('bridge') and not row['bridge'].closed)))
+        return occupied < 3
+
+    def connect(self, sid, *, _dispatch_claim=None):
         """Explicitly prepare one trusted task's CLI; never send a prompt."""
         with self.lock:
             item = self.get(sid)
+            if item.get('_dispatchClaim') != _dispatch_claim:
+                raise ValueError('대기 요청을 전송하고 있습니다. 연결 준비는 잠시 후 다시 시도해 주세요.')
             self._check_import_context(item)
             if not item.get('trusted'):
                 raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
@@ -708,9 +723,7 @@ class LocalApp:
             if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
                 raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.')
             if bridge is None or bridge.closed:
-                count = sum(1 for row in self.sessions.values()
-                            if row.get('bridge') and not row['bridge'].closed)
-                if count >= 3:
+                if not self.connection_capacity_available(item):
                     raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
                 resume_options = self._resume_options(item)
                 bridge = ClaudeSession(self.command, self.info, root,
@@ -959,7 +972,7 @@ class LocalApp:
             restore = (not self.demo and bool(current.get('_sessionControls'))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
         if restore:
-            self.connect(sid)
+            self.connect(sid, _dispatch_claim=_dispatch_claim)
         with self.lock:
             item = self.get(sid)
             if item.get('_dispatchClaim') != _dispatch_claim:
@@ -984,8 +997,7 @@ class LocalApp:
                 if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
                     raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.')
                 if bridge is None or bridge.closed:
-                    active = sum(1 for row in self.sessions.values() if row.get("bridge") and not row["bridge"].closed)
-                    if active >= 3:
+                    if not self.connection_capacity_available(item):
                         raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
                     resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
@@ -1146,6 +1158,11 @@ class AppClosing(ValueError):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
+    # A fresh WebView opens many asset connections before desktop initialization
+    # yields to serve_forever. Python 3.11's default backlog of five can drop
+    # those connections before Handler sees them. This queues sockets, not
+    # worker threads, and keeps the existing loopback-only listener unchanged.
+    request_queue_size = 64
 
     def __init__(self, app, port=0):
         self.app = app
@@ -1275,6 +1292,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/desktop.js": ("desktop.js", "text/javascript; charset=utf-8"),
                       "/session-import.js": ("session-import.js", "text/javascript; charset=utf-8"),
                       "/rich-content.js": ("rich-content.js", "text/javascript; charset=utf-8"),
+                      "/startup-health.js": ("startup-health.js", "text/javascript; charset=utf-8"),
+                      "/startup-health.css": ("startup-health.css", "text/css; charset=utf-8"),
                       "/execution-view.js": ("execution-view.js", "text/javascript; charset=utf-8"),
                       "/rich-content.css": ("rich-content.css", "text/css; charset=utf-8"),
                       "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
@@ -1368,6 +1387,8 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/ui-health':
+            return self.reply({'ok': True, 'recorded': app.ui_health.frontend(data)})
         if route == '/api/session/branch':
             return self.reply(app.fork_session(sid))
         if route == "/api/create":
@@ -1508,7 +1529,8 @@ def main():
             return False
         server.shutdown()
         return True
-    window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray)
+    window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray,
+                         on_event=app.ui_health.native)
     def reopen():
         result = window.open()
         app._desktop_window = window

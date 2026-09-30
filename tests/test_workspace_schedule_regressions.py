@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,35 @@ from local_app.work_queue import WorkQueue
 from tests import test_workspace_dispatch_routes as dispatch_fixtures
 from tests import test_workspace_productivity_frontend as frontend_fixtures
 from tests import test_workspace_work_queue as queue_fixtures
+
+
+class PreparedRecordingBridge(dispatch_fixtures.Bridge):
+    stopping = False
+
+    def __init__(self, app, sid, on_prepare=None):
+        super().__init__(app, sid)
+        self.on_prepare, self.frames = on_prepare, []
+
+    def prepare(self):
+        self.frames.append(('prepare', None))
+        if self.on_prepare:
+            self.on_prepare()
+
+    def connection_state(self):
+        return {'sessionId': 'fixture-session', 'capabilities': {}}
+
+    def set_model(self, value):
+        self.frames.append(('model', value))
+
+    def set_effort(self, value):
+        self.frames.append(('effort', value))
+
+    def set_permission_mode(self, value):
+        self.frames.append(('permissionMode', value))
+
+    def send(self, prompt):
+        self.frames.append(('send', prompt))
+        super().send(prompt)
 
 
 class ScheduleDurabilityTests(unittest.TestCase):
@@ -128,6 +158,94 @@ class ScheduleDurabilityTests(unittest.TestCase):
         self.finish(next_row, 'second-run')
         self.assertEqual([], self.queue.snapshot('task')['queue'])
 
+    def test_completed_once_edit_rearms_one_new_occurrence(self):
+        schedule = self.schedule()
+        self.now += 60
+        self.queue.tick()
+        first = self.claim()
+        self.finish(first, 'original-run')
+        completed = self.queue.snapshot('task')['schedules'][0]
+        self.assertFalse(completed['enabled'])
+        self.assertFalse(completed['pausedByUser'])
+        edited = self.queue.update_schedule('task', schedule['id'], 'rearmed', kind='once',
+                                            run_at=self.now + 60, context=self.context)
+        self.assertTrue(edited['enabled'])
+        self.now += 60
+        self.queue.tick()
+        self.queue.tick()
+        second = self.claim()
+        self.assertNotEqual(first['id'], second['id'])
+        self.assertEqual('rearmed', second['text'])
+        self.finish(second, 'edited-run')
+        self.assertIsNone(self.claim())
+
+    def test_explicit_pause_survives_late_result_restart_and_edit(self):
+        schedule = self.schedule()
+        self.now += 60
+        self.queue.tick()
+        row = self.claim()
+        self.queue.dispatched(row['id'], 'late-result')
+        self.queue.set_schedule_enabled('task', schedule['id'], False)
+        self.queue.observe('task', 'result', {'lastRunId': 'late-result'})
+        self.queue = WorkQueue(self.root, clock=lambda: self.now)
+        restored = self.queue.snapshot('task')['schedules'][0]
+        self.assertEqual('done', restored['lastRun']['status'])
+        self.assertTrue(restored['pausedByUser'])
+        edited = self.queue.update_schedule('task', schedule['id'], 'keep paused', kind='once',
+                                            run_at=self.now + 60, context=self.context)
+        self.assertFalse(edited['enabled'])
+        self.assertTrue(edited['pausedByUser'])
+        self.queue.resume('task')
+        self.queue.set_schedule_enabled('task', schedule['id'], True)
+        self.now += 60
+        self.queue.tick()
+        self.assertEqual('keep paused', self.claim()['text'])
+
+    def test_legacy_consumed_once_and_explicit_pause_migrate_separately(self):
+        completed = self.schedule()
+        self.now += 60
+        self.queue.tick()
+        self.finish(self.claim(), 'legacy-run')
+        paused_once = self.schedule()
+        paused_daily = self.schedule('daily')
+        for schedule in (paused_once, paused_daily):
+            self.queue.set_schedule_enabled('task', schedule['id'], False)
+        store = self.root / 'work-queue.json'
+        old = json.loads(store.read_text('utf-8'))
+        for schedule in old['schedules']:
+            schedule.pop('pausedByUser')
+        store.write_text(json.dumps(old), encoding='utf-8')
+        restarted = WorkQueue(self.root, clock=lambda: self.now)
+        flags = {row['id']: row['pausedByUser'] for row in restarted.snapshot('task')['schedules']}
+        self.assertEqual({completed['id']: False, paused_once['id']: True, paused_daily['id']: True}, flags)
+
+    def test_invalid_persisted_pause_intent_fails_closed_without_overwrite(self):
+        self.schedule()
+        store = self.root / 'work-queue.json'
+        data = json.loads(store.read_text('utf-8'))
+        data['schedules'][0]['pausedByUser'] = 'false'
+        store.write_text(json.dumps(data), encoding='utf-8')
+        original = store.read_bytes()
+        restarted = WorkQueue(self.root, clock=lambda: self.now)
+        self.assertIsNotNone(restarted.warning)
+        self.assertEqual(original, store.read_bytes())
+
+    def test_rearming_uncertain_delivery_does_not_replay_or_clear_review(self):
+        schedule = self.schedule()
+        self.now += 60
+        self.queue.tick()
+        row = self.claim()
+        self.queue.failed(row['id'])
+        self.queue.update_schedule('task', schedule['id'], 'future request', kind='once',
+                                   run_at=self.now + 60, context=self.context)
+        self.queue.resume('task')
+        self.now += 60
+        self.queue.tick()
+        self.assertIsNone(self.claim())
+        state = self.queue.snapshot('task')
+        self.assertEqual([(row['id'], 'needs_review')], [(r['id'], r['state']) for r in state['queue']])
+        self.assertEqual('previous_pending', state['schedules'][0]['lastRun']['status'])
+
 
 class ScheduleDispatchTests(unittest.TestCase):
     setUp = dispatch_fixtures.DispatchRoutesTests.setUp
@@ -222,13 +340,12 @@ class ScheduleDispatchTests(unittest.TestCase):
         self.assertIsNotNone(self.app.dispatch.snapshot(self.sid)['warning'])
 
 
-class KnownScheduleCapacityDefect(unittest.TestCase):
-    """Confirmed in 0.20.1; expected failure is not a passing regression."""
+class ScheduleCapacityRegressionTests(unittest.TestCase):
+    """Connection admission waits safely, then uses one reserved slot."""
     setUp = dispatch_fixtures.DispatchRoutesTests.setUp
     shutdown = dispatch_fixtures.DispatchRoutesTests.shutdown
 
-    @unittest.expectedFailure
-    def test_known_defect_capacity_block_waits_without_uncertain_delivery(self):
+    def test_capacity_block_waits_without_uncertain_delivery(self):
         # Capacity rejection happens before CLI construction and before a user
         # message is recorded, so this request should remain safely queued.
         occupied = [self.sid]
@@ -259,14 +376,137 @@ class KnownScheduleCapacityDefect(unittest.TestCase):
             'A known zero-send capacity rejection must wait and run once when a slot becomes free.',
         )
 
+    def test_capacity_counts_each_other_bridge_or_reservation_once(self):
+        second = self.app.get(self.app.create(str(self.work), True)['id'])
+        second['_dispatchClaim'] = 'second-reservation'
+        candidate = self.app.get(self.app.create(str(self.work), True)['id'])
+        candidate['_dispatchClaim'] = 'own-reservation'
+        with self.app.lock:
+            self.assertTrue(self.app.connection_capacity_available(candidate))
+            second['bridge'] = dispatch_fixtures.Bridge(self.app, second['id'])
+            self.assertTrue(self.app.connection_capacity_available(candidate))
+            third = self.app.get(self.app.create(str(self.work), True)['id'])
+            third['_dispatchClaim'] = 'third-reservation'
+            self.assertFalse(self.app.connection_capacity_available(candidate))
+            # A task already connected needs no additional connection slot.
+            self.assertTrue(self.app.connection_capacity_available(self.app.get(self.sid)))
+            self.app.demo = True
+            self.assertTrue(self.app.connection_capacity_available(candidate))
+
+    def test_competing_connect_and_send_cannot_take_dispatch_reservation(self):
+        occupied = self.app.create(str(self.work), True)['id']
+        self.app.get(occupied)['bridge'] = dispatch_fixtures.Bridge(self.app, occupied)
+        waiting = self.app.create(str(self.work), True)['id']
+        competitor = self.app.create(str(self.work), True)['id']
+        self.app.dispatch.action(waiting, {'action': 'enqueue', 'text': 'reserved request', 'attachments': []})
+        original_send = self.app.send
+        recording = dispatch_fixtures.Bridge(self.app, waiting)
+        claims = []
+
+        def send_with_competition(sid, text, attachments, **kwargs):
+            claim = self.app.get(sid).get('_dispatchClaim')
+            claims.append(claim)
+            self.assertEqual(kwargs['_dispatch_claim'], claim)
+            with self.assertRaisesRegex(ValueError, '3개'):
+                self.app.connect(competitor)
+            with self.assertRaisesRegex(ValueError, '3개'):
+                original_send(competitor, 'competing request', [])
+            return original_send(sid, text, attachments, **kwargs)
+
+        with patch.object(self.app, 'send', side_effect=send_with_competition), \
+                patch('local_app.server.ClaudeSession', return_value=recording) as factory:
+            self.app.dispatch.pump()
+            self.app.dispatch.pump()
+        factory.assert_called_once()
+        self.assertEqual(1, len(claims))
+        self.assertEqual(['reserved request'], recording.sent)
+        self.assertEqual([], self.app.get(competitor)['messages'])
+        self.assertIsNone(self.app.get(waiting).get('_dispatchClaim'))
+        self.assertEqual([], self.app.dispatch.snapshot(waiting)['queue'])
+
+    def test_ambiguous_send_failure_releases_slot_but_never_retries(self):
+        waiting = self.app.create(str(self.work), True)['id']
+        self.app.dispatch.action(waiting, {'action': 'enqueue', 'text': 'ambiguous request', 'attachments': []})
+        with patch.object(self.app, 'send', side_effect=OSError('delivery may have started')) as send:
+            self.app.dispatch.pump()
+            self.app.dispatch.pump()
+        send.assert_called_once()
+        self.assertIsNone(self.app.get(waiting).get('_dispatchClaim'))
+        state = self.app.dispatch.snapshot(waiting)
+        self.assertEqual('needs_review', state['queue'][0]['state'])
+        self.assertEqual('delivery_unknown', state['reason'])
+
+    def test_same_task_external_connect_cannot_interrupt_reserved_dispatch(self):
+        waiting = self.app.create(str(self.work), True)['id']
+        self.app.dispatch.action(waiting, {'action': 'enqueue', 'text': 'reserved request', 'attachments': []})
+        original_send = self.app.send
+        attempt_ready, release_prepare = threading.Event(), threading.Event()
+        connect_errors = []
+
+        def hold_prepare():
+            attempt_ready.set()
+            if not release_prepare.wait(3):
+                raise AssertionError('Competing connection did not release its prepare wait')
+
+        recording = PreparedRecordingBridge(self.app, waiting, hold_prepare)
+
+        def external_connect():
+            try:
+                self.app.connect(waiting)
+            except ValueError as error:
+                connect_errors.append(str(error))
+            finally:
+                attempt_ready.set()
+
+        def send_with_same_task_connect(sid, text, attachments, **kwargs):
+            self.assertEqual(kwargs['_dispatch_claim'], self.app.get(sid).get('_dispatchClaim'))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                connection = pool.submit(external_connect)
+                try:
+                    self.assertTrue(attempt_ready.wait(3))
+                    return original_send(sid, text, attachments, **kwargs)
+                finally:
+                    release_prepare.set()
+                    connection.result(timeout=3)
+
+        with patch.object(self.app, 'send', side_effect=send_with_same_task_connect), \
+                patch('local_app.server.ClaudeSession', return_value=recording) as factory:
+            self.app.dispatch.pump()
+            self.app.dispatch.pump()
+        self.assertEqual([], self.app.dispatch.snapshot(waiting)['queue'])
+        self.assertEqual(['reserved request'], recording.sent)
+        self.assertEqual([('send', 'reserved request')], recording.frames)
+        self.assertEqual(1, len(connect_errors))
+        self.assertIn('대기 요청', connect_errors[0])
+        factory.assert_called_once()
+        self.assertIsNone(self.app.get(waiting).get('_dispatchClaim'))
+
+    def test_reserved_dispatch_restores_own_connection_controls_before_send(self):
+        item = self.app.get(self.sid)
+        self.bridge.close()
+        item['_sessionControls'] = {'model': 'chosen-model', 'effort': 'high', 'permissionMode': 'plan'}
+        self.app.dispatch.action(self.sid, {'action': 'enqueue', 'text': 'restored request', 'attachments': []})
+        recording = PreparedRecordingBridge(self.app, self.sid)
+        with patch.object(self.app, 'connect', wraps=self.app.connect) as connect, \
+                patch('local_app.server.ClaudeSession', return_value=recording):
+            self.app.dispatch.pump()
+            self.app.dispatch.pump()
+        claim = item['messages'][0]['requestId']
+        connect.assert_called_once_with(self.sid, _dispatch_claim=claim)
+        self.assertEqual([('prepare', None), ('model', 'chosen-model'), ('effort', 'high'),
+                          ('permissionMode', 'plan'), ('send', 'restored request')], recording.frames)
+        self.assertEqual([], self.app.dispatch.snapshot(self.sid)['queue'])
+        self.assertFalse(item.get('_needsControlRestore'))
+        self.assertFalse(item.get('_connecting'))
+        self.assertIsNone(item.get('_dispatchClaim'))
+
 
 @unittest.skipUnless(frontend_fixtures.NODE, 'Node.js is required for schedule UI defect checks')
-class KnownScheduleFrontendDefects(unittest.TestCase):
-    """Assert intended recovery behavior, retaining two confirmed 0.20.1 defects."""
+class ScheduleFrontendRegressionTests(unittest.TestCase):
+    """Completed scheduling and explicit trust return preserve user intent."""
     run_case = frontend_fixtures.WorkspaceProductivityFrontendTests.run_case
 
-    @unittest.expectedFailure
-    def test_known_defect_edit_completed_once_rearms_future_execution(self):
+    def test_edit_completed_once_rearms_future_execution(self):
         self.run_case(r"""(async()=>{
           active.state='done';
           const completed={id:'completed-once',kind:'once',text:'original prompt',attachments:[],
@@ -281,8 +521,7 @@ class KnownScheduleFrontendDefects(unittest.TestCase):
             'Editing a completed one-shot to a future time must rearm its execution.');
         })()""", ('workflow',))
 
-    @unittest.expectedFailure
-    def test_known_defect_restart_resume_opens_folder_trust_confirmation(self):
+    def test_restart_resume_opens_folder_trust_confirmation(self):
         self.run_case(r"""(async()=>{
           active.state='idle';active.trusted=false;
           const state={revision:1,paused:true,reason:'restart',queue:[],schedules:[
@@ -296,6 +535,86 @@ class KnownScheduleFrontendDefects(unittest.TestCase):
           await $('workflow-resume').onclick();await settle();
           assert.deepEqual([confirmations,resumeCalls],[1,0],
             'Restart resume must obtain folder trust before submitting the guarded resume action.');
+        })()""", ('workflow',))
+
+    def test_explicitly_paused_completed_once_edit_preserves_pause(self):
+        self.run_case(r"""(async()=>{
+          active.state='done';
+          const paused={id:'paused-once',kind:'once',text:'keep paused',attachments:[],
+            enabled:false,pausedByUser:true,runAt:Date.now()/1000-3600,nextRunAt:null,lastRun:{status:'done'}};
+          api=async()=>({queue:[],schedules:[paused],revision:1});await WorkspaceWorkflow.refresh();
+          assert.match(flatText($('schedule-list')),/일시 정지/);
+          WorkspaceWorkflow.openEditor('schedule',paused);$('schedule-at').value='2099-01-01T09:00';
+          let call;api=async(path,body)=>{call=body;return {queue:[],schedules:[],revision:2};};
+          await WorkspaceWorkflow.saveEditor({preventDefault(){}});
+          assert.equal(call.schedule.enabled,false);
+        })()""", ('workflow',))
+
+    def test_trust_confirmation_resumes_once_without_submitting_composer(self):
+        self.run_case(r"""(async()=>{
+          active.state='idle';active.trusted=false;$('prompt').value='unsent draft';attachments=['C:/kept.csv'];
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};
+          await WorkspaceWorkflow.requestResume();
+          const confirmed={id:active.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};
+          assert.equal($('folder-form').dataset.afterTrust,'workflow');assert.equal(calls.length,0);
+          $('trust').checked=true;
+          await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          await WorkspaceWorkflow.resumeAfterTrust(confirmed);
+          assert.deepEqual(calls.map(call=>[call.path,call.body.action]),[['/api/trust',undefined],['/api/dispatch','resume']]);
+          assert.equal(calls[1].body.id,'A');assert.equal(active.trusted,true);
+          assert.equal($('prompt').value,'unsent draft');assert.equal(attachments[0],'C:/kept.csv');
+        })()""", ('workflow',))
+
+    def test_individual_resume_retains_schedule_id_through_trust_confirmation(self):
+        self.run_case(r"""(async()=>{
+          active.state='idle';active.trusted=false;
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};
+          await WorkspaceWorkflow.requestResume({action:'schedule_resume',requestId:'paused-schedule'});
+          $('trust').checked=true;
+          await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          assert.equal(calls.length,2);assert.equal(calls[1].body.action,'schedule_resume');
+          assert.equal(calls[1].body.requestId,'paused-schedule');
+        })()""", ('workflow',))
+
+    def test_cancelled_confirmation_cannot_resume_later(self):
+        self.run_case(r"""(async()=>{
+          active.state='idle';const calls=[];api=async(path,body)=>{calls.push({path,body});return {};};
+          for(const cancel of [()=>emit($('folder-dialog'),'cancel'),()=>emit($('folder-form'),'submit',{submitter:{value:'cancel'}})]){
+            active.trusted=false;await WorkspaceWorkflow.requestResume();
+            const confirmed={id:active.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};
+            cancel();active.trusted=true;await WorkspaceWorkflow.resumeAfterTrust(confirmed);
+          }
+          assert.equal(calls.length,0);
+        })()""", ('workflow',))
+
+    def test_selection_change_during_trust_does_not_resume_another_task(self):
+        self.run_case(r"""(async()=>{
+          active.state='idle';active.trusted=false;let resolveTrust;const calls=[];
+          api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>{resolveTrust=resolve;});};
+          await WorkspaceWorkflow.requestResume();$('trust').checked=true;
+          const submission=$('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          selectionGeneration++;WorkspaceWorkflow.contextChanged();
+          active={id:'B',workspace:'C:/fixture/B',state:'idle',trusted:false};
+          $('prompt').value='task B draft';attachments=['C:/B.csv'];resolveTrust({});await submission;
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/trust');
+          assert.equal(active.trusted,false);assert.equal($('prompt').value,'task B draft');
+          assert.equal(attachments[0],'C:/B.csv');
+        })()""", ('workflow',))
+
+    def test_old_trust_response_cannot_consume_new_confirmation(self):
+        self.run_case(r"""(async()=>{
+          active.state='idle';active.trusted=false;let resolveTrust;const calls=[];
+          api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>{resolveTrust=resolve;});};
+          await WorkspaceWorkflow.requestResume();$('trust').checked=true;
+          const submission=$('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          emit($('folder-dialog'),'cancel');$('folder-dialog').close();
+          await WorkspaceWorkflow.requestResume({action:'schedule_resume',requestId:'new-intent'});
+          resolveTrust({});await submission;
+          assert.equal(calls.length,1);assert.equal(active.trusted,false);assert.equal($('folder-dialog').open,true);
+          api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};
+          $('trust').checked=true;await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          assert.equal(calls.length,3);assert.equal(calls[2].body.action,'schedule_resume');
+          assert.equal(calls[2].body.requestId,'new-intent');
         })()""", ('workflow',))
 
 

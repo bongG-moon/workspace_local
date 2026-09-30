@@ -434,7 +434,7 @@ async function submit(){
   }catch(e){pending.remove();error(e.message);}finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
 $("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;if(globalThis.WorkspaceComposer?.keydown(e))return;if(globalThis.WorkspaceInlineControls?.keydown(e))return;if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();return submit();}};
-$("folder-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();if(!$("trust").checked)return;const button=e.submitter;button.disabled=true;try{if($("folder-form").dataset.resume==="yes"){const id=active.id;await api("/api/trust",{id,trusted:true});if(active?.id!==id)return;active.trusted=true;}else{const draft={text:$("prompt").value,attachments:[...attachments]},managed=$("folder-mode-new").checked;if(managed&&!managedRootChoice&&!boot.managedWorkspaceRoot)throw Error("새 업무를 저장할 위치를 먼저 선택해 주세요.");const item=await api("/api/create",{workspace:managed?undefined:$("folder-input").value,managed,managedRoot:managed?managedRootChoice||undefined:undefined,title:$("task-name").value.trim()||undefined,trusted:true});sessions.unshift(item);drafts.set(item.id,draft);await selectSession(item.id);drafts.delete("home");}$("folder-dialog").close();if($("folder-form").dataset.afterTrust==="choice"){renderWorkspaceChoice();toast("폴더 확인을 마쳤어요. 원하는 디자인을 선택해 주세요.");}else if($("folder-form").dataset.afterTrust==="commands"){await globalThis.WorkspaceComposer?.prepareConnection();}else if($("folder-form").dataset.afterTrust==="schedule"){globalThis.WorkspaceWorkflow?.openEditor("schedule");}else if($("folder-form").dataset.afterTrust==="controls"){await globalThis.WorkspaceInlineControls?.resumeAfterTrust();}else if($("prompt").value.trim())await submit();}catch(e){toast(e.message);}finally{button.disabled=false;}};
+$("folder-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();if(!$("trust").checked)return;const button=e.submitter,trustContext={id:active?.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};button.disabled=true;try{if($("folder-form").dataset.resume==="yes"){const id=active.id;await api("/api/trust",{id,trusted:true});if(active?.id!==id||selectionGeneration!==trustContext.generation||folderChoiceGeneration!==trustContext.folderGeneration)return;active.trusted=true;}else{const draft={text:$("prompt").value,attachments:[...attachments]},managed=$("folder-mode-new").checked;if(managed&&!managedRootChoice&&!boot.managedWorkspaceRoot)throw Error("새 업무를 저장할 위치를 먼저 선택해 주세요.");const item=await api("/api/create",{workspace:managed?undefined:$("folder-input").value,managed,managedRoot:managed?managedRootChoice||undefined:undefined,title:$("task-name").value.trim()||undefined,trusted:true});sessions.unshift(item);drafts.set(item.id,draft);await selectSession(item.id);drafts.delete("home");}$("folder-dialog").close();if($("folder-form").dataset.afterTrust==="choice"){renderWorkspaceChoice();toast("폴더 확인을 마쳤어요. 원하는 디자인을 선택해 주세요.");}else if($("folder-form").dataset.afterTrust==="commands"){await globalThis.WorkspaceComposer?.prepareConnection();}else if($("folder-form").dataset.afterTrust==="schedule"){globalThis.WorkspaceWorkflow?.openEditor("schedule");}else if($("folder-form").dataset.afterTrust==="workflow"){await globalThis.WorkspaceWorkflow?.resumeAfterTrust(trustContext);}else if($("folder-form").dataset.afterTrust==="controls"){await globalThis.WorkspaceInlineControls?.resumeAfterTrust();}else if($("prompt").value.trim())await submit();}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $("folder-mode-new").onchange=$("folder-mode-existing").onchange=folderMode;
 async function browseWorkspace(managed){const button=$(managed?"choose-managed":"browse-folder"),label=button.textContent,ticket=folderChoiceGeneration;button.disabled=true;button.textContent="선택 창 열림…";try{const initial=managed?managedRootChoice||boot.defaultWorkspace:$("folder-input").value||boot.defaultWorkspace;const d=await api("/api/pick",{kind:"folder",initialDirectory:initial||undefined});if(ticket!==folderChoiceGeneration||!$("folder-dialog").open)return;if(d.paths.length){if(managed){managedRootChoice=d.paths[0];folderMode();}else $("folder-input").value=d.paths[0];$("trust").checked=false;}}catch(e){toast(e.message);}finally{button.textContent=label;button.disabled=$("folder-form").dataset.resume==="yes";if($("folder-dialog").open&&ticket===folderChoiceGeneration)button.focus();}}
 $("browse-folder").onclick=()=>browseWorkspace(false);
@@ -561,6 +561,33 @@ $("quit").onclick=async()=>{
     $("quit").disabled=false;
   }finally{quitting=false;}
 };
-async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.error)error(boot.error);}catch(e){error(e.message);$("send").disabled=true;}}
+// A screen recovery carries only this tab's unsent drafts, never a request to execute.
+function captureScreenRecovery(){
+  // Empty entries saved by an edit cancel older handoff drafts on retry. A
+  // pristine blank input must not erase a saved draft that failed to display.
+  if($("prompt").value||attachments.length)saveDraft();
+  return {sessionId:active?.id||null,drafts:[...drafts].map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
+}
+async function restoreScreenRecovery(snapshot){
+  // Bootstrap may finish after the user has already edited this page. Existing
+  // entries, including explicitly empty drafts, take precedence over the handoff.
+  if($("prompt").value||attachments.length)saveDraft();
+  const liveDraftIds=new Set(drafts.keys());
+  for(const row of snapshot.drafts)if(!drafts.has(row.id))drafts.set(row.id,{text:row.text,attachments:[...row.attachments]});
+  const id=snapshot.sessionId,exists=id&&sessions.some(row=>row.id===id);
+  if(exists){
+    const selection=selectSession(id,{keepDraft:true}),ticket=selectionGeneration;
+    const selected=await selection;
+    if(selected===false||active?.id!==id||selectionGeneration!==ticket)return {selectionChanged:true};
+    restoreDraft(id);return {};
+  }
+  if(id&&!liveDraftIds.has("home")){const previous=drafts.get(id);if(previous)drafts.set("home",{text:previous.text,attachments:[...previous.attachments]});}
+  restoreDraft("home");return {missingSession:!!id};
+}
+globalThis.WorkspaceStartupHealth?.attach({
+  report:record=>api("/api/ui-health",record),capture:captureScreenRecovery,restore:restoreScreenRecovery,
+  canReload:()=>!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
+});
+async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

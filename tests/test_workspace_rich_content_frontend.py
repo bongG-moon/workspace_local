@@ -94,10 +94,61 @@ class WorkspaceRichContentFrontendTests(unittest.TestCase):
         })()""")
 
     def test_table_parses_escaped_and_inline_code_pipes(self):
-        self.run_case(r"""(()=>{
+        self.run_case(r"""(async()=>{
           R.render(parent,'| 이름 | 값 |\n| --- | --- |\n| A\\|B | `x|y` |');
           assert.equal(tag(parent,'th').length,2);assert.equal(tag(parent,'td').length,2);
           assert.equal(tag(parent,'td')[0].textContent,'A|B');assert.equal(tag(parent,'td')[1].textContent,'x|y');
+          await tag(parent,'button')[0].onclick();assert.equal(readClipboard(),'이름\t값\nA|B\tx|y');
+        })()""")
+
+    def test_markdown_table_copy_matches_bold_headers_numbers_links_and_code(self):
+        self.run_case(r"""(async()=>{
+          R.render(parent,'| **항목** | **값** |\n| --- | --- |\n| **합계** | **468** |\n| [보고서](https://example.com/report) | `**468**` |\n| [파일](result.csv) | **`코드`** |');
+          assert.equal(tag(parent,'strong')[2].textContent,'합계');
+          assert.equal(tag(parent,'td')[1].textContent,'468');
+          assert.equal(tag(parent,'td')[3].textContent,'**468**');
+          await tag(parent,'button')[0].onclick();
+          assert.equal(readClipboard(),'항목\t값\n합계\t468\n보고서\t**468**\n파일\t코드');
+          assert.equal(apiCalls.length,0);assert.equal(opens.length,0);
+        })()""")
+
+    def test_markdown_copy_retains_literal_fallback_and_tsv_quoting(self):
+        self.run_case(r"""(async()=>{
+          R.table(parent,{columns:['**이름**','값'],rows:[['**합계**','a\tb\nc"d'],['<script>literal</script>','**unfinished']]},{markdown:true});
+          await tag(parent,'button')[0].onclick();
+          assert.equal(readClipboard(),'이름\t값\n합계\t"a\tb\nc""d"\n<script>literal</script>\t**unfinished');
+          assert.equal(tag(parent,'script').length,0);
+        })()""")
+
+    def test_csv_literal_markdown_code_links_and_formulas_are_not_reinterpreted(self):
+        self.run_case(r"""(async()=>{
+          const values=['**468**','`x|y`','[보고서](https://example.com)','![image](chart.png)','=1+1'];
+          R.table(parent,{columns:['**항목**','값'],rows:values.map(value=>[value,value])});
+          await tag(parent,'button')[0].onclick();
+          assert.equal(readClipboard(),['**항목**\t값',...values.map(value=>value+'\t'+value)].join('\n'));
+          assert.equal(tag(parent,'strong').length,0);assert.equal(tag(parent,'a').length,0);
+          assert.equal(observers.length,0);assert.equal(apiCalls.length,0);
+        })()""")
+
+    def test_markdown_image_cell_copy_uses_stable_label_without_extra_requests(self):
+        self.run_case(r"""(async()=>{
+          R.render(parent,'| 이미지 |\n| --- |\n| ![매출 차트](chart.png) |\n| ![외부 차트](https://example.com/chart.png) |');
+          const copy=tag(parent,'button')[0],observerCount=observers.length;
+          await copy.onclick();assert.equal(readClipboard(),'이미지\n매출 차트\n외부 차트');
+          assert.equal(apiCalls.length,0);assert.equal(observers.length,observerCount);
+          observers[0].trigger();assert.equal(apiCalls.length,1);
+          replies[0].resolve({kind:'image',data:'data:image/png;base64,YQ=='});await flush();
+          await copy.onclick();assert.equal(readClipboard(),'이미지\n매출 차트\n외부 차트');
+          assert.equal(apiCalls.length,1);assert.equal(observers.length,observerCount);
+        })()""")
+
+    def test_markdown_copy_uses_only_bounded_displayed_cells(self):
+        self.run_case(r"""(async()=>{
+          const columns=Array.from({length:32},(_,i)=>'**col'+i+'**'),rows=Array.from({length:105},(_,r)=>columns.map((_,c)=>'**'+r+':'+c+'**'));
+          R.table(parent,{columns,rows},{markdown:true});await tag(parent,'button')[0].onclick();
+          const lines=readClipboard().split('\n');assert.equal(lines.length,101);
+          assert.equal(lines[0].split('\t').length,30);assert.equal(lines[100].split('\t')[29],'99:29');
+          assert.ok(!readClipboard().includes('**'));assert.match(parent.textContent,/복사는 표시된 범위/);
         })()""")
 
     def test_tables_bound_rows_columns_and_copy_only_visible_scope(self):

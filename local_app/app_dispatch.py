@@ -111,6 +111,11 @@ class DispatchController:
                             self.queue.pause(sid, 'stopped')
                         else:
                             continue
+                    # A claim also reserves a connection slot. Keep admission,
+                    # durable claim and reservation under the same app lock used
+                    # by ordinary connect/send, so other tasks cannot take it.
+                    if not self.app.connection_capacity_available(item):
+                        continue
                     claim = self.queue.claim(sid, item, self.context(item))
                     if claim is not None:
                         # Reserve the normal-send admission while control
@@ -211,7 +216,7 @@ class DispatchController:
                 if action == 'schedule':
                     self.queue.add_schedule(sid, text, paths, **values, client_id=data.get('clientRequestId'))
                 else:
-                    self.queue.update_schedule(sid, identifier, text, paths, **values, enabled=schedule.get('enabled', True))
+                    self.queue.update_schedule(sid, identifier, text, paths, **values, enabled=schedule.get('enabled'))
             elif action == 'schedule_cancel':
                 self.queue.cancel_schedule(sid, identifier)
             elif action in {'schedule_pause', 'schedule_resume'}:

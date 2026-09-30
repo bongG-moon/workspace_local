@@ -1,6 +1,7 @@
 """One dedicated WebView2 window, owned by this server through private pipes."""
 from __future__ import annotations
 
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,8 @@ import subprocess
 import threading
 import time
 import unicodedata
+
+from .ui_health import NATIVE_EVENTS
 
 
 class DesktopError(OSError):
@@ -29,7 +32,8 @@ def desktop_executable():
 
 
 class DesktopHost:
-    def __init__(self, notifier, url, state, *, background=False, on_close=None, popen=subprocess.Popen):
+    def __init__(self, notifier, url, state, *, background=False, on_close=None, popen=subprocess.Popen,
+                 on_event=None):
         self.notifier, self.url = notifier, url
         self.profile = str((Path(state).resolve() / 'webview2').resolve())
         self.background, self.on_close, self.popen = background, on_close, popen
@@ -41,6 +45,12 @@ class DesktopHost:
         self.sequence = 0
         self.presentation = {'mode': 'desktop', 'engine': 'WebView2'}
         self.last_event = None
+        self.on_event = on_event
+        self.window_handle = None
+        self._diagnostic_condition = threading.Condition()
+        self._diagnostic_rows = deque(maxlen=64)
+        self._diagnostic_worker = None
+        self._diagnostics_closed = False
         # The reader must never wait for the command lock while the caller waits
         # for its acknowledgement. Only one visible card/callback is retained.
         self.notification_lock = threading.Lock()
@@ -79,6 +89,50 @@ class DesktopHost:
                     pass  # Notification navigation must not stop IPC delivery.
             threading.Thread(target=opened, name='workspace-notification-open', daemon=True).start()
 
+    def _diagnostic(self, process, event):
+        if (self.on_event and process is self.process and isinstance(event, dict)
+                and isinstance(event.get('type'), str) and event['type'] in NATIVE_EVENTS):
+            try:
+                row = {**{key: event[key] for key in ('type', 'hwnd', 'runtime', 'code') if key in event},
+                       'pid': process.pid,
+                       **({'hwnd': self.window_handle} if self.window_handle else {})}
+                with self._diagnostic_condition:
+                    if self._diagnostics_closed:
+                        return
+                    # Retain only the latest bounded history during slow storage.
+                    # The IPC reader and command caller never execute callbacks.
+                    self._diagnostic_rows.append(row)
+                    if self._diagnostic_worker is None:
+                        worker = threading.Thread(target=self._deliver_diagnostics,
+                            name='workspace-desktop-diagnostics', daemon=True)
+                        worker.start()
+                        self._diagnostic_worker = worker
+                    self._diagnostic_condition.notify()
+            except Exception:
+                pass
+
+    def _deliver_diagnostics(self):
+        while True:
+            with self._diagnostic_condition:
+                while not self._diagnostic_rows and not self._diagnostics_closed:
+                    self._diagnostic_condition.wait()
+                if self._diagnostics_closed:
+                    return
+                row = self._diagnostic_rows.popleft()
+            try:
+                if self.on_event:
+                    self.on_event(row)
+            except Exception:
+                pass  # Diagnostics must never stop command acknowledgements.
+
+    def _stop_diagnostics(self):
+        with self._diagnostic_condition:
+            self._diagnostics_closed = True
+            self._diagnostic_rows.clear()
+            self._diagnostic_condition.notify_all()
+        # A filesystem call cannot be cancelled safely. One in-flight daemon
+        # callback may finish later; shutdown never waits on diagnostic storage.
+
     def _read(self, process, responses):
         try:
             while True:
@@ -97,9 +151,11 @@ class DesktopHost:
                     threading.Thread(target=self.on_close, name='workspace-desktop-close', daemon=True).start()
                 if process is self.process:
                     self.last_event = kind
+                    self._diagnostic(process, event)
         except (OSError, ValueError, queue.Full):
             pass
         finally:
+            self._diagnostic(process, {'type': 'exited'})
             self._clear_notification(process)
             try:
                 responses.put_nowait({'type': 'exited'})
@@ -164,6 +220,7 @@ class DesktopHost:
             if self.process is not None and self.process.poll() is None:
                 try:
                     self._command('activate')
+                    self._diagnostic(self.process, {'type': 'activated'})
                     return {'ok': True, 'action': 'activated', **self.presentation}
                 except (OSError, ValueError, queue.Empty) as exc:
                     # A live but unresponsive window must not create a duplicate.
@@ -189,6 +246,7 @@ class DesktopHost:
                     raise DesktopError()
                 if not self.notifier.bind_owned(hwnd, self.process.pid):
                     raise DesktopError()
+                self.window_handle = hwnd
                 self.presentation['runtime'] = str(ready.get('runtime', ''))[:100]
                 with self.notification_lock:
                     self._notification_capable = ready.get('notificationCards') is True
@@ -205,6 +263,7 @@ class DesktopHost:
             self._notification_capable = False
             self._notification = None
         self.process, self.reader = None, None
+        self.window_handle = None
         if process is not None:
             try:
                 if process.poll() is None:
@@ -227,4 +286,7 @@ class DesktopHost:
     def close(self):
         with self.lock:
             self.closed = True
-            self._dispose()
+            try:
+                self._dispose()
+            finally:
+                self._stop_diagnostics()

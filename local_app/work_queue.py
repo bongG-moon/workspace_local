@@ -115,6 +115,17 @@ def _next_after(schedule, now):
     raise ValueError('다음 예약 시각을 확인하지 못했습니다.')
 
 
+def _paused_by_user(schedule):
+    if 'pausedByUser' in schedule:
+        return schedule['pausedByUser']
+    # Legacy stores conflated one-shot exhaustion and explicit pause. Retain
+    # recognizable pauses; a consumed occurrence can be scheduled again by edit.
+    consumed = (schedule['kind'] == 'once' and schedule['nextAt'] is None and
+                schedule.get('lastStatus') in {'queued', 'submitted', 'done', 'missed',
+                                               'queue_full', 'needs_review', 'previous_pending'})
+    return not schedule['enabled'] and not consumed
+
+
 class WorkQueue:
     def __init__(self, root: Path, *, clock=time.time, grace_seconds=300):
         self.root, self.clock = Path(root), clock
@@ -137,6 +148,7 @@ class WorkQueue:
                     if row['status'] in {'dispatching', 'submitted'}:
                         row['status'], row['reason'] = 'needs_review', 'delivery_unknown_after_restart'
                 for schedule in value['schedules']:
+                    schedule.setdefault('pausedByUser', _paused_by_user(schedule))
                     if schedule['enabled']:
                         sessions.add(schedule['sessionId'])
                 for sid in sessions:
@@ -175,6 +187,8 @@ class WorkQueue:
         for schedule in value['schedules']:
             if type(schedule['enabled']) is not bool or schedule['kind'] not in {'once', 'daily', 'weekly'}:
                 raise ValueError('Invalid schedule')
+            if 'pausedByUser' in schedule and type(schedule['pausedByUser']) is not bool:
+                raise ValueError('Invalid schedule pause intent')
             if schedule['nextAt'] is not None:
                 _stamp(schedule['nextAt'])
             _stamp(schedule['runAt'])
@@ -222,7 +236,7 @@ class WorkQueue:
             schedules = [row for row in self.data['schedules'] if sid is None or row['sessionId'] == sid]
             reason = self.data['holds'].get(sid) if sid is not None else None
             rows = [{**row, 'state': row['status']} for row in rows]
-            schedules = [{**row, 'nextRunAt': row['nextAt'],
+            schedules = [{**row, 'nextRunAt': row['nextAt'], 'pausedByUser': _paused_by_user(row),
                           'lastRun': {'dueAt': row['lastDueAt'], 'status': row['lastStatus']}} for row in schedules]
             return deepcopy({'revision': self.data['revision'], 'queue': rows, 'schedules': schedules,
                              'paused': bool(reason), 'reason': reason, 'warning': self.warning, 'policy': POLICY})
@@ -365,22 +379,25 @@ class WorkQueue:
             if len(self.data['schedules']) >= 100:
                 raise ValueError('예약은 최대 100개까지 저장할 수 있습니다.')
             row = {'id': uuid.uuid4().hex, 'sessionId': sid, 'text': text, 'attachments': attachments,
-                   'context': context, **rule, 'enabled': True, 'lastDueAt': None, 'lastStatus': None}
+                   'context': context, **rule, 'enabled': True, 'pausedByUser': False,
+                   'lastDueAt': None, 'lastStatus': None}
             self.data['schedules'].append(row)
             if receipt_key is not None:
                 self.data['receipts'][receipt_key] = {'id': row['id'], 'digest': digest}
             self._save()
             return deepcopy(row)
 
-    def update_schedule(self, sid, identifier, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, enabled=True):
+    def update_schedule(self, sid, identifier, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, enabled=None):
         text, attachments = _prompt(text, [] if attachments is None else attachments)
         rule = _rule(kind, run_at, time, weekdays, self.clock())
         context = _context(context) if context is not None else None
-        if type(enabled) is not bool:
+        if enabled is not None and type(enabled) is not bool:
             raise ValueError('예약 사용 여부를 확인해 주세요.')
         with self.lock:
             row = self._row(sid, identifier, 'schedules')
-            row.update(text=text, attachments=attachments, **rule, enabled=enabled)
+            selected_enabled = not _paused_by_user(row) if enabled is None else enabled
+            row.update(text=text, attachments=attachments, **rule, enabled=selected_enabled,
+                       pausedByUser=not selected_enabled)
             if context is not None:
                 row['context'] = context
             # Editing/rescheduling withdraws only not-yet-sent occurrences.
@@ -405,6 +422,7 @@ class WorkQueue:
         with self.lock:
             schedule = self._row(sid, identifier, 'schedules')
             schedule['enabled'] = enabled
+            schedule['pausedByUser'] = not enabled
             if not enabled:
                 for row in self.data['queue']:
                     if row.get('scheduleId') == identifier and row['status'] == 'queued':

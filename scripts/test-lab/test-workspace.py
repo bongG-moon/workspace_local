@@ -25,7 +25,7 @@ def cases(suite):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--report', type=Path, default=ROOT / 'build/qa-workspace-0.21.0-tests.json')
+parser.add_argument('--report', type=Path, default=ROOT / 'build/qa-workspace-0.21.1-tests.json')
 args = parser.parse_args()
 loader = unittest.TestLoader()
 suite = loader.discover(str(ROOT / 'tests'), pattern='test_workspace*.py')

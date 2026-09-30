@@ -1,23 +1,30 @@
-# Company Workspace 0.21.0
+# Company Workspace 0.21.1
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.0/Company-Workspace-0.21.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.0/Company-Workspace-0.21.0-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.1/Company-Workspace-0.21.1-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.1/Company-Workspace-0.21.1-vbs.zip)**
 
-[0.21.0 변경 안내](docs/VALIDATION_0.21.0.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.0.md)
+[0.21.1 변경 안내](docs/VALIDATION_0.21.1.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.1.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.1.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
 
-## 0.21.0 변경
+## 0.21.1 변경
+
+- 첫 실행에서 일부 화면 파일이 누락되던 연결 대기 문제를 수정했습니다. 화면 준비 상태와 복구 안내를 추가했습니다.
+- 화면 복구 시 업무·초안·첨부를 보존하고, 로딩 중 새로 입력하거나 지운 초안을 우선합니다. 업무 요청을 자동 재전송하지 않습니다.
+- 사용 안내 링크와 Markdown 표 복사를 수정했습니다.
+- 예약의 재시작 후 폴더 확인, 완료된 일회성 예약의 미래 시각 재설정, 연결 한도 대기와 동시 연결 처리를 수정했습니다.
+
+## 0.21.0에서 개선된 기능
 
 - 채팅 안의 이미지 미리보기·확대와 파일 카드를 추가했습니다.
 - 표 복사와 CSV/TSV 표 미리보기, 코드의 문법 색상·복사·접기를 지원합니다.
