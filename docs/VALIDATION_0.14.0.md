@@ -54,7 +54,9 @@
 
 깊게 중첩된 개발 경로에서 내장 파일 검증이 종료 코드 59로 중단되어, 동일 EXE를 짧은 격리 캐시에서 재검증했습니다. 종료 코드 0과 78개 해시 일치를 확인했습니다. 최종 패키지는 전체 회귀를 통과한 공개 저장소의 소스로 만들었으며 별도 개발 변경 파일은 제외했습니다.
 
-위 표는 최종 로컬 산출물 기준입니다. 공개 다운로드 검증은 완료 후 추가 기록합니다.
+[v0.14.0 공개 사전 배포](https://github.com/bongG-moon/workspace_local/releases/tag/v0.14.0)에 등록한 EXE ZIP·VBS ZIP·SHA256SUMS.txt를 인증 없이 다시 다운로드하여 3개 모두 SHA-256 일치를 확인했습니다. Release는 초안이 아니며 소스·태그 커밋은 `26eb478d22093ad676253421d7a776c01439fe09`입니다. 후속 검증 문서 커밋과 관계없이 ZIP은 이 소스 기준입니다.
+
+공개 전 검사에서 앱 파일 78개와 저장소 인덱스 바이트 일치, ZIP CRC, EXE ZIP의 3개 파일 구성, 추가 인증정보 패턴 0건, 추적된 개인 실행 상태·인증 경로 0건을 확인했습니다. 익명 다운로드 기록은 `build/qa-workspace-0.14.0-public-downloads.json`, 출판 검사는 `build/qa-workspace-0.14.0-publication.json`에 보관합니다.
 
 
 로컬 검사 기록은 `build/qa-workspace-0.14.0-tests.json`, `build/qa-workspace-0.14.0-browser.json`, `build/qa-standalone-0.14.0-public` 등에 보관합니다. 개인 경로·토큰·원시 대화 기록은 공개 저장소와 ZIP에 포함하지 않습니다.

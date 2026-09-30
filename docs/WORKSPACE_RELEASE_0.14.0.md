@@ -18,4 +18,4 @@
 
 [사용법과 구현 범위](WORKSPACE_0.14.0_CONTINUITY.md) · [검증 결과와 한계](VALIDATION_0.14.0.md) · [Release 페이지](https://github.com/bongG-moon/workspace_local/releases/tag/v0.14.0) · [체크섬](https://github.com/bongG-moon/workspace_local/releases/download/v0.14.0/SHA256SUMS.txt)
 
-공개 배포와 다운로드 검증 결과는 완료 후 기록합니다.
+[v0.14.0 공개 사전 배포](https://github.com/bongG-moon/workspace_local/releases/tag/v0.14.0)에 등록한 EXE ZIP·VBS ZIP·SHA256SUMS.txt를 인증 없이 다시 다운로드하여 3개 모두 SHA-256 일치를 확인했습니다. Release는 초안이 아니며 소스·태그 커밋은 `26eb478d22093ad676253421d7a776c01439fe09`입니다. 후속 검증 문서 커밋과 관계없이 ZIP은 이 소스 기준입니다.
