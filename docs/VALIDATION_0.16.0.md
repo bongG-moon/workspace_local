@@ -52,6 +52,8 @@
 - VBS 더블클릭 자체는 이 호스트의 WSH 시험 제한으로 확인하지 못했습니다. EXE 실행 검증과 구분합니다.
 - 최종 EXE SHA-256: `1c48e3102ecfbd1607f05582084f40f049624e0a3f4a01ef6a288048fefef5ef`
 - 최종 VBS ZIP SHA-256: `757686bac1657176094e223f3d182ce8a9dbc7b3645f0e6fe7d4229d70eab36c`
-- 공개 다운로드 및 소스 커밋 확인: 최종 결과 반영 예정.
+- 배포 소스 커밋: `66a9b12f936c856c1e6ad8cb03222f4389eab049`. 원격 `main`의 동일 커밋과 [v0.16.0 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.16.0)를 확인했습니다.
+- 공개한 EXE ZIP·VBS ZIP·SHA256SUMS.txt를 인증 없이 다시 내려받아 모두 로컬 파일과 같은 SHA-256임을 확인했습니다. EXE ZIP: `0ece72b437d82097e498b75b597bd2f3f62ba4e4d180e7736e32dd0e0f6ac351`.
+- 배포 직전 별도 코드 검토에서 분기 식별자·원본 검증, 파일 수집 경계, 기록 캐시·저장 실패 보호, 늦게 도착한 화면 응답 처리를 확인했고 추가 차단 결함은 발견하지 못했습니다.
 
 Windows 알림 배너의 실제 표시 여부, 모든 회사 보안 정책·Python 설치 조합, Office 문서 내부 비교·자동 복구는 이번 검증 완료 범위가 아닙니다. 기존 인증·UAC·회사 정책·개인 Claude 설정을 변경하지 않았습니다.
