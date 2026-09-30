@@ -1,6 +1,6 @@
 # Company Workspace 0.12.12 — 제한 권한 재실행과 WS-38
 
-검증 기준일: 2026-09-30. 네이티브 회귀, 공개 소스 전체 회귀, 현재 사용자 실행기 및 로컬 산출물·실제 EXE 연결 검증을 완료했습니다. 공개 게시와 다운로드 대조는 아직 하지 않았습니다. **운영 진단으로 확인한 실패 원인, 개발 PC의 인공 재현, 수정본의 운영 PC 재실행을 구분합니다.** 아래 대기 항목은 성공으로 처리하지 않습니다.
+검증 기준일: 2026-09-30. 네이티브 회귀, 공개 소스 전체 회귀, 현재 사용자 실행기 및 로컬 산출물·실제 EXE 연결 검증을 완료했습니다. 공개 사전 배포와 자산 3개의 익명 다운로드·체크섬 대조도 완료했습니다. **운영 진단으로 확인한 실패 원인, 개발 PC의 인공 재현, 수정본의 운영 PC 재실행을 구분합니다.** 수정본의 운영 PC 재실행은 미확인입니다.
 
 ## 운영 진단으로 확인한 내용
 
@@ -41,6 +41,7 @@ EXE와 VBS 모두 앱 파일만 배포하며 이미 설치된 Python 3.11 이상
 | 실제 Claude 연결·확인 대상 개인 설정 보존 | Claude 2.1.285 연결 초기화 성공, `claude-sonnet-5-5` / Effort `medium` / 명령 141개, 사용자 AI 요청 0건, 설정 5개 중 변경 0개 |
 | 전체 공개 소스 회귀 | 636개 중 608개 통과, 28개 생략, 실패·오류 0개(155.782초) |
 | 별도 현재 사용자 실행기 | 3개 전부 통과(10.402초): 기존 Claude 호출 환경, 다른 빌드 분리, 숨김 실행·재열기 |
+| 공개 Release 다운로드·체크섬 대조 | VBS ZIP·EXE ZIP·SHA256SUMS.txt를 인증 없이 다운로드하여 크기와 SHA-256 일치 확인 |
 | 수정본의 운영 PC 실제 재실행 | 미확인 |
 
 전체 공개 소스 회귀의 생략 28개는 선택적 Company Agent 코어 20개, 심볼릭 링크 권한 3개, 별도 선택 실행 토큰 검사 4개, WSH 환경 1개입니다. 토큰 검사 중 제한 복사본·자식·신규 기본 DACL 3개는 위 별도 네이티브 14개 실행에서 통과했습니다. 시험 범위가 겹치므로 전체 회귀·네이티브·순수 ACL·버전 검사 수를 누적 합산하지 않습니다. 현재 사용자 실행기 3개는 전체 회귀 실행기에서 제외해 별도로 확인했습니다. 전체 보고서는 `build/qa-workspace-0.12.12-tests.json`에 보관합니다.
@@ -60,5 +61,10 @@ VBS ZIP의 격리 데모 검사는 별도 압축 해제한 서버 진입점의 �
 | `Company-Workspace-0.12.12.exe` | 5,957,120 | `fea1bcd8f07a964b6e3ec107929a01b0d4da201202ad1b33fb8df3fcd791ebb1` |
 | `Company-Workspace-0.12.12-vbs.zip` | 5,887,320 | `1a7a4e3157e4741872c3aaccbaffc562209879a623b11102ae9e5e1070d5d74d` |
 | `Company-Workspace-0.12.12-exe.zip` | 5,923,067 | `5b6c21a51ca8cbe5c1826870e5c55ff97188662a2d620a5be65f7779b11fb2a0` |
+| `SHA256SUMS.txt` | 200 | `28c913cd23708ec465d8a3ddca26526471d187dfca79f74f5d3c4db048f4409c` |
 
-표의 크기와 SHA-256은 로컬 최종 산출물 기준입니다. 공개 게시·다운로드 대조는 아직 확인하지 않았습니다. 원시 검증 기록은 `build/qa-workspace-0.12.12-native.json`, `build/workspace-standalone-0.12.12-build.json`, `build/workspace-release-0.12.12.json`, `build/qa-workspace-0.12.12-bundle.json`, `build/qa-standalone-0.12.12-final/{startup-result,prepare-result,finish-result}.json`에 보관합니다. 이 기록이나 개인 경로·설정 파일은 배포하지 않습니다. 기존 0.12.11 앱·진단 자산과 검증 문서는 수정하지 않습니다. 당시 비교 진단을 재현하려면 커밋 `806183a`를 사용하며 main의 진단 도구는 현재 제품 버전을 대상으로 합니다.
+[v0.12.12 공개 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.12.12)는 사전 배포(prerelease)이며 초안이 아닙니다. 배포 소스와 태그의 커밋은 [5d42aa5f8b0aac6b20741091ccbfc0880d811580](https://github.com/bongG-moon/workspace_local/commit/5d42aa5f8b0aac6b20741091ccbfc0880d811580)입니다. 문서 후속 변경과 관계없이 이 태그와 자산은 해당 소스 기준입니다.
+
+표의 크기와 SHA-256은 로컬 최종 산출물 기준이며, 공개한 VBS ZIP·EXE ZIP·SHA256SUMS.txt 3개를 인증 없이 다시 다운로드하여 모두 일치함을 확인했습니다. EXE 단일 파일은 ZIP에 포함된 로컬 산출물로 검증했으며 별도의 공개 다운로드 자산은 아닙니다. 공개 다운로드 결과는 `build/qa-workspace-0.12.12-public-downloads.json`에 보관합니다.
+
+원시 검증 기록은 `build/qa-workspace-0.12.12-native.json`, `build/workspace-standalone-0.12.12-build.json`, `build/workspace-release-0.12.12.json`, `build/qa-workspace-0.12.12-bundle.json`, `build/qa-standalone-0.12.12-final/{startup-result,prepare-result,finish-result}.json`에 보관합니다. 이 기록이나 개인 경로·설정 파일은 배포하지 않습니다. 기존 0.12.11 앱·진단 자산과 검증 문서는 수정하지 않습니다. 당시 비교 진단을 재현하려면 커밋 `806183a`를 사용하며 main의 진단 도구는 현재 제품 버전을 대상으로 합니다.

@@ -9,6 +9,8 @@
 | VBS ZIP | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상 | [Company-Workspace-0.12.12-vbs.zip](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.12/Company-Workspace-0.12.12-vbs.zip) |
 | EXE ZIP | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상 | [Company-Workspace-0.12.12-exe.zip](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.12/Company-Workspace-0.12.12-exe.zip) |
 
+[v0.12.12 공개 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.12.12)는 사전 배포(prerelease)입니다. 배포 소스와 태그의 커밋은 [5d42aa5f8b0aac6b20741091ccbfc0880d811580](https://github.com/bongG-moon/workspace_local/commit/5d42aa5f8b0aac6b20741091ccbfc0880d811580)이며, [SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.12.12/SHA256SUMS.txt)에서 ZIP 체크섬을 확인할 수 있습니다.
+
 두 배포본은 앱 파일만 포함합니다. Python 런타임·설치 프로그램·자동 다운로드·설치는 없으며 기존 설치를 확인하여 사용합니다. 앱 전용 로그인 없이 열고 AI 업무에는 같은 Windows 사용자의 기존 Claude Code 인증을 사용합니다.
 
 1. 기존 앱에서 **설정 → 앱 종료**를 선택합니다. 창의 X만 닫으면 서버가 남을 수 있습니다.
@@ -26,7 +28,7 @@
 
 ## 검증 기록
 
-아래는 완료한 개발 환경·로컬 산출물 검증 결과입니다. 공개 게시와 다운로드는 아직 검증하지 않았습니다. 운영 진단의 원인 확인과 수정본의 운영 PC 실행 성공은 별개입니다.
+아래는 완료한 개발 환경·로컬 산출물·공개 다운로드 검증 결과입니다. 운영 진단의 원인 확인과 수정본의 운영 PC 실행 성공은 별개입니다.
 
 | 항목 | 결과 |
 | --- | --- |
@@ -40,10 +42,10 @@
 | 실제 Claude 연결·앱 정상 종료 | Claude 2.1.285 초기화 성공, 명령 141개, 사용자 AI 요청 0건, 정상 종료 |
 | VBS ZIP SHA-256 | `1a7a4e3157e4741872c3aaccbaffc562209879a623b11102ae9e5e1070d5d74d` |
 | EXE ZIP SHA-256 | `5b6c21a51ca8cbe5c1826870e5c55ff97188662a2d620a5be65f7779b11fb2a0` |
-| 공개 Release 다운로드·체크섬 대조 | 확인 대기 |
+| 공개 Release 다운로드·체크섬 대조 | VBS ZIP·EXE ZIP·SHA256SUMS.txt 3개 익명 다운로드, 크기·SHA-256 모두 일치 |
 | 수정본의 운영 PC 재실행 | 미확인 |
 
-수정 전 인공 시험은 파이프·자식 접근의 코드 5를 재현했으며 운영 JSON의 모든 종료 코드와 실패 경로를 그대로 재현한 것은 아닙니다. 로컬 산출물 해시와 공개 다운로드 검증도 구분합니다.
+수정 전 인공 시험은 파이프·자식 접근의 코드 5를 재현했으며 운영 JSON의 모든 종료 코드와 실패 경로를 그대로 재현한 것은 아닙니다. 공개 자산의 무결성 확인은 운영 PC에서의 실행 성공을 뜻하지 않습니다.
 
 세부 증거와 남은 범위는 [0.12.12 검증 기록](VALIDATION_0.12.12.md)에 기록합니다. 다른 회사 PC의 모든 보안 정책·Office·DRM·모델·플러그인 호환성까지 보장하는 것은 아닙니다.
 
