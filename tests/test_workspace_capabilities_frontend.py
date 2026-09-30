@@ -61,6 +61,59 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
+    def test_common_catalog_prefers_live_connection_until_user_explicitly_chooses(self):
+        self.run_case(r"""(async()=>{
+          sessions.push({id:'B',title:'진행했던 업무',workspace:'C:\\fixture\\B',state:'done',connectionState:'live'});
+          const calls=[];api=async(path)=>{calls.push(path);return modern('B');};
+          WorkspaceCapabilities.open();await flush();
+          assert.equal($('capabilities-folder').value,'B');
+          assert.equal(calls[0],'/api/capabilities?scope=common&id=B');
+          $('capabilities-folder').value='A';await $('capabilities-folder').onchange();
+          WorkspaceCapabilities.contextChanged();
+          assert.equal($('capabilities-folder').value,'A');
+        })()""")
+
+    def test_catalog_prepare_connects_selected_trusted_task_without_prompt_or_task_switch(self):
+        self.run_case(r"""(async()=>{
+          sessions.push({id:'B',title:'연결 업무',workspace:'C:\\fixture\\B',state:'idle'});
+          const calls=[];api=async(path,body)=>{
+            calls.push({path,body});
+            if(path==='/api/session?id=B')return {id:'B',trusted:true,state:'idle'};
+            if(path==='/api/connect')return {ok:true,connection:{connected:true}};
+            return modern('B');
+          };
+          WorkspaceCapabilities.open();await flush();
+          $('capabilities-folder').value='B';await $('capabilities-folder').onchange();
+          await $('capabilities-connect').onclick();
+          assert.deepEqual(calls.filter(x=>x.body),[{path:'/api/connect',body:{id:'B'}}]);
+          assert.equal(active.id,'A');assert.equal(active.state,'idle');
+          assert.equal(sessions.find(x=>x.id==='B').connectionState,'live');
+          assert.equal($('capabilities-connect').disabled,false);
+        })()""")
+
+    def test_cancelled_untrusted_catalog_prepare_does_not_start_cli(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];confirmAction=async()=>false;
+          api=async(path,body)=>{calls.push({path,body});return path.startsWith('/api/session?')?
+            {...active,trusted:false}:modern('A');};
+          WorkspaceCapabilities.open();await flush();
+          await $('capabilities-connect').onclick();
+          assert.ok(calls.every(x=>x.body===undefined));
+          assert.equal($('capabilities-connect').disabled,false);
+        })()""")
+
+    def test_late_preparation_never_replaces_another_active_task_connection(self):
+        self.run_case(r"""(async()=>{
+          let resolve;api=async(path)=>path==='/api/session?id=A'?{...active,trusted:true}:
+            path==='/api/connect'?new Promise(r=>resolve=r):modern('A');
+          WorkspaceCapabilities.open();await flush();
+          const pending=$('capabilities-connect').onclick();await flush();
+          WorkspaceCapabilities.close();active={id:'B',title:'새 업무',state:'idle',workspace:'C:\\B',connection:{model:'B-model'}};
+          resolve({ok:true,connection:{connected:true,model:'A-model'}});await pending;
+          assert.equal(active.connection.model,'B-model');
+          assert.equal(WorkspaceCapabilities.isOpen(),false);
+        })()""")
+
     def run_case(self, javascript):
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), FIXTURE + javascript,
@@ -138,7 +191,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           WorkspaceCapabilities.open();await flush();
           assert.match($('capabilities-empty').textContent,/전달받지 못/);
           assert.match($('capabilities-warning').textContent,/없다는 뜻은 아닙니다/);
-          assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'미확인');
+          assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'CLI 미제공');
           $('capabilities-tools-tab').onclick();
           assert.match($('capabilities-empty').textContent,/목록이 비어/);
           assert.equal($('capabilities-warning').hidden,true);
@@ -167,7 +220,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.match(flatText(groupsEl[1]),/플러그인: codex/);
           assert.equal($('capabilities-warning').hidden,true);
           for(const type of ['tools','mcp','commands']) {
-            assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 전');
+            assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 필요');
             $('capabilities-'+type+'-tab').onclick();
             assert.match($('capabilities-empty').textContent,/선택한 업무의 Claude 연결이 준비/);
           }
@@ -206,14 +259,14 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           api=async()=>fixture(null,{status:'no-session',state:'unavailable',groups,
             installed:{state:'not-selected',skills:[]}});
           WorkspaceCapabilities.open();await flush();
-          for(const type of ['skills','tools','mcp','commands'])assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 전');
+          for(const type of ['skills','tools','mcp','commands'])assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 필요');
           assert.match($('capabilities-empty').textContent,/먼저 새 업무/);
           active={id:'A',title:'업무 A',workspace:'C:\\fixture\\A',state:'idle'};
           api=async()=>fixture('A',{groups:{skills:{reported:true,items:[]},tools:{reported:false,items:[]}},
             installed:{state:'discovered',skills:[]}});
           await $('capabilities-refresh').onclick();
           assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'0');
-          assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'미확인');
+          assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'CLI 미제공');
           assert.equal($('capabilities-skills-tab').attributes['aria-label'],'스킬 · 0개');
         })()""")
 
@@ -350,7 +403,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           const calls=[];let live=false,timer;
           api=async path=>{calls.push(path);return live?modern('A'):modern('A',{status:'awaiting-runtime',state:'unavailable',groups:{
             tools:{reported:false,items:[]},mcp:{reported:false,items:[]},commands:{reported:false,items:[]}}});};
-          WorkspaceCapabilities.open();await flush();assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'연결 전');
+          WorkspaceCapabilities.open();await flush();assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'연결 필요');
           live=true;setTimeout=fn=>{timer=fn;return 1;};WorkspaceCapabilities.contextChanged(true);
           assert.equal(typeof timer,'function');await timer();await flush();
           assert.equal(calls.length,2);assert.ok(calls.every(path=>path==='/api/capabilities?scope=common&id=A'));

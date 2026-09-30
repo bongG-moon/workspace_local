@@ -75,7 +75,7 @@ class WindowBinding:
 
 
 class WindowsAttention:
-    """Windows adapter: capture foreground only; no window enumeration/focus.
+    """Capture foreground for attention; find/focus only on explicit reopen.
 
     Edge may reuse its existing process, so the launch PID is not a window
     identity. An authenticated page sets a per-run random, non-auth title. Its
@@ -118,13 +118,10 @@ class WindowsAttention:
                         ('uCount', wt.UINT), ('dwTimeout', wt.DWORD)]
         self.FlashInfo = FlashInfo
         signature(self.user, 'FlashWindowEx', [ptr(FlashInfo)], wt.BOOL)
-        self.allowed_images = set()
-        for name in ('PROGRAMFILES(X86)', 'PROGRAMFILES', 'LOCALAPPDATA'):
-            value = os.environ.get(name)
-            if value:
-                candidate = Path(value) / 'Microsoft/Edge/Application/msedge.exe'
-                if candidate.is_absolute() and candidate.is_file():
-                    self.allowed_images.add(os.path.normcase(str(candidate.resolve(strict=True))))
+        from .app_window import browser_candidates
+        self.allowed_images = {os.path.normcase(str(path)) for _, path in browser_candidates()}
+        self.EnumProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+        signature(self.user, 'EnumWindows', [self.EnumProc, wt.LPARAM], wt.BOOL)
         own = self._process(os.getpid())
         if own is None or not self.allowed_images:
             raise OSError('An eligible app browser could not be verified.')
@@ -189,6 +186,19 @@ class WindowsAttention:
 
     def bind(self, title):
         return self._window(self.user.GetForegroundWindow(), title)
+
+    def find(self, title):
+        # Used only for an explicit reopen click. The random per-run title plus
+        # SID/session/image/creation checks exclude unrelated browser windows.
+        found = []
+        def visit(hwnd, _):
+            binding = self._window(hwnd, title, allow_hidden=True)
+            if binding is not None:
+                found.append(binding)
+                return False
+            return True
+        self.user.EnumWindows(self.EnumProc(visit), 0)
+        return found[0] if found else None
 
     def flash(self, binding, title, *, stop=False):
         if self._window(binding.hwnd, title, allow_hidden=True) != binding:
@@ -305,10 +315,24 @@ class AttentionNotifier:
 
     def set_visible(self, show):
         with self._lock:
-            if self._closed or self._binding is None or self._native in (None, _AUTO):
+            if self._closed:
+                return False
+            if show and self._native is _AUTO:
+                try:
+                    self._native = WindowsAttention()
+                except (OSError, AttributeError, ValueError):
+                    self._native = None
+            if self._native in (None, _AUTO):
                 return False
             try:
-                return self._native.visibility(self._binding, self.window_title, show=show) is True
+                if self._binding is not None and self._native.visibility(self._binding, self.window_title, show=show) is True:
+                    return True
+                if show and callable(getattr(self._native, 'find', None)):
+                    binding = self._native.find(self.window_title)
+                    if binding is not None:
+                        self._binding = binding
+                        return self._native.visibility(binding, self.window_title, show=True) is True
+                return False
             except (OSError, AttributeError, ValueError):
                 return False
 

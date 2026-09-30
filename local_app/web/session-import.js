@@ -5,6 +5,15 @@ globalThis.WorkspaceSessionImport = (() => {
   function status(text){message.textContent=text||"";}
   function busy(value){loading=value;$("import-find").disabled=value;$("import-refresh").disabled=value;$("import-apply").disabled=value||!selected||selected.workspaceAvailable===false;}
   function reset(){selected=null;preview.replaceChildren();$("import-apply").disabled=true;}
+  function render(){
+    const shown=!!active?.imported&&!globalThis.WorkspaceCapabilities?.isOpen();
+    $("imported-context").hidden=!shown;
+    if(!shown)return;
+    const connected=!!active.connection&&active.connection.connected!==false;
+    $("imported-context-label").textContent=`이전 Claude 세션을 업무로 추가했어요 · ${String(active.sessionId||"").slice(0,8)} · ${connected?"같은 대화에서 이어가는 중":"아래 입력창에서 후속 질문을 보낼 수 있어요"}`;
+    $("imported-continue").hidden=connected;
+    $("imported-continue").disabled=appClosed||["starting","running","approval","question"].includes(active.state);
+  }
   async function inspect(id){
     if(loading||appClosed)return; const ticket=++generation;reset();busy(true);status("이전 대화와 작업 폴더를 확인하고 있어요…");
     try{
@@ -15,7 +24,7 @@ globalThis.WorkspaceSessionImport = (() => {
       for(const row of (record.messages||[]).slice(-6)){
         const article=el("article",null,"import-message");article.append(el("strong",row.role==="user"?"나":"Claude"),el("p",String(row.text||"").slice(0,1600)));preview.append(article);
       }
-      status((record.warnings||[]).join(" ")||"최근 대화 미리보기입니다. 불러오기만으로 Claude를 실행하지 않습니다.");
+      status((record.warnings||[]).join(" ")||"최근 대화 미리보기입니다. 아래 ‘업무에 추가하고 이어가기’를 누르면 같은 세션과 폴더를 업무로 등록합니다. 불러오기만으로 Claude를 실행하지 않습니다.");
     }catch(e){if(ticket===generation)status(e.message);}finally{if(ticket===generation)busy(false);}
   }
   async function refresh(){
@@ -43,8 +52,10 @@ globalThis.WorkspaceSessionImport = (() => {
       const bootResult=await api("/api/bootstrap");if(ticket!==generation||!dialog.open||appClosed)return;
       sessions=bootResult.sessions;renderSessions();dialog.close();
       await selectSession(result.session.id);
-      toast(result.existing?"이미 불러온 업무를 열었어요.":"이전 대화와 원래 작업 폴더를 불러왔어요. 다른 터미널에서 같은 대화를 실행 중이라면 먼저 마쳐 주세요.");
+      render();$("prompt").focus();
+      toast(result.existing?"이미 불러온 업무를 열었어요. 아래 입력창에서 이어서 요청하세요.":"같은 Claude 세션을 업무에 추가했어요. 아래 입력창에서 이어서 요청하세요. 기존 터미널에서는 이 세션의 작업을 먼저 마쳐 주세요.");
     }catch(e){if(ticket===generation)status(e.message);}finally{if(ticket===generation)busy(false);}
   };
-  return {refresh};
+  $("imported-continue").onclick=async()=>{await globalThis.WorkspaceComposer?.prepareConnection();render();};
+  return {refresh,render};
 })();

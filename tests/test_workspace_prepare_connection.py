@@ -97,14 +97,14 @@ class PrepareConnectionTests(unittest.TestCase):
         self.assertNotIn('skills', connection)
         rows = complete(item, {'kind':'slash', 'query':'company'})['items']
         self.assertEqual(['/company:report'], [row['invocation'] for row in rows])
-        self.assertEqual(['control_request'], [row['type'] for row in self.frames()])
+        self.assertEqual(['initialize', 'mcp_status'], [row['request']['subtype'] for row in self.frames()])
         self.app.connect(self.sid)
-        self.assertEqual(1, len(self.frames()))
+        self.assertEqual(['initialize', 'mcp_status', 'mcp_status'], [row['request']['subtype'] for row in self.frames()])
         self.app.send(self.sid, '/company:report retained argument', [])
         eventually(lambda: item['state'] == 'done')
         self.assertEqual(pid, bridge.process.pid)
         frames = self.frames()
-        self.assertEqual(['control_request', 'user'], [row['type'] for row in frames])
+        self.assertEqual(['control_request', 'control_request', 'control_request', 'user'], [row['type'] for row in frames])
         self.assertEqual('/company:report retained argument', frames[-1]['message']['content'])
         self.assertEqual('fixture-model', item['connection']['model'])
 
@@ -181,7 +181,7 @@ class PrepareConnectionTests(unittest.TestCase):
                 thread.join(5)
         self.assertFalse(thread.is_alive())
         self.assertEqual([], errors)
-        self.assertEqual(1, len(self.frames()))
+        self.assertEqual(2, len(self.frames()))
         self.assertEqual([], self.app.get(self.sid)['messages'])
 
     def test_stopped_task_can_prepare_without_artifact_or_turn_mutation(self):

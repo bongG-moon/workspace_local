@@ -1,11 +1,13 @@
 "use strict";
 
-// A read-only inventory. Metadata never becomes HTML or an executable request.
+// Read-only inventory with an explicit, trusted connection preparation action.
+// Metadata never becomes HTML or an executable request.
 globalThis.WorkspaceCapabilities = (() => {
   let opened = false, kind = "skills", data = null, generation = 0;
   let controller = null, loading = false, refreshTimer = null;
   let scope = "common", selectedFolder = "", selectedSession = null, folderOptionsKey = "";
-  let commonSession = null;
+  let commonSession = null, commonExplicit = false, preparing = null;
+  const isLive = item => item?.connection?.connected === true || item?.connectionState === "live";
   const kinds = ["skills", "tools", "mcp", "commands"];
   const names = {skills:"스킬", tools:"도구", mcp:"연결 서버", commands:"명령"};
   const sources = {
@@ -38,8 +40,8 @@ globalThis.WorkspaceCapabilities = (() => {
   function selectFolder(value) {
     const folder = sessionFolders().find(item => pathKey(item.workspace) === pathKey(value));
     selectedFolder = folder?.workspace || "";
-    const match = folder?.sessions.find(item => item.id === selectedSession?.id) || folder?.sessions[0];
-    selectedSession = match ? {id:match.id, title:match.title} : null;
+    const match = folder?.sessions.find(isLive) || folder?.sessions.find(item => item.id === selectedSession?.id) || folder?.sessions[0];
+    selectedSession = match ? {id:match.id, title:match.title, workspace:folder.workspace} : null;
   }
   function syncFolders(chooseDefault = false) {
     if (scope === "common") return syncConnections();
@@ -62,7 +64,7 @@ globalThis.WorkspaceCapabilities = (() => {
   function syncConnections() {
     const rows = sessionFolders().flatMap(folder => folder.sessions);
     const previous = rows.find(item => item.id === commonSession?.id);
-    const selected = previous || rows.find(item => item.id === active?.id) || rows[0];
+    const selected = (commonExplicit && previous) || rows.find(item=>item.id===active?.id && isLive(item)) || rows.find(isLive) || previous || rows.find(item => item.id === active?.id) || rows[0];
     commonSession = selected ? {id:selected.id, title:selected.title, workspace:selected.workspace} : null;
     const select = $("capabilities-folder"), key = "connections:" + JSON.stringify(rows.map(item => [item.id,item.title,item.workspace]));
     if (key !== folderOptionsKey || !select.children.length) {
@@ -97,6 +99,9 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   function statusLine() {
     contextLine();
+    const selected=runtimeSession();
+    $("capabilities-connect").disabled=!!preparing||!selected||appClosed;
+    $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "연결하고 목록 확인";
     const attention = active && ["approval", "question"].includes(active.state)
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
     $("capabilities-status").textContent = loading
@@ -161,7 +166,7 @@ globalThis.WorkspaceCapabilities = (() => {
       return String(inventory.skills.length);
     }
     return runtime?.reported ? String(runtime.items.length)
-      : loading && !data ? "확인 중" : beforeConnection() ? "연결 전" : "미확인";
+      : loading && !data ? "확인 중" : beforeConnection() ? (runtimeSession()?"연결 필요":"업무 선택") : "CLI 미제공";
   }
   function tabState(inventory) {
     for (const type of kinds) {
@@ -276,7 +281,7 @@ globalThis.WorkspaceCapabilities = (() => {
         : "확인한 설치 목록에 일반 스킬이 없어요."
       : current.reported ? `CLI가 보고한 ${names[kind]} 목록이 비어 있어요.`
       : data?.schemaVersion === 2 && data?.status === "installed-only" ? "이 범위의 업무 연결 보고가 없어요. 설치 정보와 실제 연결 목록은 별도로 확인합니다."
-      : beforeConnection() ? `선택한 업무의 Claude 연결이 준비되면 ${names[kind]} 목록을 확인할 수 있어요.`
+      : beforeConnection() ? `선택한 업무의 Claude 연결이 준비되면 ${names[kind]} 목록을 확인할 수 있어요. 위의 ‘연결하고 목록 확인’을 눌러 주세요.`
       : `현재 Claude 연결에서 ${names[kind]} 목록을 전달받지 못했어요. 항목이 없다는 뜻은 아닙니다.`;
     const notes = [...(data?.warnings || [])];
     if (kind === "skills" && data?.installed?.diagnostics?.summary && !["ready", "metadata_read"].includes(data.installed.diagnostics.code)) notes.push(data.installed.diagnostics.summary);
@@ -322,7 +327,7 @@ globalThis.WorkspaceCapabilities = (() => {
       }
       if (data?.schemaVersion !== 2) summary.append(el("span", "스킬 숫자는 설치·연결 목록의 중복을 합친 일반 스킬 수예요. 내부 보조와 참고 자료는 아래에 따로 표시해요.", "capability-count-note"));
     } else {
-      summary.append(el("span", "숫자는 Claude 연결에서 확인한 전체 항목 수예요. ‘연결 전’·‘미확인’은 0개라는 뜻이 아닙니다.", "capability-count-note"));
+      summary.append(el("span", "숫자는 선택한 업무의 Claude 연결이 보고한 항목 수예요. ‘CLI 미제공’은 0개라는 뜻이 아닙니다. 도구 목록은 첫 실제 요청 후 제공될 수 있어요.", "capability-count-note"));
     }
   }
   async function refresh() {
@@ -354,6 +359,7 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   function open() {
     opened = true; app().classList.add("catalog-open");
+    globalThis.WorkspaceSessionImport?.render();
     $("capabilities-view").hidden = false;
     $("capabilities-open").setAttribute("aria-current", "page");
     $("home-button").setAttribute("aria-current", "false");
@@ -371,6 +377,31 @@ globalThis.WorkspaceCapabilities = (() => {
     $("capabilities-view").hidden = true;
     $("capabilities-open").setAttribute("aria-current", "false");
     taskHeader();
+  }
+  async function prepareCatalog() {
+    if(preparing||!runtimeSession()||appClosed)return;
+    const context={key:contextKey(),id:runtimeSession().id};preparing=context;statusLine();
+    const current=()=>opened&&!appClosed&&contextKey()===context.key;
+    try {
+      const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);
+      if(!current())return;
+      if(!item.trusted){
+        const accepted=await confirmAction({title:"이 업무 폴더의 Claude 연결",message:`${item.workspace}\n이 폴더의 Claude 설정·후크·MCP를 실행해 목록을 확인합니다. AI 질문은 보내지 않습니다.`,confirmLabel:"이 폴더 연결"});
+        if(!accepted||!current())return;
+        await api('/api/trust',{id:context.id,trusted:true});
+        if(!current())return;
+      }
+      if(["starting","running","approval","question"].includes(item.state)){
+        await refresh();toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
+      }
+      const response=await api('/api/connect',{id:context.id});
+      if(!current())return;
+      sessions=sessions.map(row=>row.id===context.id?{...row,connectionState:"live"}:row);
+      if(active?.id===context.id){active.trusted=true;active.connection=response.connection;renderConnection(response.connection);}
+      await refresh();
+      if(current())toast("연결 목록을 확인했어요. 도구 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
+    }catch(err){if(current())toast(err.message);}
+    finally{if(preparing===context){preparing=null;if(opened)statusLine();}}
   }
   function contextChanged(reload = false) {
     if (!opened) return;
@@ -391,12 +422,14 @@ globalThis.WorkspaceCapabilities = (() => {
       const item = sessionFolders().flatMap(folder => folder.sessions).find(row => row.id === $("capabilities-folder").value);
       if (!item) return syncConnections();
       commonSession = {id:item.id, title:item.title, workspace:item.workspace};
+      commonExplicit = true;
     } else selectFolder($("capabilities-folder").value);
     data = null; render(); return refresh();
   };
   $("capabilities-open").onclick = open;
   $("capabilities-back").onclick = () => { close(); $("capabilities-open").focus(); };
   $("capabilities-refresh").onclick = refresh;
+  $("capabilities-connect").onclick = prepareCatalog;
   $("capabilities-search").oninput = render;
   for (const type of kinds) {
     const tab = $(`capabilities-${type}-tab`);

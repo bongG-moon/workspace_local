@@ -319,7 +319,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.16.0' -and $health.appRoot -eq $appRoot
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.17.0' -and $health.appRoot -eq $appRoot
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -334,7 +334,9 @@ try {
         # Closing the app window leaves its connection alive. A previous build
         # must remain reachable so the user can end it through Settings.
         # Open only the authenticated, validated endpoint above; never kill it.
-        if (-not $NoBrowser) { Open-WorkspaceWindow -Uri $liveWorkspaceUri }
+        $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
+            $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
+        if (-not $NoBrowser) { Open-WorkspaceWindow -Uri $liveWorkspaceUri -ReuseSupported ([bool]$canReuseWindow) }
         if (-not $sameWorkspaceRunning) { throw 'WORKSPACE_STARTUP:39' }
         return
     }

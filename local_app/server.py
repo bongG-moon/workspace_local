@@ -8,6 +8,8 @@ import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 import secrets
 import subprocess
@@ -37,7 +39,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.16.0"
+WORKSPACE_VERSION = "0.17.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -210,6 +212,7 @@ class LocalApp:
             if sid in self.sessions:
                 raise ValueError('같은 세션의 업무 기록이 이미 존재합니다. 기존 업무를 확인해 주세요.')
             item = {key: record[key] for key in ('id', 'sessionId', 'title', 'workspace', 'created', 'updated', 'messages')}
+            item['title'] = self.unique_title(item['title'][:100])
             workspace_folder(item)
             item.update(pinned=False, trusted=False, state='idle', seq=0, events=[], requests={},
                         bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
@@ -318,6 +321,7 @@ class LocalApp:
                     "workspaceVersion": WORKSPACE_VERSION, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
+                                 {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))} for item in sessions],
                     "sessionOrder": self.session_order.snapshot(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
@@ -330,6 +334,7 @@ class LocalApp:
     def window_state(self):
         available = self.tray is not None and self.tray.available is True
         return {'traySupported': available, 'hideSupported': available and self.notifier.native_state['supported'],
+                'reopenSupported': self._open_window_callback is not None,
                 'closeBehavior': 'background' if available else 'browser'}
 
     def hide_window(self):
@@ -386,6 +391,23 @@ class LocalApp:
             raise ValueError('업무 이름을 줄바꿈 없이 1~100자로 입력해 주세요.')
         return value.strip()
 
+    def unique_title(self, value, exclude=None):
+        """Caller holds the session lock; display names never change folder paths."""
+        value = self.clean_title(value)
+        key = lambda title: unicodedata.normalize('NFC', title).casefold()
+        used = {key(row['title']) for row in self.sessions.values() if row['id'] != exclude}
+        if key(value) not in used:
+            return value
+        numbered = re.search(r' \(([2-9]|[1-9][0-9]+)\)$', value)
+        base = value[:numbered.start()] if numbered else value
+        start = int(numbered[1]) + 1 if numbered else 2
+        for number in range(start, start + MAX_SESSIONS + 1):
+            suffix = f' ({number})'
+            candidate = base[:100-len(suffix)].rstrip() + suffix
+            if key(candidate) not in used:
+                return candidate
+        raise ValueError('업무 이름을 구분할 수 없습니다. 다른 이름을 입력해 주세요.')
+
     def create(self, workspace, trusted, *, managed=False, title=None, managed_root=None):
         if trusted is not True:
             raise ValueError("이 폴더의 Claude 설정·후크·MCP 실행에 동의해 주세요.")
@@ -398,6 +420,7 @@ class LocalApp:
         with self.lock:
             if len(self.sessions) >= MAX_SESSIONS:
                 raise ValueError('업무는 최대 500개까지 저장할 수 있습니다. 기존 업무를 이어서 사용해 주세요.')
+            title = self.unique_title(title)
             sid = str(uuid.uuid4())
             if managed:
                 # The displayed title is never interpreted as a filesystem path.
@@ -444,7 +467,7 @@ class LocalApp:
                 raise ValueError(self.history.warning)
             previous = {key: item.get(key) for key in ('title', 'pinned', 'updated')}
             if title is not None:
-                item['title'] = title
+                item['title'] = self.unique_title(title, sid)
             if 'pinned' in data:
                 item['pinned'] = data['pinned']
             item['updated'] = time.time()
@@ -509,6 +532,7 @@ class LocalApp:
                         'reason': '마지막 완료 기록에서 이어가요. 분기 생성만으로 AI 요청을 보내지는 않아요.'}
             item.update(bridge=None, requests={}, events=[], seq=0, state='idle',
                         attachments=[], artifacts=[], lastRunId=None)
+            item['title'] = self.unique_title(item['title'][:100])
             self.sessions[item['id']] = item
             try:
                 self.save(item['id'])
@@ -519,7 +543,8 @@ class LocalApp:
 
     def _resume_options(self, item):
         if 'branch' not in item:
-            return {'resume': item.get('sessionId')}
+            return {'resume': item.get('sessionId'),
+                    **({'require_resume_identity': True} if item.get('importedConfigRoot') else {})}
         from .conversation_fork import branch_connection
         return branch_connection(item, self.info, runtime_context(self.command)['configRoot'])
 
@@ -950,8 +975,8 @@ class LocalApp:
             item.pop('verification', None)
             item["trusted"] = True
             item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
-            if item["title"] == "새 업무":
-                item["title"] = text.strip().splitlines()[0][:35]
+            if not item['messages'] and re.fullmatch(r'새 업무(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
+                item["title"] = self.unique_title(text.strip().splitlines()[0][:35], sid)
             item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
             if _dispatch_claim is not None:
                 item['messages'][-1]['requestId'] = _dispatch_claim
@@ -1348,6 +1373,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.connect(sid))
         if route == '/api/window/hide':
             return self.reply(app.hide_window())
+        if route == '/api/window/open':
+            if not app._open_window_callback:
+                raise ValueError('앱 창 연결을 준비하지 못했습니다.')
+            return self.reply(app._open_window_callback())
         if route == '/api/dispatch':
             return self.reply(app.dispatch.action(sid, data))
         if route == '/api/claude-sessions/import':
@@ -1447,14 +1476,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def open_window(url):
-    if os.name == "nt":
-        for root in (os.environ.get("PROGRAMFILES(X86)"), os.environ.get("PROGRAMFILES"), os.environ.get("LOCALAPPDATA")):
-            if root:
-                edge = Path(root) / "Microsoft/Edge/Application/msedge.exe"
-                if edge.is_file():
-                    subprocess.Popen([str(edge), "--app=" + url, "--new-window"], creationflags=HIDDEN)
-                    return
-    webbrowser.open(url)
+    from .app_window import launch
+    return launch(url)
 
 
 def main():
@@ -1474,11 +1497,13 @@ def main():
     runtime = args.state / "runtime.json"
     runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
     app.dispatch.start()
+    from .app_window import AppWindow
+    window = AppWindow(app.notifier, url, opener=open_window)
+    app._open_window_callback = window.open
     if not args.no_browser and not args.demo:
         from .tray import WorkspaceTray
         def reopen():
-            if not app.notifier.set_visible(True):
-                open_window(url)
+            return window.open()
         def quit_from_tray():
             if not app.close():
                 return False
@@ -1488,7 +1513,7 @@ def main():
         app.tray = WorkspaceTray(str(args.state.resolve()), reopen, quit_from_tray, ASSETS / 'app-icon.ico')
         app.tray.start()
     if not args.no_browser:
-        open_window(url)
+        window.open()
     try:
         server.serve_forever(poll_interval=.3)
     except KeyboardInterrupt:

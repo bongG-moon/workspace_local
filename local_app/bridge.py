@@ -125,7 +125,7 @@ def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, 
 
 class ClaudeSession:
     def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None,
-                 allow_bypass_permissions=False, fork_session=False, new_session_id=None):
+                 allow_bypass_permissions=False, fork_session=False, new_session_id=None, require_resume_identity=False):
         if type(allow_bypass_permissions) is not bool:
             raise ValueError('Bypass 선택 준비 여부를 확인해 주세요.')
         self.command, self.info, self.cwd, self.emit = command, info, cwd, emit
@@ -140,6 +140,7 @@ class ClaudeSession:
         self._fork_source = str(uuid.UUID(resume)) if fork_session else None
         self._fork_target = str(uuid.UUID(new_session_id)) if fork_session else None
         self._fork_confirmed = False
+        self._expected_resume = str(uuid.UUID(resume)) if require_resume_identity else None
         self.session_id = self._fork_target if fork_session else resume
         self.resume_id = None if fork_session else resume
         self.process = None
@@ -267,6 +268,35 @@ class ClaudeSession:
 
     def _permission_available_modes(self):
         return [mode for mode in self._permission_modes if mode not in self._permission_rejected_modes]
+
+    def _read_runtime_inventory(self):
+        """SDK read control only. Never manufacture a prompt to obtain init tools."""
+        rid = 'catalog-' + uuid.uuid4().hex
+        waiter = {'event': threading.Event(), 'response': None}
+        with self.lock:
+            self._control_waiters[rid] = waiter
+        try:
+            self._write({'type': 'control_request', 'request_id': rid, 'request': {'subtype': 'mcp_status'}})
+            if not waiter['event'].wait(3):
+                return
+            envelope = waiter['response'] or {}
+            detail = envelope.get('response')
+            if envelope.get('subtype') != 'success' or not isinstance(detail, dict):
+                return
+            servers = detail.get('mcpServers')
+            if not isinstance(servers, list):
+                return
+            # The wire also includes server config, URLs and authentication
+            # errors. Keep only display names/status, never those values.
+            rows = [{'name': row['name'][:500], 'status': row.get('status', 'unknown')}
+                    for row in servers[:1000] if isinstance(row, dict) and isinstance(row.get('name'), str)
+                    and isinstance(row.get('status', 'unknown'), str)]
+            with self.lock:
+                self._connection_info['mcp'] = rows
+                self._connection_info.setdefault('reported', {})['mcp'] = True
+        finally:
+            with self.lock:
+                self._control_waiters.pop(rid, None)
 
     def _bypass_enabled_for_connection(self):
         # An inherited original bypass is existing CLI configuration, not an
@@ -575,6 +605,7 @@ class ClaudeSession:
                 raise ValueError("명령 목록을 준비하는 동안 CLI 연결이 종료되었습니다. 기존 Claude 실행 환경을 확인해 주세요.")
             if not self._runtime_settings_checked:
                 self._read_runtime_settings()
+            self._read_runtime_inventory()
             return self.connection_state()
         except Exception:
             self.close()
@@ -742,6 +773,20 @@ class ClaudeSession:
         if self.closed:
             return
         kind = data.get("type")
+        if self._expected_resume and not data.get('parent_tool_use_id'):
+            native_id = data.get('session_id')
+            if native_id is not None or kind == 'system' and data.get('subtype') == 'init':
+                try:
+                    accepted = str(uuid.UUID(native_id)) == self._expected_resume
+                except (ValueError, TypeError, AttributeError):
+                    accepted = False
+                if not accepted:
+                    self.initialization_error = 'Claude가 원래 대화의 세션 ID를 확인해 주지 않았습니다. 새 대화로 대신 이어가지 않았어요. 원래 환경과 세션 기록을 확인해 주세요.'
+                    self.ready.set()
+                    self.close()
+                    self.emit('error', {'code': 'resume_identity', 'message': self.initialization_error,
+                                        'nextAction': '원래 Claude 세션 확인'})
+                    return
         if self._fork_source and not data.get('parent_tool_use_id'):
             native_id = data.get('session_id')
             has_identity = native_id is not None
@@ -770,6 +815,10 @@ class ClaudeSession:
                     self._initialized = True
                     detail = response.get("response", {})
                     if isinstance(detail, dict):
+                        for name, field in (('tools', 'tools'), ('mcp', 'mcp_servers'), ('skills', 'skills'), ('plugins', 'plugins')):
+                            if isinstance(detail.get(field), list):
+                                self._connection_info[name] = detail[field]
+                                self._connection_info.setdefault('reported', {})[name] = True
                         if isinstance(detail.get("commands"), list):
                             self.slash_commands = (self._command_details(self.slash_commands, detail["commands"])
                                                    if self._system_commands_reported else detail["commands"])
@@ -936,6 +985,8 @@ class ClaudeSession:
                             seen.add(choice['id'])
                             self.emit('choice', choice)
         elif kind == "result":
+            if data.get('parent_tool_use_id'):
+                return
             self.last_result = data
             self.session_id = data.get("session_id") or self.session_id
             text = data.get("result", "")
@@ -943,12 +994,28 @@ class ClaudeSession:
             if data.get("is_error") and self._auth_error(error_text):
                 self._authentication_failed()
                 return
-            if text and text not in self.seen_text:
+            if text and text not in self.seen_text and not data.get('is_error'):
                 self._assistant_text(text)
             if data.get("is_error"):
                 self.busy = False
-                self.emit("error", {"code": "task_failed", "nextAction": "자료와 연결 상태를 확인하고 다시 요청",
-                    "message": "; ".join(map(str, data.get("errors", []))) or text or "작업을 완료하지 못했습니다."})
+                # A terminal failure cannot keep obsolete permission cards or
+                # delegated tasks alive for the next user turn.
+                with self.lock:
+                    pending = list(self.pending)
+                    self.pending.clear()
+                    self._permission_choices.clear()
+                    self.tasks.clear()
+                for rid in pending:
+                    self.emit('request_closed', {'id': rid})
+                diagnostic = '[ede_diagnostic]' in error_text
+                if diagnostic and self.session_id:
+                    self.resume_id = self.session_id
+                self.emit("error", {"code": 'cli_turn_incomplete' if diagnostic else "task_failed",
+                    "nextAction": '현재 결과를 확인한 뒤 같은 대화에서 후속 요청' if diagnostic else "자료와 연결 상태를 확인하고 다시 요청",
+                    **({'resumeSessionId': self.resume_id, 'diagnosticCode': 'ede_diagnostic'} if diagnostic else {}),
+                    "message": ('Claude가 도구 처리 뒤 최종 답변을 완료하지 못했어요. 지금까지의 대화와 파일 변경은 남아 있습니다. '
+                                '결과를 확인한 뒤 같은 대화에서 계속 요청할 수 있어요. 이전 요청을 자동으로 재실행하지 않습니다. '
+                                '(진단: ede_diagnostic)') if diagnostic else error_text or "작업을 완료하지 못했습니다."})
             elif not self.tasks:
                 self.busy = False
                 self.resume_id = self.session_id

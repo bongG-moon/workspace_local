@@ -66,7 +66,7 @@ function Write-WorkspacePythonDiagnostic {
         $null = [IO.Directory]::CreateDirectory($directory)
         if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         $path = Join-Path $directory ('python-check-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
-        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.16.0';
+        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.17.0';
             createdUtc=[DateTime]::UtcNow.ToString('o'); sourceRoot=[IO.Path]::GetFullPath($AppRoot);
             powershellVersion=$PSVersionTable.PSVersion.ToString(); attemptId=$AttemptId; code=('WS-' + $Code); checks=$clean }
         # Allowlisted metadata only: no stderr, wrapper/profile bodies, auth,
@@ -91,7 +91,7 @@ function Read-WorkspaceRecentPythonDiagnostic {
         foreach ($file in $files) {
             try {
                 $report = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.16.0' -or
+                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.17.0' -or
                     $report.sourceRoot -ne [IO.Path]::GetFullPath($AppRoot) -or $report.code -ne ('WS-' + $Code) -or $report.attemptId -ne $AttemptId) { continue }
                 return [pscustomobject]@{ path=$file.FullName; checks=@(ConvertTo-WorkspacePythonChecks -Checks $report.checks) }
             } catch {}
@@ -176,9 +176,16 @@ function Wait-WorkspaceShutdown {
 }
 
 function Open-WorkspaceWindow {
-    param([Uri] $Uri)
+    param([Uri] $Uri, [bool] $ReuseSupported = $false)
     # Only an authenticated local Workspace URL is passed by the launcher.
     try {
+        if ($Uri.Scheme -ne 'http' -or $Uri.Host -ne '127.0.0.1' -or $Uri.Fragment -notmatch '^#token=([A-Za-z0-9_-]{40,100})$') { throw 'Invalid local endpoint' }
+        $windowAuth = $Matches[1]
+        if ($ReuseSupported) {
+            $opened = Invoke-RestMethod -Method Post -Uri ($Uri.GetLeftPart([UriPartial]::Authority) + '/api/window/open') -Headers @{ Authorization = ('Bearer ' + $windowAuth) } -ContentType 'application/json' -Body '{}' -TimeoutSec 10
+            if ($opened.ok -eq $true) { return }
+            throw 'Window response was not accepted'
+        }
         # Match the initial window's search in local_app.server.open_window.
         foreach ($edgeRoot in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)) {
             if (-not $edgeRoot) { continue }

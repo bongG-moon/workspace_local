@@ -18,7 +18,7 @@ $files = @(
     'deploy\CompanyWorkspace.Startup.ps1',
     'deploy\CompanyWorkspace.NormalToken.cs',
     'deploy\CompanyAgent.UserContext.ps1',
-    'docs\WORKSPACE_0.16.0_PRODUCTIVITY.md',
+    'docs\WORKSPACE_0.16.0_PRODUCTIVITY.md', 'docs\WORKSPACE_0.17.0_RELIABILITY.md',
     'docs\LOCAL_WORKSPACE.md', 'docs\WORKSPACE_USER_GUIDE.html', 'docs\WORKSPACE_0.15.0_CLAUDE.md',
     'docs\WORKSPACE_0.13.0_DESKTOP.md', 'docs\WORKSPACE_0.14.0_CONTINUITY.md',
     'docs\WORKSPACE_STARTUP_DIAGNOSTIC.md',
@@ -29,7 +29,7 @@ $files = @(
     'local_app\startup.py', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
     'local_app\windows_process.py', 'local_app\picker_channel.py',
     'local_app\choices.py', 'local_app\hook_status.py', 'local_app\permission_contract.py',
-    'local_app\external_apps.py', 'local_app\completions.py', 'local_app\attention.py',
+    'local_app\external_apps.py', 'local_app\completions.py', 'local_app\attention.py', 'local_app\app_window.py',
     'local_app\session_import.py', 'local_app\desktop_notifications.py', 'local_app\window_theme.py', 'local_app\tray.py', 'local_app\attachments.py', 'local_app\work_queue.py', 'local_app\app_dispatch.py',
     'local_app\web\fonts\NotoSansKR-Variable.woff', 'local_app\web\fonts\OFL.txt', 'local_app\web\fonts\SOURCE.json',
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\capabilities.js',
@@ -45,7 +45,7 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
     if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.16.0-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.17.0-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

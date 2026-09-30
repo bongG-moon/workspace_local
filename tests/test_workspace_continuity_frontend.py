@@ -45,6 +45,21 @@ const imported={sessionId:'11111111-1111-1111-1111-111111111111',title:'이전 �
 
 @unittest.skipUnless(NODE, "Node.js is required for continuity UI checks")
 class WorkspaceContinuityFrontendTests(unittest.TestCase):
+    def test_imported_task_banner_and_trust_dialog_describe_continuing_same_session(self):
+        self.run_case(r"""(async()=>{
+          active.imported=true;active.sessionId='12345678-test-session';active.trusted=false;active.connection=null;
+          WorkspaceSessionImport.render();
+          assert.equal($('imported-context').hidden,false);assert.equal($('imported-continue').hidden,false);
+          assert.match($('imported-context-label').textContent,/12345678/);
+          chooseFolder(true);
+          assert.match($('folder-title').textContent,/이전 업무/);assert.equal($('confirm-folder-label').textContent,'확인하고 이어가기');
+          assert.equal($('folder-input').value,active.workspace);assert.equal($('folder-form').dataset.resume,'yes');
+          active.connection={model:'reported-model'};WorkspaceSessionImport.render();
+          assert.equal($('imported-continue').hidden,true);assert.match($('imported-context-label').textContent,/같은 대화/);
+          active.imported=false;WorkspaceSessionImport.render();assert.equal($('imported-context').hidden,true);
+          assertDraft();
+        })()""", ("session-import",))
+
     def run_case(self, script, modules=()):
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), SETUP + script,

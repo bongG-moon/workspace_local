@@ -1,23 +1,31 @@
-# Company Workspace 0.16.0
+# Company Workspace 0.17.0
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.16.0/Company-Workspace-0.16.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.16.0/Company-Workspace-0.16.0-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.17.0/Company-Workspace-0.17.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.17.0/Company-Workspace-0.17.0-vbs.zip)**
 
-[0.16.0 변경 안내](docs/WORKSPACE_0.16.0_PRODUCTIVITY.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.16.0.md)
+[0.17.0 변경 안내](docs/WORKSPACE_0.17.0_RELIABILITY.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.17.0.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.16.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.17.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
 
-## 0.16.0 변경
+## 0.17.0 변경
+
+- 실행 아이콘을 다시 누르면 기존 창을 활성화합니다. 설치된 Edge 또는 Chrome을 앱 창으로 사용합니다.
+- 좌측 탐색 영역을 넓히고 업무 행 간격을 줄였습니다. 업무 이름이 같으면 `(2)`, `(3)`을 붙입니다.
+- 이전 Claude 대화를 업무에 추가해 원래 세션과 폴더에서 후속 요청을 보냅니다.
+- 도구 화면의 **연결하고 목록 확인**으로 명령·MCP 상태를 확인합니다. CLI 미제공 목록은 0개와 구분합니다.
+- `ede_diagnostic` 실패를 완료로 처리하지 않으며, 남은 승인 상태를 정리하고 같은 대화의 후속 요청을 받습니다. CLI 자체의 모든 오류 원인을 해결했다는 뜻은 아닙니다.
+
+## 0.16.0에서 추가된 기능
 
 - **통합 알림함**에서 응답 필요·완료·확인 필요·읽지 않음을 필터링합니다. 읽음 처리와 승인·답변 처리는 별개입니다.
 - **빠른 실행 / Ctrl+K**로 업무와 자주 쓰는 기능을 검색합니다. 기존 `/`·`@` 입력과 Shift+Tab은 유지합니다.
