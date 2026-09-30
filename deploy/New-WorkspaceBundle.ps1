@@ -18,12 +18,13 @@ $files = @(
     'deploy\CompanyWorkspace.Startup.ps1',
     'deploy\CompanyWorkspace.NormalToken.cs',
     'deploy\CompanyAgent.UserContext.ps1',
+    'docs\WORKSPACE_0.16.0_PRODUCTIVITY.md',
     'docs\LOCAL_WORKSPACE.md', 'docs\WORKSPACE_USER_GUIDE.html', 'docs\WORKSPACE_0.15.0_CLAUDE.md',
     'docs\WORKSPACE_0.13.0_DESKTOP.md', 'docs\WORKSPACE_0.14.0_CONTINUITY.md',
     'docs\WORKSPACE_STARTUP_DIAGNOSTIC.md',
     'docs\WORKSPACE_0.12.1_COMPATIBILITY.md', 'docs\WORKSPACE_0.12.2_INPUT.md', 'docs\WORKSPACE_0.12.3_AUTOCOMPLETE.md', 'docs\WORKSPACE_0.12.4_CONTROLS.md', 'docs\WORKSPACE_STANDALONE_EXE.md',
                         'local_app\__init__.py', 'local_app\bridge.py', 'local_app\server.py', 'local_app\demo.py',
-    'local_app\claude_inventory.py', 'local_app\session_order.py', 'local_app\history.py', 'local_app\artifacts.py', 'local_app\capabilities.py', 'local_app\skill_inventory.py', 'local_app\html_preview.py',
+    'local_app\claude_inventory.py', 'local_app\session_order.py', 'local_app\file_diff.py', 'local_app\conversation_fork.py', 'local_app\history.py', 'local_app\artifacts.py', 'local_app\capabilities.py', 'local_app\skill_inventory.py', 'local_app\html_preview.py',
         'local_app\Pick-Path.ps1', 'local_app\WorkspacePicker.cs', 'local_app\Invoke-TerminalClaude.ps1',
     'local_app\startup.py', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
     'local_app\windows_process.py', 'local_app\picker_channel.py',
@@ -33,7 +34,7 @@ $files = @(
     'local_app\web\fonts\NotoSansKR-Variable.woff', 'local_app\web\fonts\OFL.txt', 'local_app\web\fonts\SOURCE.json',
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\capabilities.js',
     'local_app\web\composer.js', 'local_app\web\inline-controls.js', 'local_app\web\attention.js',
-    'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js',
+    'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
     'local_app\web\app-icon-192.png', 'local_app\web\app-icon-512.png'
 )
@@ -44,7 +45,7 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
     if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.15.0-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.16.0-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

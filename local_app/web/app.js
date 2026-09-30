@@ -54,6 +54,7 @@ async function api(path,data,signal){
 }
 function setStatus(state,label){
   if(active)active.state=state;const busy=busyStates.has(state),running=state==="starting"||state==="running";
+  globalThis.WorkspaceProductivityActions?.update();
   $("status-text").textContent=label||statusLabels[state]||"진행 상태를 확인하고 있어요";$("status").classList.toggle("busy",running);$("status").dataset.state=state;
   const choosing=!!choiceSubmission&&choiceSubmission.sessionId===active?.id,dispatching=!!globalThis.WorkspaceWorkflow?.isSubmitting();
   $("send").hidden=busy;$("send").disabled=busy||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceAttachments?.isUploading()||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||!!boot.error||appClosed;$("stop").hidden=!busy;$("task-title").disabled=!active||busy;$("task-pin").disabled=!active;
@@ -194,13 +195,53 @@ function renderText(parent,text){
   }
 }
 function streamKey(data){return `${data.messageId}:${data.index||0}`;}
+const MESSAGE_TEXT_LIMIT=100000,CONVERSATION_MESSAGE_LIMIT=150,CONVERSATION_TEXT_LIMIT=500000;
+function messageTruncation(article,truncated){
+  let note=article.querySelector(".message-truncated");
+  if(truncated&&!note){note=el("small","긴 답변의 앞부분만 표시해요. 이 화면의 표시 제한은 Claude 대화 기록을 변경하지 않아요.","message-interrupted message-truncated");article.append(note);}
+  else if(!truncated)note?.remove();
+}
+function renderBoundedMessageText(body,text){
+  // Markup-dense responses stay plain text. This avoids creating tens
+  // of thousands of table/list/inline nodes from a bounded but pathological reply.
+  let marks=0;const pattern=/\n|\||\*\*|`/g;while(marks<=600&&pattern.exec(text))marks++;
+  body.setAttribute("style",marks>600?"white-space:pre-wrap":"");
+  body.textContent="";
+  if(marks>600){body.replaceChildren();body.textContent=text;}else renderText(body,text);
+}
+function boundConversation(keep){
+  const conversation=$("conversation"),articles=[...conversation.children].filter(node=>node.classList.contains("message"));
+  let total=articles.reduce((sum,node)=>sum+Number(node.dataset.messageSize||0),0),count=articles.length,removed=false;
+  const over=()=>count>CONVERSATION_MESSAGE_LIMIT||total>CONVERSATION_TEXT_LIMIT;
+  const discard=node=>{total-=Number(node.dataset.messageSize||0);count--;node.remove();for(const [key,value]of streaming)if(value===node)streaming.delete(key);removed=true;};
+  // Keep ongoing text and the pending user submission while completed history
+  // expires first. Approval/choice controls live outside this conversation node.
+  for(const node of articles)if(over()&&node!==keep&&!node.classList.contains("streaming")&&!node.classList.contains("pending"))discard(node);
+  if(over())for(const node of articles){
+    if(!over())break;
+    if(node===keep||node.classList.contains("pending")||!node.parentElement&&!node.parent)continue;
+    // Many simultaneous text blocks can otherwise bypass the aggregate bound.
+    // Retain each live block's identity and bounded prefix whenever possible.
+    const old=node.dataset.streamText||"",excess=Math.max(0,total-CONVERSATION_TEXT_LIMIT),length=Math.max(0,old.length-excess);
+    if(old.length&&length<old.length){node.dataset.streamText=old.slice(0,length);node.dataset.streamTruncated="true";node.dataset.messageSize=String(length);node.querySelector(".message-body").textContent=node.dataset.streamText;total-=old.length-length;messageTruncation(node,true);}
+    if(count>CONVERSATION_MESSAGE_LIMIT)discard(node);
+  }
+  if(removed&&!conversation.querySelector(".conversation-limit"))conversation.prepend(el("p","최근 대화 일부만 표시하고 있어요. 표시 범위는 최대 150개 메시지·50만 자이며 Claude 기록은 변경하지 않아요.","message-interrupted conversation-limit"));
+  if(Array.isArray(active?.messages)){
+    const messages=active.messages.slice(-CONVERSATION_MESSAGE_LIMIT).map(message=>typeof message.text==="string"&&message.text.length>MESSAGE_TEXT_LIMIT?{...message,text:message.text.slice(0,MESSAGE_TEXT_LIMIT),uiTruncated:true}:message);
+    const size=message=>String(message.text||"").length+(Array.isArray(message.files)?message.files:[]).reduce((sum,path)=>sum+String(path).length,0);
+    let characters=messages.reduce((sum,message)=>sum+size(message),0);while(messages.length>1&&characters>CONVERSATION_TEXT_LIMIT)characters-=size(messages.shift());
+    active.messages=messages;
+  }
+}
 function renderMessage(message){
   globalThis.WorkspaceStream?.finish(message);
+  const raw=String(message.text||""),text=raw.slice(0,MESSAGE_TEXT_LIMIT),truncated=!!message.uiTruncated||raw.length>MESSAGE_TEXT_LIMIT;
   const sk=streamKey(message),existing=message.messageId?streaming.get(sk):null;
-  if(existing){renderText(existing.querySelector(".message-body"),message.text);existing.classList.remove("streaming");streaming.delete(sk);return existing;}
-  const article=el("article",null,`message ${message.role}`);article.append(el("div",message.role==="user"?"나":"WORKSPACE","message-label"));const body=el("div",null,"message-body");renderText(body,message.text);article.append(body);if(message.files?.length)article.append(el("div",message.files.map(basename).join(" · "),"message-files"));$("conversation").append(article);return article;
+  if(existing){renderBoundedMessageText(existing.querySelector(".message-body"),text);existing.classList.remove("streaming");delete existing.dataset.streamText;delete existing.dataset.streamTruncated;existing.dataset.messageSize=String(text.length);streaming.delete(sk);messageTruncation(existing,truncated);boundConversation(existing);return existing;}
+  const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);article.append(el("div",message.role==="user"?"나":"WORKSPACE","message-label"));const body=el("div",null,"message-body");renderBoundedMessageText(body,text);article.append(body);if(fileText)article.append(el("div",fileText,"message-files"));messageTruncation(article,truncated);$("conversation").append(article);boundConversation(article);return article;
 }
-function applyDelta(data){const sk=streamKey(data);let article=streaming.get(sk);if(!article){article=renderMessage({role:"assistant",text:""});article.classList.add("streaming");article.dataset.streamText="";streaming.set(sk,article);}article.dataset.streamText+=data.text;article.querySelector(".message-body").textContent=article.dataset.streamText;}
+function applyDelta(data){const sk=streamKey(data);let article=streaming.get(sk);if(!article){article=renderMessage({role:"assistant",text:""});article.classList.add("streaming");article.dataset.streamText="";streaming.set(sk,article);}const old=article.dataset.streamText||"",incoming=String(data.text||""),available=Math.max(0,MESSAGE_TEXT_LIMIT-old.length);if(article.dataset.streamTruncated!=="true")article.dataset.streamText=old+incoming.slice(0,available);if(data.uiTruncated||incoming.length>available)article.dataset.streamTruncated="true";article.dataset.messageSize=String(article.dataset.streamText.length);article.querySelector(".message-body").textContent=article.dataset.streamText;messageTruncation(article,article.dataset.streamTruncated==="true");boundConversation(article);}
 function renderDelta(data){if(globalThis.WorkspaceStream)WorkspaceStream.enqueue(data,applyDelta);else applyDelta(data);}
 function renderConnection(info){
   const connected=info && info.connected!==false;
@@ -282,15 +323,15 @@ async function submitWorkspaceChoice(answer,expectedKey){
 }
 function saveDraft(){drafts.set(active?.id||"home",{text:$("prompt").value,attachments:[...attachments]});}
 function restoreDraft(id){const draft=drafts.get(id||"home");$("prompt").value=draft?.text||"";attachments=[...(draft?.attachments||[])];renderAttachments();}
-function taskHeader(){$("chat-title").textContent=globalThis.WorkspaceCapabilities?.isOpen()?"스킬·도구":active?.title||"업무 홈";$("task-title").hidden=$("task-pin").hidden=!active;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||globalThis.WorkspaceCapabilities?.isOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);}
+function taskHeader(){globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceCapabilities?.isOpen()?"스킬·도구":active?.title||"업무 홈";$("task-title").hidden=$("task-pin").hidden=!active;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||globalThis.WorkspaceCapabilities?.isOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);}
 async function selectSession(id,{keepDraft=false}={}){
   globalThis.WorkspaceCapabilities?.close();
-  globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();
+  globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();
   if(!keepDraft)saveDraft();const ticket=++selectionGeneration;if(pollController)pollController.abort();streaming.clear();const item=await api(`/api/session?id=${encodeURIComponent(id)}`);if(ticket!==selectionGeneration)return false;active=item;started=null;error("");
   $("conversation").replaceChildren();$("requests").replaceChildren();$("activity").replaceChildren();renderedQueuedRequests.clear();active.messages.forEach(message=>{renderMessage(message);if(message.requestId)renderedQueuedRequests.add(message.requestId);});(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length)$("conversation").append(el("p","업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   taskHeader();if(!keepDraft)restoreDraft(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshFiles();refreshResults();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
-function showHome(clear=false){globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("activity").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
+function showHome(clear=false){globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("activity").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
 async function poll(id,after,signal){while(!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
@@ -305,7 +346,7 @@ function handleEvent(event){
   if(event.type==="request"){newRequest=renderRequest(d);setStatus(d.tool==="AskUserQuestion"?"question":"approval");}
   if(event.type==="request_closed"){for(const n of $("requests").children)if(n.dataset.requestId===d.id)n.remove();if(d.state)setStatus(d.state);else if(!$("requests").children.length&&busyStates.has(active?.state))setStatus("running");}
   if(event.type==="activity"){const labels={Skill:"작업 방식 확인",Read:"자료 읽기",Bash:"업무 도구 실행",Write:"파일 작성",Edit:"파일 수정",Agent:"추가 작업 진행",Task:"추가 작업 진행",AskUserQuestion:"질문 준비"};$("activity").append(el("li",(labels[d.tool]||d.tool||"업무 진행")+(d.skill?" · "+d.skill:"")));while($("activity").children.length>40)$("activity").firstChild.remove();}
-  if(event.type==="result"){active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus("done");refreshFiles();refreshResults(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
+  if(event.type==="result"){if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus("done");refreshFiles();refreshResults(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
   if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();}if(event.type==="notice")toast(d.message);
   if(["queue_changed","schedule_changed","dispatch_changed","result","status"].includes(event.type))globalThis.WorkspaceWorkflow?.refresh();
   globalThis.WorkspaceCapabilities?.contextChanged(["connected","model_changed","error"].includes(event.type)||(event.type==="status"&&d.state==="stopped"));
@@ -317,7 +358,8 @@ function revealRequest(card){
   if(!card)return;const sid=active?.id;
   requestAnimationFrame(()=>{if(active?.id===sid&&[...$("requests").children].includes(card)&&!globalThis.WorkspaceCapabilities?.isOpen())card.scrollIntoView({block:"nearest",inline:"nearest"});});
 }
-async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?next:s);if(active?.id===id){active.updated=next.updated;active.artifactCount=next.artifactCount;active.title=next.title;taskHeader();}renderSessions();}catch(e){toast(e.message);}}
+function sessionMetadata(item){return {id:item.id,title:item.title,workspace:item.workspace,created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0};}
+async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?sessionMetadata(next):s);if(active?.id===id){active.updated=next.updated;active.artifactCount=next.artifactCount;active.title=next.title;taskHeader();}renderSessions();}catch(e){toast(e.message);}}
 function approvalSummary(request){
   const input=request.input||{},tool=request.tool||"업무 도구",target=input.file_path||input.path||input.notebook_path;
   const known={Read:["자료를 읽습니다","선택한 자료의 내용을 확인하는 요청이에요."],Write:["파일에 내용을 저장합니다","같은 이름의 파일이 있으면 기존 내용이 바뀔 수 있어요."],Edit:["파일 내용을 수정합니다","아래 변경 전후와 대상 파일을 확인해 주세요."],MultiEdit:["파일의 여러 부분을 수정합니다","대상 파일과 상세 변경 내용을 확인해 주세요."],Glob:["파일을 찾습니다","조건에 맞는 파일 경로를 찾는 요청이에요."],Grep:["자료 안에서 내용을 찾습니다","검색 조건에 맞는 내용을 확인하는 요청이에요."]};
@@ -489,7 +531,7 @@ $("quit").onclick=async()=>{
   if(quitting||!await confirmAction({title:"앱을 완전히 종료할까요?",message:"진행 중인 업무를 중지하고 앱 연결을 종료합니다. 앱이 꺼져 있는 동안에는 예약도 실행되지 않습니다. 이미 만들어진 파일은 유지됩니다.",confirmLabel:"완전히 종료",danger:true}))return;
   quitting=true;appClosed=true;$("quit").disabled=true;$("settings-dialog").close();
   globalThis.WorkspaceCapabilities?.close();
-  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceComposer?.close();closePreview();
+  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();closePreview();
   if(pollController)pollController.abort();
   setStatus(active?.state||"idle","앱을 종료하고 있어요");
   error("업무 연결을 정리하고 있어요. 종료 완료 안내가 나올 때까지 잠시 기다려 주세요.");

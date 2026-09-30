@@ -22,6 +22,7 @@ from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .session_order import SessionOrder
 from .artifacts import changes, linked, snapshot
+from .file_diff import FileDiffStore
 from .capabilities import catalog
 from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES
 from .picker_protocol import read_result as read_picker_result
@@ -36,7 +37,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = {".md", ".txt", ".csv", ".tsv", ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".webp"}
 MAX_BODY = 256 * 1024
 MAX_PREVIEW = 1024 * 1024
-WORKSPACE_VERSION = "0.15.0"
+WORKSPACE_VERSION = "0.16.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -129,6 +130,7 @@ class LocalApp:
         self._viewed_session = None
         self._viewed_until = 0
         self.attachment_store = AttachmentStore(state)
+        self.file_diffs = FileDiffStore(state / 'file-changes')
         self.error = None
         self.workspace_location_error = None
         self.managed_workspace_root = None
@@ -228,23 +230,58 @@ class LocalApp:
 
     def _load(self):
         self.history = HistoryStore(self.state)
-        for item in self.history.load():
+        self._history_access = {}
+        for item in self.history.load(lazy=True):
             item.update(bridge=None, requests={}, events=[], seq=0, trusted=False, state='idle')
             self.sessions[item['id']] = item
         self.session_order = SessionOrder(self.state)
 
     def save(self, sid=None):
         with self.lock:
+            migrated = self.history.migrate
+            for item in self.sessions.values():
+                if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
+                    # A failed (or partially successful) write must never make a
+                    # newer in-memory result eligible for replacement by old disk data.
+                    item['_historySaved'] = False
             self.history.save(self.sessions.values(), sid)
+            if not self.history.warning:
+                for item in self.sessions.values():
+                    if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
+                        item['_historySaved'] = True
 
     def get(self, sid):
         with self.lock:
             if sid not in self.sessions:
                 raise ValueError("대화를 찾을 수 없습니다.")
-            return self.sessions[sid]
+            item = self.sessions[sid]
+            self.history.hydrate(item)
+            self._history_access[sid] = time.monotonic()
+            # Active CLI work is never evicted. Dormant UI mirrors use an LRU of
+            # eight conversations; full Claude transcripts remain CLI-owned.
+            loaded = [row for row in self.sessions.values() if not row.get('_historyUnloaded')]
+            for old in sorted(loaded, key=lambda row: self._history_access.get(row['id'], 0)):
+                if len(loaded) <= 8:
+                    break
+                bridge = old.get('bridge')
+                if (old['id'] == sid or not old.get('_historySaved')
+                        or any(old.get(key) for key in ('_connecting', '_modelUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                        or old.get('requests')
+                        or old.get('state') in {'starting', 'running', 'question', 'approval'}
+                        or bridge and (not bridge.closed or getattr(bridge, 'cleanup_complete', False) is not True)
+                        or self.history.migrate or self.history.warning):
+                    continue
+                self.history.compact(old)
+                loaded.remove(old)
+            return item
 
     def public(self, item):
-        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification") } | {
+        with self.lock:
+            return self._public(item)
+
+    def _public(self, item):
+        item = self.get(item['id'])
+        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification", "branch") } | {
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
             "requests": list(item.get("requests", {}).values())}
@@ -281,7 +318,7 @@ class LocalApp:
                     "workspaceVersion": WORKSPACE_VERSION, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
-                                 {"artifactCount": len(item.get('artifacts', []))} for item in sessions],
+                                 {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))} for item in sessions],
                     "sessionOrder": self.session_order.snapshot(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
@@ -310,7 +347,11 @@ class LocalApp:
 
     def attention(self):
         with self.lock:
-            return {**attention_snapshot(self.sessions.values()),
+            from .desktop_notifications import notification_id
+            pending = attention_snapshot(self.sessions.values())
+            for item in pending['items']:
+                item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
+            return {**pending,
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(), 'nativeAvailable': bool(self.tray and self.tray.available)},
                     'navigation': self._navigation}
@@ -426,6 +467,7 @@ class LocalApp:
         if before is None:
             return
         root = Path(item['workspace'])
+        self.file_diffs.finish(root, item['lastRunId'])
         after = snapshot(root)
         found = changes(root, before, after, item['lastRunId'], time.time())
         item['artifacts'] = (item.get('artifacts', []) + found)[-MAX_ARTIFACTS:]
@@ -438,6 +480,48 @@ class LocalApp:
             item = self.get(sid)
             return {'artifacts': list(item.get('artifacts', [])), 'lastRunId': item.get('lastRunId'),
                     'observation': item.get('artifactObservation'), 'workspace': item['workspace']}
+
+    def file_changes(self, sid, run_id=None, file_id=None):
+        with self.lock:
+            item = self.get(sid)
+            root = workspace_folder(item)
+            # Captures contain only files read after the task's trust decision.
+            # Reviewing app-owned records after restart doesn't execute settings.
+        if file_id is not None:
+            return self.file_diffs.get(root, run_id, file_id)
+        return self.file_diffs.list(root, run_id)
+
+    def fork_session(self, sid, *, preview=False):
+        from .conversation_fork import prepare_fork
+        with self.lock:
+            if self.demo or not self.command:
+                raise ValueError('실제 Claude Code 대화를 연결한 뒤 분기할 수 있어요.')
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            if len(self.sessions) >= MAX_SESSIONS and not preview:
+                raise ValueError('업무는 최대 500개까지 저장할 수 있습니다.')
+            parent = self.get(sid)
+            workspace_folder(parent)
+            root = runtime_context(self.command)['configRoot']
+            item = prepare_fork(parent, self.info, root)
+            if preview:
+                return {'available': True, 'scope': 'latest',
+                        'reason': '마지막 완료 기록에서 이어가요. 분기 생성만으로 AI 요청을 보내지는 않아요.'}
+            item.update(bridge=None, requests={}, events=[], seq=0, state='idle',
+                        attachments=[], artifacts=[], lastRunId=None)
+            self.sessions[item['id']] = item
+            try:
+                self.save(item['id'])
+            except (OSError, ValueError):
+                self.sessions.pop(item['id'], None)
+                raise
+            return {'ok': True, 'session': self.public(item)}
+
+    def _resume_options(self, item):
+        if 'branch' not in item:
+            return {'resume': item.get('sessionId')}
+        from .conversation_fork import branch_connection
+        return branch_connection(item, self.info, runtime_context(self.command)['configRoot'])
 
     def reconnect(self, sid=None):
         if sid is not None:
@@ -538,8 +622,9 @@ class LocalApp:
                     root = workspace_folder(item)
                     self._check_import_context(item)
                     item['_allowBypass'] = True
+                    resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, root,
-                        lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
+                        lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
                         allow_bypass_permissions=True)
                     item['bridge'] = bridge
                     item['_needsControlRestore'] = bool(item.get('_sessionControls'))
@@ -590,8 +675,9 @@ class LocalApp:
                             if row.get('bridge') and not row['bridge'].closed)
                 if count >= 3:
                     raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
+                resume_options = self._resume_options(item)
                 bridge = ClaudeSession(self.command, self.info, root,
-                    lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get('sessionId'),
+                    lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
                     **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                 item['bridge'] = bridge
                 item['modelOverride'] = None
@@ -744,6 +830,9 @@ class LocalApp:
             elif kind == "result":
                 item["sessionId"] = data.get("sessionId")
                 item["state"] = "done"
+                if item.get('branch') and item['sessionId'] == item['branch']['childSessionId']:
+                    item['branch']['status'] = 'active'
+                    data['branch'] = dict(item['branch'])
                 item['verification'] = data.get('verification')
             elif kind == "error":
                 item["state"] = "error"
@@ -835,6 +924,8 @@ class LocalApp:
             self._check_import_context(item)
             if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating') or item.get('_connecting'):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
+            if item.get('branch', {}).get('status') == 'pending':
+                self._resume_options(item)  # Recheck even after control-only preparation.
             paths = self.validate_attachments(attachments)
             if self.error:
                 raise ValueError(self.error)
@@ -846,8 +937,9 @@ class LocalApp:
                     active = sum(1 for row in self.sessions.values() if row.get("bridge") and not row["bridge"].closed)
                     if active >= 3:
                         raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
+                    resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
-                                           lambda kind, data: self._emit_bridge(sid, bridge, kind, data), item.get("sessionId"),
+                                           lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
                                            **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                     item["bridge"] = bridge
                     item['modelOverride'] = None
@@ -867,6 +959,7 @@ class LocalApp:
             item['updated'] = time.time()
             item['lastRunId'] = uuid.uuid4().hex
             item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
+            self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
             item['artifactObservation'] = item['_artifactSnapshot'].public()
             self.save(sid)
             if _dispatch_claim is not None:
@@ -1102,6 +1195,12 @@ class Handler(BaseHTTPRequestHandler):
                                           demo=app.demo, validate_workspace=workspace_folder))
             if route.path == "/api/files":
                 return self.reply({"files": app.files(sid)})
+            if route.path == '/api/changes':
+                return self.reply(app.file_changes(sid, query.get('run', [None])[0]))
+            if route.path == '/api/changes/file':
+                return self.reply(app.file_changes(sid, query.get('run', [''])[0], query.get('file', [''])[0]))
+            if route.path == '/api/session/branch':
+                return self.reply(app.fork_session(sid, preview=True))
             if route.path == "/api/results":
                 return self.reply(app.results(sid))
             if route.path == "/api/preview":
@@ -1150,6 +1249,10 @@ class Handler(BaseHTTPRequestHandler):
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
+                      "/productivity.js": ("productivity.js", "text/javascript; charset=utf-8"),
+                      "/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
+                      "/productivity.css": ("productivity.css", "text/css; charset=utf-8"),
+                      "/review.css": ("review.css", "text/css; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),
                       "/fonts/NotoSansKR-Variable.woff": ("fonts/NotoSansKR-Variable.woff", "font/woff"),
                       "/favicon.ico": ("app-icon.ico", "image/vnd.microsoft.icon"),
@@ -1231,6 +1334,8 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/session/branch':
+            return self.reply(app.fork_session(sid))
         if route == "/api/create":
             return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot')))
         if route == '/api/session/update':
@@ -1252,7 +1357,12 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'configure':
                 app.desktop.configure(data.get('preferences', {}))
             elif action == 'read':
-                app.desktop.mark_read(data.get('notificationId'))
+                if 'notificationIds' in data:
+                    if 'notificationId' in data:
+                        raise ValueError('읽음 처리할 알림 목록을 확인해 주세요.')
+                    app.desktop.mark_read_many(data['notificationIds'])
+                else:
+                    app.desktop.mark_read(data.get('notificationId'))
             elif action == 'open':
                 app.desktop.open(data.get('notificationId'))
             elif action == 'view':
@@ -1325,8 +1435,11 @@ class Handler(BaseHTTPRequestHandler):
             if not item.get("trusted") or not app.command or os.name != "nt" or app.demo:
                 raise ValueError("원본 CLI는 폴더 동의 후 Windows 실사용 모드에서 열 수 있습니다.")
             args = app.command[:]
-            if item.get("sessionId"):
-                args.append("--resume=" + str(uuid.UUID(item["sessionId"])))
+            resume_options = app._resume_options(item)
+            if resume_options.get('resume'):
+                args.append('--resume=' + str(uuid.UUID(resume_options['resume'])))
+            if resume_options.get('fork_session'):
+                args.extend(['--fork-session', '--session-id', resume_options['new_session_id']])
             subprocess.Popen(args, cwd=workspace_folder(item), creationflags=subprocess.CREATE_NEW_CONSOLE)
         else:
             return self.reply({"error": "없는 요청입니다."}, 404)

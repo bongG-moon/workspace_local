@@ -89,7 +89,11 @@ class DispatchController:
                 return
             with self.app.operation():
                 with self.app.lock:
-                    item = self.app.get(sid)
+                    # Queue eligibility needs only navigation/runtime metadata.
+                    # Hydrate the bounded UI mirror only when send actually runs.
+                    item = self.app.sessions.get(sid)
+                    if item is None:
+                        continue
                     pending = self.steering.get(sid)
                     if pending:
                         bridge = item.get('bridge')

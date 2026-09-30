@@ -82,6 +82,9 @@ def row(item):
     result['artifacts'] = artifacts
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
+    if 'branch' in item:
+        from .conversation_fork import normalize_branch
+        result['branch'] = normalize_branch(item['branch'])
     imported = item.get('importedConfigRoot')
     if isinstance(imported, str) and 0 < len(imported) <= 8192 and Path(imported).is_absolute():
         result['importedConfigRoot'] = imported
@@ -107,7 +110,31 @@ class HistoryStore:
         self.migrate = False
         self.index_bytes = None
 
-    def load(self):
+    @staticmethod
+    def compact(item):
+        """Keep navigation/attention metadata, release dormant conversation bodies."""
+        item['_artifactCount'] = len(item.get('artifacts', []))
+        item.pop('messages', None)
+        item.pop('artifacts', None)
+        item['_historyUnloaded'] = True
+        return item
+
+    def hydrate(self, item):
+        if not item.get('_historyUnloaded'):
+            return
+        try:
+            sid = str(uuid.UUID(item['id']))
+            value = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
+            if value['id'] != sid:
+                raise ValueError('대화 파일과 목록이 다릅니다.')
+            item['messages'] = value['messages']
+            item['artifacts'] = value['artifacts']
+            item.pop('_historyUnloaded', None)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            self.warning = '대화 기록을 다시 읽지 못해 원본을 보존했습니다. 앱을 다시 열어 기록 위치를 확인해 주세요.'
+            raise ValueError(self.warning) from exc
+
+    def load(self, *, lazy=False):
         index = self.root/'history-index.json'
         legacy = self.root/'history.json'
         result = []
@@ -125,7 +152,9 @@ class HistoryStore:
                     item = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
                     if item['id'] != sid:
                         raise ValueError('대화 파일과 목록이 다릅니다.')
-                    result.append(item)
+                    if lazy:
+                        item['_historySaved'] = True
+                    result.append(self.compact(item) if lazy else item)
             elif safe(legacy).exists():
                 old = read(legacy, 80*1024*1024)
                 if not isinstance(old, list) or len(old) > MAX_SESSIONS:
@@ -159,6 +188,10 @@ class HistoryStore:
             raise ValueError('업무는 최대 500개까지 저장할 수 있습니다. 기존 업무를 이어서 사용해 주세요.')
         # Only the changed conversation is normalized/serialized on each event.
         for item in items:
+            if item.get('_historyUnloaded'):
+                # Its validated body remains on disk. Metadata is unchanged until
+                # LocalApp.get hydrates it before a user mutation.
+                continue
             if self.migrate or changed_id is None or item['id'] == changed_id:
                 value = row(item)
                 payload = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')

@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from local_app.desktop_notifications import DesktopNotifications, MAX_INBOX, MAX_SEEN
+from local_app.desktop_notifications import DesktopNotifications, MAX_INBOX, MAX_SEEN, notification_id
 from local_app.tray import WorkspaceTray, _WindowsTray, _notification_text
 
 
@@ -139,6 +139,36 @@ class DesktopNotificationTests(unittest.TestCase):
         row = self.publish()
         self.assertTrue(self.center.open(row['id']))
         self.assertEqual(1, len(outcomes))
+
+    def test_public_receipt_identity_matches_publish_without_mutating_state(self):
+        identity = notification_id(self.sid, 'attention', 'native-request')
+        self.assertFalse(self.center.path.exists())
+        self.assertEqual(identity, self.publish('native-request', 'attention')['id'])
+        self.assertNotEqual(identity, notification_id(self.other, 'attention', 'native-request'))
+
+    def test_batch_read_marks_only_exact_current_receipts_and_saves_once(self):
+        old = self.publish('old', 'attention')
+        first = self.publish('first', 'attention')
+        second = self.publish('second', 'attention')
+        with patch.object(self.center, '_save', wraps=self.center._save) as save:
+            self.center.mark_read_many([first['id'], second['id']])
+        self.assertEqual(1, save.call_count)
+        rows = {row['id']: row for row in self.make_center().snapshot()['inbox']}
+        self.assertFalse(rows[old['id']]['read'])
+        self.assertTrue(rows[first['id']]['read'])
+        self.assertTrue(rows[second['id']]['read'])
+        self.assertEqual([], self.opened)
+
+    def test_invalid_or_stale_batch_does_not_partially_read_or_write(self):
+        first = self.publish('first', 'attention')
+        before = self.center.path.read_bytes()
+        invalid = [None, [], 'not-list', [None], ['not-id'], [first['id'], first['id']],
+                   [first['id'], '0' * 64], [first['id']] * (MAX_INBOX + 1)]
+        for values in invalid:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                self.center.mark_read_many(values)
+            self.assertEqual(before, self.center.path.read_bytes())
+            self.assertFalse(self.center.snapshot()['inbox'][0]['read'])
 
     def test_missing_or_closed_task_callback_does_not_mark_read(self):
         row = self.publish()

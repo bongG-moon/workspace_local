@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HARNESS = BASE_HARNESS.replace("const scenario=process.argv[3];", r"""
 Element.prototype.addEventListener=function(name,fn){this.listeners??={};(this.listeners[name]??=[]).push(fn);};
 Element.prototype.contains=function(node){for(let n=node;n;n=n.parent)if(n===this)return true;return false;};
+context.document.listeners={};context.document.addEventListener=function(name,fn){(this.listeners[name]??=[]).push(fn);};
 context.frames=new Map();context.timers=new Map();let serial=0;
 context.requestAnimationFrame=fn=>{context.frames.set(++serial,fn);return serial;};
 context.cancelAnimationFrame=id=>context.frames.delete(id);
@@ -67,6 +68,142 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           active={id:'B',state:'idle'};flushTimers();flushFrames();
           assert.equal(streaming.size,0);assert.doesNotMatch(flatText($('conversation')),/A 답변/);
         """, ("rendering",))
+
+    def test_hidden_window_flushes_on_batch_timer_without_raf_or_polling_timer(self):
+        self.run_case(r"""
+          document.hidden=true;$('prompt').value='작성 중인 질문';attachments=['C:/kept.csv'];
+          renderDelta({messageId:'one',text:'숨겨진 창의 응답'});
+          assert.equal(timers.size,1);flushTimers();
+          assert.equal(streaming.get('one:0').querySelector('.message-body').textContent,'숨겨진 창의 응답');
+          assert.equal(frames.size,0);assert.equal(timers.size,0);
+          assert.equal($('prompt').value,'작성 중인 질문');assert.equal(attachments[0],'C:/kept.csv');
+        """, ("rendering",))
+
+    def test_visibility_change_releases_pending_batch_and_keeps_read_position(self):
+        self.run_case(r"""
+          const area=$('work-area');area.scrollHeight=1000;area.scrollTop=350;area.clientHeight=100;
+          emit(area,'wheel',{deltaY:-10});renderDelta({messageId:'one',text:'도착한 답변'});
+          document.hidden=true;emit(document,'visibilitychange');
+          assert.equal(timers.size,0);assert.equal(frames.size,0);
+          assert.match(flatText($('conversation')),/도착한 답변/);
+          document.hidden=false;emit(document,'visibilitychange');flushFrames();
+          assert.equal(area.scrollTop,350);assert.equal(WorkspaceStream.isFollowing(),false);
+        """, ("rendering",))
+
+    def test_suspended_timers_and_frames_cannot_grow_pending_or_visible_text(self):
+        self.run_case(r"""
+          document.hidden=true;
+          const received=[];let buffered=0;
+          for(let i=0;i<50;i++){
+            const text=String(i).padStart(2,'0')+'x'.repeat(29998);buffered+=text.length;
+            WorkspaceStream.enqueue({messageId:'one',text},data=>{received.push(data.text);buffered-=data.text.length;applyDelta(data);});
+            assert.ok(buffered<=100000);assert.ok(timers.size<=1);assert.equal(frames.size,0);
+          }
+          flushTimers();const article=streaming.get('one:0');
+          assert.ok(article.dataset.streamText.length<=100000);
+          assert.ok(article.querySelector('.message-body').textContent.length<=100000);
+          assert.ok(article.querySelector('.message-truncated'));
+          assert.equal(received.join('').slice(0,8),'00xxxxxx');
+          assert.equal(timers.size,0);
+        """, ("rendering",))
+
+    def test_long_final_replaces_partial_releases_duplicate_text_and_limits_markup_nodes(self):
+        self.run_case(r"""
+          applyDelta({messageId:'one',text:'partial'.repeat(20000)});
+          const partial=streaming.get('one:0');assert.equal(partial.dataset.streamText.length,100000);
+          const final='**final**\n'.repeat(20000);
+          const article=renderMessage({role:'assistant',messageId:'one',text:final});
+          assert.equal(article,partial);assert.equal(streaming.size,0);
+          assert.equal(article.dataset.streamText,undefined);
+          assert.equal(article.dataset.streamTruncated,undefined);
+          assert.equal(article.querySelector('.message-body').textContent.length,100000);
+          assert.ok(article.querySelector('.message-body').children.length<10);
+          assert.ok(article.querySelector('.message-truncated'));
+          assert.equal(article.classList.contains('streaming'),false);
+        """, ("rendering",))
+
+    def test_many_completed_messages_keep_live_stream_pending_user_and_approval_controls(self):
+        self.run_case(r"""
+          $('prompt').value='지우지 않을 초안';const control=el('button','승인');$('requests').append(control);
+          applyDelta({messageId:'live',text:'진행 중 답변'});const live=streaming.get('live:0');
+          const pending=renderMessage({role:'user',text:'보내는 요청'});pending.classList.add('pending');
+          for(let i=0;i<220;i++)renderMessage({role:'assistant',text:'reply-'+i});
+          const messages=$('conversation').children.filter(node=>node.classList.contains('message'));
+          assert.ok(messages.length<=150);assert.ok(messages.includes(live));assert.ok(messages.includes(pending));
+          assert.equal(streaming.get('live:0'),live);assert.equal($('requests').children[0],control);
+          assert.equal($('prompt').value,'지우지 않을 초안');
+          assert.ok($('conversation').querySelector('.conversation-limit'));
+          assert.match(flatText($('conversation')),/reply-219/);assert.doesNotMatch(flatText($('conversation')),/reply-0 /);
+        """)
+
+    def test_text_budget_and_ui_mirror_are_bounded_without_mutating_initial_iteration(self):
+        self.run_case(r"""
+          active.messages=Array.from({length:170},(_,i)=>({role:'assistant',text:String(i)+':'+('x'.repeat(60000))}));
+          const initial=active.messages;let visited=0;
+          initial.forEach(message=>{visited++;renderMessage(message);});
+          assert.equal(visited,170);assert.equal(initial.length,170);
+          assert.ok(active.messages.length<=150);
+          assert.ok(active.messages.reduce((sum,row)=>sum+row.text.length,0)<=500000);
+          const messages=$('conversation').children.filter(node=>node.classList.contains('message'));
+          assert.ok(messages.reduce((sum,node)=>sum+Number(node.dataset.messageSize),0)<=500000);
+          assert.ok(messages.length<=150);assert.match(flatText(messages.at(-1)),/169:/);
+        """)
+
+    def test_many_simultaneous_text_blocks_still_obey_visible_aggregate_limit(self):
+        self.run_case(r"""
+          for(let i=0;i<175;i++)applyDelta({messageId:'stream-'+i,text:'x'.repeat(100000)});
+          const messages=$('conversation').children.filter(node=>node.classList.contains('message'));
+          assert.ok(messages.length<=150);assert.ok(streaming.size<=150);
+          assert.ok(messages.reduce((sum,node)=>sum+Number(node.dataset.messageSize),0)<=500000);
+          assert.equal(streaming.get('stream-174:0').dataset.streamText.length,100000);
+          assert.ok(messages.includes(streaming.get('stream-174:0')));
+        """)
+
+    def test_summary_refresh_excludes_transcript_and_preserves_live_active_record(self):
+        self.run_case(r"""(async()=>{
+          active.messages=[{role:'assistant',text:'current live reply'}];
+          active.artifacts=[{name:'current-result.txt'}];
+          active.connection={model:'current-model'};active.requests=[{id:'pending-approval'}];
+          active.branch={status:'active',childSessionId:'current-child'};active.sessionId='current-child';
+          const messages=active.messages,artifacts=active.artifacts,connection=active.connection,requests=active.requests;
+          sessions=[{id:'A',title:'old title',workspace:active.workspace,state:'running'},
+                    {id:'B',title:'other task',workspace:'C:/fixture/B',state:'idle'}];
+          let reply,requested;api=path=>{requested=path;return new Promise(resolve=>reply=resolve);};
+          const refresh=refreshSessionMeta();messages.push({role:'assistant',text:'newer streamed completion'});
+          reply({id:'A',title:'updated title',workspace:active.workspace,created:1,updated:9,pinned:true,state:'done',artifactCount:2,
+                 messages:[{role:'assistant',text:'LARGE PRIVATE TRANSCRIPT '+('x'.repeat(100000))}],
+                 artifacts:[{name:'cached-file',preview:'UNNEEDED ARTIFACT BODY'}],
+                 requests:[{input:{secret:'UNNEEDED APPROVAL BODY'}}],
+                 connection:{model:'stale-model'},branch:{status:'pending'},sessionId:'stale-session'});
+          await refresh;
+          assert.equal(requested,'/api/session?id=A');
+          const summary=sessions.find(row=>row.id==='A');
+          assert.equal(summary.title,'updated title');assert.equal(summary.updated,9);assert.equal(summary.artifactCount,2);
+          for(const key of ['messages','artifacts','requests','connection','branch','sessionId'])assert.equal(summary[key],undefined);
+          assert.doesNotMatch(JSON.stringify(sessions),/LARGE PRIVATE|UNNEEDED/);
+          assert.equal(active.messages,messages);assert.equal(active.artifacts,artifacts);
+          assert.equal(active.connection,connection);assert.equal(active.requests,requests);
+          assert.equal(active.state,'running');assert.equal(active.sessionId,'current-child');
+          assert.equal(active.branch.status,'active');assert.equal(active.messages[1].text,'newer streamed completion');
+          assert.equal(sessions.find(row=>row.id==='B').title,'other task');
+        })()""")
+
+    def test_branch_result_updates_active_identity_and_branch_actions_without_reselect(self):
+        self.run_case(r"""
+          active.branch={status:'pending',sourceTaskId:'source',childSessionId:'child-native'};
+          active.sessionId=null;active.messages=[{role:'user',text:'first branch request'}];
+          $('prompt').value='next draft';const messages=active.messages;
+          refreshFiles=async()=>{};refreshResults=async()=>{};refreshSessionMeta=async()=>{};
+          selectSession=()=>{throw new Error('Result must not reselect or reconnect the conversation');};
+          WorkspaceProductivityActions.update();assert.equal($('branch-open').disabled,true);
+          const completed={status:'active',sourceTaskId:'source',childSessionId:'child-native'};
+          handleEvent({type:'result',data:{sessionId:'child-native',branch:completed,verification:{state:'unverified'}}});
+          assert.equal(active.id,'A');assert.equal(active.state,'done');
+          assert.equal(active.sessionId,'child-native');assert.equal(active.branch,completed);
+          assert.equal(WorkspaceProductivityActions.canBranch(),true);assert.equal($('branch-open').disabled,false);
+          assert.equal($('branch-origin').hidden,false);assert.match($('branch-origin-status').textContent,/원본 대화에서 분기/);
+          assert.equal($('prompt').value,'next draft');assert.equal(active.messages,messages);
+        """, ("productivity",))
 
     def test_uploaded_copy_stays_with_original_task_after_switch(self):
         self.run_case(r"""(async()=>{

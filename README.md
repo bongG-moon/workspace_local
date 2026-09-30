@@ -1,28 +1,31 @@
-# Company Workspace 0.15.0
+# Company Workspace 0.16.0
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/Company-Workspace-0.15.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.15.0/Company-Workspace-0.15.0-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.16.0/Company-Workspace-0.16.0-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.16.0/Company-Workspace-0.16.0-vbs.zip)**
 
-[0.15.0 변경 안내](docs/WORKSPACE_0.15.0_CLAUDE.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.15.0.md)
+[0.16.0 변경 안내](docs/WORKSPACE_0.16.0_PRODUCTIVITY.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.16.0.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.15.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.16.0.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
 
-## 0.15.0 변경
+## 0.16.0 변경
 
-- 최근 업무를 손잡이로 끌어 순서를 바꾸고 핀 아이콘으로 고정합니다. 고정 업무와 일반 업무는 각각 같은 그룹 안에서 정렬하며 순서는 재시작 후에도 유지됩니다. 손잡이에 초점을 놓고 Alt+↑/↓도 사용할 수 있습니다.
-- 공통 스킬의 설치 범위와 **연결 기준 업무**를 구분했습니다. 공통 화면에서도 선택한 업무의 Claude가 보고한 도구·서버·명령을 확인합니다. 여러 업무의 서로 다른 연결 목록을 합치지 않습니다.
-- Company Agent 전용 기억·학습·설치 등록 연동을 앱에서 제거했습니다. 사용자가 Claude에 설치한 스킬·플러그인은 일반 목록에 그대로 나타납니다. 개인 설치를 삭제하거나 설정을 바꾸지 않습니다.
-- 자동완성과 Shift+Tab이 동시에 연결을 준비하면서 모드 변경이 실패하던 문제를 수정했습니다. Esc 취소, 한글 조합 입력, Tab·방향키·Ctrl+Enter 처리도 보완했습니다.
+- **통합 알림함**에서 응답 필요·완료·확인 필요·읽지 않음을 필터링합니다. 읽음 처리와 승인·답변 처리는 별개입니다.
+- **빠른 실행 / Ctrl+K**로 업무와 자주 쓰는 기능을 검색합니다. 기존 `/`·`@` 입력과 Shift+Tab은 유지합니다.
+- **이번 결과 → 파일 변경 비교**에서 요청 전후의 텍스트를 확인합니다. 최근 8개 요청을 앱 전체에서 보관하며 Office·큰 파일은 변경 정보만 표시합니다. 원본 복구·자동 되돌리기는 수행하지 않습니다.
+- **대화 분기**로 마지막 완료 기록을 독립된 Claude 세션에서 이어갑니다. 첫 요청 전에는 분기 준비 상태이며 원본과 같은 업무 폴더를 사용합니다.
+- 사용하지 않는 저장 대화의 본문을 필요할 때 읽고, 닫힌 알림함과 팔레트의 화면 요소를 해제합니다. 새 파일 감시기나 반복 조회 타이머를 추가하지 않습니다.
+
+이전 버전의 업무 순서·고정, 공통/폴더별 도구 조회, 자동완성, 모델·Effort·승인, 대기열·예약·첨부 기능도 함께 유지합니다.
 
 ## 주요 사용 흐름
 
@@ -60,4 +63,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deploy/New-WorkspaceRelease.
 
 패키지 검사기는 허용 파일, 소스 일치, 시작 진단 해시, 개인 상태 미포함을 확인합니다. EXE/VBS에는 같은 앱 파일을 담습니다. GitHub 자동 소스 ZIP과 실행용 Release ZIP은 다릅니다. 기존 Company Agent 어댑터와 관련 시험은 이전 구현 기록으로 소스에 남아 있지만 앱 진입점과 배포 파일에는 연결되지 않습니다.
 
-[0.15.0 검증 기록](docs/VALIDATION_0.15.0.md) · [제3자 고지](THIRD_PARTY_NOTICES.md)
+[0.16.0 검증 기록](docs/VALIDATION_0.16.0.md) · [제3자 고지](THIRD_PARTY_NOTICES.md)

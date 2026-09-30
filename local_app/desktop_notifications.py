@@ -41,6 +41,15 @@ def _identifier(value, length=64):
             and all(char in '0123456789abcdef' for char in value))
 
 
+def notification_id(session_id, kind, event_id):
+    """Stable public receipt identity without exposing the original event key."""
+    if (not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id
+            or not isinstance(kind, str) or kind not in MESSAGES
+            or not isinstance(event_id, str) or not event_id or len(event_id) > 512):
+        raise ValueError('알림의 업무와 이벤트 식별자를 확인해 주세요.')
+    return hashlib.sha256(json.dumps([session_id, kind, event_id], ensure_ascii=True).encode('ascii')).hexdigest()
+
+
 class DesktopNotifications:
     def __init__(self, state, *, notify=None, is_foreground=None, on_open=None,
                  clock=time.time, monotonic=time.monotonic, cooldown=3.0):
@@ -126,11 +135,7 @@ class DesktopNotifications:
             return self.snapshot()
 
     def publish(self, session_id, title, kind, event_id):
-        if (not isinstance(session_id, str) or str(uuid.UUID(session_id)) != session_id
-                or not isinstance(kind, str) or kind not in MESSAGES
-                or not isinstance(event_id, str) or not event_id or len(event_id) > 512):
-            raise ValueError('알림의 업무와 이벤트 식별자를 확인해 주세요.')
-        key = hashlib.sha256(json.dumps([session_id, kind, event_id], ensure_ascii=True).encode('ascii')).hexdigest()
+        key = notification_id(session_id, kind, event_id)
         # A server hook may acquire the app lock. Never hold our lock across it.
         foreground = False
         if callable(self.is_foreground):
@@ -182,6 +187,23 @@ class DesktopNotifications:
                 raise ValueError('알림을 찾을 수 없습니다.')
             for row in self.data['inbox']:
                 if identifier is None or row['id'] == identifier:
+                    row['read'] = True
+            self._save()
+            return self.snapshot()
+
+    def mark_read_many(self, identifiers):
+        """Mark exact retained receipts together; stale/invalid batches change none."""
+        if (not isinstance(identifiers, list) or not 1 <= len(identifiers) <= MAX_INBOX
+                or any(not _identifier(value) for value in identifiers)
+                or len(set(identifiers)) != len(identifiers)):
+            raise ValueError('읽음으로 표시할 알림 목록을 확인해 주세요.')
+        requested = set(identifiers)
+        with self._lock:
+            retained = {row['id'] for row in self.data['inbox']}
+            if not requested.issubset(retained):
+                raise ValueError('일부 알림을 찾을 수 없습니다. 목록을 갱신한 뒤 다시 선택해 주세요.')
+            for row in self.data['inbox']:
+                if row['id'] in requested:
                     row['read'] = True
             self._save()
             return self.snapshot()

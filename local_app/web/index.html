@@ -12,6 +12,8 @@
   <link rel="icon" href="/icon.svg?v=0.10.1" type="image/svg+xml" sizes="any">
   <link rel="apple-touch-icon" href="/app-icon-192.png?v=0.10.1" sizes="192x192">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/productivity.css">
+  <link rel="stylesheet" href="/review.css">
   <script src="/app.js" defer></script>
   <script src="/rendering.js" defer></script>
   <script src="/attachments.js" defer></script>
@@ -22,6 +24,8 @@
   <script src="/desktop.js" defer></script>
   <script src="/session-import.js" defer></script>
   <script src="/capabilities.js" defer></script>
+  <script src="/productivity.js" defer></script>
+  <script src="/palette.js" defer></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -52,6 +56,7 @@
       <a class="brand" href="/" aria-label="Company Workspace 홈"><span class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></span><span class="brand-type">Workspace<small>for Claude Code</small></span></a>
       <button id="new-chat" class="new-chat" aria-label="새 업무"><svg class="icon"><use href="#i-plus"/></svg><span>새 업무</span></button>
       <button id="import-open" class="text-button import-open" type="button">이전 Claude 대화 불러오기</button>
+      <button id="palette-open" class="palette-launcher" type="button"><svg class="icon"><use href="#i-search"/></svg><span>빠른 실행</span><kbd>Ctrl K</kbd></button>
       <nav class="primary-nav" aria-label="주 메뉴"><button id="home-button" class="nav-button active" aria-label="내 업무 공간" aria-current="page"><svg class="icon"><use href="#i-home"/></svg><span>내 업무 공간</span></button><button id="capabilities-open" class="nav-button" aria-label="스킬·도구" aria-current="false" title="스킬·도구"><svg class="icon"><use href="#i-box"/></svg><span>스킬·도구</span></button></nav>
       <label class="session-search"><svg class="icon"><use href="#i-search"/></svg><input id="session-search" type="search" placeholder="업무 찾기" aria-label="업무 검색" autocomplete="off"><span class="search-hint" aria-hidden="true">찾기</span></label>
       <div class="sidebar-label">최근 업무<span class="small-dot"></span></div>
@@ -64,7 +69,7 @@
 
     <main>
       <header class="topbar">
-        <div class="topbar-context"><div class="title-row"><h1 id="chat-title">내 업무 공간</h1><button id="task-title" class="icon-button" aria-label="업무 이름 변경" title="업무 이름 변경" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button id="task-pin" class="icon-button" aria-label="업무 고정" title="업무 고정" aria-pressed="false" hidden><svg class="icon"><use href="#i-pin"/></svg></button></div><button id="workspace-summary" class="workspace-summary">자료와 대화, 결과를 한곳에서</button></div>
+        <div class="topbar-context"><div class="title-row"><h1 id="chat-title">내 업무 공간</h1><button id="task-title" class="icon-button" aria-label="업무 이름 변경" title="업무 이름 변경" hidden><svg class="icon"><use href="#i-edit"/></svg></button><button id="task-pin" class="icon-button" aria-label="업무 고정" title="업무 고정" aria-pressed="false" hidden><svg class="icon"><use href="#i-pin"/></svg></button><button id="branch-open" class="text-button branch-launch" type="button" hidden>대화 분기 ↗</button></div><button id="workspace-summary" class="workspace-summary">자료와 대화, 결과를 한곳에서</button></div>
         <div class="top-actions"><button id="desktop-open" class="attention-button" type="button">알림 <span id="desktop-count" hidden>0</span></button><button id="attention-open" class="attention-button" type="button" hidden>응답 대기 <span id="attention-count">0</span></button><span id="connection-badge" class="pill">연결 확인 중</span><button id="materials-button" class="icon-button materials-button" aria-label="자료와 결과 열기" title="자료와 결과"><svg class="icon"><use href="#i-folder"/></svg></button><button id="workspace-button" class="icon-button" aria-label="업무 저장 위치 선택" title="업무 저장 위치"><svg class="icon"><use href="#i-folder"/></svg></button></div>
       </header>
       <div id="demo-banner" class="demo-banner" hidden><svg class="icon"><use href="#i-spark"/></svg><span>화면 체험 중 · 가상의 업무로 둘러보세요. 실제 AI 실행이나 자료 읽기는 하지 않습니다.</span></div>
@@ -94,6 +99,7 @@
           <div class="home-section-heading recent-heading"><h3>이어서 하기</h3><button id="tasks-open" type="button" class="text-button" hidden>전체 업무 보기 <svg class="icon"><use href="#i-arrow"/></svg></button></div>
           <div id="home-recents" class="home-recents"><div class="home-empty"><span class="empty-recent-icon"><svg class="icon"><use href="#i-clock"/></svg></span><div><strong>새로운 업무를 기다리고 있어요</strong><p>첫 업무를 시작하면 여기서 다시 이어갈 수 있어요.</p></div></div></div>
         </section>
+        <div id="branch-origin" class="branch-origin" hidden><span id="branch-origin-status"></span><button id="branch-source-open" class="text-button" type="button">원래 대화 보기 ↗</button></div>
         <section id="conversation" class="conversation" aria-label="업무 대화" aria-live="polite" hidden></section>
         <div id="requests" class="requests" aria-live="assertive"></div>
         <div id="workspace-choice" class="requests" aria-live="polite" hidden></div>
@@ -138,7 +144,7 @@
         <div class="section-heading"><h2>업무 폴더의 자료</h2><button id="refresh-files" class="icon-button" aria-label="자료 목록 새로고침" title="자료 새로고침"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
         <div id="files" class="files"><div class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-doc"/></svg></div><strong>자료를 더해 보세요</strong><p>아래 ‘자료 추가’로 파일을 고르면<br>원하는 일을 바로 부탁할 수 있어요.</p></div></div>
       </section>
-      <section id="results-panel" class="inspector-panel" role="tabpanel" aria-labelledby="results-tab" hidden><div class="result-intro"><h2>이번 요청의 결과</h2><p>이번 요청 전후에 확인한 파일 변경을<br>여기서 바로 확인하세요.</p></div><div id="results-list" class="results-list"></div><div id="empty-results" class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-box"/></svg></div><strong>결과가 놓일 자리예요</strong><p>업무가 끝나면 새로 생기거나<br>달라진 파일을 모아 보여드릴게요.</p></div></section>
+      <section id="results-panel" class="inspector-panel" role="tabpanel" aria-labelledby="results-tab" hidden><div class="result-intro"><h2>이번 요청의 결과</h2><p>이번 요청 전후에 확인한 파일 변경을<br>여기서 바로 확인하세요.</p></div><button id="changes-open" class="quiet-button changes-launch" type="button">파일 변경 비교</button><div id="results-list" class="results-list"></div><div id="empty-results" class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-box"/></svg></div><strong>결과가 놓일 자리예요</strong><p>업무가 끝나면 새로 생기거나<br>달라진 파일을 모아 보여드릴게요.</p></div></section>
       <div class="inspector-foot"><div class="inspector-tip"><span class="tip-icon"><svg class="icon"><use href="#i-spark"/></svg></span><p>다음 작업도 자연스럽게<br><strong>“이 내용을 조금 더 다듬어줘”</strong></p></div><details class="details"><summary>진행 기록 보기</summary><ol id="activity"></ol><p class="muted">실행 중 확인한 활동이 표시돼요.</p></details></div>
     </aside>
   </div>
@@ -157,7 +163,29 @@
   <div id="toast" class="toast" role="status" hidden></div>
 
   <dialog id="import-dialog" class="import-dialog" aria-labelledby="import-title"><div class="dialog-head"><div><span class="eyebrow">CONTINUE YOUR WORK</span><h2 id="import-title">이전 Claude 대화 불러오기</h2></div><button id="import-close" class="icon-button" type="button" aria-label="이전 대화 창 닫기">×</button></div><p>현재 Claude 환경에 저장된 대화와 원래 작업 폴더를 가져옵니다. 기존 터미널에서 같은 세션을 실행 중이라면 작업을 마친 뒤 여기서 이어가세요.</p><form id="import-form" class="import-search"><label for="import-id">Claude 세션 ID</label><div><input id="import-id" type="text" placeholder="예: 12345678-1234-1234-1234-123456789abc" autocomplete="off" maxlength="80"><button id="import-find" class="quiet-button" type="submit">찾기</button><button id="import-refresh" class="text-button" type="button">목록 새로고침</button></div></form><p id="import-message" role="status"></p><div class="import-columns"><section><h3>최근 Claude 대화</h3><div id="import-sessions"></div></section><section id="import-preview" aria-label="이전 대화 미리보기"></section></div><div class="dialog-actions"><button id="import-apply" class="primary-button" type="button" disabled>이 대화 불러오기</button></div></dialog>
-  <dialog id="desktop-dialog" class="desktop-dialog" aria-labelledby="desktop-title"><div class="dialog-head"><h2 id="desktop-title">알림</h2><button id="desktop-close" class="icon-button" type="button" aria-label="알림 창 닫기">×</button></div><div class="workflow-heading"><p>완료된 업무와 확인이 필요한 일을 모았어요.</p><button id="desktop-read" class="text-button" type="button">모두 읽음</button></div><div id="desktop-items"></div><p id="desktop-empty">새 알림이 없습니다.</p></dialog>
+  <dialog id="desktop-dialog" class="desktop-dialog" aria-labelledby="desktop-title"><div class="dialog-head"><h2 id="desktop-title">통합 알림함</h2><button id="desktop-close" class="icon-button" type="button" aria-label="알림 창 닫기">×</button></div><div class="workflow-heading"><p>완료된 업무와 확인이 필요한 일을 모았어요.</p><button id="desktop-read" class="text-button" type="button">모두 읽음</button></div><nav id="desktop-filters" class="inbox-filters" role="tablist" aria-label="알림 분류"></nav><p id="desktop-summary" role="status"></p><div id="desktop-items"></div><p id="desktop-empty">새 알림이 없습니다.</p></dialog>
+
+
+  <dialog id="palette-dialog" class="palette-dialog" aria-labelledby="palette-title">
+    <div class="dialog-head"><h2 id="palette-title">빠른 실행</h2><button id="palette-close" class="icon-button" aria-label="빠른 실행 닫기" type="button">×</button></div>
+    <input id="palette-search" type="search" maxlength="160" role="combobox" aria-label="명령과 업무 검색" aria-autocomplete="list" aria-controls="palette-items" aria-expanded="true" placeholder="업무나 실행할 기능을 찾아보세요" autocomplete="off">
+    <div id="palette-items" role="listbox" aria-label="명령과 업무"></div><p id="palette-empty" hidden>일치하는 항목이 없어요.</p>
+    <footer class="palette-footer"><p id="palette-status" role="status"></p><div><span>↑ ↓ 이동</span><span>Enter 선택</span><span>Esc 닫기</span></div></footer>
+  </dialog>
+  <dialog id="changes-dialog" class="changes-dialog" aria-labelledby="changes-title">
+    <div class="dialog-head"><div><span class="eyebrow">FILE REVIEW</span><h2 id="changes-title">파일 변경 비교</h2></div><button id="changes-close" class="icon-button" type="button" aria-label="변경 비교 닫기">×</button></div>
+    <p class="review-intro">요청 전후에 저장한 내용을 비교해요. 다른 프로그램의 변경도 포함될 수 있어요.</p>
+    <div class="review-toolbar"><label for="changes-run">요청 기록</label><select id="changes-run"></select><span id="changes-summary" role="status"></span></div>
+    <p id="changes-empty" class="review-empty" hidden></p><div id="changes-layout" class="changes-layout"><nav id="changes-files" aria-label="변경된 파일"></nav><section class="diff-detail" aria-label="선택한 파일 비교"><h3 id="changes-file-name"></h3><p id="changes-note" role="status"></p><pre id="changes-content" tabindex="0" aria-label="변경 내용"></pre></section></div>
+    <footer class="review-footnote">앱 전체에서 최근 요청 8개 보관 · 같은 폴더의 기록을 함께 표시 · 파일당 텍스트 128 KiB까지</footer>
+  </dialog>
+  <dialog id="branch-dialog" class="branch-dialog" aria-labelledby="branch-title">
+    <div class="dialog-head"><div><span class="eyebrow">A NEW DIRECTION</span><h2 id="branch-title">이 대화에서 새로 이어가기</h2></div><button id="branch-close" class="icon-button" type="button" aria-label="대화 분기 닫기">×</button></div>
+    <p class="review-intro">마지막으로 완료된 Claude 대화를 이어받아 별도 세션을 만들어요. 원래 대화는 그대로 남아요.</p>
+    <div class="branch-source"><span>시작할 대화</span><strong id="branch-source-title"></strong><small id="branch-source-path"></small></div>
+    <p class="branch-shared-note">두 대화는 같은 업무 폴더를 사용해요. 파일 수정은 함께 반영됩니다. 새 대화의 첫 연결에서 폴더 실행 권한을 다시 확인해요.</p>
+    <p id="branch-status" role="status"></p><div class="branch-actions"><button id="branch-cancel" class="quiet-button" type="button">취소</button><button id="branch-create" class="primary" type="button">분기 만들기</button></div>
+  </dialog>
 
 </body>
 </html>

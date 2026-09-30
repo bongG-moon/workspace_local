@@ -100,5 +100,26 @@ class WorkspaceAttentionFrontendTests(unittest.TestCase):
           assert.notEqual($('attention-count').textContent,'1');
         })()""")
 
+    def test_unchanged_poll_does_not_rebuild_sidebar_or_write_seen_cache(self):
+        self.run_case(r"""(async()=>{
+          let rebuilds=0,writes=0;renderSessions=()=>rebuilds++;sessionStorage.setItem=()=>writes++;
+          api=async()=>attention([pending]);WorkspaceAttention.start();await flush();
+          const rendered=rebuilds,stored=writes;
+          await WorkspaceAttention.refresh();await WorkspaceAttention.refresh();
+          assert.equal(rebuilds,rendered);assert.equal(writes,stored);
+          assert.equal($('attention-items').children.length,0);
+          api=async()=>attention([]);await WorkspaceAttention.refresh();assert.equal(rebuilds,rendered+1);
+        })()""")
+
+    def test_successful_poll_restores_native_status_after_temporary_error(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>attention([], {supported:true,bound:true});WorkspaceAttention.start();await flush();
+          assert.match($('native-attention-message').textContent,/연결됐어요/);
+          api=async()=>{throw Error('temporary');};await WorkspaceAttention.refresh();
+          assert.match($('native-attention-message').textContent,/다시 확인/);
+          api=async()=>attention([], {supported:true,bound:true});await WorkspaceAttention.refresh();
+          assert.match($('native-attention-message').textContent,/연결됐어요/);
+        })()""")
+
 
 if __name__=='__main__':unittest.main()

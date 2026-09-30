@@ -4,6 +4,7 @@
 globalThis.WorkspaceAttention = (() => {
   let running = false, generation = 0, timer = null, controller = null, binding = false, lastBind = 0;
   let items = [], total = 0, native = {}, windowTitle = "", seen = new Set(), enabled = false, readInFlight = null;
+  let renderedKey = "", settingsKey = "";
   const notifications = new Map(), preferenceKey = "workspaceBrowserNotifications";
   const visible = () => document.visibilityState === "visible" && document.hasFocus?.() === true;
   const waitingLabel = kind => ({approval:"승인 대기",question:"답변 대기",choice:"디자인 선택 대기"}[kind] || "응답 대기");
@@ -15,6 +16,8 @@ globalThis.WorkspaceAttention = (() => {
   }
   function notificationSettings() {
     const supported = typeof globalThis.Notification === "function", permission = supported ? Notification.permission : "unsupported";
+    const key=JSON.stringify([supported,permission,enabled,native.bound]);
+    if(key===settingsKey)return;settingsKey=key;
     $("notifications-toggle").disabled = !supported;
     $("notifications-toggle").textContent = enabled ? "브라우저 알림 끄기" : "브라우저 알림 켜기";
     $("notifications-message").textContent = !supported ? "이 환경은 브라우저 알림을 지원하지 않아요. 앱의 대기 배지로 확인할 수 있어요."
@@ -26,21 +29,25 @@ globalThis.WorkspaceAttention = (() => {
   }
   async function openTask(sessionId, pendingId) {
     if (pendingId && !items.some(item => item.id === pendingId)) return toast("이미 처리된 요청이에요.");
-    try { if (await selectSession(sessionId)) $("attention-dialog").close(); } catch (err) { toast(err.message); }
+    try { if (await selectSession(sessionId)) { $("attention-dialog").close(); if($("desktop-dialog")?.open)globalThis.WorkspaceDesktop?.close(false); } } catch (err) { toast(err.message); }
   }
   function render() {
+    const key=JSON.stringify([items,total]),changed=key!==renderedKey;renderedKey=key;
     $("attention-count").textContent = String(total); $("attention-open").hidden = total === 0;
     $("attention-open").setAttribute("aria-label", `응답이 필요한 요청 ${total}개`);
-    const list = $("attention-items"); list.replaceChildren(); $("attention-empty").hidden = total > 0;
-    for (const item of items) {
-      const button = el("button", null, "attention-item"); button.type = "button";
-      button.append(el("strong", item.title || "업무"), el("span", waitingLabel(item.kind)));
-      button.onclick = () => openTask(item.sessionId, item.id); list.append(button);
+    // The legacy fallback renders only while open; the unified inbox owns normal UI.
+    if($("attention-dialog").open){
+      const list = $("attention-items"); list.replaceChildren(); $("attention-empty").hidden = total > 0;
+      for (const item of items) {
+        const button = el("button", null, "attention-item"); button.type = "button";
+        button.append(el("strong", item.title || "업무"), el("span", waitingLabel(item.kind)));
+        button.onclick = () => openTask(item.sessionId, item.id); list.append(button);
+      }
     }
-    notificationSettings(); renderSessions();
+    notificationSettings(); if(changed)renderSessions();
   }
   function apply(snapshot) {
-    globalThis.WorkspaceDesktop?.apply(snapshot.desktop);
+    globalThis.WorkspaceDesktop?.apply(snapshot.desktop,snapshot);
     globalThis.WorkspaceDesktop?.follow(snapshot.navigation);
     setWindowTitle(snapshot.windowTitle);
     native = snapshot.native && typeof snapshot.native === "object" ? snapshot.native : {};
@@ -51,9 +58,10 @@ globalThis.WorkspaceAttention = (() => {
     });
     total = Number.isInteger(snapshot.total) && snapshot.total >= items.length ? snapshot.total : items.length;
     for (const [id, notice] of notifications) if (!unique.has(id)) { notice.close(); notifications.delete(id); }
+    let seenChanged=false;
     for (const item of items) {
       if (seen.has(item.id)) continue;
-      seen.add(item.id);
+      seen.add(item.id);seenChanged=true;
       if ((snapshot.desktop?.nativeAvailable && snapshot.desktop?.preferences?.enabled && snapshot.desktop?.preferences?.attention) || !enabled || typeof globalThis.Notification !== "function" || Notification.permission !== "granted" || (visible() && active?.id === item.sessionId)) continue;
       try {
         const notice = new Notification("Company Workspace · 응답이 필요해요", {body:`${item.title || "업무"} · ${waitingLabel(item.kind)}`, tag:item.id});
@@ -61,8 +69,8 @@ globalThis.WorkspaceAttention = (() => {
         notice.onclick = () => { if (items.some(row => row.id === item.id)) { globalThis.focus?.(); openTask(item.sessionId, item.id); } notice.close(); };
       } catch (_) { /* The badge remains available when browser delivery fails. */ }
     }
-    if (seen.size > 300) seen = new Set([...seen].slice(-300));
-    storeSeen(); render();
+    if (seen.size > 300) { seen = new Set([...seen].slice(-300));seenChanged=true; }
+    if(seenChanged)storeSeen(); render();
   }
   async function bindIfFocused() {
     if (!running || appClosed || !windowTitle || !native.supported || native.bound || !visible() || binding || Date.now() - lastBind < 10000) return;
@@ -79,7 +87,7 @@ globalThis.WorkspaceAttention = (() => {
       if (!running || ticket !== generation || appClosed) return;
       apply(snapshot); await bindIfFocused(); await globalThis.WorkspaceDesktop?.presence();
     } catch (err) {
-      if (err.name !== "AbortError" && running && ticket === generation) $("native-attention-message").textContent = "대기 알림 연결을 다시 확인하고 있어요. 업무 요청을 다시 보내지는 않습니다.";
+      if (err.name !== "AbortError" && running && ticket === generation) { settingsKey=""; $("native-attention-message").textContent = "대기 알림 연결을 다시 확인하고 있어요. 업무 요청을 다시 보내지는 않습니다."; }
     } finally { if (readInFlight === request) readInFlight = null; if (running && ticket === generation && !appClosed) timer = setTimeout(refresh, 2000); }
   }
   function stop() {
@@ -92,7 +100,7 @@ globalThis.WorkspaceAttention = (() => {
     try { enabled = sessionStorage.getItem(preferenceKey) === "yes"; } catch (_) {}
     notificationSettings(); refresh();
   }
-  $("attention-open").onclick = () => { render(); showDialog("attention-dialog"); };
+  $("attention-open").onclick = () => { if(globalThis.WorkspaceDesktop?.open)return WorkspaceDesktop.open("attention"); showDialog("attention-dialog");render(); };
   $("attention-close").onclick = () => $("attention-dialog").close();
   $("notifications-toggle").onclick = async () => {
     if (typeof globalThis.Notification !== "function") return;

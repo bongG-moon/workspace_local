@@ -88,11 +88,24 @@ def probe_cli(command: list[str]) -> dict:
     return info
 
 
-def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, allow_bypass_permissions=False) -> list[str]:
+def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, allow_bypass_permissions=False,
+                  fork_session=False, new_session_id=None) -> list[str]:
     if type(allow_bypass_permissions) is not bool:
         raise ValueError('Bypass 선택 준비 여부를 확인해 주세요.')
     if allow_bypass_permissions and not help_bypass_opt_in(info.get('help', '')):
         raise BridgeError('bypass_unavailable', '설치된 CLI에서 Bypass 선택 준비 옵션을 확인하지 못했습니다.', '기존 승인 모드 사용')
+    if type(fork_session) is not bool:
+        raise ValueError('대화 분기 여부를 확인해 주세요.')
+    if fork_session:
+        from .conversation_fork import fork_capability
+        from .session_import import session_uuid
+        if not fork_capability(info)['available']:
+            raise BridgeError('fork_unavailable', '설치된 CLI에서 독립 대화 분기 옵션을 확인하지 못했습니다.', 'Claude Code 버전 확인')
+        source_id, target_id = session_uuid(resume), session_uuid(new_session_id)
+        if source_id == target_id:
+            raise ValueError('분기할 대화는 원본과 다른 세션 ID여야 합니다.')
+    elif new_session_id is not None:
+        raise ValueError('새 세션 ID는 독립 대화 분기에만 지정할 수 있습니다.')
     args = command + ["--print", "--verbose", "--input-format", "stream-json",
                       "--output-format", "stream-json", "--permission-prompt-tool", "stdio"]
     # Only the I/O changes. Let Claude choose its existing settings, model,
@@ -105,18 +118,30 @@ def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, 
         args.append("--include-partial-messages")
     if resume:
         args.append("--resume=" + str(uuid.UUID(resume)))
+    if fork_session:
+        args.extend(['--fork-session', '--session-id=' + target_id])
     return args
 
 
 class ClaudeSession:
-    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None, allow_bypass_permissions=False):
+    def __init__(self, command: list[str], info: dict, cwd: Path, emit, resume=None, *, choice_helper=None,
+                 allow_bypass_permissions=False, fork_session=False, new_session_id=None):
         if type(allow_bypass_permissions) is not bool:
             raise ValueError('Bypass 선택 준비 여부를 확인해 주세요.')
         self.command, self.info, self.cwd, self.emit = command, info, cwd, emit
         self.allow_bypass_permissions = allow_bypass_permissions
         self.choice_helper = choice_helper
-        self.session_id = resume
-        self.resume_id = resume
+        # Validate fork IDs/options before retaining state or launching anything.
+        # A fork resumes the source only through Claude's native fork flag. Its
+        # displayed/reconnect identity must never fall back to the parent ID.
+        if fork_session or new_session_id is not None or type(fork_session) is not bool:
+            cli_arguments(command, info, resume, allow_bypass_permissions=allow_bypass_permissions,
+                          fork_session=fork_session, new_session_id=new_session_id)
+        self._fork_source = str(uuid.UUID(resume)) if fork_session else None
+        self._fork_target = str(uuid.UUID(new_session_id)) if fork_session else None
+        self._fork_confirmed = False
+        self.session_id = self._fork_target if fork_session else resume
+        self.resume_id = None if fork_session else resume
         self.process = None
         self.lock = threading.RLock()
         self.ready = threading.Event()
@@ -508,8 +533,9 @@ class ClaudeSession:
             env = dict(os.environ)
             # Encoding and a UI presentation signal only; Claude-owned settings stay untouched.
             env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", COMPANY_WORKSPACE_UI="1")
-            self.process = subprocess.Popen(cli_arguments(self.command, self.info, self.session_id,
-                allow_bypass_permissions=self.allow_bypass_permissions),
+            self.process = subprocess.Popen(cli_arguments(self.command, self.info, self._fork_source or self.session_id,
+                allow_bypass_permissions=self.allow_bypass_permissions,
+                fork_session=self._fork_source is not None, new_session_id=self._fork_target),
                 cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, creationflags=HIDDEN)
             self._readers = [threading.Thread(target=self._read, daemon=True),
@@ -523,6 +549,7 @@ class ClaudeSession:
         """Only metadata the live child has reported, including pre-turn commands."""
         with self.lock:
             return {**self._connection_info, "sessionId": self.session_id,
+                    **({'forkConfirmed': self._fork_confirmed} if self._fork_source else {}),
                     **self.model_state(), "slashCommands": list(self.slash_commands),
                     "reported": {"skills": False, "plugins": False, "mcp": False,
                                  "tools": False, **self._connection_info.get("reported", {}),
@@ -715,6 +742,25 @@ class ClaudeSession:
         if self.closed:
             return
         kind = data.get("type")
+        if self._fork_source and not data.get('parent_tool_use_id'):
+            native_id = data.get('session_id')
+            has_identity = native_id is not None
+            needs_identity = kind in {'assistant', 'result'} or kind == 'system' and data.get('subtype') == 'init'
+            if has_identity or needs_identity and not self._fork_confirmed:
+                try:
+                    from .session_import import session_uuid
+                    accepted = session_uuid(native_id) == self._fork_target
+                except ValueError:
+                    accepted = False
+                if not accepted:
+                    self.initialization_error = 'Claude가 원본과 다른 분기 세션 ID를 확인해 주지 않았습니다. 원본 대화는 이어서 실행하지 않았습니다.'
+                    self.ready.set()
+                    self.close()
+                    self.emit('error', {'code': 'fork_identity', 'message': self.initialization_error,
+                                        'nextAction': '원본 업무에서 대화 분기 다시 만들기'})
+                    return
+                self._fork_confirmed = True
+                self.resume_id = self._fork_target
         if kind == "control_response":
             response = data.get("response", {})
             if response.get("request_id") == self.initialize_id:
@@ -795,6 +841,7 @@ class ClaudeSession:
                     self._system_commands_reported = True
                     self._commands_reported = True
                 self._connection_info = {"sessionId": self.session_id, **self.model_state(),
+                    **({'forkConfirmed': self._fork_confirmed} if self._fork_source else {}),
                     "slashCommands": self.slash_commands,
                     "skills": data.get("skills", []), "plugins": data.get("plugins", []),
                     "mcp": data.get("mcp_servers", []), "tools": data.get("tools", []),
@@ -845,7 +892,8 @@ class ClaudeSession:
             if data.get("error") == "authentication_failed":
                 self._authentication_failed()
                 return
-            self.session_id = data.get("session_id") or self.session_id
+            if not data.get('parent_tool_use_id'):
+                self.session_id = data.get("session_id") or self.session_id
             parent = data.get("parent_tool_use_id")
             message = data.get("message", {})
             for index, block in enumerate(message.get("content", [])):

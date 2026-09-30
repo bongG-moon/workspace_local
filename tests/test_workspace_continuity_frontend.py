@@ -184,9 +184,11 @@ class WorkspaceContinuityFrontendTests(unittest.TestCase):
     def test_desktop_snapshot_displays_metadata_without_opening_or_running_anything(self):
         self.run_case(r"""
           let calls=0;api=async()=>{calls++;};let selections=0;selectSession=async()=>{selections++;};
-          WorkspaceDesktop.apply({preferences:{enabled:true,completed:true,attention:true,errors:true},unreadCount:2,nativeAvailable:false,
+          WorkspaceDesktop.apply({preferences:{enabled:true,completed:true,attention:true,errors:true},unreadCount:1,nativeAvailable:false,
             inbox:[{id:'n1',sessionId:'A',title:'월간 업무',kind:'completed',createdAt:1700000000,read:false}]});
-          assert.equal($('desktop-count').textContent,'2');assert.equal($('desktop-count').hidden,false);
+          assert.equal($('desktop-count').textContent,'1');assert.equal($('desktop-count').hidden,false);
+          assert.equal($('desktop-items').children.length,0);assert.notEqual($('desktop-dialog').open,true);
+          WorkspaceDesktop.open();
           assert.match(flatText($('desktop-items')),/월간 업무/);assert.match(flatText($('desktop-items')),/작업 완료/);
           assert.equal(calls,0);assert.equal(selections,0);assertDraft();
         """, ("desktop",))
@@ -223,9 +225,10 @@ class WorkspaceContinuityFrontendTests(unittest.TestCase):
     def test_desktop_notice_marks_only_clicked_notice_after_successful_selection(self):
         self.run_case(r"""(async()=>{
           const state={preferences:{enabled:true,completed:true,attention:true,errors:true},inbox:[{id:'n1',sessionId:'B',title:'업무 B',kind:'attention',createdAt:1700000000,read:false}],unreadCount:1};
-          WorkspaceDesktop.apply(state);const calls=[],selections=[];api=async(path,body)=>{calls.push({path,body});return {desktop:{...state,inbox:[],unreadCount:0}};};
-          selectSession=async id=>{selections.push(id);return false;};await $('desktop-items').children[0].onclick();assert.equal(calls.length,0);
-          selectSession=async id=>{selections.push(id);return true;};await $('desktop-items').children[0].onclick();
+          WorkspaceDesktop.apply(state,{items:[{id:'pending-B',sessionId:'B',kind:'approval',title:'업무 B',notificationId:'n1'}]});
+          WorkspaceDesktop.open();const calls=[],selections=[];api=async(path,body)=>{calls.push({path,body});return {desktop:{...state,inbox:[{...state.inbox[0],read:true}],unreadCount:0}};};
+          selectSession=async id=>{selections.push(id);return false;};await $('desktop-items').children[0].children[0].onclick();assert.equal(calls.length,0);
+          selectSession=async id=>{selections.push(id);return true;};await $('desktop-items').children[0].children[0].onclick();
           assert.equal(JSON.stringify(calls[0].body),JSON.stringify({action:'read',notificationId:'n1'}));assert.equal($('desktop-count').hidden,true);
           assert.equal(JSON.stringify(selections),'["B","B"]');assertDraft();
         })()""", ("desktop",))
