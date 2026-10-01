@@ -169,6 +169,35 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.deepEqual(attachments,['D:/계획.xlsx']);assert.equal(calls[0].data.action,'restored');
         })()""")
 
+    def test_conflicting_stashes_are_available_separately_from_drafts_in_recovery(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          globalThis.WorkspaceShortcuts={restoreStashes:()=>['home']};
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,
+            drafts:[{id:'home',text:'ordinary draft',attachments:['draft.csv']}],
+            stashes:[{id:'home',text:'stashed request',attachments:['stash.csv'],selectionStart:1,selectionEnd:3}]}}});
+          assert.equal(calls.length,0);assert.equal($('prompt').value,'ordinary draft');
+          $('upgrade-recovery-open').onclick();
+          const options=$('upgrade-recovery-task').children;assert.equal(options.length,2);
+          assert.equal(options[0].textContent,'업무 홈');assert.equal(options[1].textContent,'업무 홈 · 임시 보관');
+          assert.equal($('upgrade-recovery-text').value,'ordinary draft');
+          $('upgrade-recovery-task').value='1';$('upgrade-recovery-task').onchange();
+          assert.equal($('upgrade-recovery-text').value,'stashed request');assert.equal($('upgrade-recovery-files').textContent,'stash.csv');
+          assert.equal($('prompt').value,'ordinary draft');assert.equal(calls.length,0);
+        })()""")
+
+    def test_missing_stash_module_keeps_record_and_exposes_stash_only_snapshot_for_copy(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='newly typed';attachments=['new.csv'];
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[],
+            stashes:[{id:'home',text:'saved only in stash',attachments:['keep.csv'],selectionStart:0,selectionEnd:0}]}}});
+          assert.equal(calls.length,0);assert.equal($('prompt').value,'newly typed');assert.deepEqual(attachments,['new.csv']);
+          assert.match($('upgrade-notice-text').textContent,/복원/);$('upgrade-recovery-open').onclick();
+          assert.equal($('upgrade-recovery-task').children.length,1);
+          assert.equal($('upgrade-recovery-task').children[0].textContent,'업무 홈 · 임시 보관');
+          assert.equal($('upgrade-recovery-text').value,'saved only in stash');
+          assert.equal($('upgrade-recovery-files').textContent,'keep.csv');assert.equal(calls.length,0);
+        })()""")
+
     def test_task_restore_displays_original_task_without_sending_or_losing_home_edit(self):
         self.run_case("(async()=>{" + PRELUDE + """
           sessions=[{id:'task-A',title:'이전 업무',state:'idle',workspace:'D:/work'}];

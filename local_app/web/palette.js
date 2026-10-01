@@ -96,7 +96,8 @@ globalThis.WorkspacePalette = (() => {
   }
   function keydown(event){
     if(event.defaultPrevented||event.isComposing||event.keyCode===229||composing)return false;
-    if(normalized(event.key)==="k"&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey){
+    if(normalized(event.key)==="p"&&(event.ctrlKey||event.metaKey)&&!event.altKey&&event.shiftKey){
+      if(event.repeat){event.preventDefault();return true;}
       if(open()){event.preventDefault();event.stopPropagation?.();return true;}return false;
     }
     if(!dialog.open||event.ctrlKey||event.metaKey||event.altKey||event.shiftKey)return false;

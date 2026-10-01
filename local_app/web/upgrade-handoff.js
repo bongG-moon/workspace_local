@@ -131,15 +131,16 @@ globalThis.WorkspaceUpgrade = (() => {
     }catch(error){localError="이전 창의 입력 내용 복원을 마치지 못했어요. 창을 다시 열면 다시 확인합니다.";render();}
     finally{ready=true;}
   }
+  const recoveryRows=()=>recovery?[...recovery.snapshot.drafts,...(recovery.snapshot.stashes||[]).map(row=>({...row,stashed:true}))]:[];
   function recoveryRow(){
-    const row=recovery?.snapshot.drafts[Number($("upgrade-recovery-task").value)||0];
+    const row=recoveryRows()[Number($("upgrade-recovery-task").value)||0];
     $("upgrade-recovery-text").value=row?.text||"";
     $("upgrade-recovery-files").textContent=row?.attachments?.length?row.attachments.join("\n"):"첨부 자료 없음";
   }
   function openRecovery(){
     if(!recovery)return;
     const select=$("upgrade-recovery-task");select.replaceChildren();
-    recovery.snapshot.drafts.forEach((row,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=row.id==="home"?"업무 홈":hooks.taskTitle?.(row.id)||"이전 업무 "+row.id.slice(0,8);select.append(option);});
+    recoveryRows().forEach((row,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=(row.id==="home"?"업무 홈":hooks.taskTitle?.(row.id)||"이전 업무 "+row.id.slice(0,8))+(row.stashed?" · 임시 보관":"");select.append(option);});
     select.value="0";recoveryRow();$("upgrade-recovery-message").textContent="확인 전까지 이전 초안 기록을 유지합니다.";
     if(hooks.openRecovery)hooks.openRecovery("upgrade-recovery-dialog");else $("upgrade-recovery-dialog").showModal();
   }

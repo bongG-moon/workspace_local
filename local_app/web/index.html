@@ -32,6 +32,9 @@
   <script src="/workflow.js" defer></script>
   <script src="/composer.js" defer></script>
   <script src="/inline-controls.js" defer></script>
+  <script src="/input-keys.js" defer></script>
+  <script src="/chat-shortcuts.js" defer></script>
+  <link rel="stylesheet" href="/chat-shortcuts.css">
   <script src="/attention.js" defer></script>
   <script src="/desktop.js" defer></script>
   <script src="/session-import.js" defer></script>
@@ -71,7 +74,7 @@
     <aside id="sidebar-panel" class="sidebar" aria-label="업무 탐색">
       <div class="sidebar-head"><a class="brand" href="/" aria-label="Company Workspace 홈" title="업무 홈"><span class="brand-mark"><svg class="icon"><use href="#i-spark"/></svg></span><span class="brand-type">Workspace<small>for Claude Code</small></span></a><button id="sidebar-toggle" class="icon-button" type="button" aria-label="업무 목록 접기" title="업무 목록 접기" aria-expanded="true" aria-controls="sidebar-panel"><svg class="icon"><use href="#i-sidebar"/></svg></button></div>
       <button id="new-chat" class="new-chat" aria-label="새 업무" title="새 업무"><svg class="icon"><use href="#i-plus"/></svg><span>새 업무</span></button>
-      <button id="palette-open" class="palette-launcher" type="button" aria-label="빠른 실행" title="빠른 실행 · Ctrl+K"><svg class="icon"><use href="#i-search"/></svg><span>빠른 실행</span><kbd>Ctrl K</kbd></button>
+      <button id="palette-open" class="palette-launcher" type="button" aria-label="빠른 실행" title="빠른 실행 · Ctrl+Shift+P" aria-keyshortcuts="Control+Shift+P"><svg class="icon"><use href="#i-search"/></svg><span>빠른 실행</span><kbd>Ctrl ⇧ P</kbd></button>
       <nav class="primary-nav" aria-label="주 메뉴"><button id="home-button" class="nav-button active" aria-label="내 업무 공간" title="내 업무 공간" aria-current="page"><svg class="icon"><use href="#i-home"/></svg><span>내 업무 공간</span></button><button id="capabilities-open" class="nav-button" aria-label="스킬·도구" aria-current="false" title="스킬·도구"><svg class="icon"><use href="#i-box"/></svg><span>스킬·도구</span></button></nav>
       <label class="session-search"><svg class="icon"><use href="#i-search"/></svg><input id="session-search" type="search" placeholder="업무 찾기" aria-label="업무 검색" autocomplete="off"><span class="search-hint" aria-hidden="true">찾기</span></label>
       <div class="sidebar-label">최근 업무<span class="small-dot"></span></div>
@@ -131,7 +134,7 @@
           <div id="attachments" class="attachments"></div>
           <p id="attachment-drop-status" class="attachment-drop-status" role="status" hidden></p>
           <label for="prompt" class="sr-only">업무 요청</label><textarea id="prompt" rows="2" maxlength="32000" aria-describedby="composer-input-hints" placeholder="하고 싶은 일을 적어주세요."></textarea>
-          <div id="composer-input-hints" class="composer-input-hints"><span class="composer-trigger-hints"><span><b>/</b> 스킬·명령</span><span><b>@</b> 파일</span></span><span class="composer-shortcut-note">Tab 자동완성 · Shift+Tab 모드 전환 · Ctrl+Enter 보내기</span></div>
+          <div id="composer-input-hints" class="composer-input-hints"><span class="composer-trigger-hints"><span><b>/</b> 스킬·명령</span><span><b>@</b> 파일</span></span><span class="composer-shortcut-note">Enter 보내기 · Shift+Enter 줄바꿈 · Shift+Tab 모드 전환</span></div>
           <section id="composer-controls-panel" class="composer-controls-panel" aria-label="현재 업무 실행 설정" hidden>
             <div class="runtime-panel-heading"><strong id="runtime-panel-title"></strong><button type="button" id="runtime-panel-close" class="icon-button" aria-label="선택 목록 닫기">×</button></div>
             <p id="runtime-panel-note" class="runtime-panel-note"></p><div id="runtime-panel-options" role="group"></div><div id="runtime-panel-extra"></div>
@@ -174,7 +177,7 @@
   <dialog id="help-dialog" aria-label="사용 도움말"><div class="dialog-head"><h2>처음이라면 여기서 시작하세요</h2><button id="close-help" class="icon-button" aria-label="안내 닫기"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <ol class="help-steps"><li><strong>‘새 업무’에서 시작 방법을 골라요</strong><span>새 폴더 만들기, 기존 폴더 사용하기, 기존 세션 활용하기 중 하나를 선택하세요. 이름과 저장 위치를 확인하면 준비가 끝나요. <a href="/manual/guide#onboarding" target="_blank" rel="noopener noreferrer">세 가지 시작 방법 보기 ↗</a></span></li><li><strong>자료를 더하고 평소처럼 부탁하세요</strong><span>‘자료 추가’나 끌어 놓기로 파일을 더하세요. 원하는 일을 적고 ‘보내기’를 누릅니다. <a href="/manual/guide#files" target="_blank" rel="noopener noreferrer">파일과 결과 확인하기 ↗</a></span></li><li><strong>수정 요청은 같은 업무에서 이어가요</strong><span>“이 표에 지난달도 추가해 줘”처럼 이어서 질문할 수 있어요. 다른 방향으로 시도하려면 ‘대화 분기’, 작업 중 다음 요청을 남기려면 ‘이어 할 일’을 사용하세요. <a href="/manual/guide#productivity" target="_blank" rel="noopener noreferrer">이어하기와 분기 보기 ↗</a></span></li></ol>
     <div class="help-note"><p><strong>시간을 정해 실행하려면</strong><br>입력창 위 ‘실행 예약’에서 부탁할 내용과 시간을 정하세요. PC와 앱이 켜져 있어야 실행됩니다. <a href="/manual/guide#scheduling" target="_blank" rel="noopener noreferrer">예약을 만들고 확인하기 ↗</a></p><p><strong>창을 닫으면 작업도 끝나나요?</strong><br>앱 아이콘이 Windows의 숨겨진 아이콘 영역에 남아 있으면 백그라운드에서 계속 실행 중이에요. 완전히 끝내려면 ‘설정 → 완전히 종료’를 사용하세요. <a href="/manual/guide#background" target="_blank" rel="noopener noreferrer">최소화·창 닫기·알림 안내 ↗</a></p><p><strong>목록을 정리하고 싶다면</strong><br>업무 이름에 마우스를 올리고 휴지통을 눌러 ‘목록에서 삭제’를 확인하세요. 대화 기록과 파일은 그대로 남습니다. <a href="/manual/guide#usage" target="_blank" rel="noopener noreferrer">업무 목록 관리하기 ↗</a></p></div>
-    <div class="help-start"><p><strong>자주 쓰는 단축키</strong><br>/ 스킬·명령 · @ 파일 · Tab 자동완성<br>Shift+Tab 승인 모드 · Ctrl+Enter 보내기</p></div>
+    <div class="help-start"><p><strong>자주 쓰는 단축키</strong><br>Enter 보내기 · Shift+Enter 줄바꿈<br>/ 스킬·명령 · @ 파일 · Tab 자동완성<br>Shift+Tab 승인 모드 · Alt+P 모델 선택<br>Ctrl+R 이전 입력 검색 · Ctrl+S 입력 임시 보관<br>Ctrl+Shift+P 빠른 실행</p></div>
     <a class="manual-link" href="/manual/guide" target="_blank" rel="noopener noreferrer">그림 없이도 따라 하는 전체 사용자 안내서 <span aria-hidden="true">↗</span></a></dialog>
   <dialog id="tasks-dialog" class="tasks-dialog" aria-labelledby="tasks-title"><div class="dialog-head"><div><span class="eyebrow">YOUR WORK</span><h2 id="tasks-title">전체 업무</h2></div><button id="tasks-close" type="button" class="icon-button" aria-label="전체 업무 닫기"><svg class="icon"><use href="#i-close"/></svg></button></div><p>이전에 시작한 업무를 찾아 이어서 진행하세요.</p><label class="sr-only" for="task-search">전체 업무 검색</label><input id="task-search" type="search" placeholder="업무 이름이나 저장 위치로 검색" autocomplete="off"><nav id="all-sessions" class="all-sessions" aria-label="전체 업무 목록"></nav><p id="tasks-empty" class="tasks-empty" role="status" hidden>찾는 업무가 없어요. 이름이나 저장 위치를 다시 확인해 주세요.</p></dialog>
   <dialog id="action-dialog" class="action-dialog" aria-labelledby="action-title" aria-describedby="action-message"><div class="dialog-head"><span class="dialog-symbol" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span><button id="action-close" type="button" class="icon-button" aria-label="확인창 닫기"><svg class="icon"><use href="#i-close"/></svg></button></div><h2 id="action-title">진행할까요?</h2><p id="action-message"></p><div class="dialog-actions"><button id="action-cancel" type="button" class="quiet-button" autofocus>취소</button><button id="action-confirm" type="button" class="send-button">확인</button></div></dialog>
@@ -187,6 +190,14 @@
   <dialog id="desktop-dialog" class="desktop-dialog" aria-labelledby="desktop-title"><div class="dialog-head"><h2 id="desktop-title">통합 알림함</h2><button id="desktop-close" class="icon-button" type="button" aria-label="알림 창 닫기">×</button></div><div class="workflow-heading"><p>완료된 업무와 확인이 필요한 일을 모았어요.</p><button id="desktop-read" class="text-button" type="button">모두 읽음</button></div><nav id="desktop-filters" class="inbox-filters" role="tablist" aria-label="알림 분류"></nav><p id="desktop-summary" role="status"></p><div id="desktop-items"></div><p id="desktop-empty">새 알림이 없습니다.</p></dialog>
 
 
+  <dialog id="input-history-dialog" class="input-history-dialog" aria-labelledby="input-history-title" aria-describedby="input-history-note">
+    <header><h2 id="input-history-title">이 업무에서 보낸 요청</h2><button id="input-history-close" class="icon-button" type="button" aria-label="이전 입력 검색 닫기">×</button></header>
+    <p id="input-history-note">이전 요청을 입력창으로 가져와 고칠 수 있어요. 선택만으로 다시 보내지는 않습니다.</p>
+    <input id="input-history-search" type="search" maxlength="160" role="combobox" aria-label="이전 입력 검색" aria-autocomplete="list" aria-controls="input-history-results" aria-expanded="true" placeholder="요청에 들어 있던 말을 찾아보세요" autocomplete="off">
+    <div id="input-history-results" class="input-history-results" role="listbox" aria-label="이전 입력 목록"></div>
+    <p id="input-history-empty" role="status" hidden>일치하는 이전 요청이 없어요.</p>
+    <p>↑ ↓ 이동 · Enter 가져오기 · Esc 닫기</p>
+  </dialog>
   <dialog id="palette-dialog" class="palette-dialog" aria-labelledby="palette-title">
     <div class="dialog-head"><h2 id="palette-title">빠른 실행</h2><button id="palette-close" class="icon-button" aria-label="빠른 실행 닫기" type="button">×</button></div>
     <input id="palette-search" type="search" maxlength="160" role="combobox" aria-label="명령과 업무 검색" aria-autocomplete="list" aria-controls="palette-items" aria-expanded="true" placeholder="업무나 실행할 기능을 찾아보세요" autocomplete="off">

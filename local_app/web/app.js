@@ -466,13 +466,15 @@ async function submit(){
     return;
   }
   if(globalThis.WorkspaceComposer?.beforeSubmit()===false)return;
-  const sid=active.id,ticket=selectionGeneration,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
+  const owner=active,sid=active.id,ticket=selectionGeneration,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
   $("conversation").querySelector(".conversation-empty")?.remove();
   const pending=renderMessage({role:"user",text,files,pending:true});pending.classList.add("pending");pending.querySelector(".message-label").textContent="전송 중";globalThis.WorkspaceStream?.jump();
   try{
     await api("/api/send",{id:sid,text,attachments:files,trusted:active.trusted});
+    owner.messages=owner.messages||[];owner.messages.push({role:"user",text,files});
     pending.classList.remove("pending");pending.querySelector(".message-label").textContent="나";if(active?.id===sid&&globalThis.WorkspaceRichContent&&files.length){pending.querySelector(".message-files")?.remove();WorkspaceRichContent.files(pending,files,{sessionId:sid,workspace:active.workspace});}drafts.delete(sid);
-    if(active?.id===sid){$("prompt").value="";attachments=[];renderAttachments();await refreshSessionMeta();}
+    if(active?.id===sid){$("prompt").value="";attachments=[];renderAttachments();globalThis.WorkspaceInputKeys?.reset();globalThis.WorkspaceShortcuts?.afterSend(sid);await refreshSessionMeta();}
+    else globalThis.WorkspaceShortcuts?.afterSend(sid);
     // Keep the existing event cursor and streamed text. Re-selecting here could
     // discard partial messages received before the POST acknowledgement.
   }catch(e){
@@ -485,7 +487,15 @@ async function submit(){
     }else error(e.message);
   }finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
-$("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;if(globalThis.WorkspaceComposer?.keydown(e))return;if(globalThis.WorkspaceInlineControls?.keydown(e))return;if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();return submit();}};
+$("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{
+  if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;
+  if(globalThis.WorkspaceShortcuts?.priority(e))return;
+  if(globalThis.WorkspaceComposer?.keydown(e))return;
+  if(globalThis.WorkspaceInlineControls?.keydown(e))return;
+  if(globalThis.WorkspaceShortcuts?.keydown(e))return;
+  if(globalThis.WorkspaceInputKeys?.keydown(e))return;
+  if(e.key==="Enter"&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!e.shiftKey){e.preventDefault();if(!e.repeat)return submit();}
+};
 $("folder-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();if(!$("trust").checked)return;const button=e.submitter,trustContext={id:active?.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};button.disabled=true;try{if($("folder-form").dataset.resume==="yes"){const id=active.id;await api("/api/trust",{id,trusted:true});if(active?.id!==id||selectionGeneration!==trustContext.generation||folderChoiceGeneration!==trustContext.folderGeneration)return;active.trusted=true;}else{const draft={text:$("prompt").value,attachments:[...attachments]},managed=$("folder-mode-new").checked;if(managed&&!managedRootChoice&&!boot.managedWorkspaceRoot)throw Error("새 업무를 저장할 위치를 먼저 선택해 주세요.");const item=await api("/api/create",{workspace:managed?undefined:$("folder-input").value,managed,managedRoot:managed?managedRootChoice||undefined:undefined,title:$("task-name").value.trim()||undefined,trusted:true});sessions.unshift(item);drafts.set(item.id,draft);await selectSession(item.id);drafts.delete("home");}$("folder-dialog").close();if($("folder-form").dataset.afterTrust==="choice"){renderWorkspaceChoice();toast("폴더 확인을 마쳤어요. 원하는 디자인을 선택해 주세요.");}else if($("folder-form").dataset.afterTrust==="commands"){await globalThis.WorkspaceComposer?.prepareConnection();}else if($("folder-form").dataset.afterTrust==="schedule"){globalThis.WorkspaceWorkflow?.openEditor("schedule");}else if($("folder-form").dataset.afterTrust==="workflow"){await globalThis.WorkspaceWorkflow?.resumeAfterTrust(trustContext);}else if($("folder-form").dataset.afterTrust==="controls"){await globalThis.WorkspaceInlineControls?.resumeAfterTrust();}else if($("prompt").value.trim())await submit();}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $("folder-mode-new").onchange=$("folder-mode-existing").onchange=folderMode;
 async function browseWorkspace(managed){const button=$(managed?"choose-managed":"browse-folder"),label=button.textContent,ticket=folderChoiceGeneration;button.disabled=true;button.textContent="선택 창 열림…";try{const initial=managed?managedRootChoice||boot.defaultWorkspace:$("folder-input").value||boot.defaultWorkspace;const options={kind:"folder",initialDirectory:initial||undefined};const d=await (globalThis.WorkspacePathPicker?WorkspacePathPicker.open(options):api("/api/pick",options));if(ticket!==folderChoiceGeneration||!$("folder-dialog").open)return;if(d.paths.length){if(managed){managedRootChoice=d.paths[0];folderMode();}else $("folder-input").value=d.paths[0];$("trust").checked=false;}}catch(e){toast(e.message);}finally{button.textContent=label;button.disabled=$("folder-form").dataset.resume==="yes";if($("folder-dialog").open&&ticket===folderChoiceGeneration)button.focus();}}
@@ -497,7 +507,7 @@ $("tasks-open").onclick=()=>{$("task-search").value="";renderAllSessions();showD
 $("new-chat").onclick=()=>{showHome(true);chooseFolder();};$("home-button").onclick=()=>showHome();$("session-search").oninput=renderSessions;
 $("choose-folder").onclick=$("workspace-button").onclick=$("workspace-summary").onclick=()=>chooseFolder(!!active);
 document.querySelectorAll(".task-card,[data-prompt].prompt-shortcut").forEach(button=>button.onclick=()=>{$("prompt").value=button.dataset.prompt;$("prompt").focus();});
-$("stop").onclick=async()=>{try{await api("/api/stop",{id:active.id});toast("중지 요청을 보냈어요. 완료된 파일 변경은 유지됩니다.");refreshResults();}catch(e){error(e.message);}};
+$("stop").onclick=async()=>{if(globalThis.WorkspaceShortcuts)return WorkspaceShortcuts.stop();try{await api("/api/stop",{id:active.id});toast("중지 요청을 보냈어요. 완료된 파일 변경은 유지됩니다.");refreshResults();}catch(e){error(e.message);}};
 $("refresh-files").onclick=()=>{refreshFiles();refreshResults();};$("files-tab").onclick=()=>setPanel("sources");$("results-tab").onclick=()=>setPanel("results");
 // Panel visibility is owned by layout.js, including compact viewports.
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
@@ -629,13 +639,17 @@ function captureScreenRecovery(){
   // Empty entries saved by an edit cancel older handoff drafts on retry. A
   // pristine blank input must not erase a saved draft that failed to display.
   if($("prompt").value||attachments.length)saveDraft();
-  return {sessionId:active?.id||null,drafts:[...drafts].map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
+  const snapshot={sessionId:active?.id||null,drafts:[...drafts].map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
+  const stashes=globalThis.WorkspaceShortcuts?.exportStashes()||[];if(stashes.length)snapshot.stashes=stashes;
+  return snapshot;
 }
 async function restoreScreenRecovery(snapshot){
+  if(snapshot.stashes?.length&&!globalThis.WorkspaceShortcuts?.restoreStashes)throw new Error("임시 보관한 입력을 복원할 기능을 아직 준비하지 못했어요. 이전 기록은 유지합니다.");
   // Bootstrap may finish after the user has already edited this page. Existing
   // entries, including explicitly empty drafts, take precedence over the handoff.
   if($("prompt").value||attachments.length)saveDraft();
   const liveDraftIds=new Set(drafts.keys());
+  const stashConflicts=globalThis.WorkspaceShortcuts?.restoreStashes(snapshot.stashes||[])||[];
   for(const row of snapshot.drafts)if(!drafts.has(row.id))drafts.set(row.id,{text:row.text,attachments:[...row.attachments]});
   const id=snapshot.sessionId,exists=id&&sessions.some(row=>row.id===id);
   const conflicts=()=>snapshot.drafts.filter(row=>{
@@ -643,7 +657,7 @@ async function restoreScreenRecovery(snapshot){
     if(!same(drafts.get(row.id)))return true;
     if(!row.text&&!row.attachments.length)return false;
     return row.id!=="home"&&!sessions.some(item=>item.id===row.id)&&!(row.id===id&&same(drafts.get("home")));
-  }).map(row=>row.id);
+  }).map(row=>row.id).concat(stashConflicts);
   if(exists){
     const selection=selectSession(id,{keepDraft:true}),ticket=selectionGeneration;
     const selected=await selection;

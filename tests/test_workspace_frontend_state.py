@@ -154,6 +154,62 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
           assert.equal($('conversation').children.filter(n=>n.classList.contains('user')).length,0);
         })()""")
 
+    def test_input_history_and_stash_hook_are_updated_only_after_send_acknowledgement(self):
+        self.run_case(r"""(async()=>{
+          active={id:'A',state:'idle',trusted:true,messages:[{role:'user',text:'earlier'}]};sessions=[{...active}];
+          $('prompt').value='  current request  ';attachments=['source.csv'];
+          const hooks=[];globalThis.WorkspaceShortcuts={afterSend(id){
+            hooks.push(id);assert.equal(active.messages.at(-1).text,'current request');
+            assert.equal($('prompt').value,'');assert.equal(attachments.length,0);
+          }};
+          refreshSessionMeta=async()=>{};let acknowledge;
+          api=()=>new Promise(resolve=>acknowledge=resolve);
+          const pending=submit();assert.equal(active.messages.length,1);assert.equal(hooks.length,0);
+          acknowledge({ok:true});await pending;
+          assert.equal(active.messages.length,2);assert.equal(active.messages[1].role,'user');
+          assert.deepEqual(active.messages[1].files,['source.csv']);assert.deepEqual(hooks,['A']);
+          attachments.push('later.csv');assert.deepEqual(active.messages[1].files,['source.csv']);
+        })()""")
+
+    def test_failed_send_does_not_create_input_history_or_restore_a_stash(self):
+        self.run_case(r"""(async()=>{
+          active={id:'A',state:'idle',trusted:true,messages:[{role:'user',text:'already sent'}]};sessions=[{...active}];
+          $('prompt').value='not sent';attachments=['keep.csv'];let restored=0;
+          globalThis.WorkspaceShortcuts={afterSend(){restored++;}};
+          api=async()=>{throw Error('send rejected');};await submit();
+          assert.deepEqual(active.messages,[{role:'user',text:'already sent'}]);assert.equal(restored,0);
+          assert.equal($('prompt').value,'not sent');assert.deepEqual(attachments,['keep.csv']);
+        })()""")
+
+    def test_send_ack_updates_its_original_task_history_and_stash_owner_after_switch(self):
+        self.run_case(r"""(async()=>{
+          const original={id:'A',state:'idle',trusted:true,messages:[]};active=original;sessions=[{...active}];
+          $('prompt').value='A request';attachments=['A.csv'];const restored=[];
+          globalThis.WorkspaceShortcuts={afterSend(id){restored.push(id);}};
+          let acknowledge;api=()=>new Promise(resolve=>acknowledge=resolve);const pending=submit();
+          active={id:'B',state:'idle',trusted:true,messages:[{role:'user',text:'B earlier'}]};selectionGeneration++;
+          $('prompt').value='B draft';attachments=['B.csv'];acknowledge({ok:true});await pending;
+          assert.deepEqual(original.messages,[{role:'user',text:'A request',files:['A.csv']}]);
+          assert.deepEqual(active.messages,[{role:'user',text:'B earlier'}]);assert.deepEqual(restored,['A']);
+          assert.equal($('prompt').value,'B draft');assert.deepEqual(attachments,['B.csv']);
+        })()""")
+
+    def test_recovery_refuses_stashes_when_the_restoring_module_is_unavailable(self):
+        self.run_case(r"""(async()=>{
+          active=null;sessions=[];$('prompt').value='new draft';attachments=['new.csv'];
+          const snapshot={sessionId:null,drafts:[{id:'home',text:'old draft',attachments:['old.csv']}],
+            stashes:[{id:'home',text:'stashed request',attachments:['stash.csv'],selectionStart:2,selectionEnd:4}]};
+          for(const module of [undefined,{}]){
+            globalThis.WorkspaceShortcuts=module;
+            await assert.rejects(restoreScreenRecovery(snapshot),/임시 보관.*복원/);
+            assert.equal($('prompt').value,'new draft');assert.deepEqual(attachments,['new.csv']);
+            assert.equal(drafts.size,0);
+          }
+          globalThis.WorkspaceShortcuts={restoreStashes(rows){assert.deepEqual(rows,snapshot.stashes);return ['home'];}};
+          const outcome=await restoreScreenRecovery(snapshot);
+          assert.ok(outcome.conflicts.includes('home'));assert.equal($('prompt').value,'new draft');
+        })()""")
+
     def test_delayed_submit_ack_does_not_clear_other_workspaces_draft(self):
         self.run_case(r"""(async()=>{
           active={id:'A',state:'idle',trusted:true};sessions=[{...active}];

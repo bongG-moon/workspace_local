@@ -34,7 +34,7 @@ def version(value):
 
 def snapshot(value):
     """Validate without silently filtering/truncating any unsent user input."""
-    if not isinstance(value, dict) or set(value) != {'sessionId', 'drafts'}:
+    if not isinstance(value, dict) or set(value) not in ({'sessionId', 'drafts'}, {'sessionId', 'drafts', 'stashes'}):
         raise ValueError('작성 중인 내용의 저장 형식을 확인해 주세요.')
     def identifier(sid, home=False):
         if home and sid == 'home':
@@ -48,21 +48,43 @@ def snapshot(value):
     drafts = value['drafts']
     if not isinstance(drafts, list) or len(drafts) > MAX_SESSIONS + 1:
         raise ValueError('작성 중인 업무의 개수가 저장 범위를 넘었습니다.')
-    result, seen = [], set()
-    for row in drafts:
-        if not isinstance(row, dict) or set(row) != {'id', 'text', 'attachments'}:
-            raise ValueError('작성 중인 내용의 저장 형식을 확인해 주세요.')
-        sid = identifier(row['id'], home=True)
-        text, paths = row['text'], row['attachments']
-        if sid in seen or not isinstance(text, str) or len(text) > 100000:
-            raise ValueError('작성 중인 내용이 중복되거나 저장 범위를 넘었습니다.')
-        if (not isinstance(paths, list) or len(paths) > 12 or any(
-                not isinstance(path, str) or not path or len(path) > 8192 or '\x00' in path for path in paths)):
-            raise ValueError('작성 중인 첨부 자료의 저장 형식을 확인해 주세요.')
-        seen.add(sid)
-        result.append({'id': sid, 'text': text, 'attachments': list(paths)})
-    clean = {'sessionId': selected, 'drafts': result}
-    if len(json.dumps(clean, ensure_ascii=False).encode('utf-8')) > MAX_SNAPSHOT:
+    def entries(rows, *, stashes=False):
+        result, seen = [], set()
+        keys = {'id', 'text', 'attachments'} | ({'selectionStart', 'selectionEnd'} if stashes else set())
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != keys:
+                raise ValueError('작성 중인 내용의 저장 형식을 확인해 주세요.')
+            sid = identifier(row['id'], home=True)
+            text, paths = row['text'], row['attachments']
+            if sid in seen or not isinstance(text, str) or len(text) > 100000:
+                raise ValueError('작성 중인 내용이 중복되거나 저장 범위를 넘었습니다.')
+            if (not isinstance(paths, list) or len(paths) > 12 or any(
+                    not isinstance(path, str) or not path or len(path) > 8192 or '\x00' in path for path in paths)):
+                raise ValueError('작성 중인 첨부 자료의 저장 형식을 확인해 주세요.')
+            seen.add(sid)
+            entry = {'id': sid, 'text': text, 'attachments': list(paths)}
+            if stashes:
+                start, end = row['selectionStart'], row['selectionEnd']
+                try:
+                    units = len(text.encode('utf-16-le')) // 2
+                except UnicodeEncodeError as exc:
+                    raise ValueError('보관한 입력의 문자를 확인하지 못했습니다.') from exc
+                if (type(start) is not int or type(end) is not int or not 0 <= start <= end <= units):
+                    raise ValueError('보관한 입력의 선택 범위를 확인하지 못했습니다.')
+                entry.update(selectionStart=start, selectionEnd=end)
+            result.append(entry)
+        return result
+    clean = {'sessionId': selected, 'drafts': entries(drafts)}
+    if 'stashes' in value:
+        stashes = value['stashes']
+        if not isinstance(stashes, list) or len(stashes) > 50:
+            raise ValueError('보관한 입력의 개수가 저장 범위를 넘었습니다.')
+        clean['stashes'] = entries(stashes, stashes=True)
+    try:
+        size = len(json.dumps(clean, ensure_ascii=False).encode('utf-8'))
+    except UnicodeEncodeError as exc:
+        raise ValueError('작성 중인 내용의 문자를 확인하지 못했습니다.') from exc
+    if size > MAX_SNAPSHOT:
         raise ValueError('작성 중인 내용이 저장 범위를 넘었습니다. 내용을 보관한 뒤 다시 실행해 주세요.')
     return clean
 

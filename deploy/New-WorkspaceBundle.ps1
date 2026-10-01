@@ -39,6 +39,7 @@ $files = @(
     'local_app\web\fonts\NotoSansKR-Variable.woff', 'local_app\web\fonts\OFL.txt', 'local_app\web\fonts\SOURCE.json',
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\capabilities.js',
     'local_app\web\composer.js', 'local_app\web\inline-controls.js', 'local_app\web\attention.js',
+    'local_app\web\input-keys.js', 'local_app\web\chat-shortcuts.js', 'local_app\web\chat-shortcuts.css',
     'local_app\web\startup-health.js', 'local_app\web\startup-health.css',
     'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\layout.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
     'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
@@ -63,7 +64,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.5-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.6-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

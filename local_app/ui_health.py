@@ -12,7 +12,7 @@ import uuid
 from .history import safe, read
 
 MODULES = frozenset(('app', 'stream', 'attachments', 'workflow', 'composer',
-    'inline-controls', 'attention', 'desktop', 'session-import', 'capabilities',
+    'inline-controls', 'input-keys', 'chat-shortcuts', 'attention', 'desktop', 'session-import', 'capabilities',
     'productivity', 'palette', 'layout', 'rich-content', 'execution-view', 'tool-activity', 'path-picker', 'startup-health', 'upgrade-handoff'))
 EVENTS = frozenset(('document', 'startup', 'module', 'resource', 'error', 'recovery'))
 STATES = frozenset(('pending', 'ready', 'failed', 'restored'))

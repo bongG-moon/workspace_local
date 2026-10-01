@@ -56,7 +56,7 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           $('prompt').value='아직 보내지 않은 초안';attachments=['report.csv'];$('prompt').focus();
           let selected;selectSession=async id=>{selected=id;return true;};
-          const event=keyEvent('k',{ctrlKey:true});assert.equal(WorkspacePalette.keydown(event),true);
+          const event=keyEvent('p',{ctrlKey:true,shiftKey:true});assert.equal(WorkspacePalette.keydown(event),true);
           assert.equal(event.defaultPrevented,true);assert.equal($('palette-dialog').open,true);
           $('palette-search').value='지난';$('palette-search').oninput();
           assert.ok(find('task:B'));assert.equal(find('task:A'),undefined);
@@ -72,10 +72,27 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           WorkspacePalette.refresh();assert.equal($('palette-items').children.length,0);
         })()""")
 
+    def test_palette_reserves_shift_p_and_keeps_cli_editing_keys_unhandled(self):
+        self.run_case(r"""(()=>{
+          $('prompt').value='보존할 입력';$('prompt').focus();
+          for(const event of [keyEvent('k',{ctrlKey:true}),keyEvent('p',{ctrlKey:true}),
+              keyEvent('p',{altKey:true}),keyEvent('P',{ctrlKey:true,shiftKey:true,altKey:true})]){
+            assert.equal(WorkspacePalette.keydown(event),false);assert.notEqual(event.defaultPrevented,true);
+            assert.notEqual($('palette-dialog').open,true);
+          }
+          const open=keyEvent('P',{ctrlKey:true,shiftKey:true});assert.equal(WorkspacePalette.keydown(open),true);
+          assert.equal($('palette-dialog').open,true);assert.equal(open.defaultPrevented,true);
+          const repeat=keyEvent('P',{ctrlKey:true,shiftKey:true,repeat:true});WorkspacePalette.keydown(repeat);
+          assert.equal($('palette-dialog').open,true);assert.equal(repeat.defaultPrevented,true);
+          WorkspacePalette.keydown(keyEvent('p',{ctrlKey:true,shiftKey:true}));
+          assert.equal($('palette-dialog').open,false);assert.equal($('prompt').value,'보존할 입력');
+          assert.equal(calls.length,0);
+        })()""")
+
     def test_ime_and_existing_modal_keep_keyboard_ownership(self):
         self.run_case(r"""(()=>{
-          assert.equal(WorkspacePalette.keydown(keyEvent('k',{ctrlKey:true,isComposing:true})),false);
-          showDialog('action-dialog');const shortcut=keyEvent('k',{ctrlKey:true});
+          assert.equal(WorkspacePalette.keydown(keyEvent('p',{ctrlKey:true,shiftKey:true,isComposing:true})),false);
+          showDialog('action-dialog');const shortcut=keyEvent('p',{ctrlKey:true,shiftKey:true});
           assert.equal(WorkspacePalette.keydown(shortcut),false);assert.notEqual(shortcut.defaultPrevented,true);
           $('action-dialog').close();WorkspacePalette.open();$('palette-search').oncompositionstart();
           const before=$('palette-search').attributes['aria-activedescendant'];
@@ -130,17 +147,17 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           assert.equal($('palette-dialog').open,false);
         })()""")
 
-    def test_ctrl_k_closes_narrow_overlay_before_model_controls_and_restores_visible_focus(self):
+    def test_ctrl_shift_p_closes_narrow_overlay_before_model_controls_and_restores_visible_focus(self):
         self.run_case(r"""(async()=>{
           installLayout();WorkspaceLayout.openInspector();assert.equal(document.activeElement,$('close-materials'));
           assert.equal(document.querySelector('main').inert,true);
-          WorkspacePalette.keydown(keyEvent('k',{ctrlKey:true}));
+          WorkspacePalette.keydown(keyEvent('p',{ctrlKey:true,shiftKey:true}));
           assert.equal(WorkspaceLayout.snapshot().inspectorOverlay,false);assert.equal(document.querySelector('main').inert,false);
           WorkspacePalette.keydown(keyEvent('Escape'));assert.equal(document.activeElement,$('materials-button'));
           for(const kind of ['model','effort']){
             WorkspaceLayout.toggleSidebar();assert.equal(WorkspaceLayout.snapshot().sidebarOverlay,true);
             let opened;globalThis.WorkspaceInlineControls={close(){},open:value=>{opened=value;assert.equal(document.querySelector('main').inert,false);}};
-            WorkspacePalette.keydown(keyEvent('k',{ctrlKey:true}));await find(kind).onclick();
+            WorkspacePalette.keydown(keyEvent('p',{ctrlKey:true,shiftKey:true}));await find(kind).onclick();
             assert.equal(opened,kind);assert.equal(document.activeElement,$('prompt'));assert.equal(WorkspaceLayout.snapshot().sidebarOverlay,false);
           }
           assert.equal(layoutWrites.length,0);assert.equal(calls.length,0);

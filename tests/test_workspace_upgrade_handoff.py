@@ -320,6 +320,50 @@ class HandoffTests(unittest.TestCase):
             self.app.upgrade.action({'action': 'prepare', 'requestId': self.rid, 'targetVersion': self.target})
         self.assertEqual('{broken', self.upgrade.path.read_text(encoding='utf-8'))
 
+    def test_optional_stashes_preserve_utf16_selection_and_roundtrip_without_execution(self):
+        legacy = snapshot(self.draft)
+        self.assertNotIn('stashes', legacy)
+        self.draft['stashes'] = [
+            {'id': self.sid, 'text': 'A😀한글', 'attachments': ['C:\\자료\\원본.png'], 'selectionStart': 1, 'selectionEnd': 5},
+            {'id': 'home', 'text': '미전송 요청', 'attachments': [], 'selectionStart': 0, 'selectionEnd': 0}]
+        expected = deepcopy(self.draft)
+        validated = snapshot(self.draft)
+        self.draft['stashes'][0]['attachments'].append('C:\\changed.png')
+        self.assertEqual(expected, validated)
+        self.draft = expected
+        self.prepare()
+        self.assertTrue(self.capture()['ok'])
+        self.assertTrue(self.action('commit')['closed'])
+        restored = UpgradeHandoff(self.app, self.target)
+        self.assertEqual(expected, restored.restore['snapshot'])
+        self.assertEqual([], self.app.get(self.sid)['messages'])
+
+    def test_stash_validation_rejects_shape_ids_offsets_and_duplicates_without_filtering(self):
+        stash = {'id': self.sid, 'text': '😀', 'attachments': [], 'selectionStart': 0, 'selectionEnd': 2}
+        invalid = [None, {}, [dict(stash, selectionStart=True)], [dict(stash, selectionEnd=3)],
+                   [dict(stash, selectionStart=-1)], [dict(stash, selectionStart=2, selectionEnd=1)],
+                   [dict(stash, selectionEnd=1.0)], [dict(stash, id='../escape')],
+                   [dict(stash, attachments=[''])], [dict(stash, arbitrary=True)],
+                   [{key: value for key, value in stash.items() if key != 'selectionStart'}],
+                   [stash, deepcopy(stash)],
+                   [dict(stash, id=str(uuid.uuid4())) for _ in range(51)]]
+        for value in invalid:
+            with self.subTest(value=str(value)[:100]), self.assertRaises(ValueError):
+                snapshot({**self.draft, 'stashes': value})
+        only_stash = {'sessionId': None, 'drafts': [], 'stashes': [dict(stash, id='home')]}
+        self.assertEqual(only_stash, snapshot(only_stash))
+
+    def test_snapshot_limit_includes_stashes_and_reports_invalid_unicode_cleanly(self):
+        value = deepcopy(self.draft)
+        value['drafts'][0]['text'] = 'a' * 90000
+        value['stashes'] = [{'id': self.sid, 'text': '한' * 90000, 'attachments': [], 'selectionStart': 0, 'selectionEnd': 90000}]
+        with self.assertRaises(ValueError):
+            snapshot(value)
+        value['stashes'][0]['text'] = '\ud800'
+        value['stashes'][0]['selectionEnd'] = 1
+        with self.assertRaises(ValueError):
+            snapshot(value)
+
     def test_authenticated_routes_busy_conflict_and_successful_shutdown(self):
         server = Server(self.app)
         worker = threading.Thread(target=server.serve_forever, daemon=True)

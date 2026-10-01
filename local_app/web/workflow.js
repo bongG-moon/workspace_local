@@ -115,8 +115,8 @@ globalThis.WorkspaceWorkflow = (() => {
     if(action==="steer"&&snapshot?.steer?.supported!==true)return toast("현재 연결에서 바로 반영을 지원하지 않습니다. 끝나고 이어서를 이용해 주세요.");
     const context=capture(),result=await mutate({action,text:text.trim(),attachments:files},context);
     if (!result) return;
-    if(sameDraft(context,text,files)){$("prompt").value="";attachments=[];renderAttachments();saveDraft();}
-    else if(!current(context)){const draft=drafts.get(context.id);if(draft?.text===text&&JSON.stringify(draft.attachments)===JSON.stringify(files))drafts.delete(context.id);}
+    if(sameDraft(context,text,files)){$("prompt").value="";attachments=[];renderAttachments();saveDraft();globalThis.WorkspaceInputKeys?.reset();globalThis.WorkspaceShortcuts?.afterSend(context.id);}
+    else if(!current(context)){const draft=drafts.get(context.id);if(draft?.text===text&&JSON.stringify(draft.attachments)===JSON.stringify(files)){drafts.delete(context.id);globalThis.WorkspaceShortcuts?.afterSend(context.id);}}
     if(current(context))toast(action==="steer"?"현재 요청을 중지하고 이어갈 요청을 등록했습니다.":"현재 요청이 끝나면 이어서 실행합니다.");
   }
   async function reorder(from,to) {const items=pending().filter(item=>item.state==="queued");if(from<0||to<0||to>=items.length)return;[items[from],items[to]]=[items[to],items[from]];return mutate({action:"reorder",order:items.map(item=>item.id)});}

@@ -11,6 +11,8 @@ globalThis.WorkspaceStartupHealth = (() => {
     workflow:{file:"workflow.js",global:"WorkspaceWorkflow",buttons:["workflow-open","schedule-open"]},
     composer:{file:"composer.js",global:"WorkspaceComposer"},
     "inline-controls":{file:"inline-controls.js",global:"WorkspaceInlineControls",buttons:["composer-model","composer-effort","composer-permission"]},
+    "input-keys":{file:"input-keys.js",global:"WorkspaceInputKeys"},
+    "chat-shortcuts":{file:"chat-shortcuts.js",global:"WorkspaceShortcuts",buttons:["input-history-close"]},
     attention:{file:"attention.js",global:"WorkspaceAttention",buttons:["attention-open"]},
     desktop:{file:"desktop.js",global:"WorkspaceDesktop",buttons:["desktop-open"]},
     "session-import":{file:"session-import.js",global:"WorkspaceSessionImport",buttons:["import-open"]},
@@ -103,6 +105,17 @@ globalThis.WorkspaceStartupHealth = (() => {
     if(!Array.isArray(value.drafts)||value.drafts.length>50)return false;
     let size=0;const seen=new Set();
     for(const row of value.drafts){if(!row||typeof row.id!=="string"||!/^[A-Za-z0-9_-]{1,128}$/.test(row.id)||seen.has(row.id)||typeof row.text!=="string"||row.text.length>100000||!Array.isArray(row.attachments)||row.attachments.length>12)return false;seen.add(row.id);size+=row.text.length;for(const path of row.attachments){if(typeof path!=="string"||path.length>4096||/[\u0000-\u001f]/.test(path))return false;size+=path.length;}}
+    if(Object.prototype.hasOwnProperty.call(value,"stashes")){
+      if(!Array.isArray(value.stashes)||value.stashes.length>50)return false;
+      const stashIds=new Set();
+      for(const row of value.stashes){
+        if(!row||typeof row!=="object"||Object.keys(row).sort().join(",")!=="attachments,id,selectionEnd,selectionStart,text"||typeof row.id!=="string"||!/^[A-Za-z0-9_-]{1,128}$/.test(row.id)||stashIds.has(row.id)||typeof row.text!=="string"||row.text.length>100000||!Array.isArray(row.attachments)||row.attachments.length>12)return false;
+        if(!Number.isInteger(row.selectionStart)||!Number.isInteger(row.selectionEnd)||row.selectionStart<0||row.selectionStart>row.selectionEnd||row.selectionEnd>row.text.length)return false;
+        stashIds.add(row.id);size+=row.text.length;
+        for(const path of row.attachments){if(typeof path!=="string"||!path||path.length>4096||/[\u0000-\u001f]/.test(path))return false;size+=path.length;}
+      }
+      try{const serialized=JSON.stringify(value),bytes=typeof TextEncoder==="function"?new TextEncoder().encode(serialized).length:encodeURIComponent(serialized).replace(/%[0-9A-F]{2}/gi,"x").length;if(bytes>262144)return false;}catch(_){return false;}
+    }
     return size<=500000;
   }
   async function requestRecovery() {
@@ -117,13 +130,28 @@ globalThis.WorkspaceStartupHealth = (() => {
       // admission and capture the latest draft in the same turn as the reload.
       if(stopped||!hooks.canReload()){recovering=false;notice="요청 전송이나 파일 추가가 끝난 뒤 화면을 다시 열어 주세요.";show();return false;}
       let snapshot={version:1,savedAt:Date.now(),...hooks.capture()};
-      if(!restored){const oldRaw=sessionStorage.getItem(storageKey);if(oldRaw&&oldRaw.length<=2500000){const old=JSON.parse(oldRaw);if(validSnapshot(old)){const draftMap=new Map(old.drafts.map(row=>[row.id,row]));for(const row of snapshot.drafts)draftMap.set(row.id,row);snapshot={...snapshot,sessionId:snapshot.sessionId||old.sessionId,drafts:[...draftMap.values()]};}}}
+      if(!restored){const oldRaw=sessionStorage.getItem(storageKey);if(oldRaw&&oldRaw.length<=2500000){
+        const old=JSON.parse(oldRaw);
+        if(Object.prototype.hasOwnProperty.call(old,"stashes")&&!validSnapshot(old))throw new Error("invalid previous stashes");
+        if(validSnapshot(old)){
+          if(Object.prototype.hasOwnProperty.call(snapshot,"stashes")&&!validSnapshot(snapshot))throw new Error("invalid current stashes");
+          const draftMap=new Map(old.drafts.map(row=>[row.id,row]));for(const row of snapshot.drafts)draftMap.set(row.id,row);
+          const merged={...snapshot,sessionId:snapshot.sessionId||old.sessionId,drafts:[...draftMap.values()]};
+          if(old.stashes||snapshot.stashes){
+            const stashMap=new Map((old.stashes||[]).map(row=>[row.id,row]));
+            const content=row=>JSON.stringify([row.text,row.attachments,row.selectionStart,row.selectionEnd]);
+            for(const row of snapshot.stashes||[]){const prior=stashMap.get(row.id);if(prior&&content(prior)!==content(row))throw new Error("stash conflict");stashMap.set(row.id,row);}
+            merged.stashes=[...stashMap.values()];
+          }
+          snapshot=merged;
+        }
+      }}
       if(!validSnapshot(snapshot))throw new Error("snapshot limit");
       sessionStorage.setItem(storageKey,JSON.stringify(snapshot));
       if(sessionStorage.getItem(storageKey)!==JSON.stringify(snapshot))throw new Error("storage failed");
       // A single explicit reload retains this tab's draft handoff and server.
       location.reload();return true;
-    }catch(_){recovering=false;notice="초안을 안전하게 보관하지 못해 화면을 다시 열지 않았어요. 입력 내용을 복사한 뒤 다시 시도해 주세요.";emit("recovery","app","failed","storage-unavailable",{},true);show();return false;}
+    }catch(error){recovering=false;notice=error.message==="stash conflict"?"이전에 보관한 입력과 지금 보관한 입력이 달라 화면을 다시 열지 않았어요. 현재 입력을 먼저 보관해 주세요. 이전 복원 기록도 유지했습니다.":"초안을 안전하게 보관하지 못해 화면을 다시 열지 않았어요. 입력 내용을 복사한 뒤 다시 시도해 주세요.";emit("recovery","app","failed","storage-unavailable",{},true);show();return false;}
   }
   async function restoreRecovery() {
     if(!bootstrap||!pageReady||!hooks||recoveryPending||restored)return;
@@ -131,7 +159,7 @@ globalThis.WorkspaceStartupHealth = (() => {
     try{
       const raw=sessionStorage.getItem(storageKey);if(!raw){restored=true;return;}
       if(raw.length>2500000)throw new Error("invalid snapshot");
-      const value=JSON.parse(raw);if(!validSnapshot(value)){sessionStorage.removeItem(storageKey);throw new Error("invalid snapshot");}
+      const value=JSON.parse(raw);if(!validSnapshot(value)){if(!value||!Object.prototype.hasOwnProperty.call(value,"stashes"))sessionStorage.removeItem(storageKey);throw new Error("invalid snapshot");}
       const result=await hooks.restore(value);
       sessionStorage.removeItem(storageKey);restored=true;
       if(result?.missingSession)notice="이전 업무를 찾지 못해 초안을 새 업무 입력창에 복원했어요.";

@@ -61,7 +61,7 @@ globalThis.WorkspaceComposer = (() => {
     $("composer-connect").textContent = preparing ? "명령 불러오는 중…" : "Claude 명령 불러오기";
     $("composer-native").hidden = current?.kind !== "terminal" && !rows.some(row => row.supported === false);
     $("composer-suggestion-note").textContent = rows.length
-      ? "↑ ↓ 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 정보 기준이며 실행 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
+      ? "↑ ↓ / Ctrl+N·P 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 정보 기준이며 실행 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
       : response.message || (preparing?.id === active?.id && active ? "Claude 명령을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
       : !active ? "설치된 공통 스킬에서 일치하는 항목을 찾지 못했어요. 업무를 선택하면 해당 폴더의 명령도 확인할 수 있어요."
       : response.connectRequired ? "연결에서 명령 목록을 확인하지 못했어요. ‘Claude 명령 불러오기’로 다시 시도할 수 있어요."
@@ -152,11 +152,12 @@ globalThis.WorkspaceComposer = (() => {
     if (composing || event.isComposing || event.keyCode === 229) return true;
     if (box.hidden) return false;
     const plain = !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+    const controlKey = typeof event.key === "string" ? event.key.toLowerCase() : "";
     if (event.key === "Escape" && plain) { event.preventDefault(); dismissed = true; close(); return true; }
     if (!rows.length) return false;
     if ((plain && ["ArrowDown","ArrowUp"].includes(event.key))
-        || (event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && ["n","p"].includes(event.key))) {
-      const next = event.key === "ArrowDown" || event.key === "n";
+        || (event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && ["n","p"].includes(controlKey))) {
+      const next = event.key === "ArrowDown" || controlKey === "n";
       event.preventDefault(); selected = (selected + (next ? 1 : rows.length - 1)) % rows.length; activeOption(); return true;
     }
     if (["Enter","Tab"].includes(event.key) && plain) { event.preventDefault(); choose(selected); return true; }

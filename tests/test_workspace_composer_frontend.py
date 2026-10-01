@@ -89,6 +89,71 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal($('composer-suggestions').hidden,true);assert.equal($('prompt').value,'/');assert.equal($('prompt').selectionStart,1);
         })()""")
 
+    def test_enter_completes_first_and_only_a_second_enter_submits(self):
+        self.run_case(r"""(async()=>{
+          let sends=0;submit=async()=>sends++;
+          api=async()=>({items:[{id:'skill',invocation:'/skill-creator',supported:true}]});
+          type('/sk');await WorkspaceComposer.refresh();
+          const accept=enter();$('prompt').onkeydown(accept);
+          assert.equal(accept.prevented,true);assert.equal(sends,0);
+          assert.equal($('prompt').value,'/skill-creator ');assert.equal($('composer-suggestions').hidden,true);
+          const send=enter();$('prompt').onkeydown(send);
+          assert.equal(send.prevented,true);assert.equal(sends,1);
+        })()""")
+
+    def test_empty_completion_results_do_not_swallow_plain_enter(self):
+        self.run_case(r"""(async()=>{
+          let sends=0;submit=async()=>sends++;api=async()=>({items:[]});
+          type('/unknown-command');await WorkspaceComposer.refresh();
+          const send=enter();$('prompt').onkeydown(send);
+          assert.equal(send.prevented,true);assert.equal(sends,1);
+          assert.equal($('prompt').value,'/unknown-command');
+        })()""")
+
+    def test_control_navigation_wraps_and_supports_caps_lock_without_leaking_when_closed(self):
+        self.run_case(r"""(async()=>{
+          let sends=0;submit=async()=>sends++;
+          api=async()=>({items:[{id:'a',invocation:'/a',supported:true},{id:'b',invocation:'/b',supported:true}]});
+          type('/');await WorkspaceComposer.refresh();
+          const key=(name,options={})=>({key:name,ctrlKey:true,preventDefault(){this.prevented=true;},...options});
+          const next=key('n');assert.equal(WorkspaceComposer.keydown(next),true);assert.equal(next.prevented,true);
+          assert.equal($('composer-suggestion-list').children[1].attributes['aria-selected'],'true');
+          const wrap=key('N');assert.equal(WorkspaceComposer.keydown(wrap),true);
+          assert.equal($('composer-suggestion-list').children[0].attributes['aria-selected'],'true');
+          const previous=key('P');assert.equal(WorkspaceComposer.keydown(previous),true);
+          assert.equal($('composer-suggestion-list').children[1].attributes['aria-selected'],'true');
+          const selected=$('prompt').attributes['aria-activedescendant'];
+          for(const modifier of ['shiftKey','altKey','metaKey']){
+            const modified=key('p',{[modifier]:true});assert.equal(WorkspaceComposer.keydown(modified),false);
+            assert.equal(modified.prevented,undefined);assert.equal($('prompt').attributes['aria-activedescendant'],selected);
+          }
+          const tab={key:'Tab',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(tab);
+          assert.equal($('prompt').value,'/b ');assert.equal(sends,0);
+          const closed=key('n');assert.equal(WorkspaceComposer.keydown(closed),false);assert.equal(closed.prevented,undefined);
+        })()""")
+
+    def test_escape_dismisses_completion_before_lower_priority_handlers(self):
+        self.run_case(r"""(async()=>{
+          let lowerPriority=0;
+          globalThis.WorkspaceInlineControls={keydown(){lowerPriority++;return false;}};
+          api=async()=>({items:[{id:'a',invocation:'/a',supported:true}]});
+          type('/');await WorkspaceComposer.refresh();
+          const escape={key:'Escape',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(escape);
+          assert.equal(escape.prevented,true);assert.equal(lowerPriority,0);
+          assert.equal($('composer-suggestions').hidden,true);assert.equal($('prompt').value,'/');
+        })()""")
+
+    def test_shift_tab_passes_through_to_permission_mode_without_accepting_completion(self):
+        self.run_case(r"""(async()=>{
+          let modeKeys=0,sends=0;submit=async()=>sends++;
+          globalThis.WorkspaceInlineControls={keydown(event){if(event.key==='Tab'&&event.shiftKey){modeKeys++;event.preventDefault();return true;}return false;}};
+          api=async()=>({items:[{id:'a',invocation:'/a',supported:true}]});
+          type('/');await WorkspaceComposer.refresh();
+          const shiftTab={key:'Tab',shiftKey:true,preventDefault(){this.prevented=true;}};$('prompt').onkeydown(shiftTab);
+          assert.equal(modeKeys,1);assert.equal(shiftTab.prevented,true);assert.equal(sends,0);
+          assert.equal($('prompt').value,'/');assert.equal(attachments.length,0);
+        })()""")
+
     def test_shift_enter_keeps_newline_action_and_mid_token_file_suffix_is_removed(self):
         self.run_case(r"""(async()=>{
           api=async()=>({items:[{id:'file',label:'report.md',path:'C:/fixture/A/report.md',supported:true}]});
@@ -112,14 +177,14 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal(plain.prevented,true);assert.notEqual($('prompt').attributes['aria-activedescendant'],selected);
         })()""")
 
-    def test_ctrl_enter_sends_without_accepting_suggestion_and_respects_prevented_event(self):
+    def test_ctrl_enter_is_delegated_without_accepting_suggestion_and_respects_prevented_event(self):
         self.run_case(r"""(async()=>{
           api=async()=>({items:[{id:'a',invocation:'/skills',supported:true}]});let sends=0;submit=async()=>sends++;
           type('/sk');await WorkspaceComposer.refresh();
           const prevented=enter({ctrlKey:true,defaultPrevented:true});$('prompt').onkeydown(prevented);
           assert.equal(sends,0);assert.equal($('prompt').value,'/sk');
-          const send=enter({ctrlKey:true});$('prompt').onkeydown(send);
-          assert.equal(send.prevented,true);assert.equal(sends,1);assert.equal($('prompt').value,'/sk');
+          const send=enter({ctrlKey:true});assert.equal(WorkspaceComposer.keydown(send),false);
+          assert.equal(send.prevented,undefined);assert.equal(sends,0);assert.equal($('prompt').value,'/sk');
           assert.equal(attachments.length,0);
         })()""")
 

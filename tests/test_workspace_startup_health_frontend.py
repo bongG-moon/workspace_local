@@ -13,8 +13,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const nodes=new Map(),storage=new Map(),events=new Map(),windowEvents=new Map(),intervals=new Map();
 let now=1000000,nextTimer=1,reloads=0,storageFails=false;
 function node(id){if(!nodes.has(id))nodes.set(id,{id,hidden:false,textContent:'',dataset:{},disabled:false,onclick:null,tagName:'BUTTON',closest(){return this;}});return nodes.get(id);}
-const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','upgrade-handoff':'WorkspaceUpgrade'};
-const controls=['new-chat','settings-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button'];
+const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls','input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','upgrade-handoff':'WorkspaceUpgrade'};
+const controls=['new-chat','settings-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close'];
 const posted=[],restores=[],directCalls=[];
 const context={assert,console,URL,URLSearchParams,Math,JSON,Object,Map,Set,Date:{now:()=>now},location:{href:'http://127.0.0.1:1234/',hash:'#token=TEST_AUTH_SECRET',reload:()=>reloads++},
  crypto:{randomUUID:()=> '12345678-abcd-1234-abcd-123456789abc'},
@@ -70,6 +70,20 @@ class WorkspaceStartupHealthFrontendTests(unittest.TestCase):
           let blocked=false;fire('click',{target:node('desktop-open'),preventDefault(){blocked=true;},stopImmediatePropagation(){}});
           assert.equal(blocked,true);assert.match(node('startup-health-text').textContent,/다시 열어/);
           assert.equal(health.snapshot().modules.capabilities.status,'ready');
+        })()""")
+
+    def test_missing_keyboard_assets_are_reported_and_history_close_requires_handler(self):
+        self.run_case(r"""(async()=>{
+          installAll();delete WorkspaceInputKeys;node('input-history-close').onclick=null;
+          health.attach(hooks);await health.bootstrapReady();fire('DOMContentLoaded');await flush();
+          assert.equal(health.snapshot().modules['input-keys'].reason,'missing-global');
+          assert.equal(health.snapshot().modules['chat-shortcuts'].reason,'missing-handler');
+          globalThis.WorkspaceInputKeys={};node('input-history-close').onclick=()=>{};
+          fire('load',{target:{tagName:'SCRIPT',src:'/input-keys.js'}});
+          fire('load',{target:{tagName:'SCRIPT',src:'/chat-shortcuts.js'}});
+          assert.equal(health.snapshot().modules['input-keys'].status,'ready');
+          assert.equal(health.snapshot().modules['chat-shortcuts'].status,'ready');
+          assert.equal(readReloads(),0);
         })()""")
 
     def test_resource_and_runtime_failure_records_are_sanitized_and_bounded(self):
@@ -211,6 +225,64 @@ class WorkspaceStartupHealthFrontendTests(unittest.TestCase):
           health.attach({...hooks,capture:()=>({sessionId:null,drafts:Array.from({length:51},(_,i)=>({id:`draft-${i}`,text:'',attachments:[]}))})});
           assert.equal(await health.requestRecovery(),false);assert.equal(readReloads(),0);
           assert.equal(storage.has('workspace.uiRecovery.v1'),false);
+        })()""")
+
+    def test_stash_snapshot_roundtrip_preserves_utf16_selection_and_attachments(self):
+        self.run_case(r"""(async()=>{
+          const saved={sessionId:'A',drafts:[],stashes:[{id:'A',text:'A😀한글',attachments:['C:/원본.png'],selectionStart:1,selectionEnd:5}]};
+          health.attach({...hooks,capture:()=>saved});assert.equal(await health.requestRecovery(),true);
+          assert.deepEqual(JSON.parse(storage.get('workspace.uiRecovery.v1')).stashes,JSON.parse(JSON.stringify(saved.stashes)));
+          installAll();fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(restores.length,1);assert.deepEqual(restores[0].stashes,JSON.parse(JSON.stringify(saved.stashes)));
+          assert.equal(storage.has('workspace.uiRecovery.v1'),false);
+        })()""")
+
+    def test_stash_invalid_shapes_and_total_utf8_size_block_reload_without_dropping_data(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'A',text:'😀',attachments:[],selectionStart:0,selectionEnd:2};
+          const cases=[null,{},[{...row,selectionEnd:3}],[{...row,selectionStart:true}],[{...row,selectionStart:-1}],
+            [{...row,selectionStart:2,selectionEnd:1}],[{...row,arbitrary:1}],[row,{...row}],
+            [{...row,attachments:['']}],Array.from({length:51},(_,i)=>({...row,id:'row-'+i}))];
+          for(const stashes of cases){health.attach({...hooks,capture:()=>({sessionId:'A',drafts:[],stashes})});assert.equal(await health.requestRecovery(),false);}
+          health.attach({...hooks,capture:()=>({sessionId:'A',drafts:[{id:'A',text:'a'.repeat(90000),attachments:[]}],stashes:[{...row,text:'한'.repeat(90000),selectionEnd:90000}]})});
+          assert.equal(await health.requestRecovery(),false);assert.equal(readReloads(),0);assert.equal(storage.has('workspace.uiRecovery.v1'),false);
+        })()""")
+
+    def test_failed_restore_retry_merges_absent_stashes_and_keeps_identical_owner_once(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'A',text:'earlier stash',attachments:['C:/keep.png'],selectionStart:2,selectionEnd:4};
+          storage.set('workspace.uiRecovery.v1',JSON.stringify({version:1,savedAt:1000000,sessionId:'A',drafts:[],stashes:[row,{...row,id:'C',text:'not yet restored'}]}));
+          health.attach({...hooks,restore:async()=>{throw Error('offline');},capture:()=>({sessionId:'B',drafts:[],stashes:[
+            {selectionEnd:4,selectionStart:2,attachments:['C:/keep.png'],text:'earlier stash',id:'A'},
+            {id:'B',text:'new stash',attachments:[],selectionStart:0,selectionEnd:0}]})});
+          installAll();fire('DOMContentLoaded');await health.bootstrapReady();
+          assert.equal(await health.requestRecovery(),true);
+          const saved=JSON.parse(storage.get('workspace.uiRecovery.v1'));assert.equal(saved.stashes.length,3);
+          assert.deepEqual(saved.stashes.find(value=>value.id==='A'),JSON.parse(JSON.stringify(row)));assert.equal(saved.stashes.find(value=>value.id==='B').text,'new stash');
+          assert.equal(saved.stashes.find(value=>value.id==='C').text,'not yet restored');
+        })()""")
+
+    def test_failed_restore_retry_stash_conflict_retains_old_record_and_current_input(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'A',text:'earlier stash',attachments:[],selectionStart:0,selectionEnd:0};
+          const previous=JSON.stringify({version:1,savedAt:1000000,sessionId:'A',drafts:[],stashes:[row]});
+          storage.set('workspace.uiRecovery.v1',previous);
+          const current={sessionId:'A',drafts:[],stashes:[{...row,text:'new stash'}]};
+          health.attach({...hooks,restore:async()=>{throw Error('offline');},capture:()=>current});
+          installAll();fire('DOMContentLoaded');await health.bootstrapReady();
+          assert.equal(await health.requestRecovery(),false);assert.equal(readReloads(),0);
+          assert.equal(storage.get('workspace.uiRecovery.v1'),previous);assert.equal(current.stashes[0].text,'new stash');
+          assert.match(node('startup-health-text').textContent,/보관한 입력.*달라/);
+        })()""")
+
+    def test_invalid_stash_recovery_record_is_preserved_and_cannot_be_overwritten(self):
+        self.run_case(r"""(async()=>{
+          const previous=JSON.stringify({version:1,savedAt:1000000,sessionId:'A',drafts:[],stashes:[{id:'A',text:'keep privately',attachments:[],selectionStart:0,selectionEnd:999}]});
+          storage.set('workspace.uiRecovery.v1',previous);health.attach(hooks);
+          installAll();fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(restores.length,0);assert.equal(storage.get('workspace.uiRecovery.v1'),previous);
+          assert.equal(await health.requestRecovery(),false);assert.equal(readReloads(),0);
+          assert.equal(storage.get('workspace.uiRecovery.v1'),previous);
         })()""")
 
 

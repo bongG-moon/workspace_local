@@ -33,6 +33,7 @@ seen = set()
 expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py', 'local_app/web/path-picker.js', 'local_app/web/path-picker.css'})
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})
+expected.update({'local_app/web/input-keys.js', 'local_app/web/chat-shortcuts.js', 'local_app/web/chat-shortcuts.css'})
 expected.update({'local_app/ui_health.py','local_app/web/startup-health.js','local_app/web/startup-health.css'})
 expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','deploy/WebView2.lock.json',
                  'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',

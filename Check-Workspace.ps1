@@ -3,8 +3,8 @@ param()
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $report = [ordered]@{
-    diagnosticVersion = 'ws33-33'
-    targetSource = 'workspace-0.21.5'
+    diagnosticVersion = 'ws33-34'
+    targetSource = 'workspace-0.21.6'
     status = 'checking'
     sourceMatches = $false
     files = [ordered]@{}
@@ -24,8 +24,8 @@ $report = [ordered]@{
     notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = 'd592cb0bda6ce9e0003623067948bba61bef6a2a930f41f13d07db6c97f87b1f'
-    'deploy/CompanyWorkspace.Startup.ps1' = '62ad252eaa85ea6e6a1cc01ff7618719e6e4fc5d40ab66332f4dc72f7aeb8fd3'
+    'deploy/Start-CompanyWorkspace.ps1' = 'f5751c55c0f77ef1a9e681a8e721d7d0d9184655dd97c31c7b6b289121262cc4'
+    'deploy/CompanyWorkspace.Startup.ps1' = '1a3d353697dffe5dc496df4dd257deaa349b8efe6f06c66a324620c75e0ec496'
     'deploy/CompanyWorkspace.NormalToken.cs' = 'fa0798916b9e761b0f54633a2d13263f3a98824a0e10809c9de5c372ec12dae8'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }

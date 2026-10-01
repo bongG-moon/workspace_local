@@ -30,6 +30,7 @@ ASSETS = frozenset({
     '/upgrade-handoff.js', '/upgrade-handoff.css',
     '/rendering.js', '/attachments.js', '/workflow.js', '/composer.js',
     '/inline-controls.js', '/attention.js', '/desktop.js', '/session-import.js',
+    '/input-keys.js', '/chat-shortcuts.js', '/chat-shortcuts.css',
     '/capabilities.js', '/productivity.js', '/palette.js', '/layout.js',
     '/app.css', '/productivity.css', '/review.css', '/startup-health.css',
     '/rich-content.css', '/execution-view.css', '/fonts/NotoSansKR-Variable.woff',

@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.5"
+WORKSPACE_VERSION = "0.21.6"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -1528,6 +1528,9 @@ class Handler(BaseHTTPRequestHandler):
                       "/path-picker.css": ("path-picker.css", "text/css; charset=utf-8"),
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
+                      "/input-keys.js": ("input-keys.js", "text/javascript; charset=utf-8"),
+                      "/chat-shortcuts.js": ("chat-shortcuts.js", "text/javascript; charset=utf-8"),
+                      "/chat-shortcuts.css": ("chat-shortcuts.css", "text/css; charset=utf-8"),
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
                       "/desktop.js": ("desktop.js", "text/javascript; charset=utf-8"),
                       "/session-import.js": ("session-import.js", "text/javascript; charset=utf-8"),
