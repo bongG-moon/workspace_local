@@ -4,9 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 import uuid
+from unittest.mock import Mock
 
 from local_app.desktop_notifications import DesktopNotifications, MESSAGES
 from local_app.server import LocalApp
@@ -57,6 +59,16 @@ class NotificationRoutingTests(unittest.TestCase):
         self.assertFalse(self.app._notify_desktop(self.payload, lambda: None))
         self.assertEqual(1, len(self.app._desktop_window.calls))
         self.assertEqual([], self.app.tray.calls)
+
+    def test_busy_card_is_deferred_without_a_second_channel(self):
+        self.app._desktop_window.result = 'busy'
+        row = self.app.desktop.publish(self.sid, '첫 업무', 'attention', 'new-question')
+        self.assertEqual('queued', row['delivery'])
+        self.assertEqual([], self.app.tray.calls)
+        self.app._desktop_window.result = True
+        self.app.desktop.flush_pending()
+        self.assertEqual('requested', self.app.desktop.snapshot()['inbox'][0]['delivery'])
+        self.assertEqual(2, len(self.app._desktop_window.calls))
 
     def test_unsupported_card_falls_back_to_legacy_tray_with_original_callback(self):
         self.app._desktop_window.result = None
@@ -124,6 +136,94 @@ class NotificationRoutingTests(unittest.TestCase):
         self.assertEqual(before, self.app.desktop.snapshot()['preferences'])
         self.assertEqual([], self.app._desktop_window.calls)
         self.assertEqual([], self.app.tray.calls)
+
+
+class BackgroundNotificationFlowTests(unittest.TestCase):
+    """Real server/dispatch lifecycle with fake CLI/window, no renderer polling."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.app = LocalApp(root / 'state', command=['not-started'], managed_workspace_root=root / 'managed')
+        self.addCleanup(self.app.close)
+        self.sid = self.app.create(str(root), True)['id']
+        self.item = self.app.get(self.sid)
+        self.item['lastRunId'] = 'background-run'
+        self.host = self.app._desktop_window = DeliveryStub()
+        self.app.tray = Mock(available=True)
+        self.app.notifier = Mock(native_state={'supported': True, 'bound': True})
+        self.app.notifier.set_visible.return_value = True
+        self.app.notifier.is_foreground.return_value = False
+        self.app._viewed_session = self.sid
+        self.app._viewed_until = float('inf')
+        self.app.desktop.cooldown = 0
+        self.app.desktop._automatic_retry = False
+        class Bridge:
+            closed = cleanup_complete = False
+            def __init__(bridge): bridge.sent = []
+            def send(bridge, prompt):
+                bridge.sent.append(prompt)
+                self.app.emit(self.sid, 'result', {'sessionId': 'fake-cli-session'})
+            def close(bridge):
+                bridge.closed = bridge.cleanup_complete = True
+                return True
+        self.bridge = self.item['bridge'] = Bridge()
+
+    def hide(self):
+        self.assertTrue(self.app.hide_window()['hidden'])
+        self.assertFalse(self.app.shutdown_status()['closing'])
+        self.assertFalse(self.bridge.closed)
+
+    def test_hidden_window_receives_question_approval_and_ready_choice_without_any_ui_poll(self):
+        self.hide()
+        for tool in ('AskUserQuestion', 'Write'):
+            self.app.emit(self.sid, 'request', {'id': 'reused-cli-id', 'tool': tool, 'input': {}})
+            self.assertEqual('attention', self.host.calls[-1]['kind'])
+            self.app.emit(self.sid, 'request_closed', {'id': 'reused-cli-id'})
+        self.assertEqual(2, len(self.host.calls))
+        self.assertNotEqual(self.host.calls[0]['notification_id'], self.host.calls[1]['notification_id'])
+        self.app.emit(self.sid, 'choice', {
+            'schemaVersion': 1, 'id': 'business-style-choice', 'kind': 'html-report-style',
+            'responseMode': 'next-user-message', 'question': '디자인을 선택해 주세요.',
+            'options': [{'id': 'minimalism', 'label': '미니멀리즘'}], 'allowCustom': True})
+        self.assertEqual(2, len(self.host.calls))  # Tool turn still running.
+        self.app.emit(self.sid, 'result', {'sessionId': 'fake-cli-session'})
+        self.assertEqual(3, len(self.host.calls))
+        self.assertEqual('attention', self.host.calls[-1]['kind'])
+        self.assertEqual(3, self.app.desktop.snapshot()['unreadCount'])
+        self.app.notifier.set_visible.assert_called_once_with(False)
+        self.assertFalse(self.bridge.closed)
+
+    def test_plain_final_answer_not_parsed_as_permission_and_still_delivers_completion(self):
+        self.hide()
+        self.app.emit(self.sid, 'assistant', {'text': '다음 분석 방향을 선택해 주세요: A 또는 B.'})
+        self.app.emit(self.sid, 'result', {'sessionId': 'fake-cli-session'})
+        self.assertEqual(['completed'], [call['kind'] for call in self.host.calls])
+        self.assertEqual({}, self.item['requests'])
+        self.assertIsNone(self.item.get('choice'))
+
+    def test_hidden_queue_continues_and_complete_quit_closes_cli_and_notification_retry(self):
+        self.hide()
+        self.app.dispatch.action(self.sid, {'action': 'enqueue', 'text': '이어서 분석', 'attachments': []})
+        self.app.dispatch.pump()
+        self.assertEqual(['이어서 분석'], self.bridge.sent)
+        self.assertEqual('completed', self.host.calls[-1]['kind'])
+        self.assertTrue(self.app.close())
+        self.assertTrue(self.bridge.closed)
+        self.assertTrue(self.app.shutdown_status()['closed'])
+        self.assertTrue(self.app.desktop._closed)
+        self.assertEqual({}, self.app.desktop._pending)
+
+    def test_hidden_once_schedule_runs_at_due_time_without_renderer_or_presence_poll(self):
+        self.hide()
+        now = time.time()
+        self.app.dispatch.action(self.sid, {'action': 'schedule', 'text': '예약 분석', 'attachments': [],
+            'schedule': {'kind': 'once', 'runAt': now + 60}})
+        self.app.dispatch.queue.clock = lambda: now + 61
+        self.app.dispatch.pump()
+        self.app.dispatch.pump()
+        self.assertEqual(['예약 분석'], self.bridge.sent)
+        self.assertEqual('completed', self.host.calls[-1]['kind'])
 
 
 if __name__ == '__main__':

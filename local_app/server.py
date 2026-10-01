@@ -22,6 +22,7 @@ from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, 
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .session_order import SessionOrder
+from .session_visibility import SessionVisibility
 from .artifacts import changes, linked, snapshot, PREVIEW_TYPES
 from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
@@ -38,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.2"
+WORKSPACE_VERSION = "0.21.3"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -173,7 +174,7 @@ class LocalApp:
             # A busy or suppressed card must not escape through a second channel.
             # None means this host cannot offer cards (e.g. an older native host).
             if result is not None:
-                return result is True
+                return 'busy' if result == 'busy' else result is True
         return bool(self.tray and self.tray.notify(title=payload['title'], message=payload['message'], on_click=on_click))
 
     def _viewing_task(self, sid):
@@ -212,7 +213,12 @@ class LocalApp:
             for item in self.sessions.values():
                 if (item.get('sessionId') == record['sessionId'] and item['workspace'] == record['workspace']
                         and os.path.normcase(item.get('importedConfigRoot', config_root)) == os.path.normcase(config_root)):
-                    return {'ok': True, 'existing': True, 'session': self.public(item)}
+                    if item.get('_removingFromList'):
+                        raise ValueError('업무 목록을 정리하고 있습니다. 잠시 뒤 다시 불러와 주세요.')
+                    restored = self.session_visibility.contains(item['id'])
+                    if restored:
+                        self.session_visibility.set_hidden(item['id'], False)
+                    return {'ok': True, 'existing': True, 'restored': restored, 'session': self.public(item)}
             if self.history.warning:
                 raise ValueError(self.history.warning)
             if len(self.sessions) >= MAX_SESSIONS:
@@ -247,6 +253,7 @@ class LocalApp:
             item.update(bridge=None, requests={}, events=[], seq=0, trusted=False, state='idle')
             self.sessions[item['id']] = item
         self.session_order = SessionOrder(self.state)
+        self.session_visibility = SessionVisibility(self.state)
 
     def save(self, sid=None):
         with self.lock:
@@ -262,11 +269,15 @@ class LocalApp:
                     if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
                         item['_historySaved'] = True
 
-    def get(self, sid):
+    def get(self, sid, *, _internal=False):
         with self.lock:
             if sid not in self.sessions:
                 raise ValueError("대화를 찾을 수 없습니다.")
             item = self.sessions[sid]
+            if not _internal and item.get('_removingFromList'):
+                raise ValueError('업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.')
+            if not _internal and self.session_visibility.contains(sid):
+                raise ValueError('업무 목록에서 삭제한 항목입니다. Claude 세션이 있는 업무는 새 업무의 기존 세션 활용하기에서 다시 불러올 수 있어요.')
             self.history.hydrate(item)
             self._history_access[sid] = time.monotonic()
             # Active CLI work is never evicted. Dormant UI mirrors use an LRU of
@@ -326,14 +337,17 @@ class LocalApp:
 
     def bootstrap(self):
         with self.lock:
-            sessions = self.session_order.ordered(self.sessions.values())
+            sessions = self.session_order.ordered(self.visible_sessions())
+            order = self.session_order.snapshot()
+            order['ids'] = [sid for sid in order['ids'] if not self.session_visibility.contains(sid)]
             return {"application": "company-workspace", "version": self.info.get("version"), "error": self.error, "demo": self.demo,
                     "workspaceVersion": WORKSPACE_VERSION, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
+                    "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))} for item in sessions],
-                    "sessionOrder": self.session_order.snapshot(),
+                    "sessionOrder": order,
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
                     "workspaceLocationError": self.workspace_location_error,
@@ -359,13 +373,13 @@ class LocalApp:
 
     def update_tray(self):
         if self.tray is not None:
-            self.tray.update(running=sum(item['state'] in {'starting', 'running'} for item in self.sessions.values()),
-                             waiting=attention_snapshot(self.sessions.values())['total'])
+            self.tray.update(running=sum(item['state'] in {'starting', 'running'} for item in self.visible_sessions()),
+                             waiting=attention_snapshot(self.visible_sessions())['total'])
 
     def attention(self):
         with self.lock:
             from .desktop_notifications import notification_id
-            pending = attention_snapshot(self.sessions.values())
+            pending = attention_snapshot(self.visible_sessions())
             for item in pending['items']:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
@@ -409,7 +423,7 @@ class LocalApp:
         """Caller holds the session lock; display names never change folder paths."""
         value = self.clean_title(value)
         key = lambda title: unicodedata.normalize('NFC', title).casefold()
-        used = {key(row['title']) for row in self.sessions.values() if row['id'] != exclude}
+        used = {key(row['title']) for row in self.visible_sessions() if row['id'] != exclude}
         if key(value) not in used:
             return value
         numbered = re.search(r' \(([2-9]|[1-9][0-9]+)\)$', value)
@@ -497,7 +511,69 @@ class LocalApp:
             if self.history.warning:
                 raise ValueError(self.history.warning)
             return {'ok': True, 'sessionOrder': self.session_order.move(
-                self.sessions.values(), sid, target, position)}
+                self.visible_sessions(), sid, target, position)}
+
+    def visible_sessions(self):
+        return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id'])]
+
+    def hide_session(self, sid, confirmed=False):
+        """Remove a list entry only after proving no work would be orphaned."""
+        if confirmed is not True:
+            raise ValueError('업무 목록 삭제 안내를 확인해 주세요.')
+        with self.lock:
+            if self.session_visibility.contains(sid):
+                return {'ok': True, 'hiddenId': sid, 'historyPreserved': True}
+            item = self.get(sid)
+            if self.session_visibility.warning:
+                raise ValueError(self.session_visibility.warning)
+            if (item.get('state') in {'starting', 'running', 'approval', 'question'}
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                    or item.get('requests') or item.get('choice')
+                    or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}
+                    or sid in self.dispatch.steering):
+                raise ValueError('진행 중인 작업이나 답변·승인 대기를 먼저 마쳐 주세요. 자동으로 중지하지 않습니다.')
+            pending = self.dispatch.queue.snapshot(sid)
+            if self.dispatch.error or pending.get('warning'):
+                raise ValueError('대기·예약 상태를 확인하지 못했습니다. 해당 상태를 확인한 뒤 목록에서 삭제해 주세요.')
+            if any(row['status'] in {'queued', 'dispatching', 'submitted', 'needs_review'} for row in pending['queue']):
+                raise ValueError('이어 할 일에 남은 요청을 먼저 완료하거나 취소해 주세요.')
+            if any(row['enabled'] or row.get('pausedByUser') or row.get('nextRunAt') is not None
+                   for row in pending['schedules']):
+                raise ValueError('실행 예약을 먼저 취소해 주세요. 일시 정지한 예약도 유지되고 있습니다.')
+            bridge = item.get('bridge')
+            if bridge and (getattr(bridge, 'busy', False) or getattr(bridge, 'pending', None)
+                           or getattr(bridge, 'stopping', False)
+                           and getattr(bridge, 'cleanup_complete', False) is not True):
+                raise ValueError('현재 연결의 작업 또는 종료가 끝난 뒤 목록에서 삭제해 주세요.')
+            item['_removingFromList'] = True
+        try:
+            # Release only the idle CLI owned by this app, outside the session
+            # lock so its final reader callbacks can finish normally.
+            if bridge and getattr(bridge, 'cleanup_complete', False) is not True:
+                if bridge.close() is not True or getattr(bridge, 'cleanup_complete', False) is not True:
+                    raise ValueError('기존 연결의 종료를 확인하지 못해 목록을 유지했습니다. 잠시 뒤 다시 시도해 주세요.')
+            with self.lock:
+                # A final reader callback can still arrive during close(). If
+                # it reports a decision, retain the task for explicit review.
+                if (item.get('state') in {'starting', 'running', 'approval', 'question'}
+                        or item.get('requests') or item.get('choice')
+                        or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}):
+                    raise ValueError('연결을 마무리하는 동안 확인할 내용이 도착해 목록을 유지했습니다. 업무 내용을 확인해 주세요.')
+                self.session_visibility.set_hidden(sid, True)
+                item['bridge'] = None
+                item['trusted'] = False
+                if self._navigation and self._navigation.get('sessionId') == sid:
+                    self._navigation = None
+                if self._viewed_session == sid:
+                    self._viewed_session, self._viewed_until = None, 0
+                self.update_tray()
+                if hasattr(self, 'desktop'):
+                    self.desktop.cancel_pending_session(sid)
+                    self.desktop.retain_attention(attention_snapshot(self.visible_sessions())['items'])
+                return {'ok': True, 'hiddenId': sid, 'historyPreserved': True}
+        finally:
+            with self.lock:
+                item.pop('_removingFromList', None)
 
     def _finish_observation(self, item):
         before = item.pop('_artifactSnapshot', None)
@@ -928,7 +1004,9 @@ class LocalApp:
 
     def emit(self, sid, kind, data):
         with self.lock:
-            item = self.get(sid)
+            if self.session_visibility.contains(sid):
+                return
+            item = self.get(sid, _internal=True)
             if kind in {'connected', 'model_changed', 'effort_changed', 'permission_mode_changed', 'control_restore_changed'}:
                 data = dict(data, controlRestore=item.get('_controlRestore'))
             if kind in {'assistant', 'assistant_delta', 'queued_user'}:
@@ -1027,10 +1105,11 @@ class LocalApp:
             if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed', 'execution'} or terminal:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
-                pending = attention_snapshot(self.sessions.values())
+                pending = attention_snapshot(self.visible_sessions())
                 self.notifier.update(pending)
                 self.update_tray()
                 if hasattr(self, 'desktop'):
+                    self.desktop.retain_attention(pending['items'])
                     for notice in pending['items']:
                         self._publish_notification(notice['sessionId'], notice['title'], 'attention', notice['id'])
                     if (kind in {'result', 'error'} and item.get('lastRunId') and not item.get('_modelUpdating') and not item.get('_connecting')
@@ -1401,6 +1480,8 @@ class Handler(BaseHTTPRequestHandler):
             if manual_path in MANUAL_ALIASES:
                 return self.reply({}, 302, location='/manual/guide' + MANUAL_ALIASES[manual_path])
             assets = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                      "/path-picker.js": ("path-picker.js", "text/javascript; charset=utf-8"),
+                      "/path-picker.css": ("path-picker.css", "text/css; charset=utf-8"),
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
@@ -1506,12 +1587,25 @@ class Handler(BaseHTTPRequestHandler):
         sid = data.get("id")
         if route == '/api/ui-health':
             return self.reply({'ok': True, 'recorded': app.ui_health.frontend(data)})
+        if route == '/api/browse-paths':
+            from .path_browser import browse_paths, validate_folder_selection
+            if data.get('action') == 'select':
+                if data.get('kind') not in {'files', 'folder'}:
+                    raise ValueError('선택할 파일 또는 폴더 종류를 확인해 주세요.')
+                paths = (app.validate_attachments(data.get('paths')) if data['kind'] == 'files'
+                         else validate_folder_selection(data.get('paths')))
+                return self.reply({'paths': paths})
+            if data.get('action') is not None:
+                raise ValueError('파일 선택 동작을 확인해 주세요.')
+            return self.reply(browse_paths(data))
         if route == '/api/session/branch':
             return self.reply(app.fork_session(sid))
         if route == "/api/create":
             return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot')))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
+        if route == '/api/session/hide':
+            return self.reply(app.hide_session(sid, data.get('confirmed')))
         if route == '/api/session/reorder':
             return self.reply(app.reorder_session(sid, data.get('targetId'), data.get('position')))
         if route == '/api/reconnect':

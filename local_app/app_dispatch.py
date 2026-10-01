@@ -94,7 +94,8 @@ class DispatchController:
                     # Queue eligibility needs only navigation/runtime metadata.
                     # Hydrate the bounded UI mirror only when send actually runs.
                     item = self.app.sessions.get(sid)
-                    if item is None:
+                    if (item is None or item.get('_removingFromList') or
+                            self.app.session_visibility.contains(sid)):
                         continue
                     pending = self.steering.get(sid)
                     if pending:

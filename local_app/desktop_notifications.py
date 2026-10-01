@@ -25,8 +25,9 @@ MESSAGES = {
     'attention': '승인 또는 답변이 필요해요. 클릭하면 해당 업무를 열어요.',
     'error': '작업 상태를 확인해 주세요. 클릭하면 해당 업무를 열어요.',
 }
-DELIVERY = {'disabled', 'foreground', 'cooldown', 'unavailable', 'requested'}
+DELIVERY = {'disabled', 'foreground', 'cooldown', 'queued', 'unavailable', 'requested'}
 MAX_INBOX, MAX_SEEN = 50, 256
+MAX_DEFER_SECONDS = 60.0
 
 
 def _title(value):
@@ -52,7 +53,7 @@ def notification_id(session_id, kind, event_id):
 
 class DesktopNotifications:
     def __init__(self, state, *, notify=None, is_foreground=None, on_open=None,
-                 clock=time.time, monotonic=time.monotonic, cooldown=3.0):
+                 clock=time.time, monotonic=time.monotonic, cooldown=3.0, automatic_retry=True):
         self.path = Path(state) / 'desktop-notifications.json'
         self.notify = notify
         self.is_foreground = is_foreground
@@ -62,6 +63,10 @@ class DesktopNotifications:
         self._lock = threading.RLock()
         self._closed = False
         self._last_request = None
+        self._pending = {}
+        self._inflight = {}
+        self._retry_timer = None
+        self._automatic_retry = automatic_retry
         self.warning = None
         self.data = {'schemaVersion': 1, 'preferences': dict(DEFAULTS), 'inbox': [], 'seen': []}
         try:
@@ -118,7 +123,7 @@ class DesktopNotifications:
                     'inbox': deepcopy(list(reversed(self.data['inbox']))),
                     'unreadCount': sum(not row['read'] for row in self.data['inbox']),
                     'warning': self.warning,
-                    'deliveryNote': '다른 작업 중에는 앱 알림 카드로 알려드려요. 표시가 제한되거나 알림이 겹쳐도 기록은 이 목록에 남아요.'}
+                    'deliveryNote': '다른 작업 중에도 완료·응답 대기를 알려드려요. 겹친 알림은 잠시 뒤 표시하며 기록은 이 목록에 남아요.'}
 
     def configure(self, preferences):
         if (not isinstance(preferences, dict) or not preferences or set(preferences) - set(DEFAULTS)
@@ -132,7 +137,166 @@ class DesktopNotifications:
             if not self._save():
                 self.data['preferences'] = previous
                 raise ValueError('알림 설정을 저장하지 못했습니다. 기존 설정을 유지합니다.')
+            changed = False
+            for key in list(self._pending):
+                row = self._retained(key)
+                if row and not self._enabled(row):
+                    row['delivery'] = 'disabled'
+                    self._pending.pop(key, None)
+                    changed = True
+            if changed:
+                self._save()
             return self.snapshot()
+
+    def _retained(self, key):
+        return next((row for row in self.data['inbox'] if row['id'] == key), None)
+
+    def _enabled(self, row):
+        prefs = self.data['preferences']
+        return prefs['enabled'] and prefs['errors' if row['kind'] == 'error' else row['kind']]
+
+    def _schedule_retry(self):
+        # One short-lived timer for the whole app, independent of a WebView or
+        # its visibility. Nothing is replayed after an app restart.
+        if self._closed or not self._pending or self._retry_timer or not self._automatic_retry:
+            return
+        timer = threading.Timer(max(1.0, self.cooldown), self._retry)
+        timer.daemon = True
+        self._retry_timer = timer
+        timer.start()
+
+    def _defer(self, row, deadline=None):
+        retained = {item['id'] for item in self.data['inbox']}
+        self._pending = {key: deadline for key, deadline in self._pending.items() if key in retained}
+        self._pending.setdefault(row['id'], deadline if deadline is not None else self.monotonic() + MAX_DEFER_SECONDS)
+        if deadline is not None:
+            self._pending = {row['id']: deadline, **self._pending}
+        row['delivery'] = 'queued'
+        self._schedule_retry()
+
+    def retain_attention(self, items):
+        """Retire delayed popups after their question is answered; keep receipts."""
+        current = {notification_id(item['sessionId'], 'attention', item['id']) for item in items}
+        with self._lock:
+            changed = False
+            for key in list(self._pending):
+                row = self._retained(key)
+                if row and row['kind'] == 'attention' and key not in current:
+                    row['delivery'] = 'unavailable'
+                    self._pending.pop(key, None)
+                    changed = True
+            # No write on ordinary repeated polls/events with no pending change.
+            if changed:
+                self._save()
+
+    def cancel_pending_session(self, session_id):
+        """Removing a task from the list must not surface its delayed popup."""
+        with self._lock:
+            changed = False
+            for key in list(self._pending):
+                row = self._retained(key)
+                if row and row['sessionId'] == session_id:
+                    row['delivery'] = 'unavailable'
+                    self._pending.pop(key, None)
+                    changed = True
+            if changed:
+                self._save()
+
+    def _retry(self):
+        with self._lock:
+            self._retry_timer = None
+        self.flush_pending()
+
+    def _current_attempt(self, row, token):
+        key = row['id']
+        return (not self._closed and not self.warning and not row['read']
+                and self._enabled(row) and self._inflight.get(key) is token
+                and self._retained(key) is row and key in self._pending
+                and self.monotonic() < self._pending[key])
+
+    def _finish_attempt(self, row, token, delivery=None):
+        key = row['id']
+        if self._inflight.get(key) is not token:
+            return
+        self._inflight.pop(key, None)
+        self._pending.pop(key, None)
+        if delivery is not None:
+            row['delivery'] = delivery
+        elif row['delivery'] == 'queued':
+            row['delivery'] = 'unavailable'
+
+    def flush_pending(self):
+        """Try one deferred card; only known busy/cooldown outcomes are retried."""
+        with self._lock:
+            if self._closed:
+                return
+            now, row, token = self.monotonic(), None, None
+            for key, deadline in list(self._pending.items()):
+                candidate = self._retained(key)
+                if candidate is None or candidate['read'] or now >= deadline or self.warning:
+                    self._pending.pop(key, None)
+                    if candidate and candidate['delivery'] == 'queued':
+                        candidate['delivery'] = 'unavailable'
+                    continue
+                if not self._enabled(candidate):
+                    candidate['delivery'] = 'disabled'
+                    self._pending.pop(key, None)
+                    continue
+                if row is None and key not in self._inflight:
+                    row = candidate
+            if row and (self._last_request is None or now - self._last_request >= self.cooldown):
+                self._last_request = now
+                token = object()
+                self._inflight[row['id']] = token
+                # Keep the receipt cancellable while a foreground check or the
+                # private native IPC is in progress. Cancellation removes it
+                # from _pending; the in-flight token prevents parallel retry.
+            else:
+                row = None
+            self._save()
+        if row:
+            foreground = False
+            if callable(self.is_foreground):
+                try:
+                    foreground = self.is_foreground(row['sessionId']) is True
+                except Exception:
+                    pass
+            if foreground:
+                with self._lock:
+                    delivery = 'foreground' if self._current_attempt(row, token) else None
+                    self._finish_attempt(row, token, delivery)
+                    self._save()
+            else:
+                self._deliver(row, token)
+        with self._lock:
+            self._schedule_retry()
+
+    def _deliver(self, row, token):
+        with self._lock:
+            if not self._current_attempt(row, token):
+                self._finish_attempt(row, token)
+                self._save()
+                return
+        # Do not hold the inbox lock across native IPC or callback code, which
+        # can need the server's task lock. Once notify has begun, cancellation
+        # cannot retract a card already accepted by Windows/the native host.
+        outcome = False
+        try:
+            outcome = self.notify(deepcopy(row), lambda: self.open(row['id']))
+        except Exception:
+            pass
+        with self._lock:
+            if not self._current_attempt(row, token):
+                self._finish_attempt(row, token)
+            elif outcome is True:
+                self._finish_attempt(row, token, 'requested')
+            elif outcome == 'busy':
+                self._inflight.pop(row['id'], None)
+                self._defer(row, deadline=self._pending[row['id']])
+            else:
+                # Suppression or a lost acknowledgement is not safe to replay.
+                self._finish_attempt(row, token, 'unavailable')
+            self._save()
 
     def publish(self, session_id, title, kind, event_id):
         key = notification_id(session_id, kind, event_id)
@@ -164,19 +328,18 @@ class DesktopNotifications:
             self.data['seen'] = [*self.data['seen'], key][-MAX_SEEN:]
             self.data['inbox'] = [*self.data['inbox'], row][-MAX_INBOX:]
             self._save()  # Record before asking Windows; restart never replays it.
+            if delivery == 'cooldown' and callable(self.notify) and not self.warning:
+                self._defer(row)
+                self._save()
             attempt = delivery == 'unavailable' and callable(self.notify) and not self.warning
             if attempt:
                 self._last_request = now
-        requested = False
+                self._pending[key] = now + MAX_DEFER_SECONDS
+                token = object()
+                self._inflight[key] = token
         if attempt:
-            try:
-                requested = self.notify(deepcopy(row), lambda: self.open(key)) is True
-            except Exception:
-                pass
+            self._deliver(row, token)
         with self._lock:
-            if requested:
-                row['delivery'] = 'requested'
-                self._save()
             return deepcopy(row)
 
     def mark_read(self, identifier=None):
@@ -227,3 +390,8 @@ class DesktopNotifications:
     def close(self):
         with self._lock:
             self._closed = True
+            self._pending.clear()
+            self._inflight.clear()
+            if self._retry_timer:
+                self._retry_timer.cancel()
+                self._retry_timer = None

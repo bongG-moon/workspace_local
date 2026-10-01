@@ -182,7 +182,7 @@ class DesktopHost:
         raise DesktopError()
 
     def notify(self, *, title, message, kind, notification_id, on_click):
-        """Offer a card without starting a host; None alone permits fallback."""
+        """Offer a card: 'busy' is deferred; None alone permits tray fallback."""
         if (not isinstance(notification_id, str) or not re.fullmatch(r'[0-9a-f]{64}', notification_id)
                 or not isinstance(kind, str) or kind not in {'completed', 'attention', 'error'}
                 or not isinstance(title, str) or not isinstance(message, str) or not callable(on_click)):
@@ -197,20 +197,26 @@ class DesktopHost:
             pending = (process, notification_id, on_click)
             with self.notification_lock:
                 if self._notification is not None:
-                    return False
+                    return 'busy'
                 self._notification = pending
             try:
                 reply = self._command('notify', notificationId=notification_id, kind=kind,
                                       title=clean(title, 100), message=clean(message, 255))
                 accepted = reply.get('notificationAccepted') is True
+                reason = reply.get('notificationReason')
             except (OSError, ValueError, queue.Empty):
                 # The card may already be visible after an acknowledgement was
                 # lost. Do not cause a second Windows balloon in that case.
                 accepted = False
+                reason = None
             if not accepted:
                 with self.notification_lock:
                     if self._notification is pending:
                         self._notification = None
+                if reason == 'unavailable':
+                    return None  # The native host confirms no card was shown.
+                if reason == 'busy':
+                    return 'busy'
             return accepted
 
     def open(self):

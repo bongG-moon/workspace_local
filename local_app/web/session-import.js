@@ -63,6 +63,7 @@ globalThis.WorkspaceSessionImport = (() => {
     if(loading||!selected||appClosed)return;const ticket=generation;const id=selected.sessionId;busy(true);
     try{
       const result=await api("/api/claude-sessions/import",{sessionId:id});
+      if(result.restored)hiddenSessionIds.delete(result.session.id);
       if(ticket!==generation||appClosed)return;
       const bootResult=await api("/api/bootstrap");if(ticket!==generation||!dialog.open||appClosed)return;
       sessions=bootResult.sessions;renderSessions();returnFocus=null;dialog.close();

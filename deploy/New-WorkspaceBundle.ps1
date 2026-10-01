@@ -12,6 +12,7 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'local_app\web') -Force |
 New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
+    'local_app\session_visibility.py', 'local_app\path_browser.py', 'local_app\web\path-picker.js', 'local_app\web\path-picker.css',
     'local_app\native_window.py', 'local_app\ui_health.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',
     'deploy\New-WorkspaceDesktop.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
     'docs\WORKSPACE_0.18.0_NATIVE_WINDOW.md',
@@ -59,7 +60,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.2-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.3-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

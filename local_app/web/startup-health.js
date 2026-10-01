@@ -7,6 +7,7 @@ globalThis.WorkspaceStartupHealth = (() => {
     app:{file:"app.js",buttons:["new-chat","settings-open"]},
     stream:{file:"rendering.js",global:"WorkspaceStream"},
     attachments:{file:"attachments.js",global:"WorkspaceAttachments"},
+    "path-picker":{file:"path-picker.js",global:"WorkspacePathPicker"},
     workflow:{file:"workflow.js",global:"WorkspaceWorkflow",buttons:["workflow-open","schedule-open"]},
     composer:{file:"composer.js",global:"WorkspaceComposer"},
     "inline-controls":{file:"inline-controls.js",global:"WorkspaceInlineControls",buttons:["composer-model","composer-effort","composer-permission"]},

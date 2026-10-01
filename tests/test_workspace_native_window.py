@@ -36,8 +36,8 @@ for line in sys.stdin:
    print(json.dumps({'type':'notification_opened' if mode=='open_first' else 'notification_dismissed',
                      'notificationId':request['notificationId']}), flush=True)
   if mode=='reject': reply['ok']=False
-  reply['notificationAccepted']=mode not in ('suppressed','busy','reject')
-  reply['reason']=mode
+  reply['notificationAccepted']=mode not in ('suppressed','busy','reject','unavailable')
+  reply['notificationReason']=mode
  print(json.dumps(reply), flush=True)
 '''
 
@@ -249,7 +249,7 @@ class NativeWindowTests(unittest.TestCase):
         clicked = threading.Event()
         callback = Mock(side_effect=clicked.set)
         self.assertTrue(self.notify(on_click=callback))
-        self.assertFalse(self.notify(notification_id='b' * 64))
+        self.assertEqual('busy', self.notify(notification_id='b' * 64))
         self.assertEqual(1, sum(row['command'] == 'notify' for row in self.request_log()))
         self.emit('notification_opened', 'b' * 64)
         callback.assert_not_called()
@@ -270,7 +270,7 @@ class NativeWindowTests(unittest.TestCase):
         self.assertTrue(self.notify(notification_id='b' * 64))
 
     def test_suppressed_or_rejected_card_returns_false_and_releases_callback(self):
-        for mode in ('suppressed', 'busy', 'reject'):
+        for mode in ('suppressed', 'reject'):
             with self.subTest(mode=mode):
                 self.mode = mode
                 self.host.open()
@@ -281,6 +281,37 @@ class NativeWindowTests(unittest.TestCase):
                 self.assertIsNone(self.host._notification)
                 with self.host.lock:
                     self.host._dispose()
+
+    def test_explicit_native_busy_defers_and_unavailable_allows_tray_fallback(self):
+        for mode, expected in (('busy', 'busy'), ('unavailable', None)):
+            with self.subTest(mode=mode):
+                self.mode = mode
+                self.host.open()
+                self.assertEqual(expected, self.notify())
+                self.assertIsNone(self.host._notification)
+                with self.host.lock:
+                    self.host._dispose()
+
+    def test_hidden_main_window_keeps_host_and_private_command_delivery_alive(self):
+        self.host.background = True
+        self.host.on_close = Mock()
+        self.host.open()
+        process = self.host.process
+        self.emit('hidden')
+        self.host.on_close.assert_not_called()
+        self.assertIsNone(process.poll())
+        self.assertTrue(self.notify(kind='attention'))
+        self.assertEqual('activated', self.host.open()['action'])
+        self.assertIs(process, self.host.process)
+        self.host.close()
+        self.assertIsNotNone(process.poll())
+
+    def test_explicit_close_request_reaches_shutdown_callback_without_hidden_event(self):
+        closed = threading.Event()
+        self.host.on_close = closed.set
+        self.host.open()
+        self.emit('close_requested')
+        self.assertTrue(closed.wait(2))
 
     def test_lost_ack_is_not_reported_as_safe_for_balloon_fallback(self):
         self.host.open()

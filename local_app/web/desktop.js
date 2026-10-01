@@ -45,7 +45,8 @@ globalThis.WorkspaceDesktop = (() => {
     if(key===settingsKey)return;settingsKey=key;
     text($("desktop-toggle"),prefs.enabled?"PC 알림 끄기":"PC 알림 켜기");$("desktop-toggle").disabled=changing||appClosed;
     for(const key of ["completed","attention","errors"]){const input=$("desktop-"+key);input.checked=prefs[key]===true;input.disabled=changing||appClosed;}
-    text($("desktop-message"),snapshot.warning||((snapshot.nativeAvailable?"창을 닫아도 PC 알림을 요청합니다. ":"현재는 앱 안의 알림 목록을 사용할 수 있습니다. ")+(snapshot.deliveryNote||"")));
+    const deliveryHelp=snapshot.nativeAvailable?(boot.window?.closeBehavior==="background"?"창의 X를 누르면 트레이에서 계속 실행하며 알려드려요. ":"앱이 실행 중일 때 PC 알림을 요청합니다. "):"현재는 앱 안의 알림 목록을 사용할 수 있습니다. ";
+    text($("desktop-message"),snapshot.warning||(deliveryHelp+(snapshot.deliveryNote||"")));
   }
   function renderHeader(){
     const unread=rows.filter(row=>!row.read).length, pending=rows.reduce((sum,row)=>sum+row.pending,0);

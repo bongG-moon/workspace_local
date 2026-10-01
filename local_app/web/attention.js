@@ -7,7 +7,7 @@ globalThis.WorkspaceAttention = (() => {
   let renderedKey = "", settingsKey = "";
   const notifications = new Map(), preferenceKey = "workspaceBrowserNotifications";
   const visible = () => document.visibilityState === "visible" && document.hasFocus?.() === true;
-  const waitingLabel = kind => ({approval:"승인 대기",question:"답변 대기",choice:"디자인 선택 대기"}[kind] || "응답 대기");
+  const waitingLabel = kind => ({approval:"승인 대기",question:"답변 대기",choice:"선택 대기"}[kind] || "응답 대기");
   function storeSeen() { try { sessionStorage.setItem("workspaceAttentionSeen:" + windowTitle, JSON.stringify([...seen].slice(-300))); } catch (_) {} }
   function setWindowTitle(value) {
     if (typeof value !== "string" || !value || value === windowTitle) return;

@@ -33,10 +33,13 @@ class DesktopNotificationTests(unittest.TestCase):
         return True
 
     def make_center(self, **kwargs):
-        return DesktopNotifications(self.root, notify=self.deliver,
+        center = DesktopNotifications(self.root, notify=self.deliver,
                                     is_foreground=lambda sid: self.foreground,
                                     on_open=lambda sid: self.opened.append(sid),
-                                    clock=lambda: self.clock, monotonic=lambda: self.clock, **kwargs)
+                                    clock=lambda: self.clock, monotonic=lambda: self.clock,
+                                    automatic_retry=False, **kwargs)
+        self.addCleanup(center.close)
+        return center
 
     def publish(self, event='run:one', kind='completed', sid=None, title='검증 업무'):
         return self.center.publish(sid or self.sid, title, kind, event)
@@ -77,16 +80,233 @@ class DesktopNotificationTests(unittest.TestCase):
         self.assertEqual(3, len({first['id'], second['id'], third['id']}))
         self.assertNotIn('PRIVATE-ID', (self.root / 'desktop-notifications.json').read_text('utf-8'))
 
-    def test_foreground_and_cooldown_keep_inbox_without_banners(self):
+    def test_foreground_stays_inbox_and_cooldown_defers_new_request_without_losing_it(self):
         self.foreground = True
         self.assertEqual('foreground', self.publish()['delivery'])
         self.foreground = False
         self.assertEqual('requested', self.publish('two')['delivery'])
-        self.assertEqual('cooldown', self.publish('three')['delivery'])
+        self.assertEqual('queued', self.publish('three')['delivery'])
         self.assertEqual(1, len(self.deliveries))
         self.assertEqual(3, self.center.snapshot()['unreadCount'])
         self.clock += 4
-        self.assertEqual('requested', self.publish('four')['delivery'])
+        self.center.flush_pending()
+        self.assertEqual(2, len(self.deliveries))
+        self.assertEqual('requested', self.center.snapshot()['inbox'][0]['delivery'])
+        self.center.flush_pending()
+        self.assertEqual(2, len(self.deliveries))
+
+    def test_busy_card_retries_exact_new_request_and_never_duplicates_previous_request(self):
+        original = self.publish('original')
+        self.clock += 4
+        self.center.notify = lambda *args: 'busy'
+        waiting = self.publish('new-question', 'attention')
+        self.assertEqual('queued', waiting['delivery'])
+        self.assertEqual('requested', original['delivery'])
+        self.assertTrue(self.publish('new-question', 'attention')['duplicate'])
+        self.clock += 4
+        self.center.notify = self.deliver
+        self.center.flush_pending()
+        self.assertEqual([original['id'], waiting['id']], [row['id'] for row, _ in self.deliveries])
+        self.center.flush_pending()
+        self.assertEqual(2, len(self.deliveries))
+
+    def test_retry_expires_is_runtime_only_and_close_cancels_future_delivery(self):
+        self.center.notify = lambda *args: 'busy'
+        self.publish('busy')
+        first_deadline = next(iter(self.center._pending.values()))
+        self.clock += 10
+        self.center.flush_pending()
+        self.assertEqual(first_deadline, next(iter(self.center._pending.values())))
+        self.clock += 60
+        self.center.notify = self.deliver
+        self.center.flush_pending()
+        self.assertEqual([], self.deliveries)
+        self.assertEqual({}, self.center._pending)
+        self.assertEqual('unavailable', self.center.snapshot()['inbox'][0]['delivery'])
+        self.center.notify = lambda *args: 'busy'
+        queued = self.publish('another')
+        fresh = self.make_center()
+        self.assertTrue(fresh.publish(self.sid, '검증 업무', 'completed', 'another')['duplicate'])
+        self.assertEqual({}, fresh._pending)
+        self.center.close()
+        self.center.notify = self.deliver
+        self.clock += 4
+        self.center.flush_pending()
+        self.assertEqual([], self.deliveries)
+
+    def test_answered_question_and_read_or_disabled_receipts_do_not_surface_late(self):
+        self.center.notify = lambda *args: 'busy'
+        self.publish('question', 'attention')
+        self.center.retain_attention([])
+        self.assertEqual({}, self.center._pending)
+        self.clock += 4
+        read = self.publish('read')
+        self.center.mark_read(read['id'])
+        self.clock += 4
+        self.center.flush_pending()
+        self.assertEqual({}, self.center._pending)
+        self.publish('disabled')
+        self.center.configure({'completed': False})
+        self.assertEqual({}, self.center._pending)
+        self.assertEqual('disabled', self.center.snapshot()['inbox'][0]['delivery'])
+        self.center.notify = self.deliver
+        self.clock += 4
+        self.center.flush_pending()
+        self.assertEqual([], self.deliveries)
+
+    def test_queued_request_becoming_foreground_is_not_pushed_and_suppression_never_retries(self):
+        self.center.notify = lambda *args: 'busy'
+        self.publish('question', 'attention')
+        self.foreground = True
+        self.clock += 4
+        self.center.notify = self.deliver
+        self.center.flush_pending()
+        self.assertEqual([], self.deliveries)
+        self.assertEqual('foreground', self.center.snapshot()['inbox'][0]['delivery'])
+        self.foreground = False
+        self.clock += 4
+        self.center.notify = lambda *args: False
+        self.assertEqual('unavailable', self.publish('suppressed')['delivery'])
+        self.assertEqual({}, self.center._pending)
+
+    def test_retry_timer_delivers_without_ui_poll_and_shutdown_releases_timer(self):
+        delivered, calls = threading.Event(), []
+        def notify(row, callback):
+            calls.append(row['id'])
+            if len(calls) == 1:
+                return 'busy'
+            delivered.set()
+            return True
+        center = DesktopNotifications(self.root / 'timer', notify=notify, cooldown=0)
+        self.addCleanup(center.close)
+        row = center.publish(self.sid, '백그라운드 질문', 'attention', 'wait')
+        self.assertEqual('queued', row['delivery'])
+        self.assertTrue(delivered.wait(3))
+        self.assertEqual([row['id'], row['id']], calls)
+        center.close()
+        self.assertIsNone(center._retry_timer)
+
+    def test_removed_task_cancels_only_its_deferred_banner_and_keeps_history_unread(self):
+        self.center.notify = lambda *args: 'busy'
+        removed = self.publish('removed')
+        self.clock += 4
+        retained = self.publish('retained', sid=self.other)
+        self.center.cancel_pending_session(self.sid)
+        self.assertEqual({retained['id']}, set(self.center._pending))
+        rows = {row['id']: row for row in self.center.snapshot()['inbox']}
+        self.assertFalse(rows[removed['id']]['read'])
+        self.assertEqual('unavailable', rows[removed['id']]['delivery'])
+        self.center.notify = self.deliver
+        self.clock += 4
+        self.center.flush_pending()
+        self.assertEqual([retained['id']], [row['id'] for row, _ in self.deliveries])
+
+    def test_cancel_during_foreground_check_prevents_late_native_send(self):
+        for cancel in ('answered', 'removed'):
+            with self.subTest(cancel=cancel):
+                center = self.make_center()
+                center.notify = lambda *args: 'busy'
+                row = center.publish(self.sid, '대기 질문', 'attention', 'race-' + cancel)
+                self.clock += 4
+                entered, release = threading.Event(), threading.Event()
+                calls = []
+                def foreground(sid):
+                    entered.set()
+                    self.assertTrue(release.wait(3))
+                    return False
+                center.is_foreground = foreground
+                center.notify = lambda *args: calls.append(args) or True
+                worker = threading.Thread(target=center.flush_pending)
+                try:
+                    worker.start()
+                    self.assertTrue(entered.wait(2))
+                    self.assertIn(row['id'], center._pending)
+                    self.assertIn(row['id'], center._inflight)
+                    if cancel == 'answered':
+                        center.retain_attention([])
+                    else:
+                        center.cancel_pending_session(self.sid)
+                    self.assertNotIn(row['id'], center._pending)
+                finally:
+                    release.set()
+                    worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual([], calls)
+                self.assertEqual({}, center._inflight)
+                self.assertEqual({}, center._pending)
+                self.clock += 4
+                center.flush_pending()
+                self.assertEqual([], calls)
+                self.assertEqual('unavailable', center.snapshot()['inbox'][0]['delivery'])
+                center.close()
+
+    def test_cancel_during_native_busy_response_never_resurrects_deferred_receipt(self):
+        for phase in ('initial', 'retry'):
+            for cancel in ('answered', 'removed'):
+                with self.subTest(phase=phase, cancel=cancel):
+                    center = self.make_center()
+                    event = phase + '-' + cancel
+                    if phase == 'retry':
+                        center.notify = lambda *args: 'busy'
+                        center.publish(self.sid, '대기 질문', 'attention', event)
+                        self.clock += 4
+                    entered, release = threading.Event(), threading.Event()
+                    calls = []
+                    def notify(row, callback):
+                        calls.append(row['id'])
+                        entered.set()
+                        self.assertTrue(release.wait(3))
+                        return 'busy'
+                    center.notify = notify
+                    target = center.flush_pending if phase == 'retry' else lambda: center.publish(
+                        self.sid, '대기 질문', 'attention', event)
+                    worker = threading.Thread(target=target)
+                    try:
+                        worker.start()
+                        self.assertTrue(entered.wait(2))
+                        if cancel == 'answered':
+                            center.retain_attention([])
+                        else:
+                            center.cancel_pending_session(self.sid)
+                    finally:
+                        release.set()
+                        worker.join(3)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(1, len(calls))
+                    self.assertEqual({}, center._pending)
+                    self.assertEqual({}, center._inflight)
+                    self.clock += 4
+                    center.flush_pending()
+                    self.assertEqual(1, len(calls))
+                    self.assertEqual('unavailable', center.snapshot()['inbox'][0]['delivery'])
+                    center.close()
+
+    def test_parallel_flush_cannot_deliver_same_cancellable_receipt_twice(self):
+        self.center.notify = lambda *args: 'busy'
+        row = self.publish('race-parallel', 'attention')
+        self.clock += 4
+        entered, release = threading.Event(), threading.Event()
+        calls = []
+        def notify(value, callback):
+            calls.append(value['id'])
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return True
+        self.center.notify = notify
+        worker = threading.Thread(target=self.center.flush_pending)
+        try:
+            worker.start()
+            self.assertTrue(entered.wait(2))
+            self.clock += 4
+            self.center.flush_pending()
+            self.assertEqual([row['id']], calls)
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual({}, self.center._pending)
+        self.assertEqual({}, self.center._inflight)
+        self.assertEqual('requested', self.center.snapshot()['inbox'][0]['delivery'])
 
     def test_preferences_persist_and_disable_only_selected_kinds(self):
         self.center.configure({'completed': False})

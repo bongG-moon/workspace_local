@@ -19,14 +19,14 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'status', 'finish'])
-parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.21.2.exe')
+parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.21.3.exe')
 parser.add_argument('--run', default='final')
 parser.add_argument('--python', type=Path, help='Explicit existing interpreter for an EXE startup check')
 parser.add_argument('--desktop', action='store_true', help='Open the real owned WebView2 window')
 args = parser.parse_args()
 if not re.fullmatch('[a-z0-9-]{1,30}', args.run):
     parser.error('Invalid validation run name')
-OUT = ROOT / ('build/qa-standalone-0.21.2-' + args.run)
+OUT = ROOT / ('build/qa-standalone-0.21.3-' + args.run)
 STATE = OUT / 'app-state'
 CACHE = OUT / '실행 캐시'
 COPY = OUT / 'EXE만 있는 한글 폴더' / args.exe.name
@@ -78,7 +78,7 @@ if args.action == 'start':
     if args.desktop:
         assert boot['window']['mode'] == 'desktop' and boot['window']['engine'] == 'WebView2'
         assert request('/api/window/open', {})['action'] == 'activated'
-    assert boot['workspaceVersion'] == '0.21.2' and boot['demo'] is False and not boot['error']
+    assert boot['workspaceVersion'] == '0.21.3' and boot['demo'] is False and not boot['error']
     app_root = Path(boot['appRoot'])
     assert app_root.is_relative_to(CACHE) and not (app_root / 'runtime').exists()
     assert not list(app_root.rglob('python*.exe'))
@@ -102,7 +102,7 @@ if args.action == 'start':
     second = subprocess.run(command, cwd=COPY.parent, env=env, capture_output=True, timeout=110, creationflags=HIDDEN)
     assert second.returncode == 0
     assert json.loads((STATE / 'runtime.json').read_text())['pid'] == runtime['pid']
-    for route in ('/', '/app.js', '/inline-controls.js', '/rendering.js', '/attachments.js',
+    for route in ('/', '/app.js', '/inline-controls.js', '/rendering.js', '/attachments.js', '/path-picker.js', '/path-picker.css',
                   '/workflow.js', '/desktop.js', '/session-import.js', '/app.css',
                   '/rich-content.js', '/rich-content.css', '/execution-view.js', '/execution-view.css',
                   '/startup-health.js', '/startup-health.css',
