@@ -245,6 +245,28 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 .session-remove-icon{display:block;width:15px;height:15px;background:currentColor;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 7h16M9 3h6l1 4H8l1-4Zm-3 4 1 14h10l1-14M10 11v6m4-6v6' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
 @media(hover:none){.session-remove{opacity:1}}@media(forced-colors:active){.session-remove-icon{background-color:ButtonText}}
 
+/* A quiet lavender frame separates navigation and materials from the conversation.
+   Keep the central surface and the system high-contrast palette independent. */
+@media(forced-colors:none){
+  .app>.sidebar,.app>.inspector{--panel-edge:#d6cee7;--panel-hover:#f4f1fb;--panel-selected:#ded7f0;--shadow-small:4px 4px 9px #d7d0e5,-4px -4px 9px #fbfaff;border-color:var(--panel-edge)}
+  .app>.sidebar{background:linear-gradient(165deg,#eeebf8 0%,#e7e2f2 100%);box-shadow:inset -1px 0 #ffffff70}
+  .app>.inspector{background:linear-gradient(195deg,#f0edf9 0%,#eae5f4 100%);box-shadow:inset 1px 0 #ffffff80}
+  .sidebar .session-search{background:#f3f0f9;border-color:#ddd5eb}
+  .sidebar .palette-launcher{background:#f3f0f9;border-color:#ddd5eb;box-shadow:inset 1px 1px 3px #e0d9ed,inset -1px -1px 3px #fdfbff}
+  .sidebar-collapsed .sidebar .palette-launcher{background:transparent;border-color:transparent;box-shadow:none}
+  .sidebar .nav-button:hover,.sidebar .session-list .session-row:hover{background:var(--panel-hover)}
+  .sidebar .nav-button.active,.sidebar .session-list .session-row:has(.session.active){background:var(--panel-selected);box-shadow:inset 0 0 0 1px #d2c9e8}
+  .sidebar .nav-button.active{color:#4d52a3}
+  .sidebar .sidebar-footer,.inspector .inspector-tip{border-color:var(--panel-edge)}
+  .inspector .inspector-tabs{background:#e6e0f1;box-shadow:inset 2px 2px 4px #d9d1e8,inset -2px -2px 4px #faf8ff}
+  .inspector .inspector-tab,.inspector .inspector-tab>span{color:#596071}
+  .inspector .inspector-tab>span{background:#ded7ec}
+  .inspector .inspector-tab[aria-selected="true"]{color:#535bbb;background:#faf8ff;box-shadow:2px 3px 5px #d8d0e7,-2px -2px 4px #fff}
+  .inspector .inspector-tab[aria-selected="true"]>span{color:#535bbb;background:#ebe5f7}
+  .inspector .folder-card{background:#f5f2fb;border-color:#fffaff}
+  .inspector .folder-card-icon{background:#e7e0f3}
+}
+
 /* Existing conversations are a start option; reuse the shared primary action. */
 .folder-dialog{padding:24px 28px}.folder-dialog .dialog-symbol{width:36px;height:36px;border-radius:11px}.folder-dialog h2{font-size:22px;margin-top:15px}.folder-dialog .folder-options{margin:18px 0 12px}.folder-dialog .folder-option{padding:11px 12px}.folder-dialog label{margin-top:15px}.folder-dialog .folder-options label{margin-top:8px}.folder-dialog .trust{font-size:11px;margin-top:16px}.folder-dialog .trust small{font-size:10px}.folder-dialog .dialog-actions{margin-top:18px;padding-top:14px}
 .sidebar .palette-launcher{margin-top:8px}.session-import-option{width:100%;text-align:left;color:var(--ink);gap:11px}.session-import-option>span{flex:1;min-width:0}.session-import-option small{color:var(--muted)}.session-import-icon{width:17px;height:17px;color:var(--accent-ink)}.session-import-arrow{width:17px;height:17px;margin-left:auto;color:var(--accent-ink)}.session-import-option:hover{background:var(--accent-tint);border-color:#b7bfe6}.import-apply{min-height:42px;padding:10px 17px;border-radius:12px}.import-apply .icon{width:17px;height:17px}.import-apply:disabled{box-shadow:none}.import-dialog>.dialog-actions{align-items:center}

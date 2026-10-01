@@ -321,7 +321,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.6'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.7'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -336,7 +336,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.21.6'
+        $targetVersion = [version]'0.21.7'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $upgradeNeeded = $runningVersion -lt $targetVersion
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
