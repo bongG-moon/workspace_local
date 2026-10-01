@@ -50,7 +50,7 @@ async function api(path,data,signal){
   const options={headers:{Authorization:`Bearer ${token}`},signal};
   if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
   let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
-  const value=await response.json();if(!response.ok)throw new Error(value.error||"연결을 확인해 주세요.");return value;
+  const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;throw failure;}return value;
 }
 function setStatus(state,label){
   if(active)active.state=state;globalThis.WorkspaceSessionImport?.render();const busy=busyStates.has(state),running=state==="starting"||state==="running";
@@ -265,6 +265,9 @@ function renderConnection(info){
   $("diagnostics").textContent=info?`현재 모델: ${info.model||"미제공"}\n사용 가능한 스킬: ${names(info.skills)||"CLI 목록 미제공"}\n연결 도구: ${(info.mcp||[]).map(x=>`${x.name}: ${x.status}`).join(", ")||"CLI 목록 미제공"}\n플러그인: ${names(info.plugins)||"CLI 목록 미제공"}`:"업무를 시작하면 현재 모델과 연결 도구를 표시해요.";renderConnectionOptions();updateModelControls();updatePermissionControls();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceSessionImport?.render();
 }
 function connectionLocked(){return !active||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed;}
+function controlRestoreState(){const value=active?.connection?.controlRestore;return value?.status==="needs_input"&&value.canSend===false?value:null;}
+function controlRestoreIssues(){const issues=controlRestoreState()?.issues;return (Array.isArray(issues)?issues:[]).filter(issue=>issue&&["model","effort","permissionMode"].includes(issue.control));}
+function hasControlRestoreIssue(control){return controlRestoreIssues().some(issue=>issue.control===control);}
 function modelOptions(){return (Array.isArray(active?.connection?.availableModels)?active.connection.availableModels:[]).slice(0,100).map(item=>typeof item==="string"?{value:item,displayName:item}:item).filter(item=>item&&typeof item.value==="string"&&item.value);}
 function permissionOptions(){const rows=(Array.isArray(active?.connection?.availablePermissionModes)?active.connection.availablePermissionModes:[]).filter(item=>item&&["manual","default","plan","acceptEdits","auto","bypassPermissions"].includes(item.value)&&(item.value!=="bypassPermissions"||active.connection.bypassPermissions?.available===true));return rows.filter(item=>item.value!=="manual"||!rows.some(row=>row.value==="default"));}
 function permissionOptionValue(mode,rows=permissionOptions()){if(mode==="manual"||mode==="default")return rows.find(row=>row.value==="default")?.value||rows.find(row=>row.value==="manual")?.value||mode;return mode;}
@@ -276,21 +279,21 @@ function renderConnectionOptions(){
   const mode=$("permission-mode-select"),previousMode=mode.value;mode.replaceChildren();const inherit=el("option","기존 설정 사용");inherit.value="";mode.append(inherit);
   for(const item of permissionOptions()){const option=el("option",item.displayName||item.value);option.value=item.value;mode.append(option);}mode.value=permissionOptions().some(item=>item.value===previousMode)?previousMode:"";
 }
-function updateModelControls(){const capable=!!active?.connection?.capabilities?.setModel,disabled=connectionLocked()||!capable;$("model-apply").disabled=disabled;$("model-reset").disabled=disabled||!active?.modelOverride;$("model-input").disabled=disabled;$("model-select").disabled=disabled;$("model-message").textContent=modelChanging?"모델 변경을 확인하고 있어요.":!active?"업무를 시작하면 이 대화에서 사용할 모델을 확인할 수 있어요.":!capable?"현재 연결에서 모델 변경을 확인하지 못했어요. 기존 모델을 그대로 사용합니다.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 모델을 바꿀 수 있어요.":`현재: ${active.connection?.model||"기존 모델"} · 이 연결에만 적용하며 Claude 기본 설정은 바꾸지 않아요.`;}
+function updateModelControls(){const capable=!!active?.connection?.capabilities?.setModel,disabled=connectionLocked()||!capable;$("model-apply").disabled=disabled;$("model-reset").disabled=disabled||(!active?.modelOverride&&!hasControlRestoreIssue("model"));$("model-input").disabled=disabled;$("model-select").disabled=disabled;$("model-message").textContent=modelChanging?"모델 변경을 확인하고 있어요.":!active?"업무를 시작하면 이 대화에서 사용할 모델을 확인할 수 있어요.":!capable?"현재 연결에서 모델 변경을 확인하지 못했어요. 기존 모델을 그대로 사용합니다.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 모델을 바꿀 수 있어요.":`현재: ${active.connection?.model||"기존 모델"} · 이 연결에만 적용하며 Claude 기본 설정은 바꾸지 않아요.`;}
 function updatePermissionControls(){
   const info=active?.connection,capable=info?.capabilities?.setPermissionMode===true,locked=connectionLocked();
   $("permission-mode-select").disabled=$("permission-mode-apply").disabled=locked||!capable;
-  $("permission-mode-reset").disabled=locked||!info?.permissionModeOverride||info.permissionModeResetAvailable===false;
+  $("permission-mode-reset").disabled=locked||(!info?.permissionModeOverride&&!hasControlRestoreIssue("permissionMode"))||info?.permissionModeResetAvailable===false;
   const current=permissionOptions().find(item=>item.value===permissionOptionValue(info?.permissionMode)),selected=permissionOptions().find(item=>item.value===$("permission-mode-select").value);
   $("permission-mode-detail").textContent=selected?.description||"기존 Claude 설정을 사용합니다. 개인 설정과 회사 정책은 변경하지 않아요.";
   $("permission-mode-message").textContent=permissionChanging?"승인 모드 변경을 확인하고 있어요.":!active?"업무 연결 후 현재 승인 모드를 확인할 수 있어요.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 승인 모드를 바꿀 수 있어요.":!capable?"현재 연결은 승인 모드 변경을 제공하지 않아요. 기존 승인 흐름을 유지합니다.":`현재: ${current?.displayName||info?.permissionMode||"미확인"}${info?.permissionModeOverride?" · 이 연결에서 선택":" · 기존 설정 상속"}${info?.permissionModeSupport==="unverified"?" · 선택 시 CLI 적용 응답 확인":""}`;
   $("permission-mode-reset-note").textContent=info?.permissionModeResetRequiresReconnect?"기존 설정으로 돌아가면 이 연결을 닫고 다음 요청에서 기존 설정을 다시 불러옵니다.":"이 업무에 적용합니다. 같은 앱에서 다시 연결하면 선택을 이어갑니다.";
 }
 function applyConnectionState(value){
-  if(!active)return;const state=value?.session?.connection||value;
+  if(!active)return;const state=value?.session?.connection||value?.connection||value;
   if(!state||typeof state!=="object")return;
   active.connection=active.connection||{};
-  for(const name of ["model","modelOverride","availableModels","effort","effortOverride","availableEfforts","effortSupport","effortSource","effortChangeRequiresReconnect","effortResetRequiresReconnect","effortResetAvailable","capabilities","permissionMode","permissionModeLabel","permissionModeSource","permissionModeCycle","permissionModeOverride","availablePermissionModes","permissionModeSupport","permissionModeResetRequiresReconnect","permissionModeResetAvailable","connected"])if(name in state)active.connection[name]=state[name];
+  for(const name of ["model","modelOverride","availableModels","effort","effortOverride","availableEfforts","effortSupport","effortSource","effortChangeRequiresReconnect","effortResetRequiresReconnect","effortResetAvailable","capabilities","permissionMode","permissionModeLabel","permissionModeSource","permissionModeCycle","permissionModeOverride","availablePermissionModes","permissionModeSupport","permissionModeResetRequiresReconnect","permissionModeResetAvailable","connected","controlRestore"])if(name in state)active.connection[name]=state[name];
   if("modelOverride" in state)active.modelOverride=state.modelOverride;else if("modelOverride" in value)active.modelOverride=value.modelOverride;
 }
 function renderVerification(){
@@ -353,7 +356,7 @@ function handleEvent(event){
   if(["assistant","assistant_delta"].includes(event.type)){$("conversation").querySelector(".conversation-empty")?.remove();event.type==="assistant"?renderMessage({role:"assistant",...d}):renderDelta(d);}
   if(event.type==="status"){if(["stopped","error"].includes(d.state))globalThis.WorkspaceStream?.flush();if(d.state==="starting")active.verification=null;if(["stopped","error"].includes(d.state))active.choice=null;setStatus(d.state,d.label);if(d.connection){active.connection=d.connection;if("modelOverride" in d.connection)active.modelOverride=d.connection.modelOverride;renderConnection(d.connection);}if(d.state==="stopped"){$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","중지 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshFiles();refreshResults(true);}}
   if(event.type==="connected"){active.connection=d;active.modelOverride=d.modelOverride||null;active.sessionId=d.sessionId;renderConnection(d);globalThis.WorkspaceComposer?.connectionChanged();}
-  if(["model_changed","permission_mode_changed","effort_changed"].includes(event.type)){applyConnectionState(d);renderConnection(active.connection);}
+  if(["model_changed","permission_mode_changed","effort_changed","control_restore_changed"].includes(event.type)){applyConnectionState(d);renderConnection(active.connection);}
   if(event.type==="verification"){active.verification=d;renderVerification();}
   if(event.type==="choice"){if(!answeredChoices.has(`${active.id}:${d.id}`))active.choice=d;renderWorkspaceChoice();}
   if(event.type==="choice_closed"){const id=d.id||d.choiceId;answeredChoices.add(`${active.id}:${id}`);if(active.choice?.id===id)active.choice=null;renderWorkspaceChoice();}
@@ -421,8 +424,14 @@ async function submit(){
     return;
   }
   if(!active)return chooseFolder();if(!active.trusted)return chooseFolder(true);
+  if(controlRestoreState()){
+    saveDraft();
+    if(globalThis.WorkspaceInlineControls)await WorkspaceInlineControls.recover();
+    else toast("전송 전에 모델·Effort·승인 모드 선택을 확인해 주세요. 작성한 요청은 유지됩니다.");
+    return;
+  }
   if(globalThis.WorkspaceComposer?.beforeSubmit()===false)return;
-  const sid=active.id,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
+  const sid=active.id,ticket=selectionGeneration,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
   $("conversation").querySelector(".conversation-empty")?.remove();
   const pending=renderMessage({role:"user",text,files,pending:true});pending.classList.add("pending");pending.querySelector(".message-label").textContent="전송 중";globalThis.WorkspaceStream?.jump();
   try{
@@ -431,7 +440,15 @@ async function submit(){
     if(active?.id===sid){$("prompt").value="";attachments=[];renderAttachments();await refreshSessionMeta();}
     // Keep the existing event cursor and streamed text. Re-selecting here could
     // discard partial messages received before the POST acknowledgement.
-  }catch(e){pending.remove();error(e.message);}finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
+  }catch(e){
+    pending.remove();
+    if(e.code==="control_restore_required"&&globalThis.WorkspaceInlineControls){
+      if(active?.id===sid&&selectionGeneration===ticket&&!appClosed){
+        if(e.connection)applyConnectionState(e.connection);
+        saveDraft();WorkspaceInlineControls.restoreFailure(e.message);renderConnection(active.connection);
+      }
+    }else error(e.message);
+  }finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
 $("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{if(e.defaultPrevented||e.isComposing||e.keyCode===229)return;if(globalThis.WorkspaceComposer?.keydown(e))return;if(globalThis.WorkspaceInlineControls?.keydown(e))return;if(e.key==="Enter"&&(e.ctrlKey||e.metaKey)){e.preventDefault();return submit();}};
 $("folder-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();if(!$("trust").checked)return;const button=e.submitter,trustContext={id:active?.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};button.disabled=true;try{if($("folder-form").dataset.resume==="yes"){const id=active.id;await api("/api/trust",{id,trusted:true});if(active?.id!==id||selectionGeneration!==trustContext.generation||folderChoiceGeneration!==trustContext.folderGeneration)return;active.trusted=true;}else{const draft={text:$("prompt").value,attachments:[...attachments]},managed=$("folder-mode-new").checked;if(managed&&!managedRootChoice&&!boot.managedWorkspaceRoot)throw Error("새 업무를 저장할 위치를 먼저 선택해 주세요.");const item=await api("/api/create",{workspace:managed?undefined:$("folder-input").value,managed,managedRoot:managed?managedRootChoice||undefined:undefined,title:$("task-name").value.trim()||undefined,trusted:true});sessions.unshift(item);drafts.set(item.id,draft);await selectSession(item.id);drafts.delete("home");}$("folder-dialog").close();if($("folder-form").dataset.afterTrust==="choice"){renderWorkspaceChoice();toast("폴더 확인을 마쳤어요. 원하는 디자인을 선택해 주세요.");}else if($("folder-form").dataset.afterTrust==="commands"){await globalThis.WorkspaceComposer?.prepareConnection();}else if($("folder-form").dataset.afterTrust==="schedule"){globalThis.WorkspaceWorkflow?.openEditor("schedule");}else if($("folder-form").dataset.afterTrust==="workflow"){await globalThis.WorkspaceWorkflow?.resumeAfterTrust(trustContext);}else if($("folder-form").dataset.afterTrust==="controls"){await globalThis.WorkspaceInlineControls?.resumeAfterTrust();}else if($("prompt").value.trim())await submit();}catch(e){toast(e.message);}finally{button.disabled=false;}};
@@ -495,7 +512,7 @@ async function setEffort(effort){
   if(connectionLocked())return null;
   const info=active.connection||{};
   if(effort!==null&&(!info.capabilities?.setEffort||!effortOptions().some(item=>item.value===effort)))return {ok:false,error:"현재 모델에서 지원하는 Effort 값을 선택해 주세요."};
-  if(effort===null&&!info.effortOverride)return {ok:true,response:{alreadyInherited:true}};
+  if(effort===null&&!info.effortOverride&&!hasControlRestoreIssue("effort"))return {ok:true,response:{alreadyInherited:true}};
   if(effort===null&&info.effortResetAvailable===false)return {ok:false,error:"변경 전 Effort를 확인하지 못해 auto로 복원할 수 없어요. 지원하는 수준을 직접 선택해 주세요."};
   const id=active.id,ticket=selectionGeneration,stillCurrent=()=>active?.id===id&&selectionGeneration===ticket&&!appClosed;
   effortChanging=true;setStatus(active.state);
@@ -504,6 +521,17 @@ async function setEffort(effort){
     applyConnectionState(response);renderConnection(active.connection);return {ok:true,response};
   }catch(e){return stillCurrent()?{ok:false,error:e.message}:null;}
   finally{effortChanging=false;setStatus(active?.state||"idle");}
+}
+async function useCurrentControl(control){
+  if(connectionLocked()||!controlRestoreIssues().some(issue=>issue.control===control&&issue.canUseCurrent===true))return null;
+  const id=active.id,ticket=selectionGeneration,stillCurrent=()=>active?.id===id&&selectionGeneration===ticket&&!appClosed;
+  const changing=value=>{if(control==="model")modelChanging=value;else if(control==="effort")effortChanging=value;else permissionChanging=value;};
+  changing(true);setStatus(active.state);
+  try{
+    const response=await api("/api/control-restore",{id,control,action:"use_current"});if(!stillCurrent())return null;
+    applyConnectionState(response);renderConnection(active.connection);return {ok:true,response};
+  }catch(e){return stillCurrent()?{ok:false,error:e.message}:null;}
+  finally{changing(false);setStatus(active?.state||"idle");}
 }
 $("task-title").onclick=()=>{if(!active)return;$("rename-input").value=active.title;showDialog("rename-dialog");};
 async function updateSession(id,change){

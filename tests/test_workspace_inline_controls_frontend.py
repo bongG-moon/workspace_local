@@ -60,6 +60,172 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal(calls,0);assertDraft();
         })()""")
 
+    def test_blocked_restore_keeps_actual_catalog_available_without_repeated_connect_or_send(self):
+        self.run_case(r"""(async()=>{
+          active.connection=null;active.modelOverride='stale-model';const calls=[];
+          const models=[{value:'endpoint-z',displayName:'운영 Z',description:'첫 번째'},
+            {value:'endpoint-a',displayName:'운영 A',description:'두 번째'}];
+          const restore={status:'needs_input',canSend:false,issues:[{control:'effort',code:'effort_invalid',message:'이전 Effort를 다시 선택해 주세요.'}]};
+          api=async(path)=>{calls.push(path);assert.equal(path,'/api/connect');return {connection:{...connection(),model:'endpoint-z',availableModels:models,controlRestore:restore,effortResetAvailable:true}};};
+          await $('composer-model').onclick();
+          assert.equal(active.modelOverride,null);assert.equal(textFor('composer-model'),'운영 Z');
+          assert.equal(JSON.stringify([...$('runtime-panel-options').children].map(row=>row.dataset.runtimeValue)),JSON.stringify(['','endpoint-z','endpoint-a']));
+          assert.match(flatText(choose('운영 Z')),/첫 번째/);assert.match(flatText($('runtime-panel-extra')),/직접 입력/);
+          await $('composer-model').onclick();await $('composer-effort').onclick();
+          assert.equal(choose('high').disabled,false);assert.equal(choose('auto').disabled,false);
+          assert.match($('runtime-panel-note').textContent,/이전 Effort/);
+          await submit();await submit();
+          assert.equal(calls.join(','),'/api/connect');assert.equal($('composer-controls-panel').hidden,false);
+          assert.equal($('conversation').children.length,0);assert.equal(active.messages.length,0);assertDraft();
+          assert.equal(drafts.get('A').text,'작성 중 요청');assert.equal($('composer-effort').disabled,false);
+          assert.match($('composer-control-status').textContent,/이전 Effort/);
+        })()""")
+
+    def test_pending_effort_auto_reset_reaches_server_even_without_current_override(self):
+        self.run_case(r"""(async()=>{
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'이전 Effort 복원 필요'}]};
+          active.connection.effortResetAvailable=true;$('prompt').value='/effort auto';saveDraft();const calls=[];
+          api=async(path,body)=>{calls.push({path,body});return {session:{connection:{...connection(),controlRestore:null}}};};
+          await submit();
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/effort');assert.equal(calls[0].body.effort,null);
+          assert.equal(active.connection.controlRestore,null);assert.equal($('composer-control-status').dataset.error,'false');
+          assert.doesNotMatch($('composer-control-status').textContent,/복원 필요|이미 상속/);
+          assert.equal($('prompt').value,'');assert.equal(attachments.length,1);assert.equal(active.messages.length,0);
+        })()""")
+
+    def test_valid_effort_choice_resolves_restore_once_and_requires_manual_prompt_send(self):
+        self.run_case(r"""(async()=>{
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'이전 Effort 복원 필요'}]};
+          let finish;const calls=[];api=(path,body)=>{calls.push({path,body});return path==='/api/effort'?new Promise(resolve=>finish=resolve):Promise.resolve({ok:true});};
+          await submit();const choice=choose('high'),first=choice.onclick();await choice.onclick();await submit();
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/effort');assertDraft();
+          finish({session:{connection:{...connection(),effort:'high',effortOverride:'high',controlRestore:null}}});await first;
+          assert.equal(calls.length,1);assert.equal(active.connection.controlRestore,null);assertDraft();
+          assert.equal($('composer-control-status').dataset.error,'false');assert.equal($('conversation').children.length,0);
+          await submit();assert.equal(calls.map(row=>row.path).join(','),'/api/effort,/api/send');
+          assert.equal(calls[1].body.text,'작성 중 요청');assert.equal($('prompt').value,'');
+        })()""")
+
+    def test_rejected_restore_choice_preserves_error_and_event_resolution_clears_only_restore_notice(self):
+        self.run_case(r"""(async()=>{
+          const restore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'이전 Effort 복원 필요'}]};
+          handleEvent({type:'control_restore_changed',data:{...connection(),controlRestore:restore}});
+          await WorkspaceInlineControls.recover();api=async()=>{throw Error('회사 연결이 변경을 거절했어요.');};
+          await choose('high').onclick();
+          assert.equal(active.connection.controlRestore,restore);assert.match($('runtime-panel-error').textContent,/변경을 거절/);
+          assert.match($('composer-control-status').textContent,/변경을 거절/);assert.equal(choose('high').disabled,false);assertDraft();
+          error('별도의 파일 오류');
+          handleEvent({type:'control_restore_changed',data:{...connection(),controlRestore:null}});
+          assert.equal(active.connection.controlRestore,null);assert.equal($('composer-control-status').dataset.error,'false');
+          assert.doesNotMatch($('composer-control-status').textContent,/변경을 거절|복원 필요/);
+          assert.equal($('runtime-panel-error').hidden,true);assert.doesNotMatch($('runtime-panel-note').textContent,/복원 필요/);
+          assert.equal($('error-banner').textContent,'별도의 파일 오류');assertDraft();
+        })()""")
+
+    def test_partial_restore_keeps_next_issue_actionable_without_changing_permission(self):
+        self.run_case(r"""(async()=>{
+          const effortIssue={control:'effort',message:'새 모델에서 Effort를 선택해 주세요.'};
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'model',message:'모델을 선택해 주세요.'},effortIssue]};
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {session:{connection:{...connection(),model:'company-next',modelOverride:'company-next',controlRestore:{status:'needs_input',canSend:false,issues:[effortIssue]}}}};};
+          await submit();await choose('회사 모델').onclick();
+          assert.equal(calls.map(row=>row.path).join(','),'/api/model');assert.match($('composer-control-status').textContent,/새 모델에서 Effort/);
+          const action=$('composer-control-status').children[0];assert.equal(action.tagName,'BUTTON');await action.onclick();
+          assert.equal($('runtime-panel-title').textContent,'Effort · 사고 수준');assert.equal(choose('high').disabled,false);
+          assert.equal(active.connection.permissionMode,'default');assert.equal(active.messages.length,0);assertDraft();
+        })()""")
+
+    def test_late_typed_send_block_keeps_draft_and_uses_recovery_instead_of_reconnect(self):
+        self.run_case(r"""(async()=>{
+          const restore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'Effort를 선택해 주세요.'}]};
+          let sends=0;fetch=async(path)=>{assert.equal(path,'/api/send');sends++;return {ok:false,json:async()=>({error:'이전 선택을 확인해 주세요.',code:'control_restore_required',connection:{...connection(),controlRestore:restore}})};};
+          await submit();await submit();
+          assert.equal(sends,1);assert.equal(active.connection.controlRestore.status,'needs_input');
+          assert.equal($('conversation').children.length,0);assert.equal($('error-banner').hidden,true);
+          assert.match($('composer-control-status').textContent,/이전 선택|Effort/);assert.equal($('recovery-actions').hidden,true);assertDraft();
+        })()""")
+
+    def test_late_send_block_after_task_roundtrip_cannot_replace_fresh_connection(self):
+        self.run_case(r"""(async()=>{
+          let reject;api=()=>new Promise((resolve,fail)=>reject=fail);const request=submit();
+          selectionGeneration++;active={...active,id:'B'};selectionGeneration++;
+          active={...active,id:'A',connection:{...connection(),model:'fresh-model',controlRestore:null}};
+          $('prompt').value='새로운 A 요청';attachments=['fresh.csv'];error('유지할 오류');
+          reject(Object.assign(Error('오래된 복원 오류'),{code:'control_restore_required',connection:{...connection(),controlRestore:{status:'needs_input',canSend:false,issues:[{control:'effort',message:'오래된 복원 오류'}]}}}));
+          await request;assert.equal(active.connection.model,'fresh-model');assert.equal(active.connection.controlRestore,null);
+          assert.equal($('prompt').value,'새로운 A 요청');assert.equal(attachments[0],'fresh.csv');
+          assert.equal($('error-banner').textContent,'유지할 오류');assert.doesNotMatch($('composer-control-status').textContent,/오래된 복원 오류/);
+        })()""")
+
+    def test_restore_reset_unavailable_stays_blocked_and_preserves_command(self):
+        self.run_case(r"""(async()=>{
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'Effort 선택 필요'}]};
+          active.connection.effortResetAvailable=false;let calls=0;api=async()=>{calls++;};
+          await $('composer-effort').onclick();assert.equal(choose('auto').disabled,true);assert.equal(choose('high').disabled,false);
+          $('prompt').value='/effort auto';await submit();assert.equal(calls,0);assert.equal($('prompt').value,'/effort auto');
+          assert.match($('composer-control-status').textContent,/복원할 수 없어요/);assert.equal(attachments.length,1);
+        })()""")
+
+    def test_restore_metadata_replaces_stale_effort_choices_without_reconnecting(self):
+        self.run_case(r"""(async()=>{
+          let calls=0;api=async()=>{calls++;};await $('composer-effort').onclick();choose('medium').focus();
+          handleEvent({type:'control_restore_changed',data:{...connection(),availableEfforts:[{value:'high'}],
+            controlRestore:{status:'needs_input',canSend:false,issues:[{control:'effort',message:'현재 모델에서 high를 선택해 주세요.'}]}}});
+          assert.equal(choose('medium'),undefined);assert.equal(choose('high').disabled,false);
+          assert.match($('runtime-panel-note').textContent,/현재 모델에서 high/);assert.equal(calls,0);assertDraft();
+          await $('composer-model').onclick();const input=$('runtime-panel-extra').querySelector('input');input.value='typed-company-model';input.focus();
+          handleEvent({type:'control_restore_changed',data:{...connection(),controlRestore:null}});
+          const current=$('runtime-panel-extra').querySelector('input');assert.equal(current.value,'typed-company-model');assert.equal(document.activeElement,current);
+          assert.equal(calls,0);assertDraft();
+        })()""")
+
+    def test_unsupported_effort_can_explicitly_accept_current_cli_value_without_resend(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setEffort=false;active.connection.effortResetAvailable=false;
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'effort',message:'Effort 변경을 지원하지 않아요.',canUseCurrent:true,currentValue:'medium'}]};
+          let finish;const calls=[];api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>finish=resolve);};
+          await submit();assert.equal(calls.length,0);assert.equal(choose('auto').disabled,true);assert.equal(choose('high').disabled,true);
+          const useCurrent=$('runtime-panel-extra').children.find(node=>node.textContent.startsWith('현재 CLI 값 사용'));
+          assert.match(useCurrent.textContent,/medium/);const first=useCurrent.onclick();await useCurrent.onclick();await submit();
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/control-restore');
+          assert.equal(JSON.stringify(calls[0].body),JSON.stringify({id:'A',control:'effort',action:'use_current'}));assertDraft();
+          finish({connection:{...connection(),capabilities:{...connection().capabilities,setEffort:false},controlRestore:null}});await first;
+          assert.equal(active.connection.controlRestore,null);assert.equal(active.connection.effort,'medium');assertDraft();
+          assert.equal(calls.length,1);assert.equal($('composer-controls-panel').hidden,true);
+          assert.equal($('composer-control-status').dataset.error,'false');assert.match($('composer-control-status').textContent,/전송하지 않았어요/);
+        })()""")
+
+    def test_accept_current_rejection_keeps_recovery_and_draft_until_acknowledged(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setModel=false;
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'model',message:'모델 변경 미지원',canUseCurrent:true,currentValue:'original'}]};
+          api=async()=>{throw Error('현재 값을 다시 확인해 주세요.');};await submit();
+          await $('runtime-panel-extra').children.find(node=>node.textContent.startsWith('현재 CLI 값 사용')).onclick();
+          assert.equal(active.connection.controlRestore.status,'needs_input');assert.equal($('composer-controls-panel').hidden,false);
+          assert.match($('runtime-panel-error').textContent,/다시 확인/);assert.match($('composer-control-status').textContent,/다시 확인/);assertDraft();
+        })()""")
+
+    def test_current_permission_acceptance_is_not_offered_without_server_authorization(self):
+        self.run_case(r"""(async()=>{
+          active.connection.controlRestore={status:'needs_input',canSend:false,issues:[{control:'permissionMode',message:'승인 모드 확인 필요',canUseCurrent:false,currentValue:'bypassPermissions'}]};
+          let calls=0;api=async()=>{calls++;};await submit();
+          assert.equal($('runtime-panel-title').textContent,'승인 모드');
+          assert.doesNotMatch(flatText($('runtime-panel-extra')),/현재 CLI 값 사용/);
+          assert.equal(await useCurrentControl('permissionMode'),null);assert.equal(calls,0);
+          assert.equal(active.connection.permissionMode,'default');assertDraft();
+        })()""")
+
+    def test_stale_current_value_ack_cannot_clear_another_tasks_restore_or_draft(self):
+        self.run_case(r"""(async()=>{
+          const restore={status:'needs_input',canSend:false,issues:[{control:'model',message:'모델 확인 필요',canUseCurrent:true,currentValue:'original'}]};
+          active.connection.controlRestore=restore;let finish;api=()=>new Promise(resolve=>finish=resolve);await submit();
+          const request=$('runtime-panel-extra').children.find(node=>node.textContent.startsWith('현재 CLI 값 사용')).onclick();
+          selectionGeneration++;active={...active,id:'B',connection:{...connection(),controlRestore:restore}};$('prompt').value='B 요청';attachments=['B.csv'];
+          finish({connection:{...connection(),controlRestore:null}});await request;
+          assert.equal(active.id,'B');assert.equal(active.connection.controlRestore,restore);
+          assert.equal($('prompt').value,'B 요청');assert.equal(attachments[0],'B.csv');assert.equal($('composer-controls-panel').hidden,true);
+          assert.doesNotMatch($('composer-control-status').textContent,/현재 CLI 값을 사용합니다/);
+        })()""")
+
     def test_effort_command_uses_session_control_before_send_and_preserves_files(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='/effort high';saveDraft();let reply,call;

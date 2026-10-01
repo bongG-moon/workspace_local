@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import uuid
 import webbrowser
 
-from .bridge import ClaudeSession, HIDDEN, probe_cli, resolve_cli, runtime_context
+from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .session_order import SessionOrder
@@ -38,7 +38,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.1"
+WORKSPACE_VERSION = "0.21.2"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -317,7 +317,7 @@ class LocalApp:
                 connection['modelOverride'] = None
                 connection['permissionModeOverride'] = None
                 connection['effortOverride'] = None
-            connection.update(capabilities=capabilities, connected=live)
+            connection.update(capabilities=capabilities, connected=live, controlRestore=item.get('_controlRestore'))
         if not live:
             result['modelOverride'] = None
             result['permissionModeOverride'] = None
@@ -594,13 +594,16 @@ class LocalApp:
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
                 raise ValueError('업무를 한 번 실행해 연결한 뒤, 다음 요청부터 사용할 모델을 선택해 주세요.')
             item['_modelUpdating'] = True
+            self._apply_control_baselines(item, bridge)
         try:
             # Bridge control responses may emit events: never hold the app lock while waiting.
             result = bridge.set_model(model.strip() if isinstance(model, str) else None)
             with self.lock:
                 item['modelOverride'] = result.get('modelOverride')
                 self._remember_control(item, 'model', result.get('modelOverride'))
-                return {'ok': True, 'modelOverride': item['modelOverride'], 'session': self.public(item)}
+            self._control_selected(item, bridge, 'model')
+            with self.lock:
+                return {'ok': True, 'modelOverride': item['modelOverride'], 'controlRestore': item.get('_controlRestore'), 'session': self.public(item)}
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
@@ -616,12 +619,15 @@ class LocalApp:
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
                 raise ValueError('업무 연결이 준비된 뒤 추론 수준을 선택해 주세요.')
             item['_modelUpdating'] = True
+            self._apply_control_baselines(item, bridge)
         try:
             result = bridge.set_effort(effort)
             with self.lock:
                 item.setdefault('connection', {}).update(result)
                 self._remember_control(item, 'effort', result.get('effortOverride'))
-                return {**result, 'ok': True, 'session': self.public(item)}
+            self._control_selected(item, bridge, 'effort')
+            with self.lock:
+                return {**bridge.model_state(), 'ok': True, 'controlRestore': item.get('_controlRestore'), 'session': self.public(item)}
         except (ValueError, OSError):
             with self.lock:
                 self.emit(sid, 'effort_changed', bridge.model_state())
@@ -644,13 +650,11 @@ class LocalApp:
                 raise ValueError('업무 연결이 준비된 뒤 승인 모드를 선택해 주세요.')
             item['_modelUpdating'] = True
             previous_state = item['state']
+            self._apply_control_baselines(item, bridge)
         try:
             if mode == 'bypassPermissions' and not getattr(bridge, 'allow_bypass_permissions', False):
                 if not bridge.model_state().get('bypassPermissions', {}).get('available'):
                     raise ValueError('현재 Claude 연결은 Bypass 선택을 지원하지 않습니다.')
-                baseline_model = bridge.original_model
-                baseline_permission = bridge.original_permission_mode
-                baseline_efforts = dict(bridge._effort_baselines)
                 with self.lock:
                     item['bridge'] = None
                 if bridge.close() is not True:
@@ -667,18 +671,18 @@ class LocalApp:
                         allow_bypass_permissions=True)
                     item['bridge'] = bridge
                     item['_needsControlRestore'] = bool(item.get('_sessionControls'))
+                    item['_pendingControlRestore'] = set(item.get('_sessionControls', {}))
                 bridge.prepare()
-                with bridge.lock:
-                    bridge.original_model = baseline_model
-                    bridge.original_permission_mode = baseline_permission
-                    bridge._effort_baselines.update(baseline_efforts)
+                self._apply_control_baselines(item, bridge)
                 self._restore_controls(item, bridge)
             result = bridge.set_permission_mode(mode)
             with self.lock:
                 item.setdefault('connection', {}).update(result)
                 item['permissionModeOverride'] = result.get('permissionModeOverride')
                 self._remember_control(item, 'permissionMode', result.get('permissionMode') if mode is not None else None)
-                return {**result, 'ok': True, 'session': self.public(item)}
+            self._control_selected(item, bridge, 'permissionMode')
+            with self.lock:
+                return {**bridge.model_state(), 'ok': True, 'controlRestore': item.get('_controlRestore'), 'session': self.public(item)}
         except (ValueError, OSError):
             with self.lock:
                 state = bridge.model_state()
@@ -723,6 +727,7 @@ class LocalApp:
             if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
                 raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.')
             if bridge is None or bridge.closed:
+                self._capture_control_baselines(item, bridge)
                 if not self.connection_capacity_available(item):
                     raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
                 resume_options = self._resume_options(item)
@@ -734,11 +739,14 @@ class LocalApp:
                 item['permissionModeOverride'] = None
                 item.pop('connection', None)
                 item['_needsControlRestore'] = bool(item.get('_sessionControls'))
+                item['_pendingControlRestore'] = set(item.get('_sessionControls', {}))
+                item['_controlRestoreIssues'] = {}
             item['_connecting'] = True
         try:
             # Reader events need the app lock. Never hold it while waiting for
             # initialization, and never create a synthetic conversation turn.
             bridge.prepare()
+            self._apply_control_baselines(item, bridge)
             # Make the real, prepared state visible if a previously selected
             # mode is no longer available. No business request is sent until
             # every remembered selection has been acknowledged again.
@@ -763,23 +771,124 @@ class LocalApp:
         # private field, so personal Claude settings and restart defaults stay
         # owned by the CLI.
         choices = item.setdefault('_sessionControls', {})
-        if value is None:
-            choices.pop(name, None)
-        else:
-            choices[name] = value
+        # None is an explicit reset to the app-lifetime observed baseline, not
+        # permission to inherit the last completed turn of a resumed process.
+        choices[name] = value
 
-    def _restore_controls(self, item, bridge):
+    @staticmethod
+    def _capture_control_baselines(item, bridge):
+        if bridge is None:
+            return
+        baseline = item.setdefault('_controlBaselines', {})
+        for name, attr in (('model', 'original_model'), ('permissionMode', 'original_permission_mode')):
+            value = getattr(bridge, attr, None)
+            if isinstance(value, str) and value:
+                baseline.setdefault(name, value)
+        efforts = baseline.setdefault('efforts', {})
+        for model, value in getattr(bridge, '_effort_baselines', {}).items():
+            efforts.setdefault(model, value)
+
+    def _apply_control_baselines(self, item, bridge):
+        with self.lock:
+            baseline = item.get('_controlBaselines', {})
+            for name, attr in (('model', 'original_model'), ('permissionMode', 'original_permission_mode')):
+                if name in baseline:
+                    setattr(bridge, attr, baseline[name])
+            if hasattr(bridge, '_effort_baselines'):
+                bridge._effort_baselines.update(baseline.get('efforts', {}))
+            self._capture_control_baselines(item, bridge)
+
+    def _publish_control_restore(self, item, bridge):
+        with self.lock:
+            if item.get('bridge') is not bridge:
+                return
+            issues = item.get('_controlRestoreIssues', {})
+            actual = bridge.model_state()
+            can_accept = getattr(bridge, 'can_accept_current_control', lambda name: False)
+            state = {'status': 'needs_input', 'issues': [dict(issues[name],
+                     canUseCurrent=can_accept(name), currentValue=actual.get(name)) for name in
+                     ('model', 'effort', 'permissionMode') if name in issues], 'canSend': False} if issues else None
+            changed = item.get('_controlRestore') != state
+            item['_controlRestore'] = state
+            item['_needsControlRestore'] = bool(item.get('_pendingControlRestore'))
+            if changed:
+                self.emit(item['id'], 'control_restore_changed', bridge.model_state())
+
+    def accept_current_control(self, sid, control, action):
+        if action != 'use_current' or control not in {'model', 'effort', 'permissionMode'}:
+            raise ValueError('확인할 현재 CLI 설정을 선택해 주세요.')
+        with self.lock:
+            item = self.get(sid)
+            if (item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating')
+                    or item.get('_connecting') or item.get('_dispatchClaim')):
+                raise ValueError('현재 업무와 연결 준비가 끝난 뒤 설정을 확인해 주세요.')
+            bridge = item.get('bridge')
+            if (not item.get('trusted') or not bridge or bridge.closed
+                    or control not in item.get('_controlRestoreIssues', {})):
+                raise ValueError('현재 연결에서 확인이 필요한 설정을 선택해 주세요.')
+            item['_modelUpdating'] = True
+        try:
+            bridge.accept_current_control(control)
+            with self.lock:
+                # The user explicitly abandons this stale selection only. No
+                # inherited value or other control becomes a new override.
+                item.get('_sessionControls', {}).pop(control, None)
+            self._control_selected(item, bridge, control)
+            with self.lock:
+                session = self.public(item)
+                return {'ok': True, 'connection': session['connection'], 'session': session}
+        finally:
+            with self.lock:
+                item['_modelUpdating'] = False
+
+    def _control_selected(self, item, bridge, name):
+        with self.lock:
+            self._capture_control_baselines(item, bridge)
+            pending = item.setdefault('_pendingControlRestore', set())
+            pending.discard(name)
+            item.setdefault('_controlRestoreIssues', {}).pop(name, None)
+            # A new model ACK can change the advertised effort choices. Only
+            # that dependent control is retried; unrelated rejected choices
+            # remain pending until the user addresses them explicitly.
+            if name == 'model' and 'effort' in item.get('_sessionControls', {}):
+                pending.add('effort')
+                item['_needsControlRestore'] = True
+        if name == 'model':
+            self._restore_controls(item, bridge, only={'effort'})
+        self._publish_control_restore(item, bridge)
+
+    def _restore_controls(self, item, bridge, *, only=None):
         with self.lock:
             if not item.get('_needsControlRestore'):
                 return
             choices = dict(item.get('_sessionControls', {}))
+            pending = item.setdefault('_pendingControlRestore', set(choices))
+        actionable = {'model_invalid', 'model_rejected', 'model_unavailable',
+                      'effort_invalid', 'effort_rejected', 'effort_reset_unavailable', 'effort_unavailable',
+                      'permission_mode_invalid', 'permission_mode_rejected', 'permission_mode_unavailable',
+                      'permission_mode_reset_unavailable', 'bypass_opt_in_required'}
         for name, apply in (('model', bridge.set_model), ('effort', bridge.set_effort),
                             ('permissionMode', bridge.set_permission_mode)):
-            if name in choices:
+            if name not in pending or name not in choices or (only is not None and name not in only):
+                continue
+            if name == 'effort' and 'model' in pending:
+                continue
+            try:
                 apply(choices[name])
-        with self.lock:
-            if item.get('bridge') is bridge and not bridge.closed:
-                item['_needsControlRestore'] = False
+            except BridgeError as exc:
+                process = getattr(bridge, 'process', None)
+                if (exc.code not in actionable or bridge.closed or getattr(bridge, 'stopping', False)
+                        or (process is not None and process.poll() is not None)):
+                    raise
+                with self.lock:
+                    item.setdefault('_controlRestoreIssues', {})[name] = {
+                        'control': name, 'code': exc.code, 'message': str(exc)}
+            else:
+                with self.lock:
+                    pending.discard(name)
+                    item.setdefault('_controlRestoreIssues', {}).pop(name, None)
+                    self._capture_control_baselines(item, bridge)
+        self._publish_control_restore(item, bridge)
 
     def _emit_bridge(self, sid, bridge, kind, data):
         # A retired child's delayed status/init must not change a replacement
@@ -820,6 +929,8 @@ class LocalApp:
     def emit(self, sid, kind, data):
         with self.lock:
             item = self.get(sid)
+            if kind in {'connected', 'model_changed', 'effort_changed', 'permission_mode_changed', 'control_restore_changed'}:
+                data = dict(data, controlRestore=item.get('_controlRestore'))
             if kind in {'assistant', 'assistant_delta', 'queued_user'}:
                 data = dict(data, runId=item.get('lastRunId'))
             if kind == 'execution':
@@ -884,7 +995,7 @@ class LocalApp:
             elif kind == 'permission_mode_changed':
                 item.setdefault('connection', {}).update(data)
                 item['permissionModeOverride'] = data.get('permissionModeOverride')
-            elif kind == 'effort_changed':
+            elif kind in {'effort_changed', 'control_restore_changed'}:
                 item.setdefault('connection', {}).update(data)
                 item['modelOverride'] = data.get('modelOverride')
                 item['permissionModeOverride'] = data.get('permissionModeOverride')
@@ -969,12 +1080,16 @@ class LocalApp:
                 raise ValueError('현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.')
             self._validate_choice_claim(current, _choice_claim)
             old_bridge = current.get('bridge')
+            if current.get('_controlRestore') and old_bridge is not None and not old_bridge.closed:
+                raise ControlRestoreRequired(connection=self.public(current)['connection'])
             restore = (not self.demo and bool(current.get('_sessionControls'))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
         if restore:
             self.connect(sid, _dispatch_claim=_dispatch_claim)
         with self.lock:
             item = self.get(sid)
+            if item.get('_controlRestore'):
+                raise ControlRestoreRequired(connection=self.public(item)['connection'])
             if item.get('_dispatchClaim') != _dispatch_claim:
                 raise ValueError('대기 요청을 전송하고 있습니다. 잠시 후 다시 보내 주세요.')
             if sid in self.dispatch.steering or (getattr(item.get('bridge'), 'stopping', False) is True
@@ -1361,6 +1476,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload['code'] = exc.code
             if getattr(exc, 'next_action', None):
                 payload['nextAction'] = exc.next_action
+            if isinstance(exc, ControlRestoreRequired) and exc.connection is not None:
+                payload['connection'] = exc.connection
             return self.reply(payload, 409 if isinstance(exc, AppClosing) else 400)
 
     def upload_attachment(self):
@@ -1401,6 +1518,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.reconnect(sid))
         if route == '/api/connect':
             return self.reply(app.connect(sid))
+        if route == '/api/control-restore':
+            return self.reply(app.accept_current_control(sid, data.get('control'), data.get('action')))
         if route == '/api/window/hide':
             return self.reply(app.hide_window())
         if route == '/api/window/open':

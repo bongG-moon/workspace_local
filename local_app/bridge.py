@@ -31,6 +31,15 @@ class BridgeError(ValueError):
         self.code, self.next_action = code, next_action
 
 
+class ControlRestoreRequired(BridgeError):
+    """Remembered controls need input; the business prompt was never submitted."""
+    def __init__(self, message=None, *, connection=None):
+        super().__init__('control_restore_required',
+                         message or '이전 선택을 현재 연결에 적용하지 못했습니다. 모델·추론 수준·승인 모드를 확인한 뒤 다시 보내 주세요.',
+                         '현재 연결에서 제공한 설정 선택')
+        self.connection = connection
+
+
 def resolve_cli(value: str | None = None) -> list[str]:
     """Resolve only the active user's PATH/explicit selection; never scan profiles."""
     explicit = value or os.environ.get("COMPANY_AGENT_CLAUDE")
@@ -229,6 +238,7 @@ class ClaudeSession:
     def _read_runtime_settings(self):
         """Read only applied model/effort; raw config is never retained/exposed."""
         self._runtime_settings_checked = True
+        self._runtime_settings_error = None
         if not any(isinstance(row, dict) and isinstance(row.get('supportedEffortLevels'), list)
                    for row in self.available_models):
             return False
@@ -240,8 +250,15 @@ class ClaudeSession:
             self._write({'type': 'control_request', 'request_id': rid,
                          'request': {'subtype': 'get_settings'}})
             if not waiter['event'].wait(CONTROL_TIMEOUT):
+                self._runtime_settings_error = 'runtime_settings_timeout'
                 return False
             response = waiter['response']
+            if self.closed or response is None:
+                self._runtime_settings_error = 'connection_closed'
+                return False
+            if response.get('subtype') != 'success' and self._auth_error(str(response.get('error', ''))):
+                self._runtime_settings_error = 'authentication_failed'
+                return False
             detail = response.get('response') if isinstance(response, dict) and response.get('subtype') == 'success' else None
             applied = detail.get('applied') if isinstance(detail, dict) else None
             if not isinstance(applied, dict):
@@ -268,6 +285,44 @@ class ClaudeSession:
 
     def _permission_available_modes(self):
         return [mode for mode in self._permission_modes if mode not in self._permission_rejected_modes]
+
+    def _raise_runtime_settings_error(self):
+        code = getattr(self, '_runtime_settings_error', None)
+        if code:
+            self.close()
+            raise BridgeError(code, '현재 CLI 설정 응답을 확인하지 못했습니다. 연결과 인증 상태를 확인한 뒤 다시 시도해 주세요.', '연결과 인증 상태 확인')
+
+    def _raise_control_auth_error(self, error):
+        if self._auth_error(error):
+            self.close()
+            raise BridgeError('authentication_failed', '현재 CLI 인증을 확인하지 못했습니다. 기존 Claude 실행 환경의 인증 상태를 확인해 주세요.', '기존 Claude 인증 상태 확인')
+
+    def can_accept_current_control(self, control):
+        if self.closed or not self._initialized:
+            return False
+        if control == 'model':
+            return bool(self.model)
+        if control == 'effort':
+            return bool(self._effort_reported)
+        if control == 'permissionMode':
+            # This recovery action never substitutes for the bypass warning.
+            return bool(self.permission_mode and self.permission_mode != BYPASS_MODE
+                        and self._permission_source != 'unreported')
+        return False
+
+    def accept_current_control(self, control):
+        """Explicitly accept observed CLI state; no CLI request or settings write."""
+        with self.lock:
+            if self.busy or self.pending or self._control_active:
+                raise BridgeError('session_busy', '현재 업무와 확인 요청이 끝난 뒤 설정을 확인해 주세요.', '작업 완료 기다리기')
+            if (not self.can_accept_current_control(control) or not self.process
+                    or self.process.poll() is not None or self.stopping):
+                raise BridgeError('control_current_unavailable', '현재 CLI 값을 확인하지 못해 이전 선택을 유지했습니다.', '연결과 현재 설정 확인')
+            attr = {'model': 'model_override', 'effort': 'effort_override', 'permissionMode': 'permission_mode_override'}[control]
+            setattr(self, attr, None)
+            state = self.model_state()
+        self.emit({'model': 'model_changed', 'effort': 'effort_changed', 'permissionMode': 'permission_mode_changed'}[control], state)
+        return state
 
     def _read_runtime_inventory(self):
         """SDK read control only. Never manufacture a prompt to obtain init tools."""
@@ -377,6 +432,7 @@ class ClaudeSession:
                 raise BridgeError("connection_closed", "모델을 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
             if response.get("subtype") != "success":
                 error = str(response.get("error", "")).casefold()
+                self._raise_control_auth_error(error)
                 if any(word in error for word in ("unsupported", "unknown request", "unknown subtype")):
                     self._model_control_supported = False
                 raise BridgeError("model_rejected", "현재 연결에서 모델 변경이 거절되었습니다. 회사에서 사용할 수 있는 모델 이름과 연결 상태를 확인해 주세요.", "모델 이름과 연결 확인")
@@ -385,6 +441,7 @@ class ClaudeSession:
                 self.effort, self._effort_reported = None, False
                 self._effort_source = 'unreported'
             self._read_runtime_settings()
+            self._raise_runtime_settings_error()
             with self.lock:
                 state = self.model_state()
             self.emit("model_changed", state)
@@ -411,14 +468,13 @@ class ClaudeSession:
         rid = None
         try:
             if effort is None:
-                if self.effort_override is None:
-                    return self.model_state()
                 selected = self._effort_baselines.get(self.model)
                 if selected not in self._effort_available_levels():
                     raise BridgeError('effort_reset_unavailable', '현재 모델의 변경 전 추론 수준을 확인하지 못해 복원하지 않았습니다. 다른 모델·승인 설정은 유지합니다.', '현재 연결에서 제공한 추론 수준 선택')
             else:
                 selected = effort
             if not self._read_runtime_settings() or self._ultracode_requested is None:
+                self._raise_runtime_settings_error()
                 raise BridgeError('effort_unavailable', '현재 CLI가 실제 추론 설정을 제공하지 않아 안전하게 변경할 수 없습니다.', '원본 CLI에서 확인')
             if not self.capabilities['setEffort'] or selected not in self._effort_available_levels():
                 raise BridgeError('effort_invalid', '현재 모델에서 제공한 추론 수준을 선택해 주세요.', '모델과 추론 수준 확인')
@@ -438,12 +494,14 @@ class ClaudeSession:
                 raise BridgeError('connection_closed', '추론 수준을 변경하기 전에 업무 연결이 종료되었습니다.', '다음 요청으로 다시 연결')
             if response.get('subtype') != 'success':
                 error = str(response.get('error', '')).casefold()
+                self._raise_control_auth_error(error)
                 if any(word in error for word in ('unsupported', 'unknown request', 'unknown subtype')):
                     self._effort_control_supported = False
                 raise BridgeError('effort_rejected', '현재 연결에서 추론 수준 변경이 거절되었습니다. 기존 설정을 유지합니다.', '회사 정책과 연결 상태 확인')
             self.effort, self._effort_reported = None, False
             self._effort_source = 'unreported'
             if not self._read_runtime_settings():
+                self._raise_runtime_settings_error()
                 self.close()
                 raise BridgeError('effort_unconfirmed', '변경 후 실제 추론 수준을 확인하지 못해 연결을 종료했습니다. 다음 요청은 기존 설정을 사용합니다.', '다음 요청으로 다시 연결')
             with self.lock:
@@ -502,6 +560,7 @@ class ClaudeSession:
                 raise BridgeError("connection_closed", "승인 모드를 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
             if response.get("subtype") != "success":
                 error = str(response.get("error", "")).casefold()
+                self._raise_control_auth_error(error)
                 with self.lock:
                     self._permission_rejected_modes.add(selected)
                     if any(word in error for word in ("unknown request", "unknown subtype", "unsupported control")):
@@ -605,6 +664,7 @@ class ClaudeSession:
                 raise ValueError("명령 목록을 준비하는 동안 CLI 연결이 종료되었습니다. 기존 Claude 실행 환경을 확인해 주세요.")
             if not self._runtime_settings_checked:
                 self._read_runtime_settings()
+                self._raise_runtime_settings_error()
             self._read_runtime_inventory()
             return self.connection_state()
         except Exception:

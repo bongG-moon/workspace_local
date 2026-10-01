@@ -103,6 +103,59 @@ class WorkQueueTests(unittest.TestCase):
         self.assertIsNone(self.claim())
         self.assertEqual('needs_review', self.queue.snapshot('task')['queue'][0]['state'])
 
+    def test_restore_preflight_preserves_unsent_request_until_explicit_resume(self):
+        first = self.add()
+        self.claim()
+        self.queue.defer_unsubmitted(first['id'])
+        snapshot = self.queue.snapshot('task')
+        self.assertEqual('control_restore_required', snapshot['reason'])
+        self.assertEqual('queued', snapshot['queue'][0]['state'])
+        self.assertEqual(first['text'], snapshot['queue'][0]['text'])
+        self.assertIsNone(snapshot['queue'][0]['runId'])
+        self.assertIsNone(self.claim())
+        self.queue.resume('task')
+        claimed = self.claim()
+        self.assertEqual(first['id'], claimed['id'])
+        self.assertIsNone(claimed['reason'])
+
+    def test_restore_preflight_cannot_requeue_submitted_or_uncertain_work(self):
+        first = self.add()
+        self.claim()
+        self.queue.dispatched(first['id'], 'real-run')
+        self.queue.defer_unsubmitted(first['id'])
+        self.assertEqual('submitted', self.queue.snapshot('task')['queue'][0]['state'])
+        self.queue.failed(first['id'])
+        self.queue.defer_unsubmitted(first['id'])
+        self.assertEqual('needs_review', self.queue.snapshot('task')['queue'][0]['state'])
+        self.assertEqual('delivery_unknown', self.queue.snapshot('task')['reason'])
+
+    def test_restore_preflight_preserves_stop_and_round_trips_without_corrupting_store(self):
+        first = self.add()
+        self.claim()
+        self.queue.pause('task', 'stopped')
+        self.queue.defer_unsubmitted(first['id'])
+        self.assertEqual('stopped', self.queue.snapshot('task')['reason'])
+        self.queue.pause('task', 'control_restore_required')
+        restarted = WorkQueue(self.root, clock=lambda: self.now)
+        self.assertIsNone(restarted.warning)
+        snapshot = restarted.snapshot('task')
+        self.assertEqual('restart', snapshot['reason'])
+        self.assertEqual('queued', snapshot['queue'][0]['state'])
+        self.assertEqual(first['id'], snapshot['queue'][0]['id'])
+
+    def test_scheduled_restore_preflight_preserves_one_occurrence(self):
+        schedule = self.schedule('daily')
+        self.now += 60
+        self.queue.tick()
+        claim = self.claim()
+        self.queue.defer_unsubmitted(claim['id'])
+        self.now += 86400
+        self.queue.tick()
+        snapshot = self.queue.snapshot('task')
+        self.assertEqual(1, len(snapshot['queue']))
+        self.assertEqual(schedule['id'], snapshot['queue'][0]['scheduleId'])
+        self.assertIsNone(self.claim())
+
     def test_trust_and_same_settings_are_rechecked_at_execution(self):
         self.add()
         self.assertIsNone(self.claim(state={**self.ready, 'trusted': False}))

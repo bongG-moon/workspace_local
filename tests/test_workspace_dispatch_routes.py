@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from local_app.server import LocalApp, Server
+from local_app.bridge import ControlRestoreRequired
 
 
 class Bridge:
@@ -169,6 +170,41 @@ class DispatchRoutesTests(unittest.TestCase):
         self.app.dispatch.pump()
         self.assertEqual([], self.bridge.sent)
         self.assertEqual('settings_changed', self.app.dispatch.snapshot(self.sid)['reason'])
+
+    def test_control_restore_preflight_preserves_queue_and_requires_explicit_recovery(self):
+        self.enqueue('preserved follow-up')
+        item = self.app.get(self.sid)
+        item['_controlRestore'] = {'status': 'needs_input', 'canSend': False,
+                                   'issues': [{'control': 'effort', 'code': 'effort_invalid'}]}
+        with patch.object(self.app, 'send', side_effect=ControlRestoreRequired('설정을 확인해 주세요.')) as send:
+            self.app.dispatch.pump()
+            self.app.dispatch.pump()
+            self.assertEqual(1, send.call_count)
+        snapshot = self.app.dispatch.snapshot(self.sid)
+        self.assertEqual('control_restore_required', snapshot['reason'])
+        self.assertEqual('queued', snapshot['queue'][0]['state'])
+        self.assertEqual('preserved follow-up', snapshot['queue'][0]['text'])
+        self.assertEqual([], item['messages'])
+        self.assertEqual([], self.bridge.sent)
+        self.assertNotIn('_dispatchClaim', item)
+        self.assertEqual(400, self.request({'action': 'resume'})[0])
+        item.pop('_controlRestore')
+        item['_sessionControls'] = {'effort': 'medium'}
+        item['state'] = 'stopped'  # The replacement CLI is ready, without a prompt.
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+        self.assertEqual(200, self.request({'action': 'resume'})[0])
+        self.app.dispatch.pump()
+        self.assertEqual(['preserved follow-up'], self.bridge.sent)
+        self.assertEqual(1, len(item['messages']))
+
+    def test_untyped_delivery_error_still_requires_manual_review(self):
+        self.enqueue('uncertain follow-up')
+        with patch.object(self.app, 'send', side_effect=ValueError('control_restore_required')):
+            self.app.dispatch.pump()
+        snapshot = self.app.dispatch.snapshot(self.sid)
+        self.assertEqual('delivery_unknown', snapshot['reason'])
+        self.assertEqual('needs_review', snapshot['queue'][0]['state'])
 
 
 if __name__ == '__main__':

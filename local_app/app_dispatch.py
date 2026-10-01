@@ -6,6 +6,7 @@ import threading
 import time
 
 from .work_queue import WorkQueue
+from .bridge import ControlRestoreRequired
 
 
 class DispatchController:
@@ -40,6 +41,7 @@ class DispatchController:
                        'error': '현재 작업을 확인한 뒤 이어 실행해 주세요.',
                        'restart': '앱을 다시 열었습니다. 업무 폴더와 대기·예약 내용을 확인한 뒤 이어 실행해 주세요.',
                        'settings_changed': '모델·Effort·승인 설정이 바뀌었습니다. 이어 실행하면 대기 요청과 활성 예약에 현재 선택한 설정을 사용합니다.',
+                       'control_restore_required': '모델·Effort·승인 설정을 확인해 주세요. 요청은 아직 보내지 않았습니다. 설정을 고친 뒤 이어 실행하면 현재 선택한 설정을 사용합니다.',
                        'delivery_unknown': '전송 여부가 확실하지 않은 요청이 있습니다. 대화에서 결과를 확인한 뒤 대기 항목을 정리해 주세요.'}
             result['pauseReason'] = reasons.get(result.get('reason'), result.get('reason'))
             result['policy']['message'] = 'PC가 켜져 있고 앱이 실행 중일 때 동작합니다. 앱 재시작 후에는 내용을 확인하고 이어 실행해 주세요. 놓친 예약은 몰아서 실행하지 않습니다.'
@@ -127,6 +129,10 @@ class DispatchController:
                     self.app.send(sid, claim['text'], claim['attachments'], _dispatch_claim=claim['id'])
                     with self.app.lock:
                         self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
+                except ControlRestoreRequired:
+                    # This typed preflight error guarantees send() has not
+                    # appended or delivered any part of the queued request.
+                    self.queue.defer_unsubmitted(claim['id'])
                 except (ValueError, OSError, RuntimeError):
                     self.queue.failed(claim['id'])
                 finally:
@@ -199,11 +205,15 @@ class DispatchController:
             elif action == 'resume':
                 # Explicit re-confirmation adopts only app-selected controls.
                 current = self.queue.snapshot(sid)
-                if current['reason'] == 'settings_changed':
+                if item.get('_controlRestore'):
+                    raise ValueError('모델·Effort·승인 설정을 먼저 확인해 주세요. 대기 요청은 아직 보내지 않았습니다.')
+                if current['reason'] in {'settings_changed', 'control_restore_required'}:
                     self.queue.confirm_context(sid, self.context(item))
                 if item['state'] in {'error', 'stopped'}:
                     bridge = item.get('bridge')
-                    if bridge and getattr(bridge, 'cleanup_complete', False) is not True:
+                    restored = (current['reason'] == 'control_restore_required' and bridge is not None
+                                and not bridge.closed and not getattr(bridge, 'stopping', False))
+                    if bridge and getattr(bridge, 'cleanup_complete', False) is not True and not restored:
                         raise ValueError('이전 연결의 종료를 확인한 뒤 이어 실행해 주세요.')
                     item['state'] = 'idle'
                 self.queue.resume(sid)

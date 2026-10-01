@@ -282,6 +282,19 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           await WorkspaceWorkflow.saveEditor({preventDefault(){}});assert.equal(calls,0);
         })()""", ("workflow",))
 
+    def test_effort_command_cannot_be_saved_as_new_or_edited_scheduled_or_queued_prompt(self):
+        self.run_case(r"""(async()=>{
+          $('prompt').value='작성 중 업무';attachments=['data.csv'];let calls=0;api=async()=>{calls++;};
+          for(const [kind,item] of [['schedule',null],['schedule',{id:'s1',text:'이전 예약',kind:'daily',time:'09:00',attachments:['saved.csv']}],['queue',{id:'q1',text:'이전 요청',attachments:['saved.csv']}]]){
+            WorkspaceWorkflow.openEditor(kind,item);$('request-editor-text').value='  /effort high  ';
+            await WorkspaceWorkflow.saveEditor({preventDefault(){}});
+            assert.equal(calls,0);assert.equal($('request-editor-dialog').open,true);
+            assert.equal($('request-editor-text').value,'  /effort high  ');assert.match($('request-editor-error').textContent,/Effort를 변경/);
+            assert.equal($('prompt').value,'작성 중 업무');assert.equal(attachments[0],'data.csv');
+            assert.match($('request-editor-files').textContent,item?/saved.csv/:/data.csv/);
+          }
+        })()""", ("workflow",))
+
     def test_busy_ctrl_enter_queues_but_effort_keeps_its_control_semantics(self):
         self.run_case(r"""(async()=>{
           let calls=[];api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};

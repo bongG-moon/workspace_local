@@ -5,6 +5,7 @@ globalThis.WorkspaceInlineControls = (() => {
   const panel = $("composer-controls-panel"), options = $("runtime-panel-options"), extra = $("runtime-panel-extra");
   const buttons = {model:$("composer-model"), effort:$("composer-effort"), permission:$("composer-permission")};
   const titles = {model:"모델 선택", effort:"Effort · 사고 수준", permission:"승인 모드"};
+  const restoreKind = control => control === "permissionMode" ? "permission" : control;
   let view = null, pending = false, notice = null, trustReturn = null, preparation = null;
   const context = () => ({id:active?.id || null, selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
@@ -17,13 +18,18 @@ globalThis.WorkspaceInlineControls = (() => {
   }
   function status(text, isError=false, source=context()) {
     if (!same(source)) return;
-    notice = {...source,text,isError}; render();
+    notice = {...source,text,isError,restore:!!controlRestoreState()}; render();
   }
   function selectedOption(kind,value) {
     const info=active?.connection||{};
     if(kind==="permission")return value===null?!info.permissionModeOverride:permissionOptionValue(info.permissionMode||info.permissionModeOverride)===value;
     if(kind==="effort")return value===null?!info.effortOverride:(info.effortSupport==="confirmed"?info.effort:info.effortOverride||info.effort)===value;
     return value===null?!active?.modelOverride:(active?.modelOverride||info.modelOverride||info.model)===value;
+  }
+  function optionSignature() {
+    const info=active?.connection||{};
+    const choices=view?.kind==="model"?modelOptions():view?.kind==="effort"?effortOptions():permissionOptions();
+    return JSON.stringify([choices,info.capabilities,info.effortResetAvailable,info.permissionModeResetAvailable,info.controlRestore||null]);
   }
   function render() {
     const info = active?.connection || {};
@@ -38,6 +44,15 @@ globalThis.WorkspaceInlineControls = (() => {
       button.setAttribute("aria-expanded", String(view?.kind === kind && !panel.hidden));
     }
     if (view && (!same(view) || appClosed || (active && busyStates.has(active.state)))) close();
+    if(view&&!panel.hidden&&view.optionSignature&&view.optionSignature!==optionSignature()){
+      const input=extra.querySelector("input"),inputText=input?.value,inputFocused=input===document.activeElement;
+      const focused=[...options.children].find(button=>button===document.activeElement)?.dataset.runtimeValue;
+      const previousError=$("runtime-panel-error").textContent;
+      draw();
+      const replacement=extra.querySelector("input");if(replacement&&inputText!==undefined){replacement.value=inputText;if(inputFocused)replacement.focus();}
+      if(focused!==undefined)[...options.children].find(button=>button.dataset.runtimeValue===focused)?.focus();
+      if(previousError&&controlRestoreState())failure(previousError);
+    }
     // Metadata may arrive while this list is open. Update its checkmarks in
     // place so the current value agrees with the footer without losing focus
     // or text in the custom-model input.
@@ -45,11 +60,17 @@ globalThis.WorkspaceInlineControls = (() => {
       const selected=selectedOption(view.kind,button.dataset.runtimeValue||null);
       button.setAttribute("aria-pressed",String(selected));button.children[button.children.length-1].textContent=selected?"✓":"";
     }
+    if(same(notice)&&notice.restore&&!controlRestoreState())notice=null;
     const node = $("composer-control-status"), visibleNotice = same(notice) ? notice : null;
-    const changing = modelChanging || permissionChanging || effortChanging;
+    const changing = modelChanging || permissionChanging || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
+    const restoreText = restore ? (issue?.message || "이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.") : "";
     const text = connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
-      : visibleNotice?.text || (active && busyStates.has(active.state) ? "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
-    node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean(visibleNotice?.isError && !changing));
+      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
+    node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || visibleNotice?.isError) && !changing));
+    if (restore && !changing && !connectionPreparing) {
+      const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
+      button.disabled=blocked()||pending;button.onclick=()=>recover();node.append(button);
+    }
   }
   function message(text) { $("runtime-panel-note").textContent = text; }
   function failure(text) { $("runtime-panel-error").textContent = text; $("runtime-panel-error").hidden = !text; }
@@ -66,6 +87,7 @@ globalThis.WorkspaceInlineControls = (() => {
   }
   function draw() {
     if (!view || !same(view)) return close();
+    view.optionSignature=optionSignature();
     options.replaceChildren(); extra.replaceChildren(); failure("");
     $("runtime-panel-title").textContent = titles[view.kind];
     options.setAttribute("aria-label", titles[view.kind]);
@@ -77,7 +99,7 @@ globalThis.WorkspaceInlineControls = (() => {
     if (view.kind === "model") {
       const can = info.capabilities?.setModel === true;
       message(can ? "선택하면 이 업무 연결에 적용해요. 개인 기본 설정은 유지됩니다." : "현재 연결에서 모델 변경을 제공하지 않아요. 기존 모델을 사용합니다.");
-      option(null, "기존 설정 사용", "개인·회사 기본 모델을 상속합니다.", !active.modelOverride, can);
+      option(null, "기존 설정 사용", "이 업무에서 처음 확인한 모델로 돌아갑니다.", !active.modelOverride, can);
       for (const row of modelOptions()) option(row.value,row.displayName || row.value,row.description || row.value,
         (active.modelOverride || info.model) === row.value,can);
       if (can) {
@@ -92,17 +114,25 @@ globalThis.WorkspaceInlineControls = (() => {
     } else if (view.kind === "permission") {
       const can = info.capabilities?.setPermissionMode === true;
       message("선택한 방식은 이 업무에 적용해요. 기존 개인·회사 정책은 바꾸지 않습니다.");
-      option(null,"기존 설정 사용",info.permissionModeResetRequiresReconnect ? "다음 요청에서 기존 승인 설정을 다시 불러옵니다." : "원래 승인 방식을 사용합니다.",!info.permissionModeOverride,info.permissionModeResetAvailable !== false && (can || !!info.permissionModeOverride));
+      option(null,"기존 설정 사용",info.permissionModeResetRequiresReconnect ? "다음 요청에서 기존 승인 설정을 다시 불러옵니다." : "원래 승인 방식을 사용합니다.",!info.permissionModeOverride,info.permissionModeResetAvailable !== false && (can || !!info.permissionModeOverride || hasControlRestoreIssue("permissionMode")));
       for (const row of permissionOptions()) option(row.value,(row.risk === 'high' ? '⚠ ' : '')+(row.displayName || row.value),row.description || row.value,
         permissionOptionValue(info.permissionMode || info.permissionModeOverride) === row.value,can);
       if (!can) message("현재 연결은 승인 모드 변경을 제공하지 않아요. 기존 승인 흐름을 유지합니다.");
     } else {
       const can = info.capabilities?.setEffort === true;
       message(can ? "사고 수준을 선택해요. 모델·회사 정책에 따라 실제 적용 수준이 제한될 수 있습니다." : "현재 CLI에서 Effort 변경을 확인하지 못했어요. 기존 설정을 사용합니다.");
-      option(null,"auto","이 연결에서 변경 전 확인한 Effort로 돌아갑니다. 개인 설정은 바꾸지 않아요.",!info.effortOverride,!!info.effortOverride && info.effortResetAvailable !== false);
+      option(null,"auto","이 연결에서 변경 전 확인한 Effort로 돌아갑니다. 개인 설정은 바꾸지 않아요.",!info.effortOverride,(!!info.effortOverride || hasControlRestoreIssue("effort")) && info.effortResetAvailable !== false);
       for (const row of effortOptions()) option(row.value,row.value,row.description || row.value,
         (info.effortSupport === "confirmed" ? info.effort : info.effortOverride || info.effort) === row.value,can);
     }
+    showRestoreIssue();
+  }
+  function showRestoreIssue() {
+    const issue=controlRestoreIssues().find(item=>restoreKind(item.control)===view?.kind);
+    if(!issue)return;
+    message((issue.message || "이전 선택을 적용하지 못했어요.")+" 사용할 값을 확인해 주세요. 작성한 요청은 전송되지 않습니다.");
+    if(issue.canUseCurrent===true)action(`현재 CLI 값 사용${issue.currentValue ? " · "+issue.currentValue : ""}`,()=>acceptCurrent(issue.control));
+    if(view.kind==="effort")action("모델 선택",()=>open("model"));
   }
   async function prepare(source) {
     if (!same(source) || !active || pending || connectionPreparing || blocked()) return false;
@@ -117,7 +147,7 @@ globalThis.WorkspaceInlineControls = (() => {
       preparation = request;
       const response = await request.promise;
       if (!same(source)) return false;
-      active.connection = response.connection; renderConnection(active.connection);
+      active.connection = response.connection; applyConnectionState(response); renderConnection(active.connection);
     } catch (err) {
       if (same(source) && view?.kind === source.kind) {
         message("연결의 선택 항목을 불러오지 못했어요."); failure(err.message);
@@ -139,6 +169,26 @@ globalThis.WorkspaceInlineControls = (() => {
     $("runtime-panel-title").textContent = titles[kind];
     if (active && (!active.trusted || active.connection?.connected !== true)) await prepare({...view}); else draw();
     return view === opened ? opened : null;
+  }
+  async function recover() {
+    if(!controlRestoreState() || blocked() || pending)return;
+    const kind=restoreKind(controlRestoreIssues()[0]?.control)||"model";
+    if(view?.kind===kind&&same(view)){draw();render();return;}
+    return open(kind);
+  }
+  async function acceptCurrent(control) {
+    if(!view||!same(view)||blocked()||pending)return;
+    const source={...view};pending=true;failure("");render();
+    for(const node of options.children)node.disabled=true;
+    try{
+      const result=await useCurrentControl(control);if(!same(source))return;
+      if(result?.ok){close();status("현재 CLI 값을 사용합니다. 작성한 요청은 전송하지 않았어요.",false,source);$("prompt").focus();}
+      else if(result?.error){failure(result.error);status(result.error,true,source);}
+      return result;
+    }finally{
+      pending=false;render();
+      if(view&&same(source)){const text=$("runtime-panel-error").textContent;draw();if(text)failure(text);}
+    }
   }
   async function apply(value, request=view) {
     if (!request || !same(request) || blocked() || pending) return null;
@@ -241,5 +291,6 @@ globalThis.WorkspaceInlineControls = (() => {
   function waitForPreparation() {
     return same(preparation) ? preparation.promise : null;
   }
-  render(); return {render,close,open,resumeAfterTrust,handleCommand,keydown,cyclePermission,waitForPreparation};
+  function restoreFailure(text) {status(text,true);}
+  render(); return {render,close,open,recover,restoreFailure,resumeAfterTrust,handleCommand,keydown,cyclePermission,waitForPreparation};
 })();

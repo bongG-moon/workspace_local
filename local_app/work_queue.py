@@ -200,7 +200,7 @@ class WorkQueue:
                 raise ValueError('Invalid weekdays')
         for sid, reason in value['holds'].items():
             _sid(sid)
-            if reason not in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown'}:
+            if reason not in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required'}:
                 raise ValueError('Invalid hold')
         for key, receipt in value.get('receipts', {}).items():
             if not isinstance(key, str) or len(key) != 64 or not isinstance(receipt, dict):
@@ -318,7 +318,7 @@ class WorkQueue:
     def pause(self, sid, reason='user'):
         with self.lock:
             self._check()
-            self.data['holds'][_sid(sid)] = reason if reason in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown'} else 'user'
+            self.data['holds'][_sid(sid)] = reason if reason in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required'} else 'user'
             self._save()
 
     def resume(self, sid):
@@ -492,7 +492,7 @@ class WorkQueue:
                 self.data['holds'][sid] = 'settings_changed'
                 self._save()
                 return None
-            row.update(status='dispatching', updatedAt=self.clock())
+            row.update(status='dispatching', reason=None, updatedAt=self.clock())
             self._save()  # Must complete before any user request is sent.
             return deepcopy(row)
 
@@ -507,6 +507,24 @@ class WorkQueue:
             if early is not None and run_id is not None and early == run_id:
                 row['status'] = 'done'
             self._schedule_status(row, row['status'])
+            self._save()
+
+    def defer_unsubmitted(self, identifier):
+        """Preserve a request rejected by the typed control-restoration preflight.
+
+        Only the caller with proof of no delivery may use this path. Sent,
+        interrupted or uncertain rows are never made eligible for replay.
+        A separate explicit resume is still required after controls are fixed.
+        """
+        with self.lock:
+            self._check()
+            row = next((item for item in self.data['queue'] if item['id'] == identifier), None)
+            if row is None or row['status'] != 'dispatching' or row.get('runId') is not None:
+                return
+            row.update(status='queued', reason='control_restore_required', updatedAt=self.clock())
+            self._early_results.pop(row['sessionId'], None)
+            self._schedule_status(row, 'queued')
+            self.data['holds'].setdefault(row['sessionId'], 'control_restore_required')
             self._save()
 
     def failed(self, identifier):

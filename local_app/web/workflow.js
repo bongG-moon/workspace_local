@@ -139,6 +139,7 @@ globalThis.WorkspaceWorkflow = (() => {
   async function saveEditor(event) {
     event.preventDefault();const context=editor;if(!context||!current(context)||mutations.has(context.id))return;
     const text=$("request-editor-text").value.trim();if(!text)return $("request-editor-text").focus();
+    if(/^\/effort(?:\s|$)/u.test(text)){$("request-editor-error").textContent="현재 요청이 끝난 뒤 Effort를 변경해 주세요. 입력은 그대로 유지합니다.";return;}
     let schedule;
     if(context.kind!=="queue") {
       const kind=$("schedule-kind").value;schedule={kind,enabled:!pausedByUser(context.item)};
