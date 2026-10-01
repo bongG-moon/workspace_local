@@ -37,6 +37,42 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
           boot.demo=true;await preview('C:/fixture/A/업무.xlsx');assert.equal($('open-file').hidden,true);assert.equal($('reveal-file').hidden,true);
         })()""")
 
+    def test_html_mode_switch_is_local_literal_and_releases_frame_on_close(self):
+        self.run_case(r"""(async()=>{
+          const source='<script>parent.fetch("/api/quit")</script><h1>원본</h1>';
+          let calls=0;api=async()=>{calls++;return {kind:'html',name:'일반.html',html:'<h1>원본</h1>',text:source,truncated:true};};
+          await preview('C:/fixture/A/일반.html');assert.equal($('preview-modes').hidden,false);
+          assert.equal($('preview-screen').attributes['aria-pressed'],'true');
+          const first=$('preview-content').querySelector('iframe');assert.equal(first.attributes.sandbox,'');
+          $('preview-code').onclick();assert.equal($('preview-content').querySelector('iframe'),null);
+          assert.equal($('preview-content').querySelector('pre').textContent,source);
+          assert.equal($('preview-content').querySelector('script'),null);
+          assert.ok($('preview-content').children.some(n=>n.textContent.includes('100,000')));
+          assert.equal($('preview-code').attributes['aria-pressed'],'true');assert.equal($('open-file').hidden,false);
+          $('preview-screen').onclick();assert.notEqual($('preview-content').querySelector('iframe'),first);
+          assert.equal($('preview-content').querySelector('iframe').attributes.referrerpolicy,'no-referrer');
+          $('preview-dialog').close();assert.equal(previewData,null);assert.equal(previewContext,null);
+          assert.equal($('preview-content').children.length,0);assert.equal($('preview-modes').hidden,true);
+          assert.equal(calls,1);
+        })()""")
+
+    def test_html_switch_cannot_reveal_stale_task_and_next_file_resets_mode(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({kind:'html',name:'a.html',html:'<p>A</p>',text:'<p>A</p>'});
+          await preview('C:/fixture/A/a.html');$('preview-code').onclick();
+          active={...active,id:'B'};$('preview-screen').onclick();
+          assert.equal($('preview-content').querySelector('iframe'),null);
+          closePreview();api=async()=>({kind:'text',name:'b.txt',text:'B 내용'});
+          await preview('C:/fixture/B/b.txt');assert.equal($('preview-modes').hidden,true);
+          $('preview-code').onclick();assert.equal($('preview-content').querySelector('pre'),null);
+          api=async()=>({kind:'html',name:'b.html',html:'<p>B</p>',text:'<p>B</p>'});
+          await preview('C:/fixture/B/b.html');assert.ok($('preview-content').querySelector('iframe'));
+          assert.equal($('preview-screen').attributes['aria-pressed'],'true');
+          // A previous dialog's queued close event must not tear down this new preview.
+          $('preview-dialog').onclose();assert.equal($('preview-dialog').open,true);
+          assert.equal(previewData.name,'b.html');assert.ok($('preview-content').querySelector('iframe'));
+        })()""")
+
     def test_late_preview_and_close_cannot_replace_current_task_context(self):
         self.run_case(r"""(async()=>{
           const pending=[];api=(path,body)=>new Promise(resolve=>pending.push({path,body,resolve}));

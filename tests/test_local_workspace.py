@@ -360,7 +360,7 @@ class ServerTests(unittest.TestCase):
     def test_bootstrap_identifies_shared_cli_without_claiming_login_success(self):
         with self.request("/api/bootstrap") as response:
             value = json.load(response)
-        self.assertEqual(value["workspaceVersion"], "0.21.8")
+        self.assertEqual(value["workspaceVersion"], "0.21.9")
         self.assertEqual(value["appRoot"], str(ROOT))
         self.assertEqual(value["runtime"]["authentication"], "shared-with-cli")
         self.assertNotIn("loggedIn", value["runtime"])
@@ -438,7 +438,7 @@ class ServerTests(unittest.TestCase):
             self.assertEqual('external', data['kind'])
             self.assertNotIn('text', data)
 
-    def test_supported_html_preview_is_static_but_raw_attachment_is_text(self):
+    def test_all_html_previews_are_static_with_original_source_available(self):
         from urllib.parse import urlencode
         path = self.workspace/'보고서.html'
         text = '<body data-style="minimalism"><main class="report-main">확인용<script>alert(1)</script></main></body>'
@@ -448,10 +448,14 @@ class ServerTests(unittest.TestCase):
             data = json.load(response)
         self.assertEqual('html', data['kind'])
         self.assertNotIn('<script', data['html'])
+        self.assertEqual((text, 'html', False), (data['text'], data['language'], data['truncated']))
         self.assertEqual(text, path.read_text(encoding='utf-8'))
         path.write_text('<html>첨부 원본</html>', encoding='utf-8')
         with self.request(route) as response:
-            self.assertEqual('text', json.load(response)['kind'])
+            data = json.load(response)
+            self.assertEqual('html', data['kind'])
+            self.assertEqual('<html>첨부 원본</html>', data['text'])
+            self.assertIn('첨부 원본', data['html'])
         with patch('local_app.external_apps.open_document', return_value={'ok': True, 'requested': True}) as opened:
             with self.request('/api/open', {'id': self.id, 'path': str(path)}) as response:
                 self.assertTrue(json.load(response)['requested'])

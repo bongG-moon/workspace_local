@@ -159,11 +159,42 @@ class PreviewParsingTests(unittest.TestCase):
                b'\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\x00\xff\xd9')
         self.assertEqual((12, 24), image_dimensions(raw, '.jpg'))
 
-    def test_html_preserves_static_sanitizer_and_fallback_source(self):
-        result = self.preview('report.html', '<body data-style="minimalism"><main class="report-main">본문<script>alert(1)</script></main></body>')
+    def test_html_and_htm_have_isolated_preview_and_original_source(self):
+        samples = (
+            ('report.html', '<body data-style="minimalism"><main class="report-main">본문<script>alert(1)</script></main></body>'),
+            ('other.html', '<!doctype html><h1>일반 문서</h1><script>alert(1)</script>'),
+            ('other.HTM', "<BODY><main class='extra'>일반 문서</main></BODY>"),
+        )
+        for name, source in samples:
+            with self.subTest(name=name):
+                result = self.preview(name, source)
+                self.assertEqual(('html', 'html', source, False),
+                                 (result['kind'], result['language'], result['text'], result['truncated']))
+                self.assertNotIn('<script', result['html'])
+                self.assertEqual(source.encode(), (self.root / name).read_bytes())
+
+    def test_html_source_limit_does_not_truncate_static_preview(self):
+        source = '<p>' + '가' * MAX_CODE_CHARS + '</p><h1>마지막 제목</h1>'
+        result = self.preview('long.html', source)
         self.assertEqual('html', result['kind'])
-        self.assertNotIn('<script', result['html'])
-        self.assertEqual('text', self.preview('other.html', '<p>other</p>')['kind'])
+        self.assertEqual(source[:MAX_CODE_CHARS], result['text'])
+        self.assertTrue(result['truncated'])
+        self.assertIn('<h1>마지막 제목</h1>', result['html'])
+        self.assertFalse(self.preview('exact.html', 'a' * MAX_CODE_CHARS)['truncated'])
+
+    def test_html_retains_file_byte_and_encoding_limits(self):
+        self.assertEqual('html', self.preview('exact.html', b'a' * MAX_TEXT_BYTES)['kind'])
+        for raw in (b'a' * (MAX_TEXT_BYTES + 1), b'\xff\x00\xfe'):
+            result = self.preview('invalid.html', raw)
+            self.assertEqual('external', result['kind'])
+            self.assertNotIn('html', result)
+            self.assertNotIn('text', result)
+        for encoding in ('utf-8-sig', 'cp949', 'utf-16'):
+            with self.subTest(encoding=encoding):
+                raw = '<h1>문서</h1>'.encode(encoding)
+                result = self.preview('encoded.htm', raw)
+                self.assertEqual(('html', '<h1>문서</h1>'), (result['kind'], result['text']))
+                self.assertEqual(raw, (self.root / 'encoded.htm').read_bytes())
 
     def test_discovery_adds_source_but_excludes_hidden_and_secret_paths(self):
         for name in ('result.py', 'table.csv', 'credentials.json', '.config.json'):
@@ -233,6 +264,21 @@ class PreviewRouteTests(unittest.TestCase):
             self.assertEqual('external', self.request(invalid)[1]['kind'])
             start.assert_not_called()
         self.assertEqual({str(code)}, observation['previewed'])
+
+    def test_html_route_keeps_authorization_original_bytes_and_static_source_pair(self):
+        source = '<!doctype html><h1>별도 첨부</h1><script>fetch("/api/quit")</script>'
+        outside = self.root / 'outside.html'; outside.write_text(source, encoding='utf-8')
+        self.assertEqual(403, self.request(outside, token=False)[0])
+        self.assertEqual(400, self.request(outside)[0])
+        self.app.get(self.sid)['attachments'] = [str(outside)]
+        with patch('local_app.external_apps.os.startfile', create=True) as opened:
+            status, result = self.request(outside)
+            opened.assert_not_called()
+        self.assertEqual((200, 'html', 'html', source, False),
+                         (status, result['kind'], result['language'], result['text'], result['truncated']))
+        self.assertIn('<h1>별도 첨부</h1>', result['html'])
+        self.assertNotIn('<script', result['html'])
+        self.assertEqual(source.encode(), outside.read_bytes())
 
     def test_new_source_types_stay_blocked_from_external_execution(self):
         from local_app.external_apps import open_document

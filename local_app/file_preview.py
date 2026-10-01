@@ -233,8 +233,8 @@ def build_preview(path: Path):
             return external(path, '표 형식을 확인하지 못했습니다. 원래 앱에서 열어 주세요.')
     if suffix in {'.html', '.htm'}:
         from .html_preview import render
-        preview = render(text)
-        if preview:
-            return {'kind': 'html', 'name': path.name, 'html': preview,
-                    'message': '정적 미리보기입니다. 스크립트·외부 연결은 실행하지 않습니다.'}
+        return {'kind': 'html', 'name': path.name, 'html': render(text),
+                'text': text[:MAX_CODE_CHARS], 'language': 'html',
+                'truncated': len(text) > MAX_CODE_CHARS,
+                'message': '정적 미리보기 · 외부 자료나 스크립트가 필요한 내용은 기본 앱에서 확인하세요.'}
     return {'kind': 'text', 'name': path.name, 'text': text}
