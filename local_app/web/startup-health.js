@@ -4,7 +4,7 @@
 // retry scripts, replay requests, change browser profiles, or infer root cause.
 globalThis.WorkspaceStartupHealth = (() => {
   const definitions = {
-    app:{file:"app.js",buttons:["new-chat","settings-open"]},
+    app:{file:"app.js",buttons:["new-chat","settings-open","shortcuts-open"]},
     stream:{file:"rendering.js",global:"WorkspaceStream"},
     attachments:{file:"attachments.js",global:"WorkspaceAttachments"},
     "path-picker":{file:"path-picker.js",global:"WorkspacePathPicker"},

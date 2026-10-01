@@ -1,21 +1,28 @@
-# Company Workspace 0.21.7
+# Company Workspace 0.21.8
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.7/Company-Workspace-0.21.7-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.7/Company-Workspace-0.21.7-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.8/Company-Workspace-0.21.8-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.8/Company-Workspace-0.21.8-vbs.zip)**
 
-[0.21.7 변경 안내](docs/VALIDATION_0.21.7.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.7.md)
+[0.21.8 변경 안내](docs/VALIDATION_0.21.8.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.8.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.7.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.8.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+
+## 0.21.8 변경
+
+- 좌측에 **단축키** 메뉴를 추가했습니다. 앱에서 사용하는 키 조합과 동작을 한곳에서 확인할 수 있습니다.
+- 단축키 안내에서 키 이름이나 기능을 검색할 수 있으며, 빠른 실행(Ctrl+Shift+P)에서도 **단축키**를 찾아 열 수 있습니다.
+- 기존 단축키의 동작은 유지하고, 앱에서 지원하는 범위와 터미널에서 사용하는 기능을 안내합니다.
+- [화면 확인과 검증 범위](docs/VALIDATION_0.21.8.md)를 확인하세요.
 
 ## 0.21.7 변경
 

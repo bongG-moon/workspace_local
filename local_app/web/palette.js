@@ -25,7 +25,8 @@ globalThis.WorkspacePalette = (() => {
     {id:"queue",label:"이어 할 일과 예약",detail:"대기 요청·예약 확인",keywords:"queue schedule 일정 스케줄",glyph:"◷",enabled:hasTask,run:()=>activate("workflow-open")},
     {id:"import",label:"이전 Claude 대화 불러오기",detail:"기존 CLI 대화에서 이어가기",keywords:"resume import session 이전 세션",glyph:"↶",run:()=>activate("import-open")},
     {id:"settings",label:"설정 열기",detail:"연결·PC 알림·앱 설정",keywords:"settings config",glyph:"⚙",run:()=>activate("settings-open")},
-    {id:"help",label:"사용 도움말",detail:"시작 방법과 단축키",keywords:"help guide 사용법",glyph:"?",run:()=>activate("help")}
+    {id:"shortcuts",label:"단축키 안내",detail:"보내기·편집·모델·승인 키 찾기",keywords:"shortcuts keyboard 단축키 키보드 Enter Shift Ctrl",glyph:"⌨",run:()=>activate("shortcuts-open")},
+    {id:"help",label:"사용 도움말",detail:"업무 시작과 앱 사용 방법",keywords:"help guide 사용법",glyph:"?",run:()=>activate("help")}
   ];
   function restoreFocus(node){const owner=node?.closest?.("dialog");if(node?.isConnected&&!node.disabled&&(!owner||owner.open))node.focus();}
   function close(restore=true){

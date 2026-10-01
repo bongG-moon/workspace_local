@@ -512,6 +512,46 @@ $("refresh-files").onclick=()=>{refreshFiles();refreshResults();};$("files-tab")
 // Panel visibility is owned by layout.js, including compact viewports.
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
 $("help").onclick=()=>showDialog("help-dialog");$("close-help").onclick=()=>$("help-dialog").close();
+// Read-only reference: search the shipped labels locally, without touching a task.
+let shortcutsReturnFocus=null;
+function filterShortcutReference(){
+  const normalize=value=>String(value||"").normalize("NFKC").toLocaleLowerCase().replace(/[\s+→·_-]+/gu,"");
+  const query=normalize($("shortcuts-search").value);let visible=0,total=0;
+  for(const group of $("shortcuts-list").querySelectorAll("[data-shortcut-group]")){
+    const title=group.querySelector("h3")?.textContent||"";let found=0;
+    for(const row of group.querySelectorAll("[data-shortcut-row]")){
+      total++;row.hidden=!!query&&!normalize(title+" "+row.textContent).includes(query);
+      if(!row.hidden){visible++;found++;}
+    }
+    group.hidden=found===0;
+  }
+  $("shortcuts-empty").hidden=visible>0;
+  $("shortcuts-count").textContent=query?`${total}개 중 ${visible}개 표시`:`${total}개 단축키·명령`;
+}
+function openShortcutReference(){
+  if(appClosed)return;
+  if(!$("shortcuts-dialog").open){
+    globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();
+    globalThis.WorkspaceLayout?.dismissOverlays?.();
+    shortcutsReturnFocus=document.activeElement;$("shortcuts-search").value="";
+    filterShortcutReference();showDialog("shortcuts-dialog");
+  }
+  $("shortcuts-search").focus();
+}
+$("shortcuts-open").onclick=openShortcutReference;
+$("shortcuts-search").oninput=filterShortcutReference;
+$("shortcuts-search").onkeydown=event=>{
+  if(event.key==="Escape"&&!event.isComposing&&event.keyCode!==229){
+    event.preventDefault();event.stopPropagation();$("shortcuts-dialog").close();
+  }
+};
+$("shortcuts-close").onclick=()=>$("shortcuts-dialog").close();
+$("shortcuts-dialog").onclose=()=>{
+  const target=shortcutsReturnFocus;shortcutsReturnFocus=null;
+  const owner=target?.closest?.("dialog");
+  if(target?.isConnected&&!target.disabled&&!target.closest?.("[hidden],[inert]")&&(!owner||owner.open))target.focus();
+  else if(!appClosed)$("shortcuts-open").focus();
+};
 function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
 async function reconnect(){const buttons=[$("reconnect"),$("settings-refresh")];buttons.forEach(b=>b.disabled=true);try{const response=await api("/api/reconnect",active?{id:active.id}:{});boot=response;sessions=response.sessions;renderConnection(active?.connection);renderSessions();if(boot.error){error(boot.error);return;}error("");toast("실행 연결을 다시 확인했어요. 이전 요청은 다시 보내지 않았습니다.");if(active)await selectSession(active.id);else setStatus("idle");}catch(e){error(e.message);}finally{buttons.forEach(b=>b.disabled=false);}}

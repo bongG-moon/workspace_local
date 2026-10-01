@@ -110,6 +110,25 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           assert.equal(document.activeElement,$('prompt'));
         })()""")
 
+    def test_shortcut_reference_handoff_preserves_running_task_and_draft(self):
+        self.run_case(r"""(async()=>{
+          $('shortcuts-list').querySelectorAll=()=>[];
+          $('palette-dialog').tagName='DIALOG';$('palette-dialog').append($('palette-search'));
+          active.state='running';$('prompt').value='보내지 않은 후속 요청';attachments=['report.csv'];
+          const task=active;$('prompt').focus();WorkspacePalette.open();
+          $('palette-search').value='단축키';$('palette-search').oninput();
+          await find('shortcuts').onclick();
+          assert.equal($('palette-dialog').open,false);assert.equal($('shortcuts-dialog').open,true);
+          assert.equal(document.activeElement,$('shortcuts-search'));
+          $('shortcuts-search').value='없는단축키';
+          const close=keyEvent('Escape');$('shortcuts-search').onkeydown(close);
+          assert.equal(close.defaultPrevented,true);assert.equal(close.stopped,true);
+          assert.equal($('shortcuts-dialog').open,false);assert.equal(document.activeElement,$('shortcuts-open'));
+          assert.equal(active,task);assert.equal(active.state,'running');
+          assert.equal($('prompt').value,'보내지 않은 후속 요청');assert.deepEqual(attachments,['report.csv']);
+          assert.equal(calls.length,0);
+        })()""")
+
     def test_disabled_actions_and_stale_task_cannot_execute(self):
         self.run_case(r"""(async()=>{
           let executions=0;globalThis.WorkspaceProductivityActions={openBranch(){executions++;}};
