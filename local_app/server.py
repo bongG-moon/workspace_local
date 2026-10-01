@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.3"
+WORKSPACE_VERSION = "0.21.4"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -308,6 +308,7 @@ class LocalApp:
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
             "executions": list(item.get("executions", [])),
+            "toolActivity": list(item.get("toolActivity", [])),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
@@ -973,6 +974,9 @@ class LocalApp:
             item = self.sessions.get(sid)
             if item is None or item.get('bridge') is not bridge:
                 return
+            if kind == 'tool_activity' and (not getattr(bridge, '_tool_activity_run_id', None)
+                    or bridge._tool_activity_run_id != item.get('lastRunId')):
+                return  # Connection preparation is not a submitted user turn.
             self.emit(sid, kind, data)
 
     def answer_choice(self, sid, choice_id, *, option_id=None, text=None):
@@ -1011,6 +1015,25 @@ class LocalApp:
                 data = dict(data, controlRestore=item.get('_controlRestore'))
             if kind in {'assistant', 'assistant_delta', 'queued_user'}:
                 data = dict(data, runId=item.get('lastRunId'))
+            if kind == 'status' and data.get('state') in {'starting', 'running'} and item.get('lastRunId'):
+                data = dict(data, runId=item['lastRunId'])
+            if kind == 'tool_activity':
+                from .tool_activity import merge_activity, normalize_activity
+                # Capture callbacks retain their originating turn. Never relabel
+                # a late result or replay as evidence for a newer user request.
+                if (not item.get('lastRunId') or not isinstance(data, dict)
+                        or data.get('runId') is not None and data.get('runId') != item.get('lastRunId')):
+                    return
+                clean = normalize_activity(data, run_id=item.get('lastRunId'))
+                if clean is None:
+                    return
+                before = item.get('toolActivity', [])
+                item['toolActivity'] = merge_activity(before, clean)
+                if item['toolActivity'] == before:
+                    return
+                data = next((row for row in item['toolActivity'] if row['id'] == clean['id'] and row.get('runId') == clean.get('runId')), None)
+                if data is None:
+                    return
             if kind == 'execution':
                 from .executions import merge_execution, normalize_execution
                 clean = normalize_execution(data, run_id=item.get('lastRunId'))
@@ -1093,7 +1116,10 @@ class LocalApp:
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
             if terminal:
                 from .executions import normalize_executions
+                from .tool_activity import normalize_activities
                 item['executions'] = normalize_executions(item.get('executions', []), interrupted=True)
+                item['toolActivity'] = normalize_activities(item.get('toolActivity', []), interrupted=True)
+                data['toolActivity'] = list(item['toolActivity'])
                 self._finish_observation(item)
                 data['artifacts'] = list(item.get('artifacts', []))
                 data['lastRunId'] = item.get('lastRunId')
@@ -1102,7 +1128,7 @@ class LocalApp:
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
-            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed', 'execution'} or terminal:
+            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed', 'execution', 'tool_activity'} or terminal:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
                 pending = attention_snapshot(self.visible_sessions())
@@ -1230,6 +1256,7 @@ class LocalApp:
                 threading.Thread(target=run, args=(self, sid, text), daemon=True).start()
             else:
                 try:
+                    bridge._tool_activity_run_id = item['lastRunId']
                     bridge.send(prompt)
                 except (ValueError, OSError, subprocess.SubprocessError) as exc:
                     self.emit(sid, 'error', {'message': str(exc), 'code': 'send_failed'})
@@ -1493,6 +1520,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/execution-view.js": ("execution-view.js", "text/javascript; charset=utf-8"),
                       "/rich-content.css": ("rich-content.css", "text/css; charset=utf-8"),
                       "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
+                      "/tool-activity.js": ("tool-activity.js", "text/javascript; charset=utf-8"),
+                      "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),

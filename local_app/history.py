@@ -10,6 +10,7 @@ from pathlib import Path
 import uuid
 
 from .executions import normalize_executions, safe_run_id
+from .tool_activity import normalize_activities
 
 KEYS = ('id','title','workspace','created','updated','pinned','sessionId')
 MAX_SESSIONS = 500
@@ -86,6 +87,7 @@ def row(item):
                          {'size': artifact.get('size') if type(artifact.get('size')) is int and artifact['size'] >= 0 else None})
     result['artifacts'] = artifacts
     result['executions'] = normalize_executions(item.get('executions'))
+    result['toolActivity'] = normalize_activities(item.get('toolActivity'))
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
     if 'branch' in item:
@@ -123,6 +125,7 @@ class HistoryStore:
         item.pop('messages', None)
         item.pop('artifacts', None)
         item.pop('executions', None)
+        item.pop('toolActivity', None)
         item['_historyUnloaded'] = True
         return item
 
@@ -137,6 +140,7 @@ class HistoryStore:
             item['messages'] = value['messages']
             item['artifacts'] = value['artifacts']
             item['executions'] = normalize_executions(value['executions'], interrupted=True)
+            item['toolActivity'] = normalize_activities(value['toolActivity'], interrupted=True)
             item.pop('_historyUnloaded', None)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             self.warning = '대화 기록을 다시 읽지 못해 원본을 보존했습니다. 앱을 다시 열어 기록 위치를 확인해 주세요.'
@@ -161,6 +165,7 @@ class HistoryStore:
                     if item['id'] != sid:
                         raise ValueError('대화 파일과 목록이 다릅니다.')
                     item['executions'] = normalize_executions(item['executions'], interrupted=True)
+                    item['toolActivity'] = normalize_activities(item['toolActivity'], interrupted=True)
                     if lazy:
                         item['_historySaved'] = True
                     result.append(self.compact(item) if lazy else item)
@@ -171,6 +176,7 @@ class HistoryStore:
                 result = [row(item) for item in old]
                 for item in result:
                     item['executions'] = normalize_executions(item['executions'], interrupted=True)
+                    item['toolActivity'] = normalize_activities(item['toolActivity'], interrupted=True)
                 self.migrate = True
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             # Do not overwrite a damaged index or silently destroy its entries.

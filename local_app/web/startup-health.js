@@ -19,7 +19,8 @@ globalThis.WorkspaceStartupHealth = (() => {
     palette:{file:"palette.js",global:"WorkspacePalette",buttons:["palette-open"]},
     layout:{file:"layout.js",global:"WorkspaceLayout",buttons:["sidebar-toggle","materials-button"],listeners:true},
     "rich-content":{file:"rich-content.js",global:"WorkspaceRichContent"},
-    "execution-view":{file:"execution-view.js",global:"WorkspaceExecutionView"}
+    "execution-view":{file:"execution-view.js",global:"WorkspaceExecutionView"},
+    "tool-activity":{file:"tool-activity.js",global:"WorkspaceToolActivity"}
   };
   const names=Object.keys(definitions), states=new Map(names.map(name=>[name,{status:"pending",reason:""}]));
   const fileNames=new Map(names.map(name=>[definitions[name].file,name]));

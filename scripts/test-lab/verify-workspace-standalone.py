@@ -18,15 +18,15 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
-parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'status', 'finish'])
-parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.21.3.exe')
+parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'activity', 'status', 'finish'])
+parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.21.4.exe')
 parser.add_argument('--run', default='final')
 parser.add_argument('--python', type=Path, help='Explicit existing interpreter for an EXE startup check')
 parser.add_argument('--desktop', action='store_true', help='Open the real owned WebView2 window')
 args = parser.parse_args()
 if not re.fullmatch('[a-z0-9-]{1,30}', args.run):
     parser.error('Invalid validation run name')
-OUT = ROOT / ('build/qa-standalone-0.21.3-' + args.run)
+OUT = ROOT / ('build/qa-standalone-0.21.4-' + args.run)
 STATE = OUT / 'app-state'
 CACHE = OUT / '실행 캐시'
 COPY = OUT / 'EXE만 있는 한글 폴더' / args.exe.name
@@ -78,7 +78,7 @@ if args.action == 'start':
     if args.desktop:
         assert boot['window']['mode'] == 'desktop' and boot['window']['engine'] == 'WebView2'
         assert request('/api/window/open', {})['action'] == 'activated'
-    assert boot['workspaceVersion'] == '0.21.3' and boot['demo'] is False and not boot['error']
+    assert boot['workspaceVersion'] == '0.21.4' and boot['demo'] is False and not boot['error']
     app_root = Path(boot['appRoot'])
     assert app_root.is_relative_to(CACHE) and not (app_root / 'runtime').exists()
     assert not list(app_root.rglob('python*.exe'))
@@ -105,6 +105,7 @@ if args.action == 'start':
     for route in ('/', '/app.js', '/inline-controls.js', '/rendering.js', '/attachments.js', '/path-picker.js', '/path-picker.css',
                   '/workflow.js', '/desktop.js', '/session-import.js', '/app.css',
                   '/rich-content.js', '/rich-content.css', '/execution-view.js', '/execution-view.css',
+                  '/tool-activity.js', '/tool-activity.css',
                   '/startup-health.js', '/startup-health.css',
                   '/fonts/NotoSansKR-Variable.woff', '/manual/guide'):
         parsed = urlsplit(runtime['url'])
@@ -193,12 +194,27 @@ elif args.action == 'prompt':
     save('pre-prompt-controls.json', {key: before['connection'].get(key) for key in ('model', 'effort', 'permissionMode')})
     print(json.dumps(request('/api/send', {'id': task_id(), 'trusted': True, 'attachments': [],
         'text': '단일 EXE의 기존 Claude 인증 연결 검증입니다. 파일을 읽거나 수정하지 말고 도구나 외부 검색 없이 WORKSPACE_EXE_OK 한 줄만 답해 주세요.'})))
+elif args.action == 'activity':
+    # One explicitly requested read-only AI probe, confined to our own fixture.
+    # No permission/settings overrides and no automatic permission responses.
+    task = json.loads((OUT / 'task.json').read_text(encoding='utf-8'))
+    probe = Path(task['workspace']) / 'activity-probe.txt'
+    probe.write_text('WORKSPACE_ACTIVITY_OK\n', encoding='utf-8')
+    before = request('/api/session?id=' + task_id())
+    assert not before['messages'] and before['state'] not in {'starting', 'running', 'approval', 'question'}
+    save('pre-prompt-controls.json', {key: before['connection'].get(key) for key in ('model', 'effort', 'permissionMode')})
+    print(json.dumps(request('/api/send', {'id': task_id(), 'trusted': True, 'attachments': [],
+        'text': '활동 표시 기능 검증입니다. 현재 업무 폴더의 activity-probe.txt 파일을 Read 도구로 한 번 읽고 파일 안의 한 줄만 답하세요. 파일을 수정하거나 외부에 연결하지 마세요.'})))
 elif args.action == 'status':
     item = request('/api/session?id=' + task_id())
     result = {'state': item['state'], 'messageCount': len(item['messages']),
         'markerReceived': any('WORKSPACE_EXE_OK' in msg.get('text', '') for msg in item['messages'] if msg.get('role') == 'assistant'),
         'pendingTools': [row.get('tool') for row in item.get('requests', [])],
         'verification': item.get('verification'),
+        'activity': [{key: row.get(key) for key in ('id', 'tool', 'state', 'action', 'target', 'runId')}
+                     for row in item.get('toolActivity', [])],
+        'activityMarkerReceived': any('WORKSPACE_ACTIVITY_OK' in msg.get('text', '')
+                                     for msg in item['messages'] if msg.get('role') == 'assistant'),
         'controls': {key: item.get('connection', {}).get(key) for key in ('model', 'effort', 'permissionMode')}}
     before_path = OUT / 'pre-prompt-controls.json'
     if before_path.exists():

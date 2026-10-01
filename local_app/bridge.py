@@ -685,6 +685,7 @@ class ClaudeSession:
         with self.lock:
             if self.busy or self._control_active:
                 raise ValueError("현재 작업 또는 질문이 끝난 뒤 다음 메시지를 보내 주세요.")
+            self._begin_tool_activity_turn()
             self.busy = True
             self.last_result = None
             self.seen_text.clear()
@@ -843,12 +844,39 @@ class ClaudeSession:
                     capture.interrupt(closed=True)
             return capture
 
-    def _interrupt_executions(self, *, closed=False):
+    def _interrupt_executions(self, *, closed=False, activity=True):
         if closed:
             self._execution_closed = True
         capture = getattr(self, '_execution_capture_state', None)
         if capture is not None:
             capture.interrupt(closed=closed)
+        if activity:
+            self._tool_activity_finished = True
+            capture = getattr(self, '_tool_activity_state', None)
+            if capture is not None:
+                capture.interrupt()
+
+    def _begin_tool_activity_turn(self):
+        old = getattr(self, '_tool_activity_state', None)
+        if old is not None:
+            old.interrupt()
+        self._tool_activity_finished = False
+        self._tool_activity_state = None
+
+    def _tool_activity_capture(self):
+        with self.lock:
+            capture = getattr(self, '_tool_activity_state', None)
+            if capture is None:
+                from .tool_activity import ToolActivityCapture
+                tombstones = getattr(self, '_tool_activity_tombstones', None)
+                if tombstones is None:
+                    tombstones = self._tool_activity_tombstones = (set(), deque())
+                capture = self._tool_activity_state = ToolActivityCapture(
+                    lambda value: self.emit('tool_activity', value),
+                    run_id=getattr(self, '_tool_activity_run_id', None), tombstones=tombstones)
+                if getattr(self, '_tool_activity_finished', False) or getattr(self, '_execution_closed', False):
+                    capture.interrupt()
+            return capture
 
     def handle(self, data: dict):
         if self.closed:
@@ -1018,6 +1046,8 @@ class ClaudeSession:
                     self.emit("status", {"state": "running", "label": "대화 내용을 정리하고 있어요"})
         elif kind == "stream_event":
             self._handle_stream(data)
+        elif kind == 'tool_progress':
+            self._tool_activity_capture().progress(data)
         elif kind == "assistant":
             if data.get("error") == "authentication_failed":
                 self._authentication_failed()
@@ -1033,6 +1063,7 @@ class ClaudeSession:
                 if block.get("type") == "text" and not parent:
                     self._assistant_text(block.get("text", ""), message.get("id"), index)
                 elif block.get("type") == "tool_use":
+                    self._tool_activity_capture().request(block, parent=parent)
                     if not parent and isinstance(block.get('name'), str) and block['name'] in {'Bash', 'PowerShell'}:
                         self._execution_capture().request(block)
                         inputs = block.get('input') if isinstance(block.get('input'), dict) else {}
@@ -1054,13 +1085,17 @@ class ClaudeSession:
                                 choices.add(tool_id)
                     self.emit("activity", {"tool": block.get("name"), "id": block.get("id"),
                         "skill": block.get("input", {}).get("skill") if block.get("name") == "Skill" and isinstance(block.get('input'), dict) else None})
-        elif kind == 'user' and not data.get('parent_tool_use_id'):
+        elif kind == 'user':
             from .choices import from_tool_output
+            parent = data.get('parent_tool_use_id')
             message = data.get('message')
             blocks = message.get('content', []) if isinstance(message, dict) else []
             if isinstance(blocks, list):
                 for block in blocks:
                     if not isinstance(block, dict) or block.get('type') != 'tool_result':
+                        continue
+                    self._tool_activity_capture().result(block, parent=parent)
+                    if parent:
                         continue
                     self._execution_capture().result(block)
                     if (block.get('is_error') or not isinstance(block.get('tool_use_id'), str)
@@ -1077,7 +1112,7 @@ class ClaudeSession:
         elif kind == "result":
             if data.get('parent_tool_use_id'):
                 return
-            self._interrupt_executions()
+            self._interrupt_executions(activity=bool(data.get('is_error') or not self.tasks))
             self.last_result = data
             self.session_id = data.get("session_id") or self.session_id
             text = data.get("result", "")

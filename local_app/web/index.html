@@ -21,8 +21,10 @@
   <script src="/path-picker.js" defer></script>
   <script src="/rich-content.js" defer></script>
   <script src="/execution-view.js" defer></script>
+  <script src="/tool-activity.js" defer></script>
   <link rel="stylesheet" href="/rich-content.css">
   <link rel="stylesheet" href="/execution-view.css">
+  <link rel="stylesheet" href="/tool-activity.css">
   <script src="/rendering.js" defer></script>
   <script src="/attachments.js" defer></script>
   <script src="/workflow.js" defer></script>
@@ -120,7 +122,7 @@
       </div>
       <div class="composer-wrap">
         <button id="latest-response" type="button" class="latest-response" hidden>최신 응답으로 이동 ↓</button>
-        <div class="composer-heading"><div id="status" class="status" role="status"><span class="status-dot"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="elapsed"></span><button id="stop" class="text-button" hidden>작업 중지</button></div><div class="workflow-toolbar" role="group" aria-label="후속 업무"><button id="workflow-open" type="button" class="workflow-button">이어 할 일</button><button id="schedule-open" type="button" class="workflow-button">실행 예약</button></div></div>
+        <div class="composer-heading"><div id="status" class="status" role="status"><span class="status-dot"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="tool-activity-badge" class="tool-activity-badge" hidden></span><button id="tool-activity-open" type="button" class="text-button tool-activity-open" hidden></button><span id="elapsed"></span><button id="stop" class="text-button" hidden>작업 중지</button></div><div class="workflow-toolbar" role="group" aria-label="후속 업무"><button id="workflow-open" type="button" class="workflow-button">이어 할 일</button><button id="schedule-open" type="button" class="workflow-button">실행 예약</button></div></div>
         <form id="composer" class="composer">
           <section id="composer-suggestions" class="composer-suggestions" aria-label="입력 도움 목록" hidden><div class="composer-suggestion-heading"><strong id="composer-suggestion-title"></strong><span id="composer-suggestion-context"></span></div><div id="composer-suggestion-list" role="listbox" aria-label="스킬과 파일 추천"></div><p id="composer-suggestion-note" role="status"></p><div class="composer-suggestion-actions"><button id="composer-connect" class="quiet-button" type="button" hidden>Claude 명령 불러오기</button><button id="composer-native" class="text-button" type="button" hidden>원본 Claude Code 열기 ↗</button></div></section>
           <div id="attachments" class="attachments"></div>

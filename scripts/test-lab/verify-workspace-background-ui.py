@@ -8,6 +8,9 @@ Close the actual window with X, then write uniquely named commands/*.json:
   {"action":"approval"}    a permission request (first task)
   {"action":"clear"}       resolve only synthetic pending requests
   {"action":"status"}      refresh the technical-only status snapshot
+  {"action":"tool-start"}  show a synthetic skill and concurrent file tools
+  {"action":"tool-approval"} hold the same synthetic run for approval
+  {"action":"tool-finish"} finish synthetic activity, keeping its history
   {"action":"quit"}        complete shutdown of this owned fixture
 
 No test route is added to the production server. status.json and results.json
@@ -167,7 +170,41 @@ def main():
                 app.emit(sid, 'choice_closed', {})
             app.emit(sid, 'status', {'state': 'idle'})
 
+    activity_started = 0
+
     def inject(action):
+        nonlocal activity_started
+        if action.startswith('tool-'):
+            sid = tasks[0]
+            if action == 'tool-start':
+                clear(sid)
+                with app.lock:
+                    app.get(sid)['lastRunId'] = uuid.uuid4().hex
+                activity_started = time.time()
+                app.emit(sid, 'status', {'state': 'running'})
+                rows = [
+                    {'id': 'fixture-skill', 'tool': 'Skill', 'action': '스킬 호출',
+                     'target': 'report-summary', 'state': 'completed', 'finishedAt': activity_started + .1},
+                    {'id': 'fixture-read', 'tool': 'Read', 'action': '자료 읽기',
+                     'target': '분기 실적.csv', 'state': 'running'},
+                    {'id': 'fixture-glob', 'tool': 'Glob', 'action': '파일 찾기',
+                     'target': '참고 자료', 'state': 'requested'}]
+                for row in rows:
+                    app.emit(sid, 'tool_activity', {**row, 'startedAt': activity_started,
+                        'runId': app.get(sid)['lastRunId']})
+            elif action == 'tool-approval':
+                app.emit(sid, 'request', {'id': 'fixture-tool-approval', 'tool': 'Read',
+                    'input': {'file_path': '분기 실적.csv'}})
+            else:
+                for rid in list(app.get(sid)['requests']):
+                    app.emit(sid, 'request_closed', {'id': rid})
+                app.emit(sid, 'status', {'state': 'running'})
+                for row in list(app.get(sid).get('toolActivity', [])):
+                    if row['state'] in {'requested', 'running'}:
+                        app.emit(sid, 'tool_activity', {**row, 'state': 'completed', 'finishedAt': time.time()})
+                app.emit(sid, 'assistant', {'text': '활동 표시 검증을 마쳤습니다. 가상 기록이며 실제 Claude는 호출하지 않았습니다.'})
+                app.emit(sid, 'result', {})
+            return
         if action == 'clear':
             for sid in tasks:
                 clear(sid)
@@ -211,7 +248,8 @@ def main():
                     command = json.loads(source.read_text(encoding='utf-8-sig'))
                     action = command['action']
                     if set(command) != {'action'} or action not in {
-                            'questions', 'question', 'approval', 'choice', 'completed', 'clear', 'status', 'quit'}:
+                            'questions', 'question', 'approval', 'choice', 'completed', 'clear', 'status', 'quit',
+                            'tool-start', 'tool-approval', 'tool-finish'}:
                         raise ValueError('Invalid fixture command.')
                     if action == 'quit':
                         quit_fixture()

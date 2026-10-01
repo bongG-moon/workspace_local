@@ -1,23 +1,29 @@
-# Company Workspace 0.21.3
+# Company Workspace 0.21.4
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.3/Company-Workspace-0.21.3-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.3/Company-Workspace-0.21.3-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.4/Company-Workspace-0.21.4-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.4/Company-Workspace-0.21.4-vbs.zip)**
 
-[0.21.3 변경 안내](docs/VALIDATION_0.21.3.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.3.md)
+[0.21.4 변경 안내](docs/VALIDATION_0.21.4.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.4.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.3.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.4.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
 
-## 0.21.3 변경
+## 0.21.4 변경
+
+- 입력창 위에 현재 도구·스킬과 수행 동작을 표시합니다. 파일 읽기, 검색, 파일 수정, 명령 실행, 스킬 호출과 추가 작업자의 활동을 구분합니다.
+- 채팅의 ‘도구·스킬 활동’에서 요청별 기록을 펼쳐 볼 수 있습니다. 호출 요청·실행 중·결과 수신·오류·결과 미확인을 구분하고, 승인·질문 대기 안내를 우선합니다.
+- 최근 활동을 최대 80개 보관하며 원본 명령·도구 응답·스킬 인자는 새 활동 기록에 복제하지 않습니다. 개인 Claude 설정과 기존 승인 방식을 유지합니다.
+
+## 0.21.3에서 개선된 기능
 
 - 업무 목록에서만 삭제하는 확인창을 추가했습니다. 실제 Claude 기록과 업무 폴더는 보존하며 진행 중인 작업·남은 예약은 먼저 정리하도록 안내합니다.
 - 파일·폴더 선택을 앱 디자인에 맞춘 선택창으로 통일했습니다. 바탕화면·문서·다운로드, 경로 이동, 검색과 여러 파일 선택을 지원하며 Windows 선택창도 사용할 수 있습니다.
