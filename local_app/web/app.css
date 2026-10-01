@@ -245,32 +245,6 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 .session-remove-icon{display:block;width:15px;height:15px;background:currentColor;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 7h16M9 3h6l1 4H8l1-4Zm-3 4 1 14h10l1-14M10 11v6m4-6v6' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
 @media(hover:none){.session-remove{opacity:1}}@media(forced-colors:active){.session-remove-icon{background-color:ButtonText}}
 
-/* A quiet blue frame separates navigation and materials from the conversation.
-   Keep the central surface and the system high-contrast palette independent. */
-@media(forced-colors:none){
-  .app>.sidebar,.app>.inspector{--panel-edge:#cbdbea;--panel-hover:#f0f7fe;--panel-selected:#d7e6f7;--shadow-small:4px 4px 9px #cfdae7,-4px -4px 9px #f8fcff;border-color:var(--panel-edge)}
-  .app>.sidebar{background:linear-gradient(165deg,#e9f1fa 0%,#dfeaf6 100%);box-shadow:inset -1px 0 #ffffff70}
-  .app>.inspector{background:linear-gradient(195deg,#edf4fc 0%,#e3eef9 100%);box-shadow:inset 1px 0 #ffffff80}
-  .sidebar .session-search{background:#f0f6fc;border-color:#d3e0ee}
-  .sidebar .palette-launcher{background:#f0f6fc;border-color:#d3e0ee;box-shadow:inset 1px 1px 3px #d8e4f1,inset -1px -1px 3px #fcfeff}
-  .sidebar-collapsed .sidebar .palette-launcher{background:transparent;border-color:transparent;box-shadow:none}
-  .sidebar .nav-button:hover,.sidebar .session-list .session-row:hover{background:var(--panel-hover)}
-  .sidebar .nav-button.active,.sidebar .session-list .session-row:has(.session.active){background:var(--panel-selected);box-shadow:inset 0 0 0 1px #c3d7ef}
-  .sidebar .nav-button.active,.sidebar .session-list .session.active{color:#426599}
-  .sidebar .session-state-dot:not([data-state=error]){background:#6f8fb8}
-  .sidebar .sidebar-footer,.inspector .inspector-tip{border-color:var(--panel-edge)}
-  .inspector .inspector-tabs{background:#dfeaf6;box-shadow:inset 2px 2px 4px #cfdeef,inset -2px -2px 4px #f8fcff}
-  .inspector .inspector-tab,.inspector .inspector-tab>span{color:#56677e}
-  .inspector .inspector-tab>span{background:#d2e2f3}
-  .inspector .inspector-tab[aria-selected="true"]{color:#426599;background:#f8fbff;box-shadow:2px 3px 5px #ccdcee,-2px -2px 4px #fff}
-  .inspector .inspector-tab[aria-selected="true"]>span{color:#426599;background:#e2edfa}
-  .inspector .folder-card,.inspector .result-card{background:#f2f7fd;border-color:#fbfdff}
-  .inspector .folder-card-icon{background:#dceafa;color:#6686b7}
-  .inspector .file{border-bottom-color:#cfddec}.inspector .file:hover{background:var(--panel-hover);color:#426599}
-  .inspector .file-extension{background:#e2edfa;border-color:#cadcf0;color:#426599}
-  .inspector .empty-file-icon{background:#eaf3fc;border-color:#f9fcff;color:#7f98b8;box-shadow:4px 4px 9px #cfdeed,-4px -4px 10px #fff}
-}
-
 /* Existing conversations are a start option; reuse the shared primary action. */
 .folder-dialog{padding:24px 28px}.folder-dialog .dialog-symbol{width:36px;height:36px;border-radius:11px}.folder-dialog h2{font-size:22px;margin-top:15px}.folder-dialog .folder-options{margin:18px 0 12px}.folder-dialog .folder-option{padding:11px 12px}.folder-dialog label{margin-top:15px}.folder-dialog .folder-options label{margin-top:8px}.folder-dialog .trust{font-size:11px;margin-top:16px}.folder-dialog .trust small{font-size:10px}.folder-dialog .dialog-actions{margin-top:18px;padding-top:14px}
 .sidebar .palette-launcher{margin-top:8px}.session-import-option{width:100%;text-align:left;color:var(--ink);gap:11px}.session-import-option>span{flex:1;min-width:0}.session-import-option small{color:var(--muted)}.session-import-icon{width:17px;height:17px;color:var(--accent-ink)}.session-import-arrow{width:17px;height:17px;margin-left:auto;color:var(--accent-ink)}.session-import-option:hover{background:var(--accent-tint);border-color:#b7bfe6}.import-apply{min-height:42px;padding:10px 17px;border-radius:12px}.import-apply .icon{width:17px;height:17px}.import-apply:disabled{box-shadow:none}.import-dialog>.dialog-actions{align-items:center}

@@ -21,7 +21,7 @@ def package(output):
     payload = {name: path.read_bytes() for name, path in FILES.items()}
     manifest = {
         'diagnosticVersion': 'ws38-1',
-        'targetWorkspaceVersion': '0.21.9',
+        'targetWorkspaceVersion': '0.21.10',
         'sha256': {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()},
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -43,5 +43,5 @@ def package(output):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path,
-                        default=ROOT / 'dist/Company-Workspace-0.21.9-python-diagnostic-1.zip')
+                        default=ROOT / 'dist/Company-Workspace-0.21.10-python-diagnostic-1.zip')
     print(json.dumps(package(parser.parse_args().output), indent=2))
