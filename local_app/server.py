@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.4"
+WORKSPACE_VERSION = "0.21.5"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -166,6 +166,11 @@ class LocalApp:
         from .desktop_notifications import DesktopNotifications
         self.desktop = DesktopNotifications(state, notify=self._notify_desktop,
             is_foreground=self._viewing_task, on_open=self.open_task)
+        # Only an explicit --no-browser launch may omit a screen draft ACK.
+        # A test/browser client with no native host is not proof of no drafts.
+        self._upgrade_headless = False
+        from .upgrade_handoff import UpgradeHandoff
+        self.upgrade = UpgradeHandoff(self, WORKSPACE_VERSION)
 
     def _notify_desktop(self, payload, on_click):
         if self._desktop_window is not None:
@@ -354,6 +359,8 @@ class LocalApp:
                     "workspaceLocationError": self.workspace_location_error,
                     "windowTitle": self.notifier.window_title,
                     "window": self.window_state(),
+                    "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
+                    "upgradeWarning": self.upgrade.warning,
                     **self.shutdown_status()}
 
     def window_state(self):
@@ -388,7 +395,8 @@ class LocalApp:
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
                         'nativeAvailable': bool((self._desktop_window and self._desktop_window.notification_available)
                                                 or (self.tray and self.tray.available))},
-                    'navigation': self._navigation}
+                    'navigation': self._navigation,
+                    'upgrade': self.upgrade.status()['upgrade'] if hasattr(self, 'upgrade') else None}
 
     def shutdown_status(self):
         with self._lifecycle:
@@ -397,16 +405,21 @@ class LocalApp:
                     'shutdownState': self._shutdown_state}
 
     @contextmanager
-    def operation(self):
+    def operation(self, *, upgrade_change=False):
         """Admit mutations before shutdown; drain accepted requests before close.
 
         The lifecycle condition is separate from the session lock so bootstrap
         remains available while a CLI connection is being stopped.
         """
-        with self._lifecycle:
-            if self._shutdown_state != 'running':
-                raise AppClosing('앱을 종료하고 있습니다. 종료가 끝난 뒤 실행 아이콘으로 다시 열어 주세요.')
-            self._active_operations += 1
+        # Match the handoff commit barrier's lock order. Never retain either
+        # lock while executing a request or waiting for CLI/process cleanup.
+        with self.lock:
+            with self._lifecycle:
+                if self._shutdown_state != 'running':
+                    raise AppClosing('앱을 종료하고 있습니다. 종료가 끝난 뒤 실행 아이콘으로 다시 열어 주세요.')
+                self._active_operations += 1
+                if upgrade_change:
+                    self.upgrade.invalidate()
         try:
             yield
         finally:
@@ -1011,6 +1024,8 @@ class LocalApp:
             if self.session_visibility.contains(sid):
                 return
             item = self.get(sid, _internal=True)
+            if kind in {'request', 'choice'} or kind == 'status' and data.get('state') in {'starting', 'running'}:
+                self.upgrade.invalidate()
             if kind in {'connected', 'model_changed', 'effort_changed', 'permission_mode_changed', 'control_restore_changed'}:
                 data = dict(data, controlRestore=item.get('_controlRestore'))
             if kind in {'assistant', 'assistant_delta', 'queued_user'}:
@@ -1436,6 +1451,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.bootstrap())
             if route.path == '/api/attention':
                 return self.reply(app.attention())
+            if route.path == '/api/upgrade':
+                return self.reply(app.upgrade.status(query.get('requestId', [None])[0]))
             if route.path == '/api/claude-sessions':
                 return self.reply(app.import_sessions(query.get('sessionId', [None])[0]))
             if route.path == '/api/dispatch':
@@ -1522,6 +1539,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
                       "/tool-activity.js": ("tool-activity.js", "text/javascript; charset=utf-8"),
                       "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
+                      "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
+                      "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
@@ -1569,6 +1588,15 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("올바른 요청 형식이 아닙니다.")
             app = self.server.app
             route = urlsplit(self.path).path
+            if route == '/api/upgrade':
+                result = app.upgrade.action(data)
+                if result.get('closed') is True:
+                    try:
+                        return self.reply(result)
+                    finally:
+                        threading.Thread(target=self.server.shutdown, daemon=True).start()
+                status = 503 if result.get('state') == 'failed' else 409 if not result.get('ok') else 200
+                return self.reply(result, status)
             if route == "/api/quit":
                 if not app.close():
                     return self.reply({'ok': False, **app.shutdown_status(),
@@ -1578,7 +1606,9 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     # Deliver completion only after cleanup, then stop accepting HTTP.
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
-            with app.operation():
+            read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind'}
+            read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
+            with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
         except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             payload = {"error": str(exc)}
@@ -1604,7 +1634,7 @@ class Handler(BaseHTTPRequestHandler):
             sid = query.get('id', [''])[0]
             name = unquote(self.headers.get('X-File-Name', ''), errors='strict')
             app = self.server.app
-            with app.operation():
+            with app.operation(upgrade_change=True):
                 with app.lock:
                     app.get(sid)
                 return self.reply(app.attachment_store.save(sid, name, self.rfile, size))
@@ -1759,6 +1789,7 @@ def main():
     if args.demo:
         args.state = args.state / "demo"
     app = LocalApp(args.state, demo=args.demo)
+    app._upgrade_headless = args.no_browser
     server = Server(app, args.port)
     url = server.origin + "/#token=" + app.token
     runtime = args.state / "runtime.json"

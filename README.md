@@ -1,23 +1,30 @@
-# Company Workspace 0.21.4
+# Company Workspace 0.21.5
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.4/Company-Workspace-0.21.4-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.4/Company-Workspace-0.21.4-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.5/Company-Workspace-0.21.5-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.21.5/Company-Workspace-0.21.5-vbs.zip)**
 
-[0.21.4 변경 안내](docs/VALIDATION_0.21.4.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.4.md)
+[0.21.5 변경 안내](docs/VALIDATION_0.21.5.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [검증 범위](docs/VALIDATION_0.21.5.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.4.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.21.5.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
-업데이트할 때는 기존 앱의 **설정 → 완전히 종료**를 누르고 새 ZIP을 별도 폴더에 풀어 실행하세요. 창의 X는 앱을 트레이에 남깁니다. 한 번에 한 버전만 실행합니다.
+새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
-## 0.21.4 변경
+## 0.21.5 변경
+
+- 새 버전을 실행하면 실행 조건을 먼저 확인하고, 이전 업무가 끝난 뒤 정상 종료와 새 버전 실행을 이어서 처리합니다. 진행 중인 작업이나 승인·질문 대기를 강제로 중단하지 않습니다.
+- 0.21.5부터 보내지 않은 입력과 첨부를 전환할 때 보관하고 새 화면에 복원합니다. 대기 중에는 취소할 수 있으며 복원한 입력을 자동으로 보내지 않습니다.
+- 0.21.4 이하에서 처음 전환할 때는 초안 자동 보관을 지원하지 않으므로 안내를 읽고 **확인**을 한 번 선택합니다. 이후 종료와 재실행은 자동으로 처리합니다.
+- 개인 Claude 설정과 PC 보안 설정을 유지합니다. 재시작 후 대기열·예약은 기존 정책대로 확인한 뒤 이어 실행합니다.
+
+## 0.21.4에서 개선된 기능
 
 - 입력창 위에 현재 도구·스킬과 수행 동작을 표시합니다. 파일 읽기, 검색, 파일 수정, 명령 실행, 스킬 호출과 추가 작업자의 활동을 구분합니다.
 - 채팅의 ‘도구·스킬 활동’에서 요청별 기록을 펼쳐 볼 수 있습니다. 호출 요청·실행 중·결과 수신·오류·결과 미확인을 구분하고, 승인·질문 대기 안내를 우선합니다.

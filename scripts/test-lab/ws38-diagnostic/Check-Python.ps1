@@ -13,7 +13,7 @@ $stage = 'source_check'
 $sourceMatches = $false
 $exitCode = 0
 $report = [ordered]@{
-    diagnosticVersion='ws38-1'; targetWorkspaceVersion='0.21.4'; runId=$runId
+    diagnosticVersion='ws38-1'; targetWorkspaceVersion='0.21.5'; runId=$runId
     createdUtc=[DateTime]::UtcNow.ToString('o'); status='checking'; sourceMatches=$false
     current=$null; production=$null; transition=$null; failure=$null
     scope='python_prerequisite_only'; originalAppFailureObserved=$false
@@ -48,7 +48,7 @@ function Assert-DiagnosticSource {
     $manifestPath = Join-Path $toolRoot 'manifest.json'
     if (-not [IO.File]::Exists($manifestPath) -or (Get-Item -LiteralPath $manifestPath).Length -gt 65536) { throw 'DIAGNOSTIC:manifest_missing' }
     $manifest = [IO.File]::ReadAllText($manifestPath, [Text.Encoding]::UTF8) | ConvertFrom-Json
-    if ($manifest.diagnosticVersion -ne 'ws38-1' -or $manifest.targetWorkspaceVersion -ne '0.21.4') { throw 'DIAGNOSTIC:manifest_version' }
+    if ($manifest.diagnosticVersion -ne 'ws38-1' -or $manifest.targetWorkspaceVersion -ne '0.21.5') { throw 'DIAGNOSTIC:manifest_version' }
     $files = @('Check-Python.cmd', 'Check-Python.ps1', 'CheckPython.Native.cs', 'README.txt',
         'deploy/CompanyWorkspace.Startup.ps1', 'deploy/CompanyWorkspace.NormalToken.cs',
         'deploy/CompanyAgent.UserContext.ps1', 'deploy/Start-CompanyWorkspace.ps1')

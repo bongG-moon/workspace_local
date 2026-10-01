@@ -70,8 +70,11 @@ Company Workspace $version - single EXE edition
    download or install Python. Missing prerequisites are reported at startup.
 3. AI features use the current Windows user's existing Claude Code installation
    and authentication. Claude and Company Agent are not installed by this ZIP.
-4. Before switching from the VBS edition or another version, use Settings >
-   Quit app in the running Workspace. Closing its window alone is not enough.
+4. Launching the same or an older version reuses the running app. A newer
+   version waits for current work, then closes and restarts normally. Releases
+   before 0.21.5 require one confirmation after saving unsent drafts yourself.
+   From 0.21.5, drafts are preserved automatically. Review queues and schedules
+   after restarting to resume them.
 5. Existing account, Windows security policy and personal Claude settings are
    preserved. Company policy may block scripts or executables; this package
    does not bypass those restrictions.

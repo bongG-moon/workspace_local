@@ -31,7 +31,7 @@ class WorkspaceReopenTests(unittest.TestCase):
 
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
-                       probe_dialog_mutex=False, reopen_supported=True):
+                       probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -96,7 +96,7 @@ function Start-Process { throw 'unexpected process launch' }
             substitutions = {
                 "REOPEN": "$true" if reopen_supported else "$false",
                 "EVENTS": ps_quote(events), "SID": ps_quote("fixture-" + directory.name),
-                "ROOT": ps_quote(directory), "VERSION": ps_quote(version if same_version else "old-build"),
+                "ROOT": ps_quote(directory), "VERSION": ps_quote(version_override or (version if same_version else "0.20.0")),
                 "APPROOT": ps_quote(directory if same_root else directory / "other-app"),
                 "CLOSING": "$true" if closing else "$false", "RUNTIME": ps_quote(runtime),
                 "WAIT_RESULT": "$true" if wait_finished else "$false",
@@ -110,6 +110,24 @@ function Start-Process { throw 'unexpected process launch' }
             }
             overrides = re.sub(r"\b(?:" + "|".join(substitutions) + r")\b",
                                lambda match: substitutions[match[0]], overrides)
+            if upgrade_ready:
+                overrides += r'''
+function Get-WorkspacePythonExecutable { param($Command) return 'C:\Fixture\python.exe' }
+function Invoke-WorkspacePythonQuery {
+  param($Executable,$Arguments,$WorkingDirectory)
+  Write-FixtureEvent 'preflight' $Arguments
+  return '{"ok":true}'
+}
+function Start-Process {
+  param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)
+  Write-FixtureEvent 'coordinator' $WindowStyle
+  $index = [Array]::IndexOf($ArgumentList, '--request-id')
+  $requestId = $ArgumentList[$index+1]
+  $ack = @{requestId=$requestId; status='accepted'} | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText((Join-Path STATE ('upgrade-launch-' + $requestId + '.json')), $ack)
+  return [pscustomobject]@{HasExited=$false}
+}
+'''.replace('STATE', ps_quote(state))
             (deploy / HELPER.name).write_text(HELPER.read_text(encoding="utf-8-sig") + overrides,
                                              encoding="utf-8-sig")
             flags = " -NoBrowser" if no_browser else ""
@@ -132,13 +150,12 @@ function Start-Process { throw 'unexpected process launch' }
             self.assertEqual(runtime.read_text(encoding="utf-8"), original, "Existing runtime must remain untouched")
             return result, records, url
 
-    def test_previous_version_reopens_authenticated_window_before_one_guidance_dialog(self):
+    def test_previous_version_keeps_old_window_when_new_python_preflight_fails(self):
         result, events, url = self.fixture_launch()
         self.assertEqual(result.returncode, 20, result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "open", "dialog"])
         self.assertEqual(events[1]["value"], url)
-        self.assertIn("설정 → 앱 종료", events[2]["value"])
-        self.assertIn("X 버튼", events[2]["value"])
+        self.assertIn("WS-37", events[2]["value"])
         self.assertNotIn("오른쪽 위 전원", events[2]["value"])
 
     def test_warning_does_not_hold_launch_mutex_while_dialog_is_open(self):
@@ -152,8 +169,8 @@ function Start-Process { throw 'unexpected process launch' }
 
     def test_different_folder_reopens_without_starting_new_app(self):
         result, events, _ = self.fixture_launch(same_version=True, same_root=False)
-        self.assertEqual(result.returncode, 20, result.stderr)
-        self.assertEqual([item["kind"] for item in events], ["health", "open", "dialog"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([item["kind"] for item in events], ["health", "open"])
 
     def test_no_browser_mismatch_retains_ws39_without_open_or_dialog(self):
         result, events, _ = self.fixture_launch(no_browser=True)
@@ -163,14 +180,25 @@ function Start-Process { throw 'unexpected process launch' }
 
     def test_relaunched_child_reopens_but_parent_owns_the_only_dialog(self):
         result, events, _ = self.fixture_launch(relaunched=True)
-        self.assertEqual(result.returncode, 39, result.stderr)
-        self.assertIn("WS-39", result.stderr)
+        self.assertEqual(result.returncode, 37, result.stderr)
+        self.assertIn("WS-37", result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "open"])
 
     def test_same_build_reopens_without_upgrade_warning(self):
         result, events, _ = self.fixture_launch(same_version=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "open"])
+
+    def test_newer_running_version_is_reused_without_downgrade(self):
+        result, events, _ = self.fixture_launch(version_override='99.0.0')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['health', 'open'], [row['kind'] for row in events])
+
+    def test_previous_version_preflights_then_hands_off_without_waiting_for_work(self):
+        result, events, _ = self.fixture_launch(upgrade_ready=True)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(['health', 'open', 'preflight', 'coordinator'], [row['kind'] for row in events])
+        self.assertEqual('Hidden', events[-1]['value'])
 
     def test_legacy_server_without_reopen_api_never_launches_a_browser(self):
         result, events, _ = self.fixture_launch(reopen_supported=False)
@@ -201,7 +229,7 @@ function Start-Process { throw 'unexpected process launch' }
             with self.subTest(endpoint_live=endpoint_live, runtime_exists=runtime_exists):
                 source = ". " + ps_quote(HELPER) + "\n"
                 source += "function Start-Sleep {}\n"
-                source += "function Invoke-RestMethod { " + ("return @{}" if endpoint_live else "throw 'offline'") + " }\n"
+                source += "function Invoke-RestMethod { " + ("return @{}" if endpoint_live else "throw (New-Object Net.Sockets.SocketException 10061)") + " }\n"
                 source += "function Test-Path { return $" + str(runtime_exists).lower() + " }\n"
                 source += "Wait-WorkspaceShutdown -Origin 'http://127.0.0.1:54321' -Auth 'fixture' -RuntimePath 'fixture' -TimeoutSeconds 0 | ConvertTo-Json -Compress"
                 result = self.powershell(source)

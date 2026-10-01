@@ -44,6 +44,8 @@ $files = @(
     'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
     'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py',
     'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
+    'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py',
+    'local_app\web\upgrade-handoff.js', 'local_app\web\upgrade-handoff.css',
     'local_app\web\rich-content.js', 'local_app\web\rich-content.css', 'local_app\web\execution-view.js', 'local_app\web\execution-view.css',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
     'local_app\web\app-icon-192.png', 'local_app\web\app-icon-512.png'
@@ -61,7 +63,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.4-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.21.5-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

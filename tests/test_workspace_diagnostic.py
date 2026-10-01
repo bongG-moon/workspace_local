@@ -42,7 +42,7 @@ class WorkspaceDiagnosticContractTests(unittest.TestCase):
         script = SCRIPT.read_text(encoding="utf-8-sig")
         expected = dict(re.findall(r"'(deploy/[^']+)'\s*=\s*'([a-f0-9]{64})'", script))
         self.assertEqual(set(SOURCES), set(expected))
-        self.assertRegex(script, r"targetSource\s*=\s*'workspace-0.21.4'")
+        self.assertRegex(script, r"targetSource\s*=\s*'workspace-0.21.5'")
         for relative, digest in expected.items():
             with self.subTest(source=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8-sig")
@@ -130,8 +130,8 @@ finally { $identity.Dispose() }
             "process64Bit", "stage", "reason", "nativeCode", "notTested",
             "executionPolicy", "scriptEvidence", "originalLaunchObserved", "nextStep",
         }, set(report))
-        self.assertEqual("ws33-32", report["diagnosticVersion"])
-        self.assertEqual("workspace-0.21.4", report["targetSource"])
+        self.assertEqual("ws33-33", report["diagnosticVersion"])
+        self.assertEqual("workspace-0.21.5", report["targetSource"])
         self.assertEqual(set(SOURCES), set(report["files"]))
         self.assertTrue(set(report["files"].values()) <= {"matched", "missing", "different_version"})
         self.assertEqual([

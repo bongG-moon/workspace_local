@@ -15,7 +15,7 @@ if ($NormalTokenRelaunch -and $env:COMPANY_WORKSPACE_PYTHON_ATTEMPT -match '^[a-
 }
 
 function Invoke-WorkspacePythonQuery {
-    param([string] $Executable, [string] $Arguments, [int] $TimeoutMilliseconds = 6000)
+    param([string] $Executable, [string] $Arguments, [int] $TimeoutMilliseconds = 6000, [string] $WorkingDirectory)
     # Some Windows python/py aliases are install managers. Disable automatic
     # installation only in this probe child, without editing the parent, PATH,
     # registry, profiles, or the eventual Workspace/Claude environment.
@@ -26,6 +26,7 @@ function Invoke-WorkspacePythonQuery {
         $queryStart = New-Object Diagnostics.ProcessStartInfo
         $queryStart.FileName = $Executable
         $queryStart.Arguments = $Arguments
+        if ($WorkingDirectory) { $queryStart.WorkingDirectory = $WorkingDirectory }
         $queryStart.UseShellExecute = $false
         $queryStart.CreateNoWindow = $true
         $queryStart.RedirectStandardOutput = $true
@@ -308,18 +309,19 @@ try {
     $liveWorkspaceUri = $null
     $sameWorkspaceRunning = $false
     $workspaceClosing = $false
+    $upgradeNeeded = $false
     if (Test-Path -LiteralPath $runtimePath) {
         try {
             $runtime = Get-Content -LiteralPath $runtimePath -Raw -Encoding UTF8 | ConvertFrom-Json
             $uri = [Uri]$runtime.url
-            if ($uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1' -or $uri.AbsolutePath -ne '/' -or $uri.Fragment -notmatch '^#token=([A-Za-z0-9_-]{40,100})$') { throw 'Invalid local endpoint' }
+            if ($uri.Scheme -ne 'http' -or $uri.Host -ne '127.0.0.1' -or $uri.IsDefaultPort -or $uri.UserInfo -or $uri.Query -or $uri.AbsolutePath -ne '/' -or $uri.Fragment -notmatch '^#token=([A-Za-z0-9_-]{40,100})$') { throw 'Invalid local endpoint' }
             $auth = $Matches[1]
             $origin = $uri.GetLeftPart([UriPartial]::Authority)
-            $health = Invoke-RestMethod -Uri ($origin + '/api/bootstrap') -Headers @{ Authorization = ('Bearer ' + $auth) } -TimeoutSec 2
+            $health = Invoke-RestMethod -Uri ($origin + '/api/bootstrap') -Headers @{ Authorization = ('Bearer ' + $auth) } -TimeoutSec 2 -MaximumRedirection 0
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.4' -and $health.appRoot -eq $appRoot
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.5'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -331,17 +333,22 @@ try {
         $liveWorkspaceUri = $null
     }
     if ($liveWorkspaceUri) {
-        # Closing the app window leaves its connection alive. A previous build
-        # must remain reachable so the user can end it through Settings.
-        # Open only the authenticated, validated endpoint above; never kill it.
+        # A same/newer live version owns the window regardless of ZIP location.
+        # Never downgrade a running app just because an older EXE was opened.
+        $runningVersion = $null
+        $targetVersion = [version]'0.21.5'
+        if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
+        $upgradeNeeded = $runningVersion -lt $targetVersion
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
         if (-not $NoBrowser) {
             if (-not $canReuseWindow) { throw 'WORKSPACE_STARTUP:39' }
             Open-WorkspaceWindow -Uri $liveWorkspaceUri -ReuseSupported $true
         }
-        if (-not $sameWorkspaceRunning) { throw 'WORKSPACE_STARTUP:39' }
-        return
+        if (-not $upgradeNeeded) { return }
+        # Older releases cannot preserve unsent input. Their single transition
+        # confirmation is shown by the detached coordinator immediately at idle.
+        if ($NoBrowser -and $health.upgradeProtocol -ne 1) { throw 'WORKSPACE_STARTUP:39' }
     }
     if (-not $Demo -and -not $env:COMPANY_AGENT_CLAUDE) {
         # Resolve exactly what `claude` means in this user's shell. Do not silently
@@ -406,6 +413,42 @@ try {
         Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE -ErrorAction SilentlyContinue
     }
     $resolvedPython = Get-WorkspacePythonExecutable -Command $PythonCommand
+    if ($upgradeNeeded) {
+        # Complete prerequisites while the previous app is still available.
+        # The coordinator inherits this verified user's token and Claude shell
+        # resolution, but has its own lifetime beyond the 60/90 second wrappers.
+        $preflightArguments = '-X utf8 -m local_app.upgrade_launcher --preflight'
+        if ($NoBrowser) { $preflightArguments += ' --no-browser' }
+        $preflight = Invoke-WorkspacePythonQuery -Executable $resolvedPython -Arguments $preflightArguments -WorkingDirectory $appRoot
+        if (-not $preflight -or -not (($preflight | ConvertFrom-Json).ok -eq $true)) { throw 'WORKSPACE_STARTUP:47' }
+        $requestId = [Guid]::NewGuid().ToString('N')
+        $coordinatorPython = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
+        if (-not (Test-Path -LiteralPath $coordinatorPython -PathType Leaf)) { $coordinatorPython = $resolvedPython }
+        if ($appStateRoot -match '["\r\n]' -or $resolvedPython -match '["\r\n]') { throw 'WORKSPACE_STARTUP:42' }
+        # Windows argv escaping doubles a trailing slash before the close quote.
+        $quotedState = '"' + $appStateRoot + [regex]::Match($appStateRoot, '\\+$').Value + '"'
+        $arguments = @('-X', 'utf8', '-m', 'local_app.upgrade_launcher', '--state', $quotedState,
+                      '--python', ('"' + $resolvedPython + '"'), '--request-id', $requestId)
+        if ($Demo) { $arguments += '--demo' }
+        if ($NoBrowser) { $arguments += '--no-browser' }
+        $coordinator = Start-Process -FilePath $coordinatorPython -ArgumentList $arguments -WorkingDirectory $appRoot -WindowStyle Hidden -PassThru
+        $ackPath = Join-Path $runtimeStateRoot ('upgrade-launch-' + $requestId + '.json')
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            if (Test-Path -LiteralPath $ackPath -PathType Leaf) {
+                try {
+                    $ack = Get-Content -LiteralPath $ackPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                    if ($ack.requestId -eq $requestId -and $ack.status -in @('accepted', 'already_waiting')) {
+                        Remove-Item -LiteralPath $ackPath -ErrorAction SilentlyContinue
+                        return
+                    }
+                } catch {}
+            }
+            Start-Sleep -Milliseconds 100
+            $coordinator.Refresh()
+        } while ([DateTime]::UtcNow -lt $deadline -and -not $coordinator.HasExited)
+        throw 'WORKSPACE_STARTUP:39'
+    }
     $windowless = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
     if (Test-Path -LiteralPath $windowless) { $resolvedPython = $windowless }
     $arguments = @('-X', 'utf8', '-m', 'local_app.server')

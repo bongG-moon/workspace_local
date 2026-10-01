@@ -68,7 +68,7 @@ function Write-WorkspacePythonDiagnostic {
         $null = [IO.Directory]::CreateDirectory($directory)
         if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         $path = Join-Path $directory ('python-check-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
-        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.21.4';
+        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.21.5';
             createdUtc=[DateTime]::UtcNow.ToString('o'); sourceRoot=[IO.Path]::GetFullPath($AppRoot);
             powershellVersion=$PSVersionTable.PSVersion.ToString(); attemptId=$AttemptId; code=('WS-' + $Code); checks=$clean }
         # Allowlisted metadata only: no stderr, wrapper/profile bodies, auth,
@@ -93,7 +93,7 @@ function Read-WorkspaceRecentPythonDiagnostic {
         foreach ($file in $files) {
             try {
                 $report = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.21.4' -or
+                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.21.5' -or
                     $report.sourceRoot -ne [IO.Path]::GetFullPath($AppRoot) -or $report.code -ne ('WS-' + $Code) -or $report.attemptId -ne $AttemptId) { continue }
                 return [pscustomobject]@{ path=$file.FullName; checks=@(ConvertTo-WorkspacePythonChecks -Checks $report.checks) }
             } catch {}
@@ -160,6 +160,42 @@ function Show-WorkspaceStartupDialog {
     [Windows.Forms.MessageBox]::Show($Message, 'Company Workspace', 'OK', 'Warning') | Out-Null
 }
 
+function Confirm-WorkspaceLegacyUpgrade {
+    Initialize-WorkspaceStartupDisplay
+    $message = '새 버전으로 전환할 준비가 됐어요. 이전 버전은 보내지 않은 입력을 자동으로 옮길 수 없습니다. 작성 중인 내용이 있다면 먼저 복사해 두세요.' + [Environment]::NewLine + [Environment]::NewLine +
+        '확인을 누르면 이전 앱을 종료하고 새 버전을 자동으로 엽니다. 대화와 파일은 유지되며, 예약과 이어 할 일은 새 앱에서 확인 후 다시 이어 실행할 수 있어요.'
+    $owner = New-Object Windows.Forms.Form
+    try {
+        $owner.ShowInTaskbar = $false
+        $owner.TopMost = $true
+        $owner.Opacity = 0
+        $owner.StartPosition = 'CenterScreen'
+        $owner.Show()
+        return [Windows.Forms.MessageBox]::Show($owner, $message, '새 버전으로 전환', 'OKCancel', 'Information') -eq [Windows.Forms.DialogResult]::OK
+    } finally { $owner.Dispose() }
+}
+
+function Show-WorkspaceUpgradeWaiting {
+    Initialize-WorkspaceStartupDisplay
+    $notice = New-Object Windows.Forms.NotifyIcon
+    try {
+        $iconPath = Join-Path (Split-Path $PSScriptRoot -Parent) 'local_app\web\app-icon.ico'
+        $notice.Icon = New-Object Drawing.Icon($iconPath)
+        $notice.Visible = $true
+        $notice.BalloonTipTitle = '새 버전 전환 대기 중'
+        $notice.BalloonTipText = '진행 중인 업무와 승인·질문을 마치면 전환을 안내합니다. 기존 앱에서 계속 작업할 수 있어요.'
+        $notice.ShowBalloonTip(5000)
+        Start-Sleep -Seconds 5
+    } finally { $notice.Dispose() }
+    return $true
+}
+
+function Show-WorkspaceUpgradeFailure {
+    Initialize-WorkspaceStartupDisplay
+    [Windows.Forms.MessageBox]::Show('새 버전으로 전환을 마치지 못했어요. 진행 중인 업무를 강제로 종료하지 않았습니다. 기존 앱의 작업 상태를 확인한 뒤 새 실행 파일을 다시 열어 주세요.', 'Company Workspace', 'OK', 'Information') | Out-Null
+    return $true
+}
+
 
 function Wait-WorkspaceShutdown {
     param([string] $Origin, [string] $Auth, [string] $RuntimePath, [int] $TimeoutSeconds = 45)
@@ -169,9 +205,12 @@ function Wait-WorkspaceShutdown {
         try {
             # An early /quit acknowledgement may precede CLI cleanup. Wait for
             # both the old endpoint and its owned runtime record to disappear.
-            $null = Invoke-RestMethod -Uri ($Origin + '/api/bootstrap') -Headers @{ Authorization = ('Bearer ' + $Auth) } -TimeoutSec 2
+            $null = Invoke-RestMethod -Uri ($Origin + '/api/bootstrap') -Headers @{ Authorization = ('Bearer ' + $Auth) } -TimeoutSec 5 -MaximumRedirection 0
         } catch {
-            if (-not (Test-Path -LiteralPath $RuntimePath)) { return $true }
+            $failure = $_.Exception
+            while ($failure.InnerException) { $failure = $failure.InnerException }
+            $refused = $failure -is [Net.Sockets.SocketException] -and $failure.SocketErrorCode -eq [Net.Sockets.SocketError]::ConnectionRefused
+            if ($refused -and -not (Test-Path -LiteralPath $RuntimePath)) { return $true }
         }
     } while ([DateTime]::UtcNow -lt $deadline)
     return $false
@@ -181,10 +220,10 @@ function Open-WorkspaceWindow {
     param([Uri] $Uri, [bool] $ReuseSupported = $false)
     # Only an authenticated local Workspace URL is passed by the launcher.
     try {
-        if ($Uri.Scheme -ne 'http' -or $Uri.Host -ne '127.0.0.1' -or $Uri.Fragment -notmatch '^#token=([A-Za-z0-9_-]{40,100})$') { throw 'Invalid local endpoint' }
+        if ($Uri.Scheme -ne 'http' -or $Uri.Host -ne '127.0.0.1' -or $Uri.IsDefaultPort -or $Uri.UserInfo -or $Uri.Query -or $Uri.AbsolutePath -ne '/' -or $Uri.Fragment -notmatch '^#token=([A-Za-z0-9_-]{40,100})$') { throw 'Invalid local endpoint' }
         $windowAuth = $Matches[1]
         if ($ReuseSupported) {
-            $opened = Invoke-RestMethod -Method Post -Uri ($Uri.GetLeftPart([UriPartial]::Authority) + '/api/window/open') -Headers @{ Authorization = ('Bearer ' + $windowAuth) } -ContentType 'application/json' -Body '{}' -TimeoutSec 10
+            $opened = Invoke-RestMethod -Method Post -Uri ($Uri.GetLeftPart([UriPartial]::Authority) + '/api/window/open') -Headers @{ Authorization = ('Bearer ' + $windowAuth) } -ContentType 'application/json' -Body '{}' -TimeoutSec 10 -MaximumRedirection 0
             if ($opened.ok -eq $true) { return }
             throw 'Window response was not accepted'
         }

@@ -48,10 +48,13 @@ function confirmAction({title,message,confirmLabel="확인",danger=false,returnF
 }
 function error(text){$("error-banner").textContent=text||"";$("error-banner").hidden=!text;$("recovery-actions").hidden=!text||appClosed;}
 async function api(path,data,signal){
-  const options={headers:{Authorization:`Bearer ${token}`},signal};
-  if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
-  let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
-  const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;throw failure;}return value;
+  const finish=globalThis.WorkspaceUpgrade?.begin(path,data!==undefined);
+  try{
+    const options={headers:{Authorization:`Bearer ${token}`},signal};
+    if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
+    let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
+    const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;if(path==="/api/upgrade")failure.upgrade=value.upgrade;throw failure;}return value;
+  }finally{finish?.();}
 }
 function setStatus(state,label,runId){
   if(active)active.state=state;globalThis.WorkspaceSessionImport?.render();const busy=busyStates.has(state),running=state==="starting"||state==="running";
@@ -635,19 +638,32 @@ async function restoreScreenRecovery(snapshot){
   const liveDraftIds=new Set(drafts.keys());
   for(const row of snapshot.drafts)if(!drafts.has(row.id))drafts.set(row.id,{text:row.text,attachments:[...row.attachments]});
   const id=snapshot.sessionId,exists=id&&sessions.some(row=>row.id===id);
+  const conflicts=()=>snapshot.drafts.filter(row=>{
+    const same=draft=>!!draft&&(draft.text||"")===row.text&&JSON.stringify(draft.attachments||[])===JSON.stringify(row.attachments);
+    if(!same(drafts.get(row.id)))return true;
+    if(!row.text&&!row.attachments.length)return false;
+    return row.id!=="home"&&!sessions.some(item=>item.id===row.id)&&!(row.id===id&&same(drafts.get("home")));
+  }).map(row=>row.id);
   if(exists){
     const selection=selectSession(id,{keepDraft:true}),ticket=selectionGeneration;
     const selected=await selection;
-    if(selected===false||active?.id!==id||selectionGeneration!==ticket)return {selectionChanged:true};
-    restoreDraft(id);return {};
+    if(selected===false||active?.id!==id||selectionGeneration!==ticket)return {selectionChanged:true,conflicts:conflicts()};
+    restoreDraft(id);return {conflicts:conflicts()};
   }
   if(id&&!liveDraftIds.has("home")){const previous=drafts.get(id);if(previous)drafts.set("home",{text:previous.text,attachments:[...previous.attachments]});}
-  restoreDraft("home");return {missingSession:!!id};
+  restoreDraft("home");return {missingSession:!!id,conflicts:conflicts()};
 }
 globalThis.WorkspaceStartupHealth?.attach({
   report:record=>api("/api/ui-health",record),capture:captureScreenRecovery,restore:restoreScreenRecovery,
   canReload:()=>!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
 });
-async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
+globalThis.WorkspaceUpgrade?.attach({
+  api:(path,data)=>api(path,data),capture:captureScreenRecovery,restore:restoreScreenRecovery,
+  canCapture:()=>!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
+  openRecovery:id=>showDialog(id),taskTitle:id=>sessions.find(row=>row.id===id)?.title,
+  confirmRecovery:()=>confirmAction({title:"이전 초안 보관을 해제할까요?",message:"필요한 내용을 복사했는지 확인해 주세요. 이전 창에서 별도로 보관한 초안 기록만 지우며, 현재 화면의 입력 내용과 대화·파일은 유지합니다.",confirmLabel:"보관 해제"}),
+  failed:message=>toast(message),restored:outcome=>toast(outcome?.missingSession?"작성 중이던 내용을 업무 홈에 복원했어요.":"이전 창의 작성 내용과 첨부 자료를 이어서 사용할 수 있어요.")
+});
+async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

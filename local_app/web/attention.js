@@ -54,7 +54,7 @@ globalThis.WorkspaceAttention = (() => {
   }
   function apply(snapshot) {
     globalThis.WorkspaceDesktop?.apply(snapshot.desktop,snapshot);
-    globalThis.WorkspaceDesktop?.follow(snapshot.navigation);
+    if(!globalThis.WorkspaceUpgrade?.isLocked())globalThis.WorkspaceDesktop?.follow(snapshot.navigation);
     setWindowTitle(snapshot.windowTitle);
     native = snapshot.native && typeof snapshot.native === "object" ? snapshot.native : {};
     const unique = new Set();
@@ -77,6 +77,7 @@ globalThis.WorkspaceAttention = (() => {
     }
     if (seen.size > 300) { seen = new Set([...seen].slice(-300));seenChanged=true; }
     if(seenChanged)storeSeen(); render();
+    void globalThis.WorkspaceUpgrade?.observe(snapshot.upgrade,snapshot);
   }
   async function bindIfFocused() {
     if (!running || appClosed || !windowTitle || !native.supported || native.bound || !visible() || binding || Date.now() - lastBind < 10000) return;

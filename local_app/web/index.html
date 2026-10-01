@@ -17,6 +17,8 @@
   <link rel="stylesheet" href="/review.css">
   <link rel="stylesheet" href="/startup-health.css">
   <script src="/startup-health.js"></script>
+  <link rel="stylesheet" href="/upgrade-handoff.css">
+  <script src="/upgrade-handoff.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/path-picker.js" defer></script>
   <script src="/rich-content.js" defer></script>
@@ -86,6 +88,7 @@
         <div class="top-actions"><button id="desktop-open" class="attention-button" type="button">알림 <span id="desktop-count" hidden>0</span></button><button id="attention-open" class="attention-button" type="button" hidden>응답 대기 <span id="attention-count">0</span></button><span id="connection-badge" class="pill">연결 확인 중</span><button id="materials-button" class="icon-button materials-button" aria-label="자료와 결과 접기" title="자료와 결과 접기" aria-expanded="true" aria-controls="inspector-panel"><svg class="icon"><use href="#i-inspector"/></svg></button><button id="workspace-button" class="icon-button" aria-label="업무 저장 위치 선택" title="업무 저장 위치"><svg class="icon"><use href="#i-folder"/></svg></button></div>
       </header>
       <div id="startup-health" class="startup-health" role="status" aria-live="polite" hidden><p id="startup-health-text"></p><button id="startup-health-check" type="button" hidden>다시 확인</button><button id="startup-health-reload" type="button" hidden>화면 다시 열기</button></div>
+      <div id="upgrade-notice" class="upgrade-notice" role="status" aria-live="polite" hidden><p id="upgrade-notice-text"></p><button id="upgrade-recovery-open" class="text-button" type="button" hidden>이전 초안 확인</button><button id="upgrade-notice-cancel" class="text-button" type="button">전환 취소</button></div>
       <div id="demo-banner" class="demo-banner" hidden><svg class="icon"><use href="#i-spark"/></svg><span>화면 체험 중 · 가상의 업무로 둘러보세요. 실제 AI 실행이나 자료 읽기는 하지 않습니다.</span></div>
       <div id="error-banner" class="error-banner" role="alert" hidden></div>
       <div id="recovery-actions" class="recovery-actions" hidden><button id="reconnect" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>연결 다시 확인</button><button id="connection-settings" class="text-button">연결 설정 보기 <span aria-hidden="true">↗</span></button></div>
@@ -205,5 +208,7 @@
     <p id="branch-status" role="status"></p><div class="branch-actions"><button id="branch-cancel" class="quiet-button" type="button">취소</button><button id="branch-create" class="primary" type="button">분기 만들기</button></div>
   </dialog>
 
+  <dialog id="upgrade-recovery-dialog" class="upgrade-recovery-dialog" aria-labelledby="upgrade-recovery-title"><div class="dialog-head"><h2 id="upgrade-recovery-title">보관된 이전 초안</h2><button id="upgrade-recovery-close" class="icon-button" type="button" aria-label="이전 초안 닫기">×</button></div><p>새 창의 입력 내용은 유지했어요. 필요한 이전 내용을 선택해 복사할 수 있습니다.</p><label for="upgrade-recovery-task">업무</label><select id="upgrade-recovery-task"></select><label for="upgrade-recovery-text">이전 창의 입력 내용</label><textarea id="upgrade-recovery-text" readonly></textarea><button id="upgrade-recovery-select" class="text-button" type="button">초안 내용 선택</button><p class="upgrade-recovery-label">첨부 자료 경로</p><pre id="upgrade-recovery-files"></pre><p id="upgrade-recovery-message" role="status"></p><footer><button id="upgrade-recovery-release" class="quiet-button" type="button">복사·확인 완료</button></footer></dialog>
+  <dialog id="upgrade-dialog" class="upgrade-dialog" aria-labelledby="upgrade-title" aria-describedby="upgrade-detail"><span class="upgrade-mark" aria-hidden="true">↗</span><h2 id="upgrade-title">새 버전으로 전환하고 있어요</h2><p id="upgrade-detail"></p><footer><button id="upgrade-cancel" class="quiet-button" type="button">전환 취소</button></footer></dialog>
 </body>
 </html>
