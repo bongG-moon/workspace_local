@@ -504,7 +504,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.assertNotIn('innerHTML', script)
         self.assertNotIn('setInterval(', script)
 
-    def test_shipped_sidebar_indicator_is_an_independent_keyboard_button(self):
+    def test_shipped_sidebar_indicator_is_an_independent_button_before_settings(self):
         page = (ROOT / "local_app/web/index.html").read_text(encoding="utf-8")
         button = re.search(r'<button\b[^>]*\bid="app-update-sidebar-badge"[^>]*>(.*?)</button>', page, re.S)
         self.assertIsNotNone(button)
@@ -519,6 +519,9 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         settings = re.search(r'<button\b[^>]*\bid="settings-open"[^>]*>.*?</button>', page, re.S)
         self.assertIsNotNone(settings)
         self.assertNotIn('app-update-sidebar-badge', settings.group())
+        self.assertLess(button.start(), settings.start())
+        self.assertEqual('', page[button.end():settings.start()].strip())
+        self.assertRegex(page[:button.start()], r'<div class="sidebar-footer">\s*$')
         self.assertIn('id="app-update-settings-badge"', page)
 
 

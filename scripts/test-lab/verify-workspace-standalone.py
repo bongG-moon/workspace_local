@@ -19,14 +19,14 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['start', 'prepare', 'controls', 'prompt', 'activity', 'status', 'finish'])
-parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.23.5.exe')
+parser.add_argument('--exe', type=Path, default=ROOT / 'dist/Company-Workspace-0.23.6.exe')
 parser.add_argument('--run', default='final')
 parser.add_argument('--python', type=Path, help='Explicit existing interpreter for an EXE startup check')
 parser.add_argument('--desktop', action='store_true', help='Open the real owned WebView2 window')
 args = parser.parse_args()
 if not re.fullmatch('[a-z0-9-]{1,30}', args.run):
     parser.error('Invalid validation run name')
-OUT = ROOT / ('build/qa-standalone-0.23.5-' + args.run)
+OUT = ROOT / ('build/qa-standalone-0.23.6-' + args.run)
 STATE = OUT / 'app-state'
 CACHE = OUT / '실행 캐시'
 COPY = OUT / 'EXE만 있는 한글 폴더' / args.exe.name
@@ -78,7 +78,7 @@ if args.action == 'start':
     if args.desktop:
         assert boot['window']['mode'] == 'desktop' and boot['window']['engine'] == 'WebView2'
         assert request('/api/window/open', {})['action'] == 'activated'
-    assert boot['workspaceVersion'] == '0.23.5' and boot['demo'] is False and not boot['error']
+    assert boot['workspaceVersion'] == '0.23.6' and boot['demo'] is False and not boot['error']
     app_root = Path(boot['appRoot'])
     assert app_root.is_relative_to(CACHE) and not (app_root / 'runtime').exists()
     assert not list(app_root.rglob('python*.exe'))

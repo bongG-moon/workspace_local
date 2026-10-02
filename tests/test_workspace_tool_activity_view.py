@@ -9,13 +9,15 @@ from test_workspace_frontend_state import HARNESS, NODE, ROOT
 class ToolActivityViewTests(unittest.TestCase):
     def run_case(self, body):
         harness = HARNESS.replace(
+            "const nodes=new Map();",
+            "Element.prototype.insertBefore=function(node,next){node.remove();const index=next?this.children.indexOf(next):this.children.length;node.parent=this;node.isConnected=true;this.children.splice(index,0,node);};\nconst nodes=new Map();",
+        ).replace(
             "const scenario=process.argv[3];",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context);\nconst scenario=process.argv[3];",
         )
         setup = r"""
           active={id:'A',state:'running',workspace:'C:/task',messages:[],lastRunId:'run-a'};
           const conversation=$('conversation');
-          conversation.insertBefore=function(node,next){node.remove();const index=this.children.indexOf(next);node.parent=this;this.children.splice(index,0,node);};
           WorkspaceToolActivity.reset('A');
           WorkspaceToolActivity.restore([]);setStatus('running');
           const record={id:'read-a',runId:'run-a',tool:'Read',action:'자료 읽기',target:'report.csv',state:'requested',startedAt:100};
@@ -34,13 +36,16 @@ class ToolActivityViewTests(unittest.TestCase):
           assert.equal($('status-text').textContent,'자료 읽기 요청 · report.csv');
           assert.equal($('tool-activity-badge').textContent,'Read');
           assert.equal(conversation.children.length,1);
-          const detail=conversation.children[0].querySelector('details');
-          assert.ok(!detail.open);assert.equal(detail.querySelector('ol').children.length,0);
+          const list=conversation.children[0].querySelector('ol');
+          assert.equal(list.children.length,1);assert.equal(conversation.children[0].querySelector('details'),null);
+          const first=list.children[0];
           WorkspaceToolActivity.render({...record,state:'running'});
           assert.equal($('status-text').textContent,'자료 읽기 중 · report.csv');
+          assert.equal(list.children[0],first);assert.equal(first.querySelector('.tool-activity-state').textContent,'실행 중');
           WorkspaceToolActivity.render({...record,id:'skill-a',tool:'Skill',target:'plugin:report',action:'스킬 사용'});
           assert.ok($('status-text').textContent.includes('다른 도구 1개'));
           assert.equal(calls,0);assert.equal(conversation.children.length,1);
+          assert.equal(list.children.length,2);
           assert.ok(!conversation.children[0].scrolledIntoView);
         """)
 
@@ -56,8 +61,9 @@ class ToolActivityViewTests(unittest.TestCase):
           assert.equal($('status-text').textContent,'다음 단계 선택을 기다려요');
           assert.equal($('tool-activity-badge').hidden,true);
           active.choice=null;WorkspaceToolActivity.sync();
+          let opened;globalThis.WorkspaceProgressView={open:run=>{opened=run;return true;}};
           $('tool-activity-open').onclick();
-          assert.ok(conversation.children[0].querySelector('details').open);
+          assert.equal(opened,'run-a');
           assert.equal(conversation.children[0].querySelector('ol').children.length,1);
         """)
 
@@ -127,18 +133,19 @@ class ToolActivityViewTests(unittest.TestCase):
           assert.equal($('status-text').textContent,statusLabels.running);assert.ok($('tool-activity-open').hidden);
         """)
 
-    def test_record_and_dom_limits_literal_text_and_lazy_history(self):
+    def test_record_and_visible_preview_limits_keep_literal_text_and_name_older_history(self):
         self.run_case(r"""
           const danger='<img src=x onerror=alert(1)>';
           for(let n=0;n<100;n++)WorkspaceToolActivity.render({...record,id:'tool-'+n,state:'completed',target:danger,parentToolUseId:'parent'});
           assert.equal(active.toolActivity.length,80);assert.equal(conversation.children.length,1);
-          const detail=conversation.children[0].querySelector('details');
-          assert.equal(detail.querySelector('ol').children.length,0);
-          detail.open=true;detail.ontoggle();assert.equal(detail.querySelector('ol').children.length,80);
+          const detail=conversation.children[0].querySelector('.tool-activity-detail');
+          assert.equal(detail.querySelector('ol').children.length,6);
           assert.equal(detail.querySelector('.tool-activity-target').textContent,danger);
           assert.equal(detail.querySelector('img'),null);
-          assert.equal(detail.querySelector('.tool-activity-child').textContent,'추가 작업자의 활동');
-          detail.open=false;detail.ontoggle();assert.equal(detail.querySelector('ol').children.length,0);
+          assert.equal(detail.querySelector('.tool-activity-child').textContent,'추가 작업자');
+          assert.equal(detail.querySelector('.tool-activity-note').hidden,false);
+          assert.match(detail.querySelector('.tool-activity-note').textContent,/이전 활동/);
+          assert.equal(detail.querySelector('.tool-activity-count').textContent,'80+');
           WorkspaceToolActivity.reset();assert.ok($('tool-activity-badge').hidden);assert.ok($('tool-activity-open').hidden);
         """)
 
@@ -158,4 +165,68 @@ class ToolActivityViewTests(unittest.TestCase):
           const area=$('work-area');area.scrollTop=3;area.scrollHeight=200;area.clientHeight=100;
           handleEvent({type:'tool_activity',data:record});
           assert.equal(area.scrollTop,3);
+        """)
+
+    def test_pending_rows_survive_completed_eviction_and_preview_reuses_nodes(self):
+        self.run_case(r"""
+          WorkspaceToolActivity.render({...record,state:'running'});
+          const list=conversation.children[0].querySelector('ol'),first=list.children[0];
+          for(let n=0;n<100;n++)WorkspaceToolActivity.render({...record,id:'done-'+n,state:'completed'});
+          assert.equal(active.toolActivity.length,80);assert.equal(list.children.length,6);
+          assert.equal(list.children[0],first);assert.equal(first.dataset.activityId,'read-a');
+          assert.equal(active.toolActivity[0].id,'read-a');
+          assert.equal(list.children.at(-1).dataset.activityId,'done-99');
+          for(let n=0;n<8;n++)WorkspaceToolActivity.render({...record,id:'pending-'+n});
+          assert.equal(list.children.length,6);assert.ok(list.children.every(node=>node.dataset.state==='requested'));
+          assert.match(conversation.children[0].querySelector('.tool-activity-note').textContent,/진행·대기 9개 중 6개/);
+        """)
+
+    def test_actual_status_updates_without_rerendering_cards_focus_or_scrolling(self):
+        self.run_case(r"""
+          WorkspaceToolActivity.render(record);const row=conversation.children[0].querySelector('ol').children[0];
+          const area=$('work-area');area.scrollTop=3;area.scrollHeight=200;area.clientHeight=100;$('prompt').focus();
+          const activity={runId:'run-a',phase:'tool_preparing',label:'자료 읽기 준비 중',tool:'Read',updatedAt:1};
+          handleEvent({type:'run_activity',data:activity});
+          assert.equal($('status-text').textContent,'자료 읽기 준비 중');assert.equal(active.state,'running');
+          assert.equal(row.dataset.state,'requested');assert.equal(area.scrollTop,3);assert.equal(document.activeElement,$('prompt'));
+          const status=$('status-text');let writes=0,label=status.textContent;
+          Object.defineProperty(status,'textContent',{get:()=>label,set:value=>{writes++;label=value;}});
+          for(let n=2;n<102;n++)handleEvent({type:'run_activity',data:{...activity,updatedAt:n}});
+          assert.equal(writes,0);assert.equal(conversation.children[0].querySelector('ol').children[0],row);
+          handleEvent({type:'run_activity',data:{...activity,phase:'answering',label:'답변 작성 중',tool:'',updatedAt:102}});
+          assert.equal(label,'답변 작성 중');assert.ok($('tool-activity-badge').hidden);
+          handleEvent({type:'assistant',data:{runId:'run-a',text:'자료 확인을 마쳤고 다음 항목을 확인합니다.'}});
+          assert.equal(conversation.children[1].querySelector('.message-body').querySelector('p').firstChild.textContent,'자료 확인을 마쳤고 다음 항목을 확인합니다.');
+        """)
+
+    def test_actual_status_respects_human_requests_and_rejects_stale_or_terminal_runs(self):
+        self.run_case(r"""
+          const activity={runId:'run-a',phase:'tool_running',label:'자료 읽기 진행 중',tool:'Read',updatedAt:10};
+          assert.equal(WorkspaceToolActivity.runActivity(activity),true);
+          setStatus('approval');WorkspaceToolActivity.runActivity({...activity,updatedAt:11});
+          assert.equal($('status-text').textContent,statusLabels.approval);
+          setStatus('question');assert.equal($('status-text').textContent,statusLabels.question);
+          setStatus('running');assert.equal($('status-text').textContent,activity.label);
+          active.choice={id:'choose'};WorkspaceToolActivity.sync();
+          WorkspaceToolActivity.runActivity({...activity,updatedAt:12});assert.equal($('status-text').textContent,'다음 단계 선택을 기다려요');
+          active.choice=null;WorkspaceToolActivity.sync();
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,updatedAt:9,label:'old'}),false);
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,runId:'run-old',updatedAt:99}),false);
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,phase:'imagined'}),false);
+          setStatus('done');assert.equal(active.runActivity,null);
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,updatedAt:99}),false);
+          setStatus('running');assert.equal(WorkspaceToolActivity.runActivity({...activity,updatedAt:100}),false);
+          handleEvent({type:'status',data:{state:'running',runId:'run-b'}});
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,runId:'run-b',updatedAt:101}),true);
+          assert.equal(WorkspaceToolActivity.runActivity({...activity,updatedAt:102}),false);
+        """)
+
+    def test_restored_actual_status_is_only_live_for_the_running_request(self):
+        self.run_case(r"""
+          const activity={runId:'run-a',phase:'answering',label:'답변 작성 중',updatedAt:10};
+          WorkspaceToolActivity.reset('A');WorkspaceToolActivity.restore([{...record,state:'completed'}],activity);setStatus('running');
+          assert.equal($('status-text').textContent,activity.label);
+          active.state='done';WorkspaceToolActivity.reset('A');WorkspaceToolActivity.restore([record],activity);setStatus('done');
+          assert.equal($('status-text').textContent,statusLabels.done);assert.equal(active.runActivity,null);
+          assert.equal(active.toolActivity[0].state,'interrupted');
         """)

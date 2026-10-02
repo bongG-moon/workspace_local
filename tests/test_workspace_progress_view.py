@@ -185,8 +185,8 @@ class ProgressViewTests(unittest.TestCase):
           WorkspaceToolActivity.render({id:'tool',runId:'run-a',tool:'Read',state:'running',action:'자료 읽기'});
           api=async(path)=>{calls.push({path});return page([record(1)]);};$('tool-activity-open').onclick();await flushProgress();
           assert.match(calls[0].path,/runId=run-a/);assert.equal($('tool-activity-open').textContent,'진행 내용');
-          const old=conversation.children[0].querySelector('details');assert.ok(!old.open);assert.equal(old.querySelector('ol').children.length,0);
-          progress.close();old.open=true;old.ontoggle();await flushProgress();assert.equal(old.open,false);assert.equal(detail.open,true);
+          const card=conversation.children[0];assert.equal(card.querySelector('details'),null);assert.equal(card.querySelector('ol').children.length,1);
+          progress.close();card.querySelector('.tool-activity-details-open').onclick();await flushProgress();assert.equal(detail.open,true);
           $('progress-open').onclick();await flushProgress();assert.ok(!calls.at(-1).path.includes('runId='));assert.equal(host.querySelector('details'),detail);
           showHome();assert.equal(host.hidden,true);assert.equal(find('.progress-body').children.length,0);
         })()""")

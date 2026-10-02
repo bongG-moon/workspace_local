@@ -33,7 +33,7 @@ _BEARER = re.compile(r'(?i)\b(Bearer|Basic)\s+[A-Za-z0-9+/_.=:-]+')
 _KNOWN_TOKEN = re.compile(r'\b(?:sk-ant-|sk-|glpat-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{8,}')
 _HEADER_SECRET = re.compile(r'''(?im)(\b(?:authorization|proxy-authorization|cookie|set-cookie|private-token|deploy-token|job-token|x-api-key)\s*:\s*)[^\r\n"']+''')
 _JWT = re.compile(r'\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b')
-_ASSIGN = re.compile(r'''(?ix)((?:["']?[\w.-]*(?:token|password|passwd|secret|credential|authorization|cookie|api[_-]?key)[\w.-]*["']?)\s*(?:=|:)\s*)(?:"[^"]*(?:"|\Z)|'[^']*(?:'|\Z)|[^\s,;}]+)''')
+_ASSIGN = re.compile(r'''(?ix)((?:(?:token|password|passwd|secret|credential|authorization|cookie|api[_-]?key)[\w.-]{0,80}["']?)\s*(?:=|:)\s*)(?:"[^"]*(?:"|\Z)|'[^']*(?:'|\Z)|[^\s,;}]+)''')
 _FLAG = re.compile(r'''(?ix)(--?(?:token|password|passwd|secret|api-key|access-token|header|H)\s+)(?:"(?:Authorization|PRIVATE-TOKEN|DEPLOY-TOKEN|JOB-TOKEN)[^"\r\n]*"|'(?:Authorization|PRIVATE-TOKEN|DEPLOY-TOKEN|JOB-TOKEN)[^'\r\n]*'|[^\s]+)''')
 _URL_USER = re.compile(r'(?i)(https?://)[^\s/@:]+:[^\s/@]+@')
 _MEDIA = re.compile(r'data:[^\s,;]{1,100};base64,[A-Za-z0-9+/=\r\n]*', re.I)
@@ -326,6 +326,10 @@ class ProgressCapture:
                 self._flush(block)
         self.closed = True
         self.blocks.clear()
+        self.tools.clear()
+        self.frames.clear()
+        self.seen.clear()
+        self.root_texts.clear()
 
     def error(self, message):
         if not self.closed and isinstance(message, str):
@@ -374,7 +378,8 @@ class ProgressCapture:
                         self._remember(self.root_texts, digest)
                         if self.message_id == message_id:
                             matches = [v for v in self.blocks.values() if not v['full_seen']
-                                       and (text.startswith(v['text']) or v['text'].startswith(text))]
+                                       and (v['digest'] == digest if v['complete'] else
+                                            text.startswith(v['text']) or v['text'].startswith(text))]
                             if matches:
                                 target = matches[0]
                                 raw = text.encode('utf-8', errors='replace')
@@ -382,7 +387,9 @@ class ProgressCapture:
                                 target['truncated'] = len(raw) > MAX_RECORD_BYTES
                                 target['complete'] = True
                                 target['full_seen'] = True
+                                target['digest'] = digest
                                 self._flush(target)
+                                target['text'] = ''
                                 self._remember(self.seen, key, 'streamed')
                                 continue
                     if key not in self.seen:
@@ -458,7 +465,10 @@ class ProgressCapture:
             if block:
                 self._flush(block)
                 block['complete'] = True
-                self._remember(self.root_texts, self._digest(block['text']))
+                if not block['full_seen']:
+                    block['digest'] = block['hasher'].hexdigest()
+                self._remember(self.root_texts, block['digest'])
+                block['text'] = ''
             return
         value = event.get('content_block') if kind == 'content_block_start' else event.get('delta')
         if not isinstance(value, dict) or value.get('type') not in {'text', 'text_delta'} or not isinstance(value.get('text'), str):
@@ -470,11 +480,14 @@ class ProgressCapture:
                 _, removed = self.blocks.popitem(last=False)
                 self._flush(removed)
             stamp = self.clock()
-            block = self.blocks[index] = dict(key='stream:' + self._digest(self.message_id + ':' + str(index)), text='', time=stamp, last=stamp, complete=False, full_seen=False, truncated=False)
+            block = self.blocks[index] = dict(key='stream:' + self._digest(self.message_id + ':' + str(index)), text='', time=stamp,
+                                             last=stamp, complete=False, full_seen=False, truncated=False,
+                                             hasher=hashlib.sha256(), digest=None)
         # Only text_delta content is buffered, never raw frames or thinking.
         # Sanitize the assembled public block at flush so credentials split over
         # several token deltas are still recognized as one secret.
         raw = (block['text'] + value['text']).encode('utf-8', errors='replace')
+        block['hasher'].update(value['text'].encode('utf-8', errors='replace'))
         block['text'] = raw[:MAX_RECORD_BYTES].decode('utf-8', errors='ignore')
         block['truncated'] |= len(raw) > MAX_RECORD_BYTES
         # Complete public blocks are published at block stop or AssistantMessage;

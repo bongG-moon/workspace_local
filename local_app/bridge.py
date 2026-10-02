@@ -5,6 +5,7 @@ Installed filesystem hooks, skills and MCP are handled by the CLI, not emulated.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,15 +14,26 @@ import subprocess
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 
 from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
 
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
+MAX_TURN_EVIDENCE = 10000
 CONTROL_TIMEOUT = 10
 PREPARE_TIMEOUT = 60
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _remember_evidence(mapping, key, value=True):
+    mapping[key] = value
+    if len(mapping) > MAX_TURN_EVIDENCE:
+        del mapping[next(iter(mapping))]
+
+
+def _text_fingerprint(text):
+    return hashlib.sha256(text.encode('utf-8', errors='replace')).digest()
 
 
 class BridgeError(ValueError):
@@ -168,7 +180,7 @@ class ClaudeSession:
         self.stderr = deque(maxlen=30)
         self.initialize_id = "initialize-" + uuid.uuid4().hex
         self.last_result = None
-        self.seen_text = set()
+        self.seen_text = OrderedDict()
         self.model = ""
         self.original_model = None
         self.model_override = None
@@ -208,7 +220,7 @@ class ClaudeSession:
         self._stream_message_id = None
         self._stream_blocks = {}
         self._stream_index = None
-        self._finalized_blocks = set()
+        self._finalized_blocks = OrderedDict()
 
     @property
     def cleanup_complete(self):
@@ -692,7 +704,7 @@ class ClaudeSession:
             self._stream_blocks.clear()
             self._finalized_blocks.clear()
             self._stream_message_id = self._stream_index = None
-            self._assistant_frames = set()
+            self._assistant_frames = OrderedDict()
             self._stream_frames = set()
             self._choice_tools = set()
             self._choice_questions = set()
@@ -775,7 +787,8 @@ class ClaudeSession:
         event = data.get("event", {})
         kind = event.get("type")
         if kind == "message_start":
-            self._stream_message_id = event.get("message", {}).get("id") or "stream-" + uuid.uuid4().hex
+            identifier = event.get("message", {}).get("id")
+            self._stream_message_id = identifier if isinstance(identifier, str) and 0 < len(identifier) <= 200 else "stream-" + uuid.uuid4().hex
             self._stream_index = None
         elif kind in {"content_block_start", "content_block_delta"}:
             index = event.get("index")
@@ -791,23 +804,30 @@ class ClaudeSession:
             key = (self._stream_message_id, index)
             if key in self._finalized_blocks:
                 return
-            self._stream_blocks[key] = self._stream_blocks.get(key, "") + text
+            digest = self._stream_blocks.get(key)
+            if digest is None:
+                digest = hashlib.sha256()
+                _remember_evidence(self._stream_blocks, key, digest)
+            digest.update(text.encode('utf-8', errors='replace'))
             if text:
                 self.emit("assistant_delta", {"messageId": key[0], "index": index, "text": text})
 
     def _assistant_text(self, text: str, message_id=None, index=0):
         if not isinstance(text, str) or not text:
             return
+        if not isinstance(message_id, str) or not 0 < len(message_id) <= 200:
+            message_id = None
+        digest = _text_fingerprint(text)
         frames = getattr(self, '_assistant_frames', None)
         if frames is None:
-            frames = self._assistant_frames = set()
-        identity = (message_id, index, text)
+            frames = self._assistant_frames = OrderedDict()
+        identity = (message_id, index, digest)
         if message_id is not None and identity in frames:
             return
         # Complete messages may contain a single block even when the raw stream
         # block index is greater than zero. Match that block to its streamed text.
         matches = [key for key, value in self._stream_blocks.items()
-                   if value == text and (message_id is None or key[0] == message_id)]
+                   if value.digest() == digest and (message_id is None or key[0] == message_id)]
         key = next((key for key in matches if key not in self._finalized_blocks), None)
         if key is None and matches:
             return
@@ -815,17 +835,17 @@ class ClaudeSession:
             active_key = (message_id, self._stream_index)
             key = (active_key if active_key in self._stream_blocks and active_key not in self._finalized_blocks
                    else (message_id or "message-" + uuid.uuid4().hex, index))
-            if message_id is None and text in self.seen_text:
+            if message_id is None and digest in self.seen_text:
                 return
             # Without raw stream events, separate single-block assistant frames
             # share a message ID and each enumerates at zero. Give later blocks
             # a stable free index instead of losing their text.
             while key in self._finalized_blocks:
                 key = (key[0], key[1] + 1)
-        self._finalized_blocks.add(key)
+        _remember_evidence(self._finalized_blocks, key)
         if message_id is not None:
-            frames.add(identity)
-        self.seen_text.add(text)
+            _remember_evidence(frames, identity)
+        _remember_evidence(self.seen_text, digest)
         self.emit("assistant", {"messageId": key[0], "index": key[1], "text": text})
 
     @staticmethod
@@ -862,6 +882,9 @@ class ClaudeSession:
         if capture is not None:
             capture.interrupt(closed=closed)
         if activity:
+            live = getattr(self, '_run_activity_state', None)
+            if live is not None:
+                live.finish()
             progress = getattr(self, '_progress_capture_state', None)
             if progress is not None:
                 progress.finish()
@@ -871,11 +894,21 @@ class ClaudeSession:
                 capture.interrupt()
 
     def _begin_tool_activity_turn(self):
+        live = getattr(self, '_run_activity_state', None)
+        if live is not None:
+            live.finish()
         progress = getattr(self, '_progress_capture_state', None)
         if progress is not None:
             progress.finish()
         from .progress_log import ProgressCapture
         from collections import OrderedDict
+        from .tool_activity import RunActivityCapture
+        live_tombstones = getattr(self, '_run_activity_tombstones', None)
+        if live_tombstones is None:
+            live_tombstones = self._run_activity_tombstones = OrderedDict()
+        self._run_activity_state = RunActivityCapture(
+            lambda value: self.emit('run_activity', value),
+            run_id=getattr(self, '_tool_activity_run_id', None), tombstones=live_tombstones)
         tombstones = getattr(self, '_progress_tombstones', None)
         if tombstones is None:
             tombstones = self._progress_tombstones = OrderedDict()
@@ -948,6 +981,12 @@ class ClaudeSession:
                 progress.handle(data)
             except Exception:
                 pass  # Recording detail must never interrupt the CLI reader.
+        live = getattr(self, '_run_activity_state', None)
+        if live is not None and self.busy and not self.stopping:
+            try:
+                live.handle(data)
+            except Exception:
+                pass
         if kind == "control_response":
             response = data.get("response", {})
             if response.get("request_id") == self.initialize_id:
@@ -1153,7 +1192,7 @@ class ClaudeSession:
             if data.get("is_error") and self._auth_error(error_text):
                 self._authentication_failed()
                 return
-            if text and text not in self.seen_text and not data.get('is_error'):
+            if text and _text_fingerprint(text) not in self.seen_text and not data.get('is_error'):
                 self._assistant_text(text)
             if data.get("is_error"):
                 self.busy = False

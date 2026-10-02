@@ -1,5 +1,6 @@
 """Bounded display-only tool evidence; never retain raw inputs or tool outputs."""
-from collections import deque
+from collections import OrderedDict, deque
+import hashlib
 import math
 import re
 import threading
@@ -14,7 +15,7 @@ ACTIVE = {'requested', 'running'}
 STATES = ACTIVE | {'completed', 'error', 'interrupted'}
 _ID = re.compile(r'[A-Za-z0-9_-]{1,160}\Z')
 _NAME = re.compile(r'[A-Za-z][A-Za-z0-9_.:/-]{0,159}\Z')
-_SECRET = re.compile(r'(?:bearer\s+|(?:api[_ -]?key|token|secret|password|authorization)\s*[:=]|\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{8,}|data:[^\s,]*;base64,)', re.I)
+_SECRET = re.compile(r'(?:bearer\s+|(?:api[_ -]?key|token|secret|password|authorization)\s*[:=]|\b(?:sk-|glpat-|gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_-]{8,}|data:[^\s,]*;base64,)', re.I)
 _URL = re.compile(r'(?:https?|file)://\S+', re.I)
 _ACTIONS = {
     'Skill': '스킬 사용', 'Read': '자료 읽기', 'Write': '파일 작성',
@@ -30,6 +31,8 @@ _ACTIONS = {
     'CronList': '예약 확인', 'ListMcpResourcesTool': '연결 자료 확인',
     'ReadMcpResourceTool': '연결 자료 읽기',
 }
+RUN_PHASES = {'receiving', 'tool_preparing', 'tool_requested', 'tool_running',
+              'tool_result', 'answering', 'delegated', 'compacting'}
 
 
 def _identifier(value):
@@ -66,6 +69,205 @@ def target_for(tool, inputs):
     return ''
 
 
+def normalize_run_activity(value):
+    """Small live evidence only; callers must separately enforce the run gate."""
+    if (not isinstance(value, dict) or value.get('phase') not in RUN_PHASES
+            or not safe_run_id(value.get('runId')) or not _stamp(value.get('updatedAt'))):
+        return None
+    phase = value['phase']
+    row = {'runId': value['runId'], 'phase': phase, 'updatedAt': value['updatedAt']}
+    parent = value.get('parentToolUseId')
+    if parent is not None:
+        if not _identifier(parent):
+            return None
+        row['parentToolUseId'] = parent
+    if phase.startswith('tool_'):
+        name, identifier = value.get('tool'), _identifier(value.get('toolUseId'))
+        if not isinstance(name, str) or not _NAME.fullmatch(name) or not identifier:
+            return None
+        row.update(tool=name, toolUseId=identifier, target=_text(value.get('target')))
+        action = action_for(name)
+        suffix = {'tool_preparing': '준비 중', 'tool_requested': '요청을 보냈어요',
+                  'tool_running': '진행 중', 'tool_result': '결과를 받았어요'}[phase]
+        if phase == 'tool_result' and value.get('failed') is True:
+            suffix = '오류 보고를 받았어요'
+            row['failed'] = True
+        label = action + ' ' + suffix
+        if row['target']:
+            label = row['target'] + ' · ' + label
+    else:
+        label = {'receiving': 'Claude 응답을 받고 있어요', 'answering': '답변을 작성하고 있어요',
+                 'delegated': '담당 작업자의 진행 보고를 받고 있어요',
+                 'compacting': '대화 내용을 정리하고 있어요'}[phase]
+    row['label'] = ('작업자 · ' if parent else '') + label
+    return row
+
+
+class RunActivityCapture:
+    """Live phase changes from public protocol markers, with no text buffer.
+
+    Token deltas in the same phase emit once, and the server coalesces pending
+    notifications. A streamed tool header means preparation, never execution.
+    """
+    def __init__(self, emit, *, run_id, clock=time.time, tombstones=None):
+        self.emit, self.run_id, self.clock = emit, safe_run_id(run_id), clock
+        self.closed = not bool(self.run_id)
+        self.tombstones = tombstones if tombstones is not None else OrderedDict()
+        self.frames, self.tools, self.messages, self.texts = (OrderedDict() for _ in range(4))
+        self.last = None
+
+    @staticmethod
+    def _remember(mapping, key, value, maximum=4096):
+        mapping[key] = value
+        if len(mapping) > maximum:
+            mapping.popitem(last=False)
+
+    def _claim(self, key):
+        owner = self.tombstones.get(key)
+        if owner not in (None, self.run_id):
+            return False
+        self._remember(self.tombstones, key, self.run_id, maximum=16384)
+        return True
+
+    def _publish(self, phase, *, tool=None, parent=None, failed=False):
+        value = {'runId': self.run_id, 'phase': phase, 'updatedAt': self.clock(),
+                 'parentToolUseId': parent, 'failed': failed}
+        if tool:
+            value.update(tool=tool['name'], toolUseId=tool['id'], target=tool['target'])
+        clean = normalize_run_activity(value)
+        if clean is None:
+            return
+        if self.last:
+            if all(clean.get(k) == self.last.get(k) for k in set(clean) | set(self.last) if k != 'updatedAt'):
+                return
+            clean['updatedAt'] = max(clean['updatedAt'], self.last['updatedAt'] + .000001)
+        self.last = clean
+        try:
+            self.emit(dict(clean))
+        except Exception:
+            pass  # Live display cannot affect CLI execution.
+
+    def _tool(self, block, parent, *, complete):
+        identifier, name = _identifier(block.get('id')), block.get('name')
+        if not identifier or not isinstance(name, str) or not _NAME.fullmatch(name):
+            return
+        if not self._claim('tool:' + identifier):
+            return
+        old = self.tools.get(identifier)
+        if old and (old['name'] != name or old['parent'] != parent or old['stage'] >= 3):
+            return
+        if not complete and old:
+            return
+        inputs = block.get('input')
+        if complete and not isinstance(inputs, dict):
+            return
+        value = old or {'id': identifier, 'name': name, 'parent': parent, 'target': '', 'stage': 0}
+        if complete:
+            if value['stage'] >= 1:
+                return
+            value['target'] = target_for(name, inputs)
+            value['stage'] = 1
+        self._remember(self.tools, identifier, value)
+        self._publish('tool_requested' if complete else 'tool_preparing', tool=value, parent=parent)
+
+    def handle(self, data):
+        if self.closed or not isinstance(data, dict):
+            return
+        parent = data.get('parent_tool_use_id')
+        if parent is not None and (not _identifier(parent) or parent not in self.tools):
+            return
+        kind = data.get('type')
+        if kind not in {'stream_event', 'assistant', 'user', 'tool_progress', 'system'}:
+            return
+        frame = _identifier(data.get('uuid'))
+        if frame:
+            if frame in self.frames or not self._claim('frame:' + frame):
+                return
+            self._remember(self.frames, frame, True)
+        if kind == 'stream_event':
+            event = data.get('event')
+            if not isinstance(event, dict):
+                return
+            subtype = event.get('type')
+            if subtype == 'message_start':
+                message = event.get('message')
+                identifier = _identifier(message.get('id')) if isinstance(message, dict) else None
+                if not identifier or not self._claim('message:' + identifier):
+                    self.messages.pop(parent, None)
+                    return
+                if self.messages.get(parent) == identifier:
+                    return
+                self._remember(self.messages, parent, identifier, maximum=128)
+                self._publish('receiving', parent=parent)
+                return
+            if parent not in self.messages:
+                return
+            index = event.get('index')
+            if type(index) is not int or not 0 <= index < 10000:
+                return
+            block = event.get('content_block') if subtype == 'content_block_start' else event.get('delta')
+            if not isinstance(block, dict):
+                return
+            if subtype == 'content_block_start' and block.get('type') == 'tool_use':
+                self._tool(block, parent, complete=False)
+            elif (subtype in {'content_block_start', 'content_block_delta'} and block.get('type') in {'text', 'text_delta'}
+                    and isinstance(block.get('text'), str) and block['text']):
+                self._publish('answering', parent=parent)
+        elif kind == 'assistant':
+            if data.get('error'):
+                return
+            message = data.get('message')
+            if not isinstance(message, dict):
+                return
+            identifier = _identifier(message.get('id'))
+            if identifier and not self._claim('message:' + identifier):
+                return
+            blocks = message.get('content')
+            for block in blocks if isinstance(blocks, list) else []:
+                if not isinstance(block, dict):
+                    continue
+                if block.get('type') == 'tool_use':
+                    self._tool(block, parent, complete=True)
+                elif block.get('type') == 'text' and isinstance(block.get('text'), str) and block['text']:
+                    digest = hashlib.sha256(block['text'].encode('utf-8', errors='replace')).digest()
+                    key = (identifier, parent, digest)
+                    if key not in self.texts:
+                        self._remember(self.texts, key, True)
+                        self._publish('answering', parent=parent)
+        elif kind == 'tool_progress':
+            value = self.tools.get(_identifier(data.get('tool_use_id')))
+            if (value and value['parent'] == parent and value['name'] == data.get('tool_name')
+                    and value['stage'] < 3 and _stamp(data.get('elapsed_time_seconds'))):
+                value['stage'] = 2
+                self._publish('tool_running', tool=value, parent=parent)
+        elif kind == 'user':
+            message = data.get('message')
+            blocks = message.get('content') if isinstance(message, dict) else None
+            for block in blocks if isinstance(blocks, list) else []:
+                if not isinstance(block, dict) or block.get('type') != 'tool_result' or type(block.get('is_error', False)) is not bool:
+                    continue
+                value = self.tools.get(_identifier(block.get('tool_use_id')))
+                if value and value['parent'] == parent and value['stage'] < 3:
+                    value['stage'] = 3
+                    self._publish('tool_result', tool=value, parent=parent, failed=block.get('is_error') is True)
+        elif kind == 'system':
+            subtype = data.get('subtype')
+            if subtype == 'status' and data.get('status') == 'compacting':
+                self._publish('compacting', parent=parent)
+            elif subtype in {'task_started', 'task_progress'}:
+                task_id = _identifier(data.get('task_id'))
+                if task_id and self._claim('task:' + task_id):
+                    self._publish('delegated', parent=parent)
+
+    def finish(self):
+        self.closed = True
+        self.messages.clear()
+        self.frames.clear()
+        self.tools.clear()
+        self.texts.clear()
+        self.last = None
+
+
 def normalize_activity(value, *, run_id=None):
     if (not isinstance(value, dict) or not _identifier(value.get('id'))
             or not isinstance(value.get('tool'), str) or not _NAME.fullmatch(value['tool'])
@@ -93,16 +295,18 @@ def _key(value):
 
 
 def _bounded(records):
-    records = records[-MAX_RECORDS:]
     total = sum(len(value) for row in records for value in row.values() if isinstance(value, str))
-    while records and total > MAX_TOTAL:
-        total -= sum(len(value) for value in records.pop(0).values() if isinstance(value, str))
+    while records and (len(records) > MAX_RECORDS or total > MAX_TOTAL):
+        # A long-running call must not disappear behind many short completed
+        # calls: its eventual result still needs a correlated summary row.
+        index = next((i for i, row in enumerate(records) if row['state'] not in ACTIVE), 0)
+        total -= sum(len(value) for value in records.pop(index).values() if isinstance(value, str))
     return records
 
 
 def normalize_activities(values, *, interrupted=False):
     records = {}
-    for value in values[-MAX_RECORDS:] if isinstance(values, list) else []:
+    for value in values[-4096:] if isinstance(values, list) else []:
         clean = normalize_activity(value)
         if clean is None:
             continue

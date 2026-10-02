@@ -40,7 +40,7 @@ from .progress_log import ProgressStore
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.5"
+WORKSPACE_VERSION = "0.23.6"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -333,6 +333,9 @@ class LocalApp:
             "executions": list(item.get("executions", [])),
             "toolActivity": list(item.get("toolActivity", [])),
             "progress": self.progress_logs.metadata(item['id']),
+            "runActivity": (item.get('runActivity') if item.get('state') in {'starting', 'running', 'approval', 'question'}
+                            and not item.get('_connecting') and not item.get('_modelUpdating')
+                            and (item.get('runActivity') or {}).get('runId') == item.get('lastRunId') else None),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
@@ -1008,7 +1011,7 @@ class LocalApp:
             item = self.sessions.get(sid)
             if item is None or item.get('bridge') is not bridge:
                 return
-            if kind in {'tool_activity', 'progress_record'} and (not getattr(bridge, '_tool_activity_run_id', None)
+            if kind in {'tool_activity', 'progress_record', 'run_activity'} and (not getattr(bridge, '_tool_activity_run_id', None)
                     or bridge._tool_activity_run_id != item.get('lastRunId')):
                 return  # Connection preparation is not a submitted user turn.
             self.emit(sid, kind, data)
@@ -1045,6 +1048,22 @@ class LocalApp:
             if self.session_visibility.contains(sid):
                 return
             item = self.get(sid, _internal=True)
+            if kind == 'run_activity':
+                from .tool_activity import normalize_run_activity
+                if (not isinstance(data, dict) or data.get('runId') != item.get('lastRunId')
+                        or item.get('state') not in {'starting', 'running', 'approval', 'question'}
+                        or item.get('_modelUpdating') or item.get('_connecting')):
+                    return
+                clean = normalize_run_activity(data)
+                previous = item.get('runActivity')
+                if clean is None or (previous and (clean['updatedAt'] < previous['updatedAt'] or clean == previous)):
+                    return
+                item['runActivity'] = clean
+                item['seq'] += 1
+                item['events'] = [event for event in item['events'] if event['type'] != 'run_activity']
+                item['events'].append({'seq': item['seq'], 'type': kind, 'data': clean})
+                item['events'] = item['events'][-300:]
+                return
             if kind == 'progress_record':
                 # Never relabel a late callback as the new request, and never
                 # retain detail in the normal history/event mirror.
@@ -1169,6 +1188,7 @@ class LocalApp:
                     item["sessionId"] = data["resumeSessionId"]
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
             if terminal:
+                item.pop('runActivity', None)
                 from .executions import normalize_executions
                 from .tool_activity import normalize_activities
                 item['executions'] = normalize_executions(item.get('executions', []), interrupted=True)
@@ -1294,6 +1314,7 @@ class LocalApp:
             item["state"] = "starting"
             item['updated'] = time.time()
             item['lastRunId'] = uuid.uuid4().hex
+            item.pop('runActivity', None)
             item['messages'][-1]['runId'] = item['lastRunId']
             item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
             self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
