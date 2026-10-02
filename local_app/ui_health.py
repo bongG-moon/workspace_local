@@ -13,7 +13,7 @@ from .history import safe, read
 
 MODULES = frozenset(('app', 'stream', 'attachments', 'workflow', 'composer',
     'inline-controls', 'input-keys', 'chat-shortcuts', 'attention', 'desktop', 'session-import', 'capabilities',
-    'productivity', 'palette', 'layout', 'rich-content', 'execution-view', 'tool-activity', 'path-picker', 'startup-health', 'upgrade-handoff'))
+    'productivity', 'palette', 'layout', 'rich-content', 'execution-view', 'tool-activity', 'path-picker', 'startup-health', 'upgrade-handoff', 'app-updates'))
 EVENTS = frozenset(('document', 'startup', 'module', 'resource', 'error', 'recovery'))
 STATES = frozenset(('pending', 'ready', 'failed', 'restored'))
 REASONS = frozenset(('', 'resource-load', 'resource-error', 'runtime-error',

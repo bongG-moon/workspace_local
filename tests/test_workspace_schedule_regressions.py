@@ -18,6 +18,7 @@ class PreparedRecordingBridge(dispatch_fixtures.Bridge):
     def __init__(self, app, sid, on_prepare=None):
         super().__init__(app, sid)
         self.on_prepare, self.frames = on_prepare, []
+        self.controls = {}
 
     def prepare(self):
         self.frames.append(('prepare', None))
@@ -25,16 +26,25 @@ class PreparedRecordingBridge(dispatch_fixtures.Bridge):
             self.on_prepare()
 
     def connection_state(self):
-        return {'sessionId': 'fixture-session', 'capabilities': {}}
+        return {'sessionId': 'fixture-session', 'capabilities': {}, **self.model_state()}
+
+    def model_state(self):
+        return dict(self.controls)
 
     def set_model(self, value):
         self.frames.append(('model', value))
+        self.controls['model'] = value
+        return self.model_state()
 
     def set_effort(self, value):
         self.frames.append(('effort', value))
+        self.controls['effort'] = value
+        return self.model_state()
 
     def set_permission_mode(self, value):
         self.frames.append(('permissionMode', value))
+        self.controls['permissionMode'] = value
+        return self.model_state()
 
     def send(self, prompt):
         self.frames.append(('send', prompt))
@@ -495,6 +505,7 @@ class ScheduleCapacityRegressionTests(unittest.TestCase):
         connect.assert_called_once_with(self.sid, _dispatch_claim=claim)
         self.assertEqual([('prepare', None), ('model', 'chosen-model'), ('effort', 'high'),
                           ('permissionMode', 'plan'), ('send', 'restored request')], recording.frames)
+        self.assertEqual(item['_sessionControls'], recording.model_state())
         self.assertEqual([], self.app.dispatch.snapshot(self.sid)['queue'])
         self.assertFalse(item.get('_needsControlRestore'))
         self.assertFalse(item.get('_connecting'))

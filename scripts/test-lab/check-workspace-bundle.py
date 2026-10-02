@@ -30,6 +30,9 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
 seen = set()
+expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
+                 'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
+                 'docs/WORKSPACE_APP_UPDATES.md'})
 expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py', 'local_app/web/path-picker.js', 'local_app/web/path-picker.css'})
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})

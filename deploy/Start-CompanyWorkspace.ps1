@@ -276,6 +276,96 @@ print("WORKSPACE_PYTHON_V1:" + json.dumps(result, ensure_ascii=True, separators=
     throw 'WORKSPACE_STARTUP:37'
 }
 
+function Invoke-WorkspaceManagedUpdate {
+    param([string]$State, [string]$CurrentVersion, [string]$Python = 'auto', [bool]$IsDemo, [bool]$Headless)
+    # A successful newer install owns future opens from either the EXE or VBS.
+    # Invalid/missing pointers fall back to this portable copy without mutation.
+    try {
+        function Assert-UpdatePath([string]$Path) {
+            $cursor = [IO.Path]::GetFullPath($Path)
+            while ($cursor) {
+                if (Test-Path -LiteralPath $cursor) {
+                    if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked update path' }
+                }
+                $cursor = [IO.Path]::GetDirectoryName($cursor)
+            }
+        }
+        function Quote-UpdateArgument([string]$Value) {
+            if ($Value -match '["\r\n\x00]') { throw 'Invalid update argument' }
+            return '"' + $Value + [regex]::Match($Value, '\\+$').Value + '"'
+        }
+        function Get-UpdateHash([string]$Path) {
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            $stream = [IO.File]::OpenRead($Path)
+            try { return [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+            finally { $stream.Dispose(); $hasher.Dispose() }
+        }
+        $runtimeState = if ($IsDemo) { Join-Path $State 'demo' } else { $State }
+        $updates = Join-Path $runtimeState 'updates'
+        $pointer = Join-Path $updates 'current.json'
+        Assert-UpdatePath $pointer
+        if (-not (Test-Path -LiteralPath $pointer -PathType Leaf)) { return $false }
+        if ((Get-Item -LiteralPath $pointer).Length -gt 262144) { return $false }
+        $current = Get-Content -LiteralPath $pointer -Raw -Encoding UTF8 | ConvertFrom-Json
+        $keys = @($current.PSObject.Properties.Name | Sort-Object)
+        if (($keys -join ',') -cne 'files,root,schema,sha256,version' -or ($current.schema -isnot [int] -and $current.schema -isnot [long]) -or $current.schema -ne 1) { return $false }
+        $pattern = '^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$'
+        if ($current.version -isnot [string] -or $current.version -cnotmatch $pattern -or $CurrentVersion -cnotmatch $pattern) { return $false }
+        if ([version]$current.version -le [version]$CurrentVersion) { return $false }
+        if ($current.sha256 -isnot [string] -or $current.sha256 -cnotmatch '^[a-f0-9]{64}$') { return $false }
+        if ($current.root -cne ('versions/' + $current.version + '/Company-Workspace')) { return $false }
+        $application = Join-Path $updates $current.root
+        Assert-UpdatePath $application
+        $fileProperties = @($current.files.PSObject.Properties)
+        if ($current.files -isnot [pscustomobject] -or $fileProperties.Count -lt 2 -or $fileProperties.Count -gt 500) { return $false }
+        $expected = @{}
+        $total = 0L
+        foreach ($file in $fileProperties) {
+            $relative = $file.Name
+            if ($relative.Length -gt 240 -or $relative -match '[\\<>:"|?*\x00-\x1f]' -or $file.Value -isnot [string] -or $file.Value -cnotmatch '^[a-f0-9]{64}$') { return $false }
+            foreach ($part in $relative.Split('/')) {
+                if (-not $part -or $part -in @('.', '..', 'runtime', 'updates', '.git', '.env', '__pycache__', 'runtime.json', 'upgrade-drafts.json', 'upgrade-launch.lock') -or $part.EndsWith('.') -or $part.EndsWith(' ') -or $part -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)') { return $false }
+            }
+            if ($expected.ContainsKey($relative)) { return $false }
+            $expected[$relative] = $true
+            $filePath = Join-Path $application $relative
+            Assert-UpdatePath $filePath
+            if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) { return $false }
+            $total += (Get-Item -LiteralPath $filePath).Length
+            if ($total -gt 209715200 -or (Get-UpdateHash $filePath) -cne $file.Value) { return $false }
+        }
+        if (-not $expected.ContainsKey('deploy/Start-CompanyWorkspace.ps1') -or -not $expected.ContainsKey('local_app/server.py')) { return $false }
+        $queue = New-Object 'Collections.Generic.Queue[string]'
+        $queue.Enqueue($application)
+        $visited = 0
+        while ($queue.Count) {
+            foreach ($entry in Get-ChildItem -LiteralPath $queue.Dequeue() -Force) {
+                if (++$visited -gt 1000 -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+                if ($entry.PSIsContainer) { $queue.Enqueue($entry.FullName); continue }
+                $name = $entry.FullName.Substring($application.Length + 1).Replace('\', '/')
+                if (-not $expected.ContainsKey($name)) { return $false }
+            }
+        }
+        $launcher = Join-Path $application 'deploy/Start-CompanyWorkspace.ps1'
+        # The child inherits the already verified launcher's process policy.
+        $arguments = '-NoLogo -WindowStyle Hidden -File ' + (Quote-UpdateArgument $launcher)
+        $arguments += ' -StateRoot ' + (Quote-UpdateArgument $State) + ' -PythonCommand ' + (Quote-UpdateArgument $Python)
+        if ($IsDemo) { $arguments += ' -Demo' }
+        if ($Headless) { $arguments += ' -NoBrowser' }
+        $start = New-Object Diagnostics.ProcessStartInfo
+        $start.FileName = (Get-Process -Id $PID).Path
+        $start.Arguments = $arguments
+        $start.WorkingDirectory = $application
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.EnvironmentVariables['PYTHONDONTWRITEBYTECODE'] = '1'
+        $process = [Diagnostics.Process]::Start($start)
+        if (-not $process) { return $false }
+        $process.Dispose()
+        return $true
+    } catch { return $false }
+}
+
 try {
     $startupHelper = Join-Path $PSScriptRoot 'CompanyWorkspace.Startup.ps1'
     if (-not (Test-Path -LiteralPath $startupHelper -PathType Leaf)) { throw 'WORKSPACE_STARTUP:41' }
@@ -295,13 +385,15 @@ try {
         throw ('WORKSPACE_STARTUP:' + $childCode)
     }
     Assert-WorkspaceNormalProcess -Context $context
+    $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
+    # Forward before acquiring the startup mutex: the child owns that lock.
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.22.0' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
     $workspaceLockHeld = $workspaceMutex.WaitOne(0)
     if (-not $workspaceLockHeld) { return }
     $appRoot = Split-Path $PSScriptRoot -Parent
-    $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
     $runtimeStateRoot = $appStateRoot
     if ($Demo) { $runtimeStateRoot = Join-Path $appStateRoot 'demo' }
     $runtimePath = Join-Path $runtimeStateRoot 'runtime.json'
@@ -321,7 +413,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.21.10'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.22.0'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -336,7 +428,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.21.10'
+        $targetVersion = [version]'0.22.0'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $upgradeNeeded = $runningVersion -lt $targetVersion
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and

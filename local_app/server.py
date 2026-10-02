@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.21.10"
+WORKSPACE_VERSION = "0.22.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -171,6 +171,20 @@ class LocalApp:
         self._upgrade_headless = False
         from .upgrade_handoff import UpgradeHandoff
         self.upgrade = UpgradeHandoff(self, WORKSPACE_VERSION)
+        from .app_updates import UpdateManager
+        self.app_updates = UpdateManager(state, WORKSPACE_VERSION,
+            demo=demo or self._injected_command, installer=self._install_app_update,
+            handoff_status=lambda: self.upgrade.status())
+        self.update_warning = None
+
+    def _install_app_update(self, version, package_bytes, sha256, *, cancel=None):
+        from .update_install import stage_and_launch
+        # Shutdown closes admission before an updater can launch a successor.
+        # The new launcher uses the existing cooperative draft/work handoff.
+        with self.operation(upgrade_change=True):
+            return stage_and_launch(self.state, WORKSPACE_VERSION, version,
+                package_bytes, sha256, demo=self.demo,
+                no_browser=self._upgrade_headless, cancel=cancel)
 
     def _notify_desktop(self, payload, on_click):
         if self._desktop_window is not None:
@@ -361,6 +375,8 @@ class LocalApp:
                     "window": self.window_state(),
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
+                    "appUpdate": self.app_updates.snapshot(),
+                    "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
 
     def window_state(self):
@@ -1355,6 +1371,8 @@ class LocalApp:
             self.dialog_lock.release()
 
     def close(self):
+        if hasattr(self, 'app_updates'):
+            self.app_updates.close()
         if hasattr(self, 'dispatch'):
             self.dispatch.stop()
         self.notifier.close()
@@ -1449,6 +1467,8 @@ class Handler(BaseHTTPRequestHandler):
             sid = query.get("id", [""])[0]
             if route.path == "/api/bootstrap":
                 return self.reply(app.bootstrap())
+            if route.path == '/api/app-update':
+                return self.reply(app.app_updates.check())
             if route.path == '/api/attention':
                 return self.reply(app.attention())
             if route.path == '/api/upgrade':
@@ -1544,6 +1564,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
+                      "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),
+                      "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
@@ -1647,6 +1669,15 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/app-update':
+            action = data.get('action')
+            if action == 'check' and set(data) == {'action'}:
+                return self.reply(app.app_updates.check(manual=True))
+            if action == 'configure' and set(data) == {'action', 'autoCheck'}:
+                return self.reply(app.app_updates.configure(data['autoCheck']))
+            if action == 'install' and set(data) == {'action', 'version'}:
+                return self.reply(app.app_updates.install(data['version']))
+            raise ValueError('업데이트 요청을 확인해 주세요.')
         if route == '/api/ui-health':
             return self.reply({'ok': True, 'recorded': app.ui_health.frontend(data)})
         if route == '/api/browse-paths':
@@ -1822,7 +1853,13 @@ def main():
             reopen()
         # Publish readiness only after the desktop host passed initialization.
         runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
+        from .update_install import confirm_running_update
+        try:
+            confirm_running_update(app.state, WORKSPACE_VERSION)
+        except (ValueError, OSError):
+            app.update_warning = '업데이트 실행 위치를 저장하지 못했어요. 다음 실행 때 최신 버전 파일을 사용해 주세요.'
         app.dispatch.start()
+        app.app_updates.start()
         serving.set()
         server.serve_forever(poll_interval=.3)
     except DesktopError as exc:

@@ -29,10 +29,14 @@ class ManualRoutingTests(unittest.TestCase):
         parser = GuideLinks()
         parser.feed((ROOT / 'local_app/web/index.html').read_text(encoding='utf-8'))
         self.assertEqual({'help-dialog', 'settings-dialog'}, {dialog for dialog, _ in parser.links})
-        self.assertEqual(2, len(parser.links))
+        full_guides = [(dialog, values) for dialog, values in parser.links if values['href'] == '/manual/guide']
+        self.assertEqual(2, len(full_guides))
+        self.assertEqual({'help-dialog', 'settings-dialog'}, {dialog for dialog, _ in full_guides})
         for dialog, values in parser.links:
             with self.subTest(dialog=dialog):
-                self.assertEqual('/manual/guide', values['href'])
+                # Help also links directly to guide sections; all links retain
+                # the same fixed, token-free route and safe external target.
+                self.assertEqual('/manual/guide', values['href'].split('#', 1)[0])
                 self.assertEqual('_blank', values['target'])
                 self.assertTrue({'noopener', 'noreferrer'}.issubset(values['rel'].split()))
 

@@ -34,7 +34,7 @@ class ControlRoutesTests(unittest.TestCase):
         self.addCleanup(self.app.close)
         self.sid = self.app.create(str(work), True)['id']
         self.item = self.app.get(self.sid)
-        self.bridge = Mock(closed=False)
+        self.bridge = Mock(closed=False, _effort_baselines={})
         self.bridge.ready.is_set.return_value = True
         self.item['bridge'] = self.bridge
         self.addCleanup(lambda: self.item.update(bridge=None))
@@ -68,6 +68,7 @@ class ControlRoutesTests(unittest.TestCase):
         self.assertEqual(400, caught.exception.code)
         self.bridge.set_permission_mode.assert_not_called()
         self.bridge.set_permission_mode.return_value = {'permissionMode': 'auto', 'permissionModeOverride': 'auto'}
+        self.bridge.model_state.return_value = dict(self.bridge.set_permission_mode.return_value)
         result = self.post('/api/permission-mode', {'id': self.sid, 'mode': 'auto'})
         self.assertTrue(result['ok'])
         self.assertEqual('auto', result['session']['permissionModeOverride'])

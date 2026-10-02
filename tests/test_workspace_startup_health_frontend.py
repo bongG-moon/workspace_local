@@ -13,8 +13,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const nodes=new Map(),storage=new Map(),events=new Map(),windowEvents=new Map(),intervals=new Map();
 let now=1000000,nextTimer=1,reloads=0,storageFails=false;
 function node(id){if(!nodes.has(id))nodes.set(id,{id,hidden:false,textContent:'',dataset:{},disabled:false,onclick:null,tagName:'BUTTON',closest(){return this;}});return nodes.get(id);}
-const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls','input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','upgrade-handoff':'WorkspaceUpgrade'};
-const controls=['new-chat','settings-open','shortcuts-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close'];
+const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls', 'input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','upgrade-handoff':'WorkspaceUpgrade','app-updates':'WorkspaceAppUpdates'};
+const controls=['new-chat','settings-open','shortcuts-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close','app-update-check','app-update-notes-open','app-update-install'];
 const posted=[],restores=[],directCalls=[];
 const context={assert,console,URL,URLSearchParams,Math,JSON,Object,Map,Set,Date:{now:()=>now},location:{href:'http://127.0.0.1:1234/',hash:'#token=TEST_AUTH_SECRET',reload:()=>reloads++},
  crypto:{randomUUID:()=> '12345678-abcd-1234-abcd-123456789abc'},
@@ -83,6 +83,34 @@ class WorkspaceStartupHealthFrontendTests(unittest.TestCase):
           fire('load',{target:{tagName:'SCRIPT',src:'/chat-shortcuts.js'}});
           assert.equal(health.snapshot().modules['input-keys'].status,'ready');
           assert.equal(health.snapshot().modules['chat-shortcuts'].status,'ready');
+          assert.equal(readReloads(),0);
+        })()""")
+
+    def test_missing_updater_script_is_reported_and_recovers_only_when_loaded(self):
+        self.run_case(r"""(async()=>{
+          installAll();delete WorkspaceAppUpdates;health.attach(hooks);
+          fire('error',{target:{tagName:'SCRIPT',src:'/app-updates.js'}});
+          fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(health.snapshot().modules['app-updates'].reason,'resource-error');
+          assert.ok(health.snapshot().missing.includes('app-updates'));
+          assert.ok(posted.some(row=>row.module==='app-updates'&&row.reason==='resource-error'));
+          let blocked=0;fire('click',{target:node('app-update-check'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.equal(readReloads(),0);
+          globalThis.WorkspaceAppUpdates={};fire('load',{target:{tagName:'SCRIPT',src:'/app-updates.js'}});
+          assert.equal(health.snapshot().modules['app-updates'].status,'ready');
+          assert.equal(health.snapshot().missing.length,0);
+        })()""")
+
+    def test_updater_global_requires_check_notes_and_install_handlers(self):
+        self.run_case(r"""(async()=>{
+          installAll();health.attach(hooks);fire('DOMContentLoaded');await health.bootstrapReady();
+          for(const id of ['app-update-check','app-update-notes-open','app-update-install']){
+            node(id).onclick=null;health.check();
+            assert.equal(health.snapshot().modules['app-updates'].reason,'missing-handler');
+            let blocked=0;fire('click',{target:node(id),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+            assert.equal(blocked,2);node(id).onclick=()=>{};health.check();
+            assert.equal(health.snapshot().modules['app-updates'].status,'ready');
+          }
           assert.equal(readReloads(),0);
         })()""")
 

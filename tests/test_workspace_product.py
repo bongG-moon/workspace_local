@@ -179,7 +179,8 @@ class ProductTests(unittest.TestCase):
         self.sid = self.app.create(str(self.workspace), True)['id']
 
     def start_request(self, changes_during_send=None):
-        bridge = Mock(closed=False)
+        bridge = Mock(closed=False, _effort_baselines={})
+        bridge.model_state.return_value = {}
         bridge.ready = threading.Event()
         bridge.ready.set()
         bridge.send.side_effect = changes_during_send
@@ -329,11 +330,13 @@ class ProductTests(unittest.TestCase):
             self.app.set_model(self.sid, 'model')
         self.app.emit(self.sid, 'result', {})
         def control(model):
-            thread = threading.Thread(target=lambda: self.app.emit(self.sid, 'model_changed', {'model': model, 'modelOverride': model}))
+            state = {'model': model, 'modelOverride': model}
+            bridge.model_state.return_value = state
+            thread = threading.Thread(target=lambda: self.app.emit(self.sid, 'model_changed', state))
             thread.start()
             thread.join(1)
             self.assertFalse(thread.is_alive(), 'app lock deadlocked model response')
-            return {'model': model, 'modelOverride': model}
+            return state
         bridge.set_model.side_effect = control
         result = self.app.set_model(self.sid, 'company-model')
         self.assertEqual('company-model', result['modelOverride'])

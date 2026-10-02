@@ -34,6 +34,18 @@ class UiHealthTests(unittest.TestCase):
         self.assertIn('serverPid', row)
         self.assertEqual(self.log.launch_id, row['launchId'])
 
+    def test_updater_load_failure_is_accepted_and_retained_without_remote_metadata(self):
+        self.assertTrue(self.log.frontend(event(event='module', module='app-updates',
+            reason='resource-error', missing=['app-updates'], url='https://private.example/release',
+            message='PRIVATE RELEASE NOTES')))
+        row = self.log.rows[-1]
+        self.assertEqual(('app-updates', 'resource-error', ['app-updates']),
+                         (row['module'], row['reason'], row['missing']))
+        restarted = UiHealthLog(self.state, '0.22.0')
+        self.assertEqual('app-updates', restarted.rows[-1]['module'])
+        self.assertNotIn('PRIVATE', self.log.path.read_text())
+        self.assertNotIn('private.example', self.log.path.read_text())
+
     def test_rejects_freeform_values_nonfinite_numbers_and_unbounded_lists(self):
         for changes in ({'documentId':'http://private/path'}, {'module':'secrets'},
                         {'reason':'file content'}, {'event':[]}, {'status':'CUSTOM'},
