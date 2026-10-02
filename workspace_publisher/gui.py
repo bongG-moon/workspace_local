@@ -16,8 +16,30 @@ DEFAULT_CONFIG = {"schema": 1, "baseUrl": "", "projectId": "", "remoteName": "in
                   "allowedDownloadOrigins": [], "tokenKind": "deploy"}
 ACTION_NAMES = {"load": "설정과 소스 확인", "inspect": "소스 확인", "save": "설정 저장",
                 "restore": "이전 빌드 확인",
+                "sdk-status": "SDK 확인", "sdk-import": "SDK 파일 확인", "sdk-download": "SDK 다운로드",
                 "connection": "연결 확인", "preview": "반영할 소스 확인", "sync": "소스 반영",
                 "build": "설치 파일 만들기", "publish": "게시와 다운로드 검증"}
+
+
+def source_is_archive(source):
+    return source.get("sourceKind") == "archive"
+
+
+def source_identifier(source):
+    return str(source.get("sourceId") or source.get("commit") or "")
+
+
+def source_can_sync(source):
+    return bool(source) and not source_is_archive(source) and source.get("canSync", True)
+
+
+def sdk_status(repo_root):
+    """A missing SDK must not hide the remaining settings or source."""
+    from .sdk import inspect_sdk
+    try:
+        return inspect_sdk(repo_root)
+    except ValueError as exc:
+        return {"status": "invalid", "message": public_text(exc)}
 
 
 def settings_only(value):
@@ -76,7 +98,7 @@ class PublisherJobs:
                 except queue.Empty:
                     pass
 
-    def start(self, action, config=None, *, preview=None, build_result=None, token=""):
+    def start(self, action, config=None, *, preview=None, build_result=None, token="", sdk_input=""):
         if action not in ACTION_NAMES:
             raise ValueError("실행할 단계를 확인해 주세요.")
         with self._lock:
@@ -100,7 +122,14 @@ class PublisherJobs:
             try:
                 publisher = self.factory(self.repo_root, emit=emit)
                 if action == "load":
-                    result = {"config": publisher.load_config(), "source": publisher.inspect_source()}
+                    result = {"config": publisher.load_config(), "sdk": sdk_status(self.repo_root)}
+                    try:
+                        result["source"] = publisher.inspect_source()
+                    except ValueError as exc:
+                        # An edited source ZIP cannot be rebuilt, but verified
+                        # artifacts from an earlier build can still be retried.
+                        result["source"] = None
+                        result["sourceNotice"] = public_text(exc)
                     try:
                         result["build"] = publisher.load_last_build(result["config"], cancel=cancel)
                     except ValueError as exc:
@@ -112,6 +141,16 @@ class PublisherJobs:
                     result = publisher.inspect_source()
                 elif action == "restore":
                     result = {"build": publisher.load_last_build(config, cancel=cancel)}
+                elif action == "sdk-status":
+                    result = sdk_status(self.repo_root)
+                elif action in {"sdk-import", "sdk-download"}:
+                    from .sdk import import_sdk, download_sdk
+                    if cancel.is_set():
+                        raise ValueError("작업을 취소했습니다.")
+                    if action == "sdk-import":
+                        result = import_sdk(self.repo_root, sdk_input, cancel=cancel, emit=emit)
+                    else:
+                        result = download_sdk(self.repo_root, sdk_input or None, cancel=cancel, emit=emit)
                 else:
                     if cancel.is_set():
                         raise ValueError("작업을 취소했습니다.")
@@ -170,11 +209,11 @@ class PublisherJobs:
 class PublisherWindow:
     def __init__(self, root, repo_root, factory):
         import tkinter as tk
-        from tkinter import ttk, messagebox
+        from tkinter import ttk, messagebox, filedialog
         from tkinter.scrolledtext import ScrolledText
 
         self.root, self.repo_root = root, Path(repo_root)
-        self.tk, self.ttk, self.messagebox = tk, ttk, messagebox
+        self.tk, self.ttk, self.messagebox, self.filedialog = tk, ttk, messagebox, filedialog
         self.jobs = PublisherJobs(repo_root, factory)
         self.active_action = None
         self.closing = False
@@ -183,11 +222,15 @@ class PublisherWindow:
         self.build_config_identity = None
         self.build_restored = False
         self.source = {}
+        self.source_notice = ""
+        self.sdk = {}
         self.mutable = []
         self.buttons = []
         self.fields = {key: tk.StringVar(value=DEFAULT_CONFIG[key]) for key in
                        ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title")}
         self.origins, self.token = tk.StringVar(), tk.StringVar()
+        self.sdk_url = tk.StringVar()
+        self.sdk_label = tk.StringVar(value="SDK를 확인하고 있어요.")
         self.token_kind = tk.StringVar(value="배포 토큰 (Deploy Token)")
         self.status = tk.StringVar(value="저장된 설정과 현재 소스를 확인하고 있어요.")
         self.source_label = tk.StringVar(value=str(self.repo_root))
@@ -210,16 +253,17 @@ class PublisherWindow:
         outer = ttk.Frame(root, padding=22)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="사내에 새 버전 배포하기", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="연결 확인 → 소스 반영 → 설치 파일 만들기 → 게시", style="Note.TLabel").pack(anchor="w", pady=(6, 13))
+        ttk.Label(outer, text="SDK 준비 → 연결 확인 → 설치 파일 만들기 → 게시 · Git 저장소는 소스 반영도 가능해요.", style="Note.TLabel").pack(anchor="w", pady=(6, 13))
         ttk.Label(outer, textvariable=self.source_label, style="Note.TLabel", wraplength=840).pack(anchor="w", pady=(0, 12))
 
         notebook = ttk.Notebook(outer)
         notebook.pack(fill="x")
-        settings, release, advanced = (ttk.Frame(notebook, padding=16) for _ in range(3))
+        settings, release, sdk_page, advanced = (ttk.Frame(notebook, padding=16) for _ in range(4))
         notebook.add(settings, text="배포 서버 설정")
         notebook.add(release, text="이번 버전 안내")
+        notebook.add(sdk_page, text="SDK 준비")
         notebook.add(advanced, text="추가 설정")
-        for frame in (settings, release, advanced):
+        for frame in (settings, release, sdk_page, advanced):
             frame.columnconfigure(1, weight=1)
 
         def field(frame, row, label, variable, *, readonly=False):
@@ -232,7 +276,7 @@ class PublisherWindow:
 
         field(settings, 0, "GitLab 서버 주소 (HTTPS)", self.fields["baseUrl"])
         field(settings, 1, "프로젝트 ID", self.fields["projectId"])
-        field(settings, 2, "소스 반영 주소 (SSH)", self.fields["remoteUrl"])
+        self.remote_entry = field(settings, 2, "소스 반영 주소 (SSH · Git만)", self.fields["remoteUrl"])
         ttk.Label(settings, text="서버 주소 예: https://gitlab.company.example — 프로젝트의 /그룹/저장소 경로는 제외합니다.\n"
                   "설정은 이 폴더의 build/publisher/config.json에만 저장하며 소스에 포함하지 않습니다.",
                   style="Note.TLabel", wraplength=730).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
@@ -242,6 +286,18 @@ class PublisherWindow:
         self.notes = ScrolledText(release, height=5, wrap="word", font=("맑은 고딕", 10), relief="solid", borderwidth=1)
         self.notes.grid(row=2, column=1, sticky="ew", pady=7)
         self.mutable.append(self.notes)
+        ttk.Label(sdk_page, textvariable=self.sdk_label, wraplength=730).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(sdk_page, text="앱 창을 만드는 WebView2 SDK는 소스 ZIP에 포함하지 않습니다. 사내에 준비된 파일을 선택하거나,\n"
+                  "허용된 네트워크에서 아래 버튼으로 내려받아 주세요. 앱 실행·빌드 중 자동으로 받지 않습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        field(sdk_page, 2, "사내 SDK 주소 (선택)", self.sdk_url)
+        ttk.Label(sdk_page, text="비워 두면 고정된 NuGet 주소를 사용합니다. 토큰 없는 HTTPS 주소만 가능하며 주소는 저장하지 않습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        sdk_buttons = ttk.Frame(sdk_page)
+        sdk_buttons.grid(row=4, column=0, columnspan=2, sticky="w")
+        self._button(sdk_buttons, "SDK 파일 선택", self.select_sdk).pack(side="left", padx=(0, 8))
+        self._button(sdk_buttons, "SDK 다운로드", self.download_sdk).pack(side="left", padx=(0, 8))
+        self._button(sdk_buttons, "상태 다시 확인", lambda: self.start("sdk-status")).pack(side="left")
         field(advanced, 0, "소스 목적지 이름", self.fields["remoteName"])
         field(advanced, 1, "추가 다운로드 서버", self.origins)
         ttk.Label(advanced, text="다운로드가 별도 저장소를 사용하는 경우에만 https://주소를 쉼표로 구분해 입력하세요.\n"
@@ -269,9 +325,12 @@ class PublisherWindow:
 
         actions = ttk.Frame(outer)
         actions.pack(fill="x")
-        for label, action in (("1  연결 확인", "connection"), ("2  소스 반영", "preview"), ("3  빌드", "build")):
-            self._button(actions, label, lambda action=action: self.start(action)).pack(side="left", padx=(0, 8))
-        self.publish_button = self._button(actions, "4  게시", lambda: self.start("publish"), style="Publish.TButton")
+        self._button(actions, "연결 확인", lambda: self.start("connection")).pack(side="left", padx=(0, 8))
+        self.sync_button = self._button(actions, "소스 반영 (Git)", lambda: self.start("preview"))
+        self.sync_button.pack(side="left", padx=(0, 8))
+        self.build_button = self._button(actions, "빌드", lambda: self.start("build"))
+        self.build_button.pack(side="left", padx=(0, 8))
+        self.publish_button = self._button(actions, "게시", lambda: self.start("publish"), style="Publish.TButton")
         self.publish_button.pack(side="left", padx=(0, 8))
         self.cancel_button = ttk.Button(actions, text="작업 취소", command=self.cancel)
         self.cancel_button.pack(side="right")
@@ -315,24 +374,50 @@ class PublisherWindow:
         for control in self.mutable:
             control.configure(state="disabled" if busy else "readonly" if control is self.token_selector else "normal")
         if not busy:
+            self.sync_button.configure(state="normal" if source_can_sync(self.source) else "disabled")
+            self.remote_entry.configure(state="normal" if source_can_sync(self.source) else "disabled")
+            self.build_button.configure(state="normal" if self.source and self.sdk.get("status") == "ready" else "disabled")
             valid_build = self.build_result is not None and self.build_config_identity == build_identity(self.config())
             self.publish_button.configure(state="normal" if valid_build else "disabled")
             if self.build_result is None:
                 self.build_label.set("게시할 설치 파일이 없습니다. 먼저 빌드하거나 이전 빌드를 불러와 주세요.")
             else:
                 built = self.build_result
-                label = f"게시할 설치 파일  {built.get('version', '')}   |   {str(built.get('commit', ''))[:12]}"
+                source_type = "소스 ZIP · SHA256" if source_is_archive(built) else "Git"
+                label = f"게시할 설치 파일  {built.get('version', '')}   |   {source_type} {source_identifier(built)[:12]}"
                 if self.build_restored:
                     label += "   |   이전 빌드 복원됨"
                 if not valid_build:
                     label += "\n설정이 바뀌었습니다. 이전 빌드를 다시 확인하거나 새로 빌드해 주세요."
-                elif built.get("commit") != self.source.get("commit"):
-                    label += "\n현재 소스와 다른 커밋의 파일입니다. 위 버전으로 게시를 이어갑니다."
+                elif self.source and source_identifier(built) != source_identifier(self.source):
+                    label += "\n현재 소스와 다른 " + ("소스 ZIP" if source_is_archive(built) else "커밋") + "의 파일입니다. 위 버전으로 게시를 이어갑니다."
                 self.build_label.set(label)
         self.cancel_button.configure(state="normal" if self.jobs.busy and not self.closing else "disabled")
 
-    def start(self, action, *, preview=None):
+    def select_sdk(self):
         if self.active_action is not None or self.closing:
+            return
+        path = self.filedialog.askopenfilename(parent=self.root, title="준비된 WebView2 SDK 선택",
+                                              filetypes=(("NuGet SDK 파일", "*.nupkg"),))
+        if path:
+            self.start("sdk-import", sdk_input=path)
+
+    def download_sdk(self):
+        if self.active_action is not None or self.closing:
+            return
+        self.start("sdk-download", sdk_input=self.sdk_url.get().strip())
+
+    def start(self, action, *, preview=None, sdk_input=""):
+        if self.active_action is not None or self.closing:
+            return
+        if action in {"preview", "sync"} and not source_can_sync(self.source):
+            self.status.set("Download ZIP에는 Git 이력이 없습니다. 소스 반영을 건너뛰고 빌드와 게시를 진행하세요.")
+            return
+        if action == "build" and not self.source:
+            self.status.set("현재 소스를 확인하지 못해 새로 빌드할 수 없습니다. 원본 ZIP을 복원하고 소스 다시 확인을 눌러 주세요.")
+            return
+        if action == "build" and self.sdk.get("status") != "ready":
+            self.status.set("먼저 SDK 준비 탭에서 파일을 선택하거나 다운로드해 주세요.")
             return
         config = self.config()
         token = self.token.get() if action == "publish" else ""
@@ -343,7 +428,7 @@ class PublisherWindow:
             self.status.set("게시용 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
             self.token_entry.focus_set()
             return
-        if self.jobs.start(action, config, preview=preview, build_result=self.build_result, token=token):
+        if self.jobs.start(action, config, preview=preview, build_result=self.build_result, token=token, sdk_input=sdk_input):
             self.active_action = action
             if action == "restore":
                 self.build_result = None
@@ -355,14 +440,30 @@ class PublisherWindow:
             self.progress.start(12)
             self.refresh_controls()
 
-    def _source(self, source):
+    def _source(self, source, notice=""):
         self.source = source or {}
+        self.source_notice = notice
+        if notice:
+            self.source_label.set("현재 소스 확인 필요 · " + public_text(notice) + "\n"
+                                  "검증된 이전 빌드가 있으면 같은 파일로 게시를 다시 시도할 수 있습니다.")
+            self.append_log("현재 소스 확인 필요: " + notice, "error")
+            return
         version = self.source.get("version", "확인 전")
-        commit = str(self.source.get("commit", ""))[:12]
+        commit = source_identifier(self.source)[:12]
         branch = self.source.get("branch", "확인 전")
         state = "반영하지 않은 변경 있음" if self.source.get("clean") is False else ""
-        self.source_label.set(f"현재 소스  {version}   |   {branch}   |   {commit}   {state}\n{self.repo_root}")
+        if source_is_archive(self.source):
+            self.source_label.set(f"현재 소스  {version}   |   Download ZIP   |   SHA256 {commit}\n"
+                                  "Git 이력이 없어 소스 반영은 생략합니다. SDK 준비 후 빌드·게시할 수 있어요.\n"
+                                  "원본 코드도 보관하려면 사내 GitLab의 파일 업로드 기능을 이용하세요.")
+        else:
+            self.source_label.set(f"현재 소스  {version}   |   {branch}   |   {commit}   {state}\n{self.repo_root}")
         self.fields["releaseTag"].set(self.source.get("releaseTag") or "")
+
+    def _sdk(self, result):
+        self.sdk = result or {}
+        message = self.sdk.get("message") or ("SDK가 준비되었습니다." if self.sdk.get("status") == "ready" else "SDK 파일을 준비해 주세요.")
+        self.sdk_label.set(public_text(message) + ("\n" + str(self.sdk.get("path")) if self.sdk.get("path") else ""))
 
     def done(self, action, result, identity):
         result = result if isinstance(result, dict) else {}
@@ -375,7 +476,8 @@ class PublisherWindow:
             self.notes.configure(state="normal")
             self.notes.delete("1.0", "end")
             self.notes.insert("1.0", config["notes"])
-            self._source(result.get("source"))
+            self._source(result.get("source"), result.get("sourceNotice", ""))
+            self._sdk(result.get("sdk"))
             self._restore_build(result, build_identity(self.config()))
             return
         elif action == "restore":
@@ -384,6 +486,8 @@ class PublisherWindow:
         elif action == "inspect":
             self._source(result)
             self.build_result = None
+        elif action.startswith("sdk-"):
+            self._sdk(result)
         elif action == "preview":
             self.preview_dialog(result)
             return
@@ -405,10 +509,12 @@ class PublisherWindow:
         self.build_restored = self.build_result is not None
         if self.build_restored:
             self.append_log(f"이전 빌드 검증 완료 · 버전 {self.build_result.get('version', '')} · "
-                            f"소스 {self.build_result.get('commit', '')}\n{self.build_result.get('directory', '')}")
+                            f"소스 {source_identifier(self.build_result)}\n{self.build_result.get('directory', '')}")
             message = "이전 빌드를 확인했습니다. 게시용 토큰을 입력하고 게시하면 같은 파일로 이어갑니다."
         elif result.get("buildNotice"):
             message = "이전 빌드를 복원하지 못했습니다. " + result["buildNotice"]
+        elif self.source_notice:
+            message = "설정을 불러왔습니다. 게시할 이전 빌드가 없어 원본 ZIP을 복원하고 소스를 다시 확인해 주세요."
         else:
             message = "설정과 소스를 확인했습니다. 저장된 이전 빌드가 없어 먼저 빌드해 주세요."
         self.status.set(public_text(message))
@@ -457,6 +563,8 @@ class PublisherWindow:
                     self.destroy()
                     return
                 if kind == "failed":
+                    if event["action"] == "inspect":
+                        self._source(None, event["message"])
                     self.status.set(event["message"])
                     self.append_log(event["message"], "error")
                 else:
@@ -494,9 +602,19 @@ class PublisherWindow:
 
 
 def main(repo_root=None):
-    import tkinter as tk
+    try:
+        import tkinter as tk
+    except ImportError:
+        print("이 Python에는 배포 창을 여는 tkinter가 없습니다. 터미널 방식으로도 진행할 수 있습니다.\n"
+              "python -X utf8 Publish-Workspace.py --cli --help")
+        return 1
     from .core import Publisher
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        print("이 환경에서 배포 창을 열지 못했습니다. 터미널 방식으로 진행할 수 있습니다.\n"
+              "python -X utf8 Publish-Workspace.py --cli --help")
+        return 1
     PublisherWindow(root, Path(repo_root) if repo_root else Path(__file__).resolve().parents[1], Publisher)
     root.mainloop()
     return 0

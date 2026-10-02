@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from workspace_publisher.gui import (DEFAULT_CONFIG, PublisherJobs, PublisherWindow,
-                                     build_identity, public_text, settings_only)
+                                     build_identity, public_text, settings_only, source_can_sync)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +23,9 @@ SOURCE = {"version": "0.22.0", "branch": "main", "commit": "a" * 40, "clean": Tr
           "releaseTag": "v0.22.0"}
 BUILD = {"version": "0.22.0", "commit": "a" * 40, "directory": "C:/build/output",
          "files": [{"name": "package.zip", "path": "C:/build/output/package.zip"}]}
+SDK = {"status": "ready", "version": "1.0.4258.31", "path": "C:/build/sdk.nupkg", "message": "SDK 준비 완료"}
+ARCHIVE = {"version": "0.23.1", "sourceKind": "archive", "sourceId": "b" * 64,
+           "commit": "", "branch": "", "clean": True, "releaseTag": "", "canSync": False}
 
 
 class FakeCore:
@@ -36,6 +39,7 @@ class FakeCore:
         self.leak_token = False
         self.last_build = None
         self.restore_failure = None
+        self.source_failure = None
         self.source = deepcopy(SOURCE)
 
     def factory(self, root, *, emit):
@@ -46,6 +50,8 @@ class FakeCore:
                 return deepcopy(CONFIG)
 
             def inspect_source(self):
+                if state.source_failure:
+                    raise ValueError(state.source_failure)
                 return deepcopy(state.source)
 
             def load_last_build(self, config, *, cancel=None):
@@ -103,6 +109,9 @@ class PublisherJobsTests(unittest.TestCase):
     def setUp(self):
         self.core = FakeCore()
         self.jobs = PublisherJobs(ROOT, self.core.factory)
+        self.sdk_patch = patch("workspace_publisher.gui.sdk_status", return_value=deepcopy(SDK))
+        self.sdk_status = self.sdk_patch.start()
+        self.addCleanup(self.sdk_patch.stop)
 
     def finish(self):
         self.jobs.thread.join(3)
@@ -116,6 +125,37 @@ class PublisherJobsTests(unittest.TestCase):
         self.assertEqual(SOURCE, events[-1]["result"]["source"])
         self.assertEqual([("restore", CONFIG)], self.core.calls)
         self.assertIsNone(events[-1]["result"]["build"])
+        self.assertEqual(SDK, events[-1]["result"]["sdk"])
+        self.sdk_status.assert_called_once_with(ROOT)
+
+    def test_archive_load_preserves_sha_identity_and_never_saves_or_syncs(self):
+        self.core.source = deepcopy(ARCHIVE)
+        self.jobs.start("load")
+        event = self.finish()[-1]
+        self.assertEqual(ARCHIVE, event["result"]["source"])
+        self.assertFalse(source_can_sync(event["result"]["source"]))
+        self.assertEqual(["restore"], [row[0] for row in self.core.calls])
+
+    def test_sdk_status_is_read_only_and_does_not_save_config(self):
+        self.jobs.start("sdk-status", CONFIG)
+        event = self.finish()[-1]
+        self.assertEqual(SDK, event["result"])
+        self.assertEqual([], self.core.calls)
+        self.sdk_status.assert_called_once_with(ROOT)
+
+    def test_sdk_import_and_download_only_run_after_explicit_action_and_never_save_url(self):
+        for action, method, value in (("sdk-import", "import_sdk", "C:/approved/sdk.nupkg"),
+                                      ("sdk-download", "download_sdk", "https://packages.example/sdk.nupkg")):
+            with self.subTest(action=action), patch("workspace_publisher.sdk." + method, return_value=deepcopy(SDK)) as prepare:
+                self.jobs.start(action, CONFIG, sdk_input=value)
+                event = self.finish()[-1]
+                self.assertEqual("done", event["kind"])
+                self.assertEqual(SDK, event["result"])
+                self.assertEqual((ROOT, value), prepare.call_args.args)
+                self.assertIs(self.jobs.cancel_event, prepare.call_args.kwargs["cancel"])
+                self.assertTrue(callable(prepare.call_args.kwargs["emit"]))
+                self.assertEqual([], self.core.calls)
+                self.assertNotIn(value, json.dumps(event))
 
     def test_startup_restores_verified_build_without_building_saving_or_publishing(self):
         self.core.last_build = deepcopy(BUILD)
@@ -135,6 +175,17 @@ class PublisherJobsTests(unittest.TestCase):
         self.assertEqual(SOURCE, event["result"]["source"])
         self.assertIsNone(event["result"]["build"])
         self.assertIn("해시", event["result"]["buildNotice"])
+
+    def test_bad_source_is_independent_notice_and_preserves_verified_previous_build(self):
+        self.core.source_failure = "소스 ZIP이 원본 목록과 다릅니다."
+        self.core.last_build = deepcopy(BUILD)
+        self.jobs.start("load")
+        event = self.finish()[-1]
+        self.assertEqual("done", event["kind"])
+        self.assertEqual(CONFIG, event["result"]["config"])
+        self.assertEqual(BUILD, event["result"]["build"])
+        self.assertIsNone(event["result"]["source"])
+        self.assertIn("원본 목록", event["result"]["sourceNotice"])
 
     def test_explicit_restore_checks_current_config_without_mutation(self):
         self.core.last_build = deepcopy(BUILD)
@@ -243,6 +294,9 @@ class PublisherJobsTests(unittest.TestCase):
 
 class PublisherWindowTests(unittest.TestCase):
     def setUp(self):
+        self.sdk_patch = patch("workspace_publisher.gui.sdk_status", return_value=deepcopy(SDK))
+        self.sdk_patch.start()
+        self.addCleanup(self.sdk_patch.stop)
         try:
             import tkinter as tk
             self.root = tk.Tk()
@@ -283,6 +337,46 @@ class PublisherWindowTests(unittest.TestCase):
         self.window.token.set("DO_NOT_SAVE")
         self.assertNotIn("DO_NOT_SAVE", json.dumps(self.window.config()))
         self.assertEqual("disabled", str(self.window.publish_button.cget("state")))
+
+    def test_archive_ui_labels_zip_hash_and_disables_only_git_source_sync(self):
+        self.core.source = deepcopy(ARCHIVE)
+        self.reopen()
+        self.assertIn("Download ZIP", self.window.source_label.get())
+        self.assertIn("SHA256 " + "b" * 12, self.window.source_label.get())
+        self.assertEqual("", self.window.fields["releaseTag"].get())
+        self.assertEqual("disabled", str(self.window.sync_button.cget("state")))
+        self.assertEqual("disabled", str(self.window.remote_entry.cget("state")))
+        self.assertEqual("normal", str(self.window.build_button.cget("state")))
+        self.core.calls.clear()
+        self.window.start("preview")
+        self.assertIn("Git 이력", self.window.status.get())
+        self.assertEqual([], self.core.calls)
+        self.window.start("build")
+        self.finish()
+        self.assertIn("build", [row[0] for row in self.core.calls])
+
+    def test_missing_sdk_disables_build_with_explicit_prepare_instructions(self):
+        self.window._sdk({"status": "missing", "message": "SDK 파일을 준비해 주세요."})
+        self.window.refresh_controls()
+        self.assertEqual("disabled", str(self.window.build_button.cget("state")))
+        self.core.calls.clear()
+        self.window.start("build")
+        self.assertIn("SDK 준비", self.window.status.get())
+        self.assertEqual([], self.core.calls)
+        self.window._sdk(SDK)
+        self.window.refresh_controls()
+        self.assertEqual("normal", str(self.window.build_button.cget("state")))
+
+    def test_sdk_url_and_local_file_stay_out_of_saved_config(self):
+        self.window.sdk_url.set("https://approved.example/sdk.nupkg")
+        self.assertNotIn("approved.example", json.dumps(self.window.config()))
+        self.window.filedialog = SimpleNamespace(askopenfilename=lambda **kwargs: "C:/approved/sdk.nupkg")
+        with patch.object(self.window, "start") as start:
+            self.window.select_sdk()
+            start.assert_called_once_with("sdk-import", sdk_input="C:/approved/sdk.nupkg")
+        with patch.object(self.window, "start") as start:
+            self.window.download_sdk()
+            start.assert_called_once_with("sdk-download", sdk_input="https://approved.example/sdk.nupkg")
 
     def test_publish_clears_entry_immediately_and_waits_for_verified_result(self):
         self.window.build_result = deepcopy(BUILD)
@@ -358,6 +452,22 @@ class PublisherWindowTests(unittest.TestCase):
         self.assertIsNone(self.window.build_result)
         self.assertEqual("disabled", str(self.window.publish_button.cget("state")))
 
+    def test_source_error_keeps_verified_previous_build_publishable_but_cannot_rebuild(self):
+        self.core.source_failure = "소스 ZIP이 원본 목록과 다릅니다."
+        self.core.last_build = deepcopy(BUILD)
+        self.reopen()
+        self.assertEqual(CONFIG["baseUrl"], self.window.fields["baseUrl"].get())
+        self.assertEqual(CONFIG["releaseTag"], self.window.fields["releaseTag"].get())
+        self.assertIn("현재 소스 확인 필요", self.window.source_label.get())
+        self.assertEqual(BUILD, self.window.build_result)
+        self.assertEqual("normal", str(self.window.publish_button.cget("state")))
+        self.assertEqual("disabled", str(self.window.build_button.cget("state")))
+        self.assertEqual("disabled", str(self.window.sync_button.cget("state")))
+        self.window.token.set("RETRY_TOKEN")
+        self.window.start("publish")
+        self.finish()
+        self.assertIn("게시 완료", self.window.status.get())
+
     def test_busy_close_requests_cancel_and_waits_before_destroying(self):
         self.core.block = threading.Event()
         self.window.start("connection")
@@ -372,6 +482,51 @@ class PublisherWindowTests(unittest.TestCase):
 
 
 class PublisherEntrypointTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("git"), "Git is used only to construct a Download ZIP fixture")
+    def test_archive_jobs_retry_exact_saved_files_after_source_edit_and_failed_publish(self):
+        from workspace_publisher.core import Publisher
+        from tests.test_workspace_publisher_source_archive import DownloadZipBuildTests
+        from tests import test_workspace_publisher_core as fixtures
+        fixture = DownloadZipBuildTests(methodName="runTest")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        registry = fixtures.Registry()
+        def factory(root, *, emit):
+            return Publisher(root, emit=emit, transport=registry, runner=fixture.fixture.runner)
+        def complete(jobs):
+            jobs.thread.join(10)
+            self.assertFalse(jobs.thread.is_alive())
+            return jobs.drain()[-1]
+        jobs = PublisherJobs(fixture.root, factory)
+        with patch("local_app.windows_process.powershell_path", return_value="fixture-powershell.exe"):
+            jobs.start("build", fixtures.CONFIG)
+            built = complete(jobs)
+        self.assertEqual("done", built["kind"], built)
+        original = deepcopy(built["result"])
+        registry.fail_asset = True
+        jobs.start("publish", fixtures.CONFIG, build_result=original, token="fixture-token")
+        self.assertEqual("failed", complete(jobs)["kind"])
+        (fixture.root / "local_app/server.py").write_text("new source arrived after building", encoding="utf-8")
+        resumed = PublisherJobs(fixture.root, factory)
+        resumed.start("load")
+        loaded = complete(resumed)
+        self.assertEqual("done", loaded["kind"], loaded)
+        self.assertIsNone(loaded["result"]["source"])
+        self.assertIn("원본 목록", loaded["result"]["sourceNotice"])
+        self.assertEqual(original, loaded["result"]["build"])
+        registry.fail_asset = False
+        config = {**loaded["result"]["config"], "notes": "재시도 안내"}
+        resumed.start("publish", config, build_result=loaded["result"]["build"], token="fixture-token")
+        published = complete(resumed)
+        self.assertEqual("done", published["kind"], published)
+        self.assertTrue(published["result"]["verified"])
+        self.assertNotIn("fixture-token", json.dumps(published))
+        self.assertEqual(original, Publisher(fixture.root).load_last_build(config))
+        self.assertEqual("재시도 안내", Publisher(fixture.root).load_config()["notes"])
+        for entry in original["files"]:
+            matching = [raw for url, raw in registry.files.items() if url.endswith("/" + entry["name"])]
+            self.assertEqual([Path(entry["path"]).read_bytes()], matching)
+
     def test_default_entry_uses_its_source_directory_not_the_terminal_directory(self):
         spec = importlib.util.spec_from_file_location("publisher_entry_fixture", ROOT / "Publish-Workspace.py")
         entry = importlib.util.module_from_spec(spec)

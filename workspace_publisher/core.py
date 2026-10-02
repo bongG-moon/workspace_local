@@ -13,7 +13,7 @@ import sys
 import uuid
 import zipfile
 
-from . import git_sync
+from . import git_sync, source_archive
 from .config import PublisherError, active, atomic_json, normalize, runtime_config, safe_path
 from . import publish as publishing
 
@@ -44,17 +44,38 @@ class Publisher:
     def save_config(self, config):
         value = normalize(config, require_target=False)
         # Refuse accidental settings commits in a differently configured checkout.
-        git_sync.git(self.repo_root, 'check-ignore', '--quiet', '--', 'build/publisher/config.json')
+        if self._has_git():
+            git_sync.git(self.repo_root, 'check-ignore', '--quiet', '--', 'build/publisher/config.json')
+        else:
+            # Settings always live under this fixed generated path, outside
+            # archive inventories and isolated source copies. They must remain
+            # editable when retrying an already verified build after source
+            # edits; every NEW build independently verifies the whole archive.
+            self._owned(self.config_path)
         atomic_json(self.config_path, value)
         return value
 
-    def inspect_source(self):
-        return git_sync.source(self.repo_root)
+    def _has_git(self):
+        # Never pick up an unrelated repository containing an extracted ZIP.
+        marker = self.repo_root / '.git'
+        return marker.exists() or marker.is_symlink()
+
+    def inspect_source(self, *, require_clean=False, cancel=None):
+        if not self._has_git():
+            return source_archive.inspect(self.repo_root, cancel=cancel)
+        value = git_sync.source(self.repo_root, require_clean=require_clean, cancel=cancel)
+        return {**value, 'sourceKind': 'git', 'sourceId': value['commit'], 'canSync': True}
+
+    def _require_git_sync(self):
+        if not self._has_git():
+            raise PublisherError('Download ZIP에는 Git 이력이 없어 소스 반영은 사용할 수 없습니다. 빌드와 배포 파일 게시를 진행해 주세요.')
 
     def preview_sync(self, config, *, cancel=None):
+        self._require_git_sync()
         return git_sync.preview(self.repo_root, config, cancel=cancel)
 
     def sync(self, config, preview, *, cancel=None):
+        self._require_git_sync()
         self._info('확인한 커밋과 선택한 릴리스 태그를 사내 저장소에 반영합니다.')
         return git_sync.sync(self.repo_root, config, preview, cancel=cancel)
 
@@ -169,26 +190,30 @@ class Publisher:
             target.parent.mkdir(parents=True)
             target.write_bytes(raw)
         except (ValueError, KeyError, OSError) as exc:
-            raise PublisherError('검증된 WebView2 SDK가 없습니다. 반입 준비 PC에서 build/desktop-sdk의 지정된 .nupkg를 함께 준비해 주세요. 사내에서 자동 다운로드하지 않았습니다.') from exc
+            raise PublisherError('검증된 WebView2 SDK가 없습니다. 배포 창에서 SDK 다운로드 또는 사내 SDK 파일 선택으로 준비해 주세요. 자동 다운로드는 하지 않았습니다.') from exc
 
     def build(self, config, *, cancel=None):
         active(cancel)
         config = normalize(config)
-        info = git_sync.source(self.repo_root, require_clean=True, cancel=cancel)
+        info = self.inspect_source(require_clean=True, cancel=cancel)
         self.save_config(config)
         self.work_root.mkdir(parents=True, exist_ok=True)
         stage = self._owned(self.work_root / ('build-' + uuid.uuid4().hex))
         stage.mkdir()
-        self._info('확인한 Git 커밋을 별도 빌드 폴더로 복사합니다. 반입한 소스 파일은 수정하지 않습니다.')
-        source = self._archive(stage, info['commit'], cancel)
+        if info['sourceKind'] == 'git':
+            self._info('확인한 Git 커밋을 별도 빌드 폴더로 복사합니다. 반입한 소스 파일은 수정하지 않습니다.')
+            source = self._archive(stage, info['commit'], cancel)
+        else:
+            self._info('다운로드 ZIP의 파일 목록과 체크섬을 확인해 별도 폴더로 복사합니다. Git 이력을 생성하거나 원본을 수정하지 않습니다.')
+            source = source_archive.copy_verified(self.repo_root, stage / 'source', info['sourceId'], cancel=cancel)
         self._copy_sdk(source)
         injected = runtime_config(config)
         config_path = stage / 'workspace-update-source.json'
         atomic_json(config_path, injected)
         # Refuse a moving checkout; build output is always tied to one reviewed HEAD.
-        latest = git_sync.source(self.repo_root, require_clean=True, cancel=cancel)
-        if latest['commit'] != info['commit']:
-            raise PublisherError('빌드 준비 중 소스 커밋이 바뀌었습니다. 다시 빌드해 주세요.')
+        latest = self.inspect_source(require_clean=True, cancel=cancel)
+        if latest['sourceKind'] != info['sourceKind'] or latest['sourceId'] != info['sourceId']:
+            raise PublisherError('빌드 준비 중 소스가 바뀌었습니다. 다시 빌드해 주세요.')
         try:
             from local_app.windows_process import powershell_path
             powershell = powershell_path()
@@ -226,8 +251,15 @@ class Publisher:
                      str(release / f"Company-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path)],
                     cwd=source, cancel=cancel, timeout=120)
         files = publishing.verify_files(release, info['version'], injected)
+        # Archive users have no Git status to expose edits made while the
+        # compiler was running. Revalidate both copies before recording success.
+        if info['sourceKind'] == 'archive':
+            for root in (self.repo_root, source):
+                if source_archive.inspect(root, cancel=cancel)['sourceId'] != info['sourceId']:
+                    raise PublisherError('빌드 중 다운로드 소스가 바뀌었습니다. 배포 성공으로 기록하지 않았습니다.')
         result = {'version': info['version'], 'commit': info['commit'], 'directory': str(release),
-                  'sourceRoot': str(source), 'files': files, 'runtimeConfig': injected}
+                  'sourceRoot': str(source), 'files': files, 'runtimeConfig': injected,
+                  'sourceKind': info['sourceKind'], 'sourceId': info['sourceId']}
         atomic_json(stage / 'build-result.json', result)
         atomic_json(self.work_root / 'last-build.json', result)
         self._info('소스를 바꾸지 않고 배포 파일 세 개를 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
@@ -235,10 +267,18 @@ class Publisher:
 
     def _validated_build(self, config, build_result):
         try:
+            legacy_fields = {'version', 'commit', 'directory', 'sourceRoot', 'files', 'runtimeConfig'}
             if (not isinstance(build_result, dict)
-                    or set(build_result) != {'version', 'commit', 'directory', 'sourceRoot', 'files', 'runtimeConfig'}
-                    or not isinstance(build_result['commit'], str)
-                    or not re.fullmatch(r'[a-f0-9]{40,64}', build_result['commit'])):
+                    or set(build_result) not in (legacy_fields, legacy_fields | {'sourceKind', 'sourceId'})
+                    or not isinstance(build_result['commit'], str)):
+                raise ValueError()
+            source_kind = build_result.get('sourceKind', 'git')
+            source_id = build_result.get('sourceId', build_result['commit'])
+            if (source_kind not in {'git', 'archive'} or not isinstance(source_id, str)
+                    or (source_kind == 'git' and (not re.fullmatch(r'[a-f0-9]{40,64}', source_id)
+                                                 or source_id != build_result['commit']))
+                    or (source_kind == 'archive' and (not re.fullmatch(r'[a-f0-9]{64}', source_id)
+                                                     or build_result['commit'] != ''))):
                 raise ValueError()
             directory = self._owned(Path(build_result['directory']))
             stage = directory.parent

@@ -6,8 +6,7 @@ import sys
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--cli":
         from workspace_publisher.__main__ import main as cli_main
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
-        return cli_main()
+        return cli_main(sys.argv[2:])
     from workspace_publisher.gui import main as gui_main
     return gui_main(Path(__file__).resolve().parent)
 

@@ -309,6 +309,9 @@ class GitAndBuildTests(unittest.TestCase):
         before = self.run_git('rev-parse', 'HEAD')
         result = self.build()
         self.assertEqual(before, result['commit'])
+        self.assertEqual('git', result['sourceKind'])
+        self.assertEqual(before, result['sourceId'])
+        self.assertTrue(self.publisher.inspect_source()['canSync'])
         self.assertEqual('', self.run_git('status', '--porcelain'))
         self.assertEqual(before, self.run_git('rev-parse', 'HEAD'))
         self.assertFalse((self.repo / 'workspace-update-source.json').exists())
@@ -480,6 +483,15 @@ class GitAndBuildTests(unittest.TestCase):
         self.assertEqual(result, recovered)
         self.assertNotEqual(self.run_git('rev-parse', 'HEAD'), recovered['commit'])
         self.assertTrue(restarted.publish(CONFIG, recovered, 'fixture-token')['verified'])
+
+    def test_v0230_saved_build_without_source_metadata_remains_publishable(self):
+        result = self.build()
+        legacy = {key: value for key, value in result.items() if key not in {'sourceKind', 'sourceId'}}
+        for path in (self.publisher.work_root / 'last-build.json', Path(result['directory']).parent / 'build-result.json'):
+            path.write_text(json.dumps(legacy), encoding='utf-8')
+        restarted = Publisher(self.repo, transport=Registry())
+        self.assertEqual(legacy, restarted.load_last_build(CONFIG))
+        self.assertTrue(restarted.publish(CONFIG, legacy, 'fixture-token')['verified'])
 
     def test_last_build_rejects_target_mismatch_missing_or_changed_artifacts(self):
         result = self.build()

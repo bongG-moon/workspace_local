@@ -1,4 +1,4 @@
-Company Workspace 0.23.0 - Python 실행 진단
+Company Workspace 0.23.1 - Python 실행 진단
 
 1. ZIP 전체를 쓰기 가능한 새 폴더에 압축 해제하세요.
 2. Check-Python.cmd를 평소처럼 더블클릭하세요. 약 1분 정도 걸릴 수 있습니다.
