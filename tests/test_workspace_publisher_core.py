@@ -316,6 +316,8 @@ class GitAndBuildTests(unittest.TestCase):
         self.assertEqual(3, len(result['files']))
         self.assertEqual(3, len(self.calls))
         self.assertIn('-ConfigPython', self.calls[0])
+        self.assertEqual(Path(result['directory']).parent / 'v',
+                         Path(self.calls[0][self.calls[0].index('-VerificationDirectory') + 1]))
         self.assertIn('--update-config', self.calls[-1])
         self.assertTrue((Path(result['sourceRoot']) / 'build/desktop-sdk/1.0.fixture.nupkg').is_file())
 
@@ -328,6 +330,36 @@ class GitAndBuildTests(unittest.TestCase):
         with self.assertRaisesRegex(PublisherError, 'SDK'):
             self.build()
         self.assertEqual([], self.calls)
+
+    def test_failed_build_writes_bounded_redacted_log_with_actionable_path(self):
+        stage = self.publisher.work_root / ('build-' + 'f' * 32)
+        source = stage / 'source'
+        source.mkdir(parents=True)
+        args = ['powershell', '-File', str(source / 'deploy/New-WorkspaceStandalone.ps1'),
+                '-UpdateConfig', 'do-not-copy-arguments']
+        failure = subprocess.CompletedProcess(args, 1, b'compiler output\n',
+                    b'Embedded payload verification failed: 59\nDEPLOY-TOKEN: fixture-token\nhttps://storage.corp/file?signature=private\n' + b'x' * 100000)
+        with patch.dict(os.environ, {'PUBLISHER_TEST_SECRET': 'fixture-token'}), patch('workspace_publisher.core.subprocess.run', return_value=failure):
+            with self.assertRaisesRegex(PublisherError, '로컬 빌드 로그') as error:
+                self.publisher._run(args, cwd=source)
+        log = next((stage / 'logs').glob('*.log'))
+        content = log.read_text(encoding='utf-8')
+        self.assertIn(str(log), str(error.exception))
+        self.assertIn('Embedded payload verification failed: 59', content)
+        self.assertNotIn('fixture-token', content)
+        self.assertNotIn('signature=private', content)
+        self.assertNotIn('do-not-copy-arguments', content)
+        self.assertLess(log.stat().st_size, 132000)
+
+    def test_timeout_preserves_partial_output_in_local_build_log(self):
+        source = self.publisher.work_root / ('build-' + 'e' * 32) / 'source'
+        source.mkdir(parents=True)
+        with patch('workspace_publisher.core.subprocess.run', side_effect=subprocess.TimeoutExpired('build', 5, output=b'partial compiler output')):
+            with self.assertRaisesRegex(PublisherError, '시간이 초과'):
+                self.publisher._run(['python', 'check.py'], cwd=source)
+        content = next((source.parent / 'logs').glob('*.log')).read_text(encoding='utf-8')
+        self.assertIn('TimeoutExpired', content)
+        self.assertIn('partial compiler output', content)
 
     def test_config_stays_ignored_and_rejects_token(self):
         self.publisher.save_config(CONFIG)

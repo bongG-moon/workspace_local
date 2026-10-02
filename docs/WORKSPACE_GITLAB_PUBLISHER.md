@@ -12,6 +12,8 @@
 
 사내 GitLab 프로젝트에서 Package Registry와 **Allow anyone to pull from package registry**를 켭니다. 소스 저장소는 Private로 유지할 수 있습니다. 이 설정은 패키지 파일 다운로드에 적용되므로 비공개 Releases API를 앱에서 호출하지 않습니다.
 
+두 번째 배포부터도 최신 안내를 갱신하려면 `company-workspace-channel`의 같은 파일 이름 게시가 허용되어야 합니다. 그룹의 **Settings → Packages and registries → Generic / Duplicate packages**에서 해당 채널의 중복 게시 정책을 담당자와 확인합니다. 다른 패키지의 정책까지 바꿀 필요는 없습니다. GitLab 버전별 화면과 권한은 [공식 중복 패키지 안내](https://docs.gitlab.com/user/packages/generic_packages/#disable-publishing-duplicate-package-names)를 참고합니다. 실제 게시 후 새 내용이 내려오는지도 도구가 다시 확인합니다.
+
 사내 소스 폴더에서 다음을 실행하면 배포 창이 열립니다.
 
 ```powershell

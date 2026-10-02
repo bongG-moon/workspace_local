@@ -62,9 +62,36 @@ class Publisher:
         self._info('앱과 같은 인증 없는 읽기 방식으로 GitLab 채널을 확인합니다.')
         return publishing.connection(config, transport=self.transport, cancel=cancel)
 
-    @staticmethod
-    def _run(arguments, *, cwd, cancel=None, timeout=900):
+    def _build_log(self, cwd, step, status, stdout=b'', stderr=b''):
+        """Only local tool output; never command arguments, settings or tokens."""
+        log_root = self._owned(Path(cwd).parent / 'logs')
+        log_root.mkdir(parents=True, exist_ok=True)
+        def clean(raw):
+            if isinstance(raw, bytes):
+                raw = raw[:65536]
+                try:
+                    value = raw.decode('utf-8')
+                except UnicodeError:
+                    value = raw.decode('cp949' if os.name == 'nt' else 'utf-8', errors='replace')
+            else:
+                value = str(raw or '')[:65536]
+            for name, secret in os.environ.items():
+                if re.search(r'TOKEN|PASSWORD|SECRET|API_?KEY|CREDENTIAL|AUTH', name, re.I) and len(secret) >= 4:
+                    value = value.replace(secret, '[비밀값 숨김]')
+            value = re.sub(r'(https?://)[^\s/@]+:[^\s/@]+@', r'\1[계정 숨김]@', value, flags=re.I)
+            value = re.sub(r'(https?://[^\s?]+)\?[^\s]+', r'\1?[쿼리 숨김]', value, flags=re.I)
+            value = re.sub(r'(?i)(\b(?:[\w-]{0,64}token|password|secret|api[_-]?key|authorization)[\"\s]*[:=]\s*[\"]?)[^\r\n,\"]+', r'\1[비밀값 숨김]', value)
+            return value
+        path = self._owned(log_root / (step + '-' + uuid.uuid4().hex[:12] + '.log'))
+        with path.open('x', encoding='utf-8', newline='\n') as stream:
+            stream.write(f'단계: {step}\n결과: {status}\n\n표준 출력\n{clean(stdout)}\n\n오류 출력\n{clean(stderr)}\n')
+        return path
+
+    def _run(self, arguments, *, cwd, cancel=None, timeout=900):
         active(cancel)
+        script = Path(arguments[arguments.index('-File') + 1]).name if '-File' in arguments else 'bundle-check'
+        step = {'New-WorkspaceStandalone.ps1': 'standalone', 'New-WorkspaceRelease.ps1': 'release'}.get(script, 'bundle-check')
+        label = {'standalone': 'EXE 만들기', 'release': '배포 ZIP 만들기', 'bundle-check': '배포 파일 검사'}[step]
         environment = os.environ.copy()
         environment['PYTHONDONTWRITEBYTECODE'] = '1'
         environment['PYTHONUTF8'] = '1'
@@ -73,10 +100,12 @@ class Publisher:
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0), env=environment)
         except (OSError, subprocess.SubprocessError) as exc:
-            raise PublisherError('빌드 도구를 실행하지 못했거나 시간이 초과되었습니다. Git, Windows PowerShell, .NET 빌드 도구와 WebView2 SDK 준비 상태를 확인해 주세요.') from exc
+            log = self._build_log(cwd, step, type(exc).__name__, getattr(exc, 'stdout', b''), getattr(exc, 'stderr', b''))
+            raise PublisherError(f'{label} 도구를 실행하지 못했거나 시간이 초과되었습니다. 담당자에게 로컬 빌드 로그를 전달해 주세요: {log}') from exc
+        log = self._build_log(cwd, step, 'exit ' + str(completed.returncode), completed.stdout, completed.stderr)
         active(cancel)  # A running build step finishes safely before cancellation.
         if completed.returncode:
-            raise PublisherError('배포 빌드 또는 검사가 실패했습니다. 소스와 SDK 준비 상태를 확인해 주세요. 기존 배포본과 채널은 변경하지 않았습니다.')
+            raise PublisherError(f'{label} 단계가 실패했습니다. 담당자에게 로컬 빌드 로그를 전달해 주세요: {log}')
         return completed
 
     def _owned(self, path):
@@ -164,7 +193,8 @@ class Publisher:
         release = stage / 'release'
         self._info('회사 업데이트 주소를 포함한 EXE를 별도 폴더에서 빌드·검증합니다. 취소 요청은 현재 빌드 단계가 끝난 뒤 반영됩니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceStandalone.ps1'), '-UpdateConfig', str(config_path),
-                     '-ConfigPython', sys.executable, '-OutputDirectory', str(output)], cwd=source, cancel=cancel)
+                     '-ConfigPython', sys.executable, '-OutputDirectory', str(output),
+                     '-VerificationDirectory', str(stage / 'v')], cwd=source, cancel=cancel)
         active(cancel)
         exe = output / f"Company-Workspace-{info['version']}.exe"
         self._info('EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
