@@ -22,6 +22,7 @@ class PublisherCliTests(unittest.TestCase):
         self.publisher.load_config.return_value = dict(DEFAULTS)
         self.publisher.inspect_source.return_value = dict(ARCHIVE)
         self.publisher.save_config.side_effect = lambda config: config
+        self.publisher.publish_source.return_value = {'verified': True, 'commit': 'c' * 40}
         self.factory = patch.object(cli, "Publisher", return_value=self.publisher)
         self.factory.start()
         self.addCleanup(self.factory.stop)
@@ -106,6 +107,32 @@ class PublisherCliTests(unittest.TestCase):
             code, _ = self.invoke(['deploy'])
         self.assertEqual(1, code)
         self.publisher.prepare_deploy.assert_not_called()
+
+    def test_source_only_uses_token_without_building_or_publishing_packages(self):
+        with patch('getpass.getpass', return_value='glpat-fixture'):
+            code, output = self.invoke(['source-publish'])
+        self.assertEqual(0, code)
+        self.publisher.publish_source.assert_called_once()
+        self.publisher.prepare_deploy.assert_not_called()
+        self.publisher.publish.assert_not_called()
+        self.assertNotIn('glpat-fixture', output)
+
+    def test_source_failure_does_not_advance_package_channel(self):
+        self.publisher.publish_source.side_effect = PublisherError('기본 브랜치 쓰기 권한이 없습니다.')
+        with patch('getpass.getpass', return_value='glpat-fixture'):
+            code, output = self.invoke(['deploy'])
+        self.assertEqual(1, code)
+        self.assertIn('브랜치', output)
+        self.publisher.publish.assert_not_called()
+
+    def test_package_only_config_skips_source_write(self):
+        self.publisher.load_config.return_value = {**DEFAULTS, 'includeSource': False}
+        self.publisher.publish.return_value = {'verified': True}
+        with patch('getpass.getpass', return_value='fixture-token'):
+            code, _ = self.invoke(['deploy'])
+        self.assertEqual(0, code)
+        self.publisher.publish_source.assert_not_called()
+        self.publisher.publish.assert_called_once()
 
     def test_missing_or_misplaced_sdk_arguments_fail_before_action(self):
         for args in (["sdk-import"], ["status", "--url", "https://example"], ["build", "--file", "sdk.nupkg"]):

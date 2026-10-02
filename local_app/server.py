@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.3"
+WORKSPACE_VERSION = "0.23.4"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -1675,6 +1675,8 @@ class Handler(BaseHTTPRequestHandler):
             action = data.get('action')
             if action == 'check' and set(data) == {'action'}:
                 return self.reply(app.app_updates.check(manual=True))
+            if action == 'startup' and set(data) == {'action'}:
+                return self.reply(app.app_updates.check(startup=True))
             if action == 'configure' and set(data) == {'action', 'autoCheck'}:
                 return self.reply(app.app_updates.configure(data['autoCheck']))
             if action == 'install' and set(data) == {'action', 'version'}:
@@ -1841,6 +1843,7 @@ def main():
     window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray,
                          on_event=app.ui_health.native)
     def reopen():
+        app.app_updates.check(startup=True)
         result = window.open()
         app._desktop_window = window
         return result

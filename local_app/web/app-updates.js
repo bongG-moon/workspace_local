@@ -1,7 +1,7 @@
 "use strict";
 
-// Release discovery is owned by the server and its 12-hour cache. This module
-// reads local status; an install is sent only from an explicit button click.
+// Startup discovery is bounded by the server; focus and progress use local
+// status reads. Installation is sent only from an explicit button click.
 globalThis.WorkspaceAppUpdates = (() => {
   const $=id=>document.getElementById(id);
   const stableVersion=value=>typeof value==="string"&&/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value);
@@ -11,7 +11,7 @@ globalThis.WorkspaceAppUpdates = (() => {
   let hooks=null,bound=false,started=false,stopped=false,timer=null,pending=false,startupReads=0;
   let snapshot={currentVersion:"",status:"idle",autoCheck:true,lastChecked:null,release:null,progress:null,error:null,canInstall:false};
   let localError="",startupWarning="",returnFocus=null,installSubmitted=false,installUncertain=false,closingForHandoff=false,handoffDialogsClosed=false;
-  let installFailureNotified=false;
+  let installFailureNotified=false,startupOfferDone=false,offerTimer=null,startupReady=false,lastStartupSequence=0;
 
   function newer(version,current){
     if(!stableVersion(version)||!stableVersion(current))return false;
@@ -32,6 +32,7 @@ globalThis.WorkspaceAppUpdates = (() => {
       url:provider==="github"?`https://github.com/bongG-moon/workspace_local/releases/tag/v${value.release.version}`:""
     }:null;
     return {currentVersion,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
+      startupSequence:Number.isSafeInteger(value.startupSequence)&&value.startupSequence>=0?value.startupSequence:0,
       release,progress:typeof value.progress==="number"&&Number.isFinite(value.progress)?Math.max(0,Math.min(100,value.progress)):null,
       error:typeof value.error==="string"?value.error:null,canInstall:value.canInstall===true};
   }
@@ -44,6 +45,25 @@ globalThis.WorkspaceAppUpdates = (() => {
   }
   function visible(){return document.hidden!==true&&($("settings-dialog")?.open||$("app-update-dialog")?.open);}
   function busy(){return pending||snapshot.status==="checking"||transfers.has(snapshot.status);}
+  function offerPending(){return started&&startupReady&&!stopped&&!startupOfferDone&&snapshot.autoCheck&&snapshot.status==="available"&&!!snapshot.release&&!localError;}
+  function offerUpdate(){
+    if(!offerPending()||document.hidden===true||pending||installSubmitted||installUncertain)return false;
+    if([...document.querySelectorAll("dialog[open]")].some(dialog=>dialog!==$("app-update-dialog")))return false;
+    const focus=document.activeElement;
+    if(focus&&(focus.isContentEditable||["INPUT","TEXTAREA","SELECT"].includes(focus.tagName)))return false;
+    if(hooks.canOfferUpdate?.()===false)return false;
+    openNotes(true);return true;
+  }
+  function contextChanged(){
+    if(!offerPending()||offerTimer!==null)return;
+    // Let a closing dialog finish restoring focus before offering this one.
+    offerTimer=setTimeout(()=>{offerTimer=null;offerUpdate();},0);
+  }
+  function wake(){
+    if(stopped)return;
+    if(document.hidden!==true){startupReads=0;offerUpdate();}
+    schedule(document.hidden!==true);
+  }
   function message(){
     if(localError)return localError;
     if(snapshot.status==="error")return snapshot.error||"업데이트를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.";
@@ -81,7 +101,8 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-release-link").setAttribute("href",release?.url||"#");
     $("app-update-install").hidden=!available;
     $("app-update-install").disabled=!available||!snapshot.canInstall||isBusy||installSubmitted||installUncertain;
-    $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"전환 준비 중…":"다운로드하고 업데이트";
+    $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"전환 준비 중…":"업데이트하기";
+    $("app-update-dismiss").textContent="다음에 하기";
     $("app-update-install-note").hidden=!available||snapshot.canInstall||transfers.has(snapshot.status);
     const failed=!!localError||snapshot.status==="error";
     $("app-update-retry").hidden=!failed;$("app-update-dialog-retry").hidden=!failed;
@@ -108,12 +129,18 @@ globalThis.WorkspaceAppUpdates = (() => {
   }
   function observe(value){
     const next=normalize(value);if(!next)return false;
+    if(next.startupSequence>lastStartupSequence){
+      lastStartupSequence=next.startupSequence;
+      // Native window reopen is a new offer opportunity. Ordinary focus and
+      // status reads retain the same sequence and cannot reset dismissal.
+      startupOfferDone=$("app-update-dialog").open===true;
+    }
     if(next.status==="error")notifyInstallFailure((next.error||"업데이트를 마치지 못했어요.")+" 설정의 ‘앱 업데이트’에서 다시 시도할 수 있습니다.");
     const wasUncertain=installUncertain;
     snapshot=next;localError="";installUncertain=false;
     if(snapshot.status==="error"||snapshot.status==="current"||wasUncertain&&!transfers.has(snapshot.status))installSubmitted=false;
     if(!["idle","checking"].includes(snapshot.status))startupReads=startupDelays.length;
-    render();closeForHandoff();return true;
+    render();closeForHandoff();offerUpdate();return true;
   }
   function schedule(immediate=false){
     clearTimeout(timer);timer=null;
@@ -142,7 +169,8 @@ globalThis.WorkspaceAppUpdates = (() => {
         notifyInstallFailure("업데이트 요청 상태를 확인하지 못했어요. 설정의 ‘앱 업데이트’에서 ‘지금 확인’을 눌러 주세요.");
       }else{localError=error.message||"업데이트를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.";startupReads=startupDelays.length;}
       return false;
-    }finally{pending=false;if(!stopped){render();schedule();}}
+    }finally{pending=false;if(data?.action==="startup")startupReady=true;
+      if(!stopped){render();offerUpdate();schedule();}}
   }
   function read(){return request();}
   function check(){return request(installUncertain?undefined:{action:"check"});}
@@ -155,32 +183,42 @@ globalThis.WorkspaceAppUpdates = (() => {
     if(!ok&&!installUncertain)installSubmitted=false;
     return ok;
   }
-  function openNotes(){
+  function openNotes(automatic=false){
     if(!snapshot.release)return;
-    returnFocus=document.activeElement;render();
+    startupOfferDone=true;clearTimeout(offerTimer);offerTimer=null;
+    returnFocus=document.activeElement&&document.activeElement!==document.body?document.activeElement:$("settings-open");render();
+    $("app-update-dialog").dataset.offer=automatic?"startup":"manual";
+    if($("app-update-offer-intro"))$("app-update-offer-intro").hidden=!automatic;
     if(!$("app-update-dialog").open)hooks.openDialog("app-update-dialog");
-    $("app-update-close").focus();schedule(true);
+    $(automatic?"app-update-dismiss":"app-update-close").focus();schedule(!automatic);
   }
   function bind(){
     $("app-update-check").onclick=check;
     $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError?read():check();
     $("app-update-auto").onchange=()=>request({action:"configure",autoCheck:$("app-update-auto").checked});
-    $("app-update-notes-open").onclick=openNotes;$("app-update-install").onclick=install;
+    $("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
     $("app-update-close").onclick=$("app-update-dismiss").onclick=()=>$("app-update-dialog").close();
     $("app-update-dialog").oncancel=event=>{event.preventDefault();$("app-update-dialog").close();};
     $("app-update-dialog").onclose=()=>{
-      if(!closingForHandoff&&returnFocus?.isConnected&&!returnFocus.disabled)returnFocus.focus();
+      const owner=returnFocus?.closest?.("dialog");
+      if(!closingForHandoff&&returnFocus?.isConnected&&!returnFocus.disabled&&(!owner||owner.open))returnFocus.focus();
       returnFocus=null;schedule();
     };
-    const wake=()=>{if(document.hidden!==true)startupReads=0;schedule(document.hidden!==true);};
     document.addEventListener("visibilitychange",wake);
+    document.addEventListener("close",contextChanged,true);
+    document.addEventListener("focusin",contextChanged);
     globalThis.addEventListener?.("focus",wake);
   }
   function start(initial,warning){
     if(started||!hooks)return;
-    started=true;stopped=false;startupWarning=typeof warning==="string"?warning:"";observe(initial);render();schedule();
+    started=true;stopped=false;startupWarning=typeof warning==="string"?warning:"";observe(initial);render();
+    // Wait for the window-start response before offering a cached release, so
+    // its sequence cannot reopen an offer dismissed during the first request.
+    if(snapshot.autoCheck)void request({action:"startup"});else{startupReady=true;schedule();}
   }
-  return {attach:value=>{hooks=value;if(!bound){bind();bound=true;}},start,observe,
+  return {attach:value=>{hooks=value;if(!bound){bind();bound=true;}},start,observe,contextChanged,
     settingsOpened:()=>{render();schedule(true);},settingsClosed:()=>schedule(),
-    stop:()=>{stopped=true;clearTimeout(timer);timer=null;}};
+    stop:()=>{stopped=true;clearTimeout(timer);clearTimeout(offerTimer);timer=offerTimer=null;
+      document.removeEventListener?.("visibilitychange",wake);document.removeEventListener?.("close",contextChanged,true);
+      document.removeEventListener?.("focusin",contextChanged);globalThis.removeEventListener?.("focus",wake);}};
 })();

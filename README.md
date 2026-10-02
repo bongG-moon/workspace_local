@@ -1,21 +1,27 @@
-# Company Workspace 0.23.3
+# Company Workspace 0.23.4
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.3/Company-Workspace-0.23.3-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.3/Company-Workspace-0.23.3-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.4/Company-Workspace-0.23.4-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.4/Company-Workspace-0.23.4-vbs.zip)**
 
-[0.23.3 변경 안내](docs/VALIDATION_0.23.3.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.4 변경 안내](docs/VALIDATION_0.23.4.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.3.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.4.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+
+## 0.23.4 변경
+
+- 앱 시작 시 최신 버전을 확인하고 **업데이트하기 / 다음에 하기**와 변경 내용을 표시합니다. 자동 확인 해제 설정과 작성 중인 업무를 존중합니다.
+- 사내 배포 창에서 **프로젝트에 소스·구성 파일도 함께 올리기**를 지원합니다. Git이나 SSH 없이 HTTPS와 Access Token으로 기본 브랜치에 검증한 소스를 보관합니다.
+- 실행 파일·업데이트 정보는 Package Registry를 사용합니다. GitLab Releases 화면이 비어 있어도 앱 업데이트에 사용할 수 있습니다. 기존 0.23.2/0.23.3에서는 설정의 **앱 업데이트 → 지금 확인**으로 이번 버전을 먼저 설치하세요.
 
 ## 0.23.3 변경
 

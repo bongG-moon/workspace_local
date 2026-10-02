@@ -135,6 +135,33 @@ class Publisher:
         self._info('앱과 같은 인증 없는 읽기 방식으로 GitLab 채널을 확인합니다.')
         return publishing.connection(config, transport=self.transport, cancel=cancel)
 
+    def publish_source(self, config, token, token_kind='auto', *, build_result=None, cancel=None):
+        """Publish verified original source separately from executable packages."""
+        from .source_publish import publish_source
+        active(cancel)
+        config = normalize(config)
+        info = self.inspect_source(require_clean=True, cancel=cancel)
+        if build_result is not None:
+            self._validated_build(config, build_result)
+            identity = build_result.get('sourceId') or build_result.get('commit')
+            if identity != info['sourceId'] or build_result['version'] != info['version']:
+                raise PublisherError('완성된 배포 파일과 현재 소스가 다릅니다. 같은 버전의 소스에서 다시 배포해 주세요.')
+        source = self.repo_root
+        if info['sourceKind'] == 'git':
+            self.work_root.mkdir(parents=True, exist_ok=True)
+            stage = self._owned(self.work_root / ('source-' + uuid.uuid4().hex))
+            stage.mkdir()
+            source = self._archive(stage, info['commit'], cancel)
+        latest = self.inspect_source(require_clean=True, cancel=cancel)
+        if latest['sourceId'] != info['sourceId'] or latest['sourceKind'] != info['sourceKind']:
+            raise PublisherError('게시 준비 중 소스가 바뀌었습니다. 소스를 다시 확인해 주세요.')
+        self._info('프로젝트 기본 브랜치에 검증한 소스·구성 파일을 올립니다. 다른 파일과 기존 이력은 보존합니다.')
+        result = publish_source(source, config, token, token_kind=token_kind,
+                                expected_source_id=info['sourceId'] if info['sourceKind'] == 'archive' else None,
+                                transport=self.transport, emit=self.emit, cancel=cancel)
+        self._info(result.get('message', '프로젝트 구성 파일 게시를 확인했습니다.'))
+        return result
+
     def _build_log(self, cwd, step, status, stdout=b'', stderr=b''):
         """Only local tool output; never command arguments, settings or tokens."""
         log_root = self._owned(Path(cwd).parent / 'logs')

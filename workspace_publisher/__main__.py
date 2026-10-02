@@ -11,7 +11,7 @@ from .config import PublisherError, normalize
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Company Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish', 'deploy', 'notes',
+    parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish', 'deploy', 'source-publish', 'notes',
                                           'sdk-status', 'sdk-import', 'sdk-download'))
     parser.add_argument('--file', type=Path, help='sdk-import에서 선택할 사내의 .nupkg 파일')
     parser.add_argument('--url', help='sdk-download의 선택적 사내 HTTPS 주소. 생략하면 고정된 NuGet 주소 사용. 저장하지 않음')
@@ -41,7 +41,7 @@ def main(argv=None):
             archive = source.get('sourceKind') == 'archive'
             if archive:
                 config['releaseTag'] = ''
-                print('Download ZIP 모드: Git 없이 빌드·게시할 수 있습니다. Git 소스 반영은 생략합니다.')
+                print('Download ZIP 모드: Git 없이 빌드·게시하고 구성 파일도 HTTPS로 프로젝트에 올릴 수 있습니다.')
             elif not config['releaseTag']:
                 config['releaseTag'] = source['releaseTag']
             config['baseUrl'] = input(f"사내 GitLab HTTPS 서버 주소 [{config['baseUrl']}]: ").strip() or config['baseUrl']
@@ -69,11 +69,22 @@ def main(argv=None):
             try:
                 if not token.strip():
                     raise PublisherError('게시용 토큰을 입력해 주세요.')
+                if args.action == 'source-publish':
+                    result = publisher.publish_source(config, token, token_kind=config['tokenKind'])
+                    print(json.dumps(result, ensure_ascii=False, indent=2))
+                    return 0
                 result = (publisher.prepare_deploy(config) if args.action == 'deploy'
                           else publisher.load_last_build(config))
                 if result is None:
                     raise PublisherError('먼저 build 명령으로 배포 파일을 만들어 주세요.')
+                source_result = None
+                if config['includeSource']:
+                    source_result = publisher.publish_source(config, token, token_kind=config['tokenKind'], build_result=result)
+                    if not isinstance(source_result, dict) or source_result.get('verified') is not True:
+                        raise PublisherError('프로젝트 구성 파일 게시를 확인하지 못했습니다. 업데이트 채널은 게시하지 않았습니다.')
                 result = publisher.publish(config, result, token, token_kind=config['tokenKind'])
+                if source_result:
+                    result = {**result, 'sourcePublication': source_result}
             finally:
                 token = ''
         print(json.dumps(result, ensure_ascii=False, indent=2))

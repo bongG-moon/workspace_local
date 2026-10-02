@@ -73,7 +73,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.3-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.4-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

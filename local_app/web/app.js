@@ -65,6 +65,7 @@ function setStatus(state,label,runId){
   $("prompt").readOnly=sending||choosing||dispatching||appClosed;$("attach").disabled=sending||choosing||attachmentPicking||appClosed;$("attach-path").disabled=sending||choosing||appClosed;
   if(sending||choosing||appClosed)globalThis.WorkspaceComposer?.close();
   if(running&&!started)started=Date.now();if(!running)started=null;if(active){const row=sessions.find(s=>s.id===active.id);if(row)row.state=state;renderSessions();}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
+  globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(()=>{$("elapsed").textContent=["question","approval"].includes(active?.state)?"응답 대기":started?`${Math.floor((Date.now()-started)/1000)}초`:"";},1000);
 function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
@@ -757,7 +758,8 @@ globalThis.WorkspaceUpgrade?.attach({
   confirmRecovery:()=>confirmAction({title:"이전 초안 보관을 해제할까요?",message:"필요한 내용을 복사했는지 확인해 주세요. 이전 창에서 별도로 보관한 초안 기록만 지우며, 현재 화면의 입력 내용과 대화·파일은 유지합니다.",confirmLabel:"보관 해제"}),
   failed:message=>toast(message),restored:outcome=>toast(outcome?.missingSession?"작성 중이던 내용을 업무 홈에 복원했어요.":"이전 창의 작성 내용과 첨부 자료를 이어서 사용할 수 있어요.")
 });
-globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message)});
+globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
+  canOfferUpdate:()=>!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
 async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

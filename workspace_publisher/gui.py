@@ -10,14 +10,14 @@ from urllib.parse import quote, quote_plus
 
 
 CONFIG_KEYS = ("schema", "baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag",
-               "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind")
+               "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind", "includeSource")
 DEFAULT_CONFIG = {"schema": 1, "baseUrl": "", "projectId": "", "remoteName": "intranet",
                   "remoteUrl": "", "releaseTag": "", "title": "", "notes": "",
-                  "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto"}
+                  "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto", "includeSource": True}
 TOKEN_LABELS = {"auto": "자동 감지", "access": "액세스 토큰 (Personal / Project)",
                 "deploy": "배포 토큰 (Deploy Token)", "job": "CI 작업 토큰 (Job Token)"}
 ACTION_NAMES = {"load": "설정과 소스 확인", "inspect": "소스 확인", "save": "설정 저장",
-                "restore": "이전 빌드 확인",
+                "restore": "이전 빌드 확인", "source-publish": "프로젝트 구성 파일 게시",
                 "sdk-status": "SDK 확인", "sdk-import": "SDK 파일 확인", "sdk-download": "SDK 다운로드",
                 "connection": "연결 확인", "preview": "반영할 소스 확인", "sync": "소스 반영",
                 "build": "설치 파일 만들기", "publish": "게시와 다운로드 검증", "deploy": "사내 배포"}
@@ -51,7 +51,7 @@ def settings_only(value):
 
 def build_identity(config):
     return json.dumps({key: value for key, value in settings_only(config).items()
-                       if key not in {"title", "notes", "notesVersion", "tokenKind"}}, sort_keys=True, ensure_ascii=True)
+                       if key not in {"title", "notes", "notesVersion", "tokenKind", "includeSource"}}, sort_keys=True, ensure_ascii=True)
 
 
 def public_text(value, token=""):
@@ -116,6 +116,7 @@ class PublisherJobs:
 
         def worker():
             ready_build = None
+            source_result = None
             def emit(event):
                 if not isinstance(event, dict):
                     return
@@ -178,6 +179,12 @@ class PublisherJobs:
                         result = publisher.sync(clean, preview, cancel=cancel)
                     elif action == "build":
                         result = publisher.build(clean, cancel=cancel)
+                    elif action == "source-publish":
+                        if not token:
+                            raise ValueError("게시용 액세스 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
+                        result = publisher.publish_source(clean, token, token_kind=clean.get("tokenKind", "auto"), cancel=cancel)
+                        if not isinstance(result, dict) or result.get("verified") is not True:
+                            raise ValueError("프로젝트 구성 파일 게시를 확인하지 못했습니다. 완료로 표시하지 않았습니다.")
                     else:
                         if not token:
                             raise ValueError("게시용 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
@@ -187,12 +194,20 @@ class PublisherJobs:
                                        "configIdentity": build_identity(config)})
                         elif not build_result:
                             raise ValueError("먼저 설치 파일을 만들어 주세요.")
+                        if clean.get("includeSource", True):
+                            source_result = publisher.publish_source(clean, token, token_kind=clean.get("tokenKind", "auto"),
+                                                                     build_result=ready_build or build_result, cancel=cancel)
+                            if not isinstance(source_result, dict) or source_result.get("verified") is not True:
+                                raise ValueError("프로젝트 구성 파일 게시를 확인하지 못했습니다. 배포 파일과 채널은 게시하지 않았습니다.")
                         result = publisher.publish(clean, ready_build or build_result, token,
                                                    token_kind=clean.get("tokenKind", "auto"), cancel=cancel)
                         if not isinstance(result, dict) or result.get("verified") is not True:
                             raise ValueError("게시 파일의 인증 없는 다운로드를 확인하지 못했습니다. 완료로 표시하지 않았습니다.")
                         if action == "deploy":
-                            result = {"build": ready_build, "publication": result, "message": result.get("message", "")}
+                            result = {"build": ready_build, "publication": result, "sourcePublication": source_result,
+                                      "message": result.get("message", "")}
+                        elif source_result:
+                            result = {**result, "sourcePublication": source_result}
                 # Results use the core's non-secret data contract; no token is
                 # ever put into this queue, configuration, traceback, or log.
                 outcome = {"job": serial, "kind": "done", "action": action, "result": public_result(result, token),
@@ -200,6 +215,9 @@ class PublisherJobs:
             except Exception as exc:
                 outcome = {"job": serial, "kind": "failed", "action": action,
                            "message": public_text(exc, token) or "작업을 마치지 못했습니다. 설정과 로그를 확인해 주세요."}
+                if source_result and source_result.get("verified") is True:
+                    outcome["sourcePublication"] = public_result(source_result, token)
+                    outcome["message"] = "프로젝트 소스는 게시됐지만 배포 파일 게시를 마치지 못했습니다. " + outcome["message"]
                 if ready_build is not None:
                     outcome.update(build=public_result(ready_build, token), configIdentity=build_identity(config))
             with self._lock:
@@ -258,6 +276,7 @@ class PublisherWindow:
         self.sdk_url = tk.StringVar()
         self.sdk_label = tk.StringVar(value="SDK를 확인하고 있어요.")
         self.token_kind = tk.StringVar(value=TOKEN_LABELS["auto"])
+        self.include_source = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="저장된 설정과 현재 소스를 확인하고 있어요.")
         self.source_label = tk.StringVar(value=str(self.repo_root))
         self.build_label = tk.StringVar(value="게시할 설치 파일이 없습니다. 먼저 빌드해 주세요.")
@@ -310,6 +329,12 @@ class PublisherWindow:
         self.mutable.append(self.token_entry)
         ttk.Label(basics, text="Personal / Project Access Token 또는 Deploy Token을 자동으로 구분합니다. 토큰은 저장하지 않습니다.",
                   style="Note.TLabel", wraplength=730).grid(row=4, column=0, columnspan=2, sticky="w")
+        source_option = ttk.Checkbutton(basics, text="프로젝트에 소스·구성 파일도 함께 올리기", variable=self.include_source)
+        source_option.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        self.mutable.append(source_option)
+        ttk.Label(basics, text="기본 브랜치에 소스를 보관합니다. api 범위의 Access Token과 브랜치 쓰기 권한이 필요합니다.\n"
+                  "Deploy Token으로 설치 파일만 게시하려면 체크를 해제하세요.",
+                  style="Note.TLabel", wraplength=730).grid(row=6, column=0, columnspan=2, sticky="w")
 
         self.sdk_summary = ttk.Label(outer, textvariable=self.sdk_label, style="Note.TLabel", wraplength=790)
         self.sdk_summary.pack(anchor="w", pady=(8, 0))
@@ -378,6 +403,7 @@ class PublisherWindow:
         self.publish_button = self._button(legacy_actions, "기존 파일 게시", lambda: self.start("publish"))
         self.publish_button.pack(side="left", padx=(0, 8))
         self._button(legacy_actions, "SDK 다시 확인", lambda: self.start("sdk-status")).pack(side="left")
+        self._button(advanced, "구성 파일만 올리기", lambda: self.start("source-publish")).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         ttk.Label(outer, textvariable=self.build_label, style="Note.TLabel", wraplength=790).pack(anchor="w", pady=(12, 10))
         actions = ttk.Frame(outer)
@@ -394,7 +420,7 @@ class PublisherWindow:
         self.log.pack(fill="both", expand=True)
         self.log.tag_config("error", foreground="#9c4144")
         self.log.tag_config("info", foreground="#3d485b")
-        for variable in [*self.fields.values(), self.origins, self.token_kind]:
+        for variable in [*self.fields.values(), self.origins, self.token_kind, self.include_source]:
             variable.trace_add("write", lambda *_: self.refresh_controls())
         self.fields["title"].trace_add("write", self.mark_notes_edited)
         self.notes.bind("<<Modified>>", self.mark_notes_edited)
@@ -411,7 +437,8 @@ class PublisherWindow:
                 "notes": self.notes.get("1.0", "end-1c"),
                 "notesVersion": self.notes_version,
                 "allowedDownloadOrigins": [item.strip() for item in self.origins.get().replace("\n", ",").split(",") if item.strip()],
-                "tokenKind": next((key for key, label in TOKEN_LABELS.items() if label == self.token_kind.get()), "auto")}
+                "tokenKind": next((key for key, label in TOKEN_LABELS.items() if label == self.token_kind.get()), "auto"),
+                "includeSource": self.include_source.get()}
 
     def toggle_notes(self):
         opened = bool(self.notes_frame.winfo_manager())
@@ -541,11 +568,11 @@ class PublisherWindow:
             self.status.set("먼저 SDK 준비에서 파일을 선택하거나 다운로드해 주세요.")
             return
         config = self.config()
-        token = self.token.get() if action in {"publish", "deploy"} else ""
+        token = self.token.get() if action in {"publish", "deploy", "source-publish"} else ""
         if action == "publish" and (not self.build_result or self.build_config_identity != build_identity(config)):
             self.status.set("현재 설정으로 먼저 빌드해 주세요.")
             return
-        if action in {"publish", "deploy"} and not token.strip():
+        if action in {"publish", "deploy", "source-publish"} and not token.strip():
             self.status.set("게시용 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
             self.token_entry.focus_set()
             return
@@ -555,7 +582,7 @@ class PublisherWindow:
             if action == "restore":
                 self.build_result = None
                 self.build_config_identity = None
-            if action in {"publish", "deploy"}:
+            if action in {"publish", "deploy", "source-publish"}:
                 self.token.set("")
             self.status.set(ACTION_NAMES[action] + " 중입니다…")
             self.append_log(ACTION_NAMES[action] + "을 시작합니다.")
@@ -597,6 +624,7 @@ class PublisherWindow:
                 self.origins.set(", ".join(config["allowedDownloadOrigins"]))
                 kind = config["tokenKind"] if config["tokenKind"] in {"access", "job"} else "auto"
                 self.token_kind.set(TOKEN_LABELS[kind])
+                self.include_source.set(config["includeSource"])
                 self._set_notes(config["title"], config["notes"])
                 self.notes_version = config["notesVersion"]
                 self._release(result, apply=not bool(config["notesVersion"] or config["title"] or config["notes"]))
@@ -633,7 +661,8 @@ class PublisherWindow:
             self.build_result = None
         message = result.get("message") or ACTION_NAMES[action] + "을 마쳤습니다."
         if action in {"publish", "deploy"}:
-            message = "게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다."
+            message = ("소스·배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다."
+                       if result.get("sourcePublication") else "배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다.")
         self.status.set(public_text(message))
         self.append_log(message)
 

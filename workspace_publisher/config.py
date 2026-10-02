@@ -16,7 +16,7 @@ class PublisherError(ValueError):
 
 DEFAULTS = {'schema': 1, 'baseUrl': '', 'projectId': '', 'remoteName': 'intranet',
             'remoteUrl': '', 'releaseTag': '', 'title': '', 'notes': '',
-            'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': ''}
+            'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': '', 'includeSource': True}
 VERSION = re.compile(r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z')
 
 
@@ -69,6 +69,8 @@ def normalize(config, *, require_target=True):
     value = {**DEFAULTS, **config, 'allowedDownloadOrigins': list(origins)}
     if type(value['schema']) is not int or value['schema'] != 1:
         raise PublisherError('지원하지 않는 게시 설정 버전입니다.')
+    if type(value['includeSource']) is not bool:
+        raise PublisherError('소스·구성 파일 게시 여부는 켜기 또는 끄기로 선택해 주세요.')
     for key, limit in [('baseUrl', 2048), ('projectId', 20), ('remoteName', 80), ('remoteUrl', 2048),
                        ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20)]:
         if not isinstance(value[key], str) or len(value[key].encode('utf-8')) > limit or '\x00' in value[key]:

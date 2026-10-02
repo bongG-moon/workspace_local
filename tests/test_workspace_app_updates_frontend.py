@@ -1,4 +1,4 @@
-"""Release discovery stays quiet; installation requires an explicit user action."""
+"""Startup release offers respect workflow focus and explicit installation."""
 import json
 import subprocess
 import unittest
@@ -21,36 +21,42 @@ AVAILABLE = {
 
 @unittest.skipUnless(NODE, "Node.js is required for app update UI checks")
 class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
-    def run_case(self, javascript, initial=CURRENT, warning=None):
+    def run_case(self, javascript, initial=CURRENT, warning=None, before_start=""):
         harness = HARNESS.replace(
             "const nodes=new Map();",
             "Element.prototype.removeAttribute=function(name){delete this.attributes[name];};\n"
-            "const updateTimers=new Map(),updateEvents=new Map(),updateWindowEvents=new Map();let nextUpdateTimer=1;\nconst nodes=new Map();",
+            "const updateTimers=new Map(),updateEvents=new Map(),updateWindowEvents=new Map(),startupRequests=[];let nextUpdateTimer=1;\nconst nodes=new Map();",
         ).replace(
             "setInterval(){},setTimeout(){return 1;},clearTimeout(){},",
             "setInterval(){},setTimeout(fn,delay){const id=nextUpdateTimer++;updateTimers.set(id,{fn,delay});return id;},"
             "clearTimeout(id){updateTimers.delete(id);},",
         ).replace(
             "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,",
-            "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,updateTimers,"
+            "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,updateTimers,startupRequests,"
             "addEventListener:(name,fn)=>updateWindowEvents.set(name,fn),"
+            "removeEventListener:(name,fn)=>{if(updateWindowEvents.get(name)===fn)updateWindowEvents.delete(name);},"
             "fireUpdateWindow:name=>updateWindowEvents.get(name)?.(),fireUpdateEvent:name=>updateEvents.get(name)?.(),"
             "runUpdateTimer:async()=>{const next=updateTimers.entries().next().value;"
             "assert.ok(next,'expected a status read timer');updateTimers.delete(next[0]);next[1].fn();"
             "for(let i=0;i<12;i++)await Promise.resolve();},",
         ).replace(
-            "({sessions:[],demo:false})",
-            "({sessions:[],demo:false,appUpdate:" + json.dumps(initial) + ",appUpdateWarning:" + json.dumps(warning) + "})",
+            "fetch:async()=>({ok:true,json:async()=>({sessions:[],demo:false})}),",
+            "fetch:async(path,options)=>{if(path==='/api/app-update')startupRequests.push(options?.body?JSON.parse(options.body):null);"
+            "return {ok:true,json:async()=>path==='/api/app-update'?" + json.dumps(initial)
+            + ":({sessions:[],demo:false,appUpdate:" + json.dumps(initial) + ",appUpdateWarning:" + json.dumps(warning) + "})};},",
         ).replace(
             "querySelector:selector=>get(selector),querySelectorAll:()=>[],addEventListener(){}},",
-            "querySelector:selector=>get(selector),querySelectorAll:()=>[],addEventListener:(name,fn)=>updateEvents.set(name,fn)},",
+            "querySelector:selector=>get(selector),querySelectorAll:selector=>selector==='dialog[open]'?[...nodes.values()].filter(node=>node.open):[],"
+            "addEventListener:(name,fn)=>updateEvents.set(name,fn),"
+            "removeEventListener:(name,fn)=>{if(updateEvents.get(name)===fn)updateEvents.delete(name);}},",
         ).replace(
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'app-updates.js'});\n"
             "context.WorkspaceStartupHealth={attach(){},bootstrapReady:async()=>{"
             "context.updaterReadyAtBootstrap=['app-update-check','app-update-notes-open','app-update-install']"
             ".every(id=>typeof get(id).onclick==='function');},bootstrapFailed(){}};\n"
-            "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
+            "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});\n"
+            + "vm.runInContext(" + json.dumps(before_start) + ",context,{filename:'before-start.js'});",
         )
         javascript = "const available=" + json.dumps(AVAILABLE) + ";const current=" + json.dumps(CURRENT) + ";" + javascript
         result = subprocess.run(
@@ -63,15 +69,20 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
     def test_updater_handlers_are_bound_before_bootstrap_readiness_check(self):
         self.run_case("assert.equal(updaterReadyAtBootstrap,true);")
 
-    def test_available_bootstrap_shows_subtle_badge_without_opening_dialog_or_installing(self):
+    def test_available_startup_opens_notes_with_explicit_install_and_later_buttons(self):
         self.run_case(r"""
           assert.equal($('app-update-sidebar-badge').hidden,false);
           assert.equal($('app-update-settings-badge').hidden,false);
           assert.equal($('app-update-current').textContent,'0.22.0');
           assert.equal($('app-update-latest').textContent,'0.22.1');
           assert.match($('settings-open').attributes['aria-label'],/새 버전/);
-          assert.notEqual($('app-update-dialog').open,true);
-          assert.notEqual($('settings-dialog').open,true);assert.equal(updateTimers.size,0);
+          assert.equal($('app-update-dialog').open,true);
+          assert.equal($('app-update-notes').textContent,available.release.notes);
+          assert.equal($('app-update-install').textContent,'업데이트하기');
+          assert.equal($('app-update-dismiss').textContent,'다음에 하기');
+          assert.equal(document.activeElement,$('app-update-dismiss'));
+          assert.equal(JSON.stringify(startupRequests),JSON.stringify([{action:'startup'}]));
+          assert.notEqual($('settings-dialog').open,true);assert.equal(updateTimers.size,1);
         """, AVAILABLE)
 
     def test_bounded_startup_reads_local_status_and_notice_arrives_with_settings_closed(self):
@@ -80,8 +91,127 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           await runUpdateTimer();assert.equal(calls.length,1);
           assert.equal(calls[0].path,'/api/app-update');assert.equal(calls[0].data,undefined);
           assert.equal($('app-update-sidebar-badge').hidden,false);
-          assert.notEqual($('app-update-dialog').open,true);assert.equal(updateTimers.size,0);
+          assert.equal($('app-update-dialog').open,true);assert.equal(updateTimers.size,1);
         })()""", {**CURRENT, "status": "checking"})
+
+    def test_current_disabled_errors_and_noninstallable_versions_do_not_auto_offer(self):
+        cases = [CURRENT, {**AVAILABLE, 'autoCheck': False},
+                 {**AVAILABLE, 'status': 'disabled'}, {**AVAILABLE, 'status': 'error', 'error': '연결 실패'},
+                 *[{**AVAILABLE, 'release': {**AVAILABLE['release'], 'version': version}}
+                   for version in ('0.22.0', '0.21.9', 'v0.22.1', '0.23.0-beta')]]
+        for initial in cases:
+            with self.subTest(status=initial['status'], auto=initial['autoCheck'], release=initial.get('release')):
+                self.run_case(r"""
+                  assert.notEqual($('app-update-dialog').open,true);
+                  assert.ok(startupRequests.every(row=>row?.action==='startup'));
+                  assert.equal(startupRequests.length,$('app-update-auto').checked?1:0);
+                """, initial)
+
+    def test_dismissed_offer_does_not_reopen_on_polls_focus_or_visibility(self):
+        self.run_case(r"""(async()=>{
+          $('app-update-dismiss').onclick();assert.equal($('app-update-dialog').open,false);
+          const calls=[];api=async(path,data)=>{calls.push(data);return available;};
+          WorkspaceAppUpdates.observe(available);WorkspaceAppUpdates.contextChanged();
+          fireUpdateWindow('focus');await runUpdateTimer();
+          document.hidden=true;fireUpdateEvent('visibilitychange');
+          document.hidden=false;fireUpdateEvent('visibilitychange');await runUpdateTimer();
+          assert.equal($('app-update-dialog').open,false);assert.equal(updateTimers.size,0);
+          assert.deepEqual(calls,[undefined,undefined]);
+          assert.equal(startupRequests.length,1);
+          $('app-update-notes-open').onclick();assert.equal($('app-update-dialog').open,true);
+          assert.equal($('app-update-dialog').dataset.offer,'manual');
+        })()""", AVAILABLE)
+
+    def test_native_reopen_sequence_rearms_but_stale_and_same_sequence_do_not(self):
+        self.run_case(r"""
+          $('app-update-dismiss').onclick();
+          WorkspaceAppUpdates.observe({...available,startupSequence:4});
+          assert.equal($('app-update-dialog').open,false);
+          WorkspaceAppUpdates.observe({...available,startupSequence:5});
+          assert.equal($('app-update-dialog').open,true);
+          $('app-update-dismiss').onclick();
+          WorkspaceAppUpdates.observe({...available,startupSequence:4});
+          WorkspaceAppUpdates.observe({...available,startupSequence:5});
+          assert.equal($('app-update-dialog').open,false);
+          WorkspaceAppUpdates.observe({...available,startupSequence:6,autoCheck:false});
+          assert.equal($('app-update-dialog').open,false);
+        """, {**AVAILABLE, 'startupSequence': 4})
+
+    def test_already_visible_offer_satisfies_reopen_without_losing_return_focus(self):
+        self.run_case(r"""
+          assert.equal($('app-update-dialog').open,true);
+          WorkspaceAppUpdates.observe({...available,startupSequence:5});
+          $('app-update-dismiss').onclick();
+          assert.equal(document.activeElement,$('settings-open'));
+          WorkspaceAppUpdates.observe({...available,startupSequence:5});
+          assert.equal($('app-update-dialog').open,false);
+        """, {**AVAILABLE, 'startupSequence': 4})
+
+    def test_hidden_window_defers_offer_until_visible_without_installing(self):
+        self.run_case(r"""
+          assert.notEqual($('app-update-dialog').open,true);assert.equal(updateTimers.size,0);
+          document.hidden=false;fireUpdateEvent('visibilitychange');
+          assert.equal($('app-update-dialog').open,true);
+          assert.equal(JSON.stringify(startupRequests),JSON.stringify([{action:'startup'}]));
+        """, AVAILABLE, before_start="document.hidden=true;")
+
+    def test_other_modal_defers_offer_until_close_without_extra_network_request(self):
+        self.run_case(r"""(async()=>{
+          assert.notEqual($('app-update-dialog').open,true);assert.equal(updateTimers.size,0);
+          api=async()=>{throw Error('Opening the deferred offer must not request network');};
+          $('action-dialog').close();fireUpdateEvent('close');await runUpdateTimer();
+          assert.equal($('app-update-dialog').open,true);
+          assert.equal(document.activeElement,$('app-update-dismiss'));
+        })()""", AVAILABLE, before_start="showDialog('action-dialog');")
+
+    def test_editing_focus_defers_offer_and_preserves_text(self):
+        self.run_case(r"""(async()=>{
+          assert.notEqual($('app-update-dialog').open,true);
+          $('settings-open').focus();fireUpdateEvent('focusin');await runUpdateTimer();
+          assert.equal($('app-update-dialog').open,true);assert.equal($('prompt').value,'작성 중인 초안');
+          $('app-update-dismiss').onclick();assert.equal(document.activeElement,$('settings-open'));
+        })()""", AVAILABLE, before_start="$('prompt').tagName='TEXTAREA';$('prompt').value='작성 중인 초안';$('prompt').focus();")
+
+    def test_app_workflow_hook_defers_offer_until_work_has_finished(self):
+        self.run_case(r"""(async()=>{
+          assert.notEqual($('app-update-dialog').open,true);assert.equal(updateTimers.size,0);
+          sending=false;active={id:'A',state:'running'};WorkspaceAppUpdates.contextChanged();await runUpdateTimer();
+          assert.notEqual($('app-update-dialog').open,true);assert.equal(updateTimers.size,0);
+          active.state='done';WorkspaceAppUpdates.contextChanged();await runUpdateTimer();
+          assert.equal($('app-update-dialog').open,true);
+        })()""", AVAILABLE, before_start="sending=true;")
+
+    def test_escape_dismisses_and_restores_focus_without_install_or_reoffer(self):
+        self.run_case(r"""
+          let prevented=false;$('app-update-dialog').oncancel({preventDefault(){prevented=true;}});
+          assert.equal(prevented,true);assert.equal($('app-update-dialog').open,false);
+          assert.equal(document.activeElement,$('new-task'));
+          WorkspaceAppUpdates.observe(available);assert.equal($('app-update-dialog').open,false);
+          assert.equal(JSON.stringify(startupRequests),JSON.stringify([{action:'startup'}]));
+        """, AVAILABLE, before_start="$('new-task').focus();")
+
+    def test_stop_clears_pending_offer_and_unregisters_wake_handlers(self):
+        self.run_case(r"""
+          WorkspaceAppUpdates.contextChanged();assert.equal(updateTimers.size,1);
+          WorkspaceAppUpdates.stop();assert.equal(updateTimers.size,0);
+          document.hidden=false;fireUpdateEvent('visibilitychange');fireUpdateEvent('focusin');
+          fireUpdateEvent('close');fireUpdateWindow('focus');WorkspaceAppUpdates.observe(available);
+          assert.equal(updateTimers.size,0);assert.notEqual($('app-update-dialog').open,true);
+          assert.equal(startupRequests.length,1);
+        """, AVAILABLE, before_start="document.hidden=true;")
+
+    def test_fresh_page_session_offers_again_and_startup_xss_notes_remain_text(self):
+        malicious = {**AVAILABLE, 'release': {**AVAILABLE['release'],
+                     'title': '<svg onload=alert(1)>제목', 'notes': '<img src=x onerror=alert(1)>\n<script>install()</script>'}}
+        for _ in range(2):
+            self.run_case(r"""
+              assert.equal($('app-update-dialog').open,true);
+              assert.equal($('app-update-title').textContent,'<svg onload=alert(1)>제목');
+              assert.equal($('app-update-title').children.length,0);
+              assert.equal($('app-update-notes').children.length,0);
+              assert.match($('app-update-notes').textContent,/<script>install\(\)<\/script>/);
+              $('app-update-dismiss').onclick();assert.equal($('app-update-dialog').open,false);
+            """, malicious)
 
     def test_startup_reads_stop_even_if_background_check_keeps_running(self):
         self.run_case(r"""(async()=>{
@@ -107,7 +237,8 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           const calls=[];api=async(path,data)=>{calls.push(data);return available;};
           assert.equal(updateTimers.size,0);fireUpdateWindow('focus');await runUpdateTimer();
           assert.equal(calls.length,1);assert.equal(calls[0],undefined);
-          assert.equal($('app-update-sidebar-badge').hidden,false);assert.equal(updateTimers.size,0);
+          assert.equal($('app-update-sidebar-badge').hidden,false);assert.equal($('app-update-dialog').open,true);
+          $('app-update-dismiss').onclick();assert.equal(updateTimers.size,0);
           document.hidden=true;fireUpdateEvent('visibilitychange');assert.equal(updateTimers.size,0);
           document.hidden=false;fireUpdateEvent('visibilitychange');await runUpdateTimer();
           assert.equal(calls.length,2);assert.equal(updateTimers.size,0);
@@ -216,7 +347,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           await $('app-update-install').onclick();
           assert.equal(calls.length,1);assert.equal($('app-update-install').disabled,false);
           assert.equal($('app-update-retry').hidden,false);assert.match($('app-update-status').textContent,/다운로드 연결/);
-          assert.equal(updateTimers.size,0);await $('app-update-install').onclick();assert.equal(calls.length,2);
+          assert.equal(updateTimers.size,1);await $('app-update-install').onclick();assert.equal(calls.length,2);
         })()""", AVAILABLE)
 
     def test_waiting_handoff_closes_dialogs_only_once_per_explicit_install(self):
@@ -243,7 +374,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal(calls.length,1);assert.equal($('app-update-install').disabled,true);
           api=async(path,data)=>{calls.push(data);return available;};await $('app-update-check').onclick();
           assert.equal(calls[1],undefined);assert.equal($('app-update-install').disabled,false);
-          assert.equal(calls.length,2);assert.equal(updateTimers.size,0);
+          assert.equal(calls.length,2);assert.equal(updateTimers.size,1);
         })()""", AVAILABLE)
 
     def test_async_install_failure_notifies_once_after_dialog_close_and_retry_can_notify_again(self):

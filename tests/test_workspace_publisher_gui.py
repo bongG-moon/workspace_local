@@ -48,6 +48,8 @@ class FakeCore:
         self.notes = deepcopy(RELEASE_NOTES)
         self.notes_failure = None
         self.publication_failure = None
+        self.source_publication_failure = None
+        self.source_verified = True
 
     def factory(self, root, *, emit):
         state = self
@@ -106,6 +108,12 @@ class FakeCore:
                     emit({"kind": "info", "message": "token=" + token})
                 return {"verified": state.verified, "version": "0.22.0",
                         "message": token if state.leak_token else "게시 완료", "token": token}
+
+            def publish_source(self, config, token, token_kind="auto", *, build_result=None, cancel=None):
+                state.calls.append(("source-publish", deepcopy(config), deepcopy(build_result)))
+                if state.source_publication_failure:
+                    raise ValueError(state.source_publication_failure)
+                return {"verified": state.source_verified, "commit": "c" * 40, "message": "구성 파일 게시 완료"}
 
             def run(self, action, config, cancel):
                 state.calls.append((action, deepcopy(config)))
@@ -277,6 +285,40 @@ class PublisherJobsTests(unittest.TestCase):
         self.assertEqual("failed", result["kind"])
         self.assertIn("인증 없는 다운로드", result["message"])
 
+    def test_deploy_includes_source_before_packages_and_can_opt_out(self):
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                self.core.calls.clear()
+                self.jobs.start("deploy", {**CONFIG, "includeSource": enabled}, token="SECRET")
+                result = self.finish()[-1]
+                self.assertEqual("done", result["kind"])
+                calls = [row[0] for row in self.core.calls]
+                self.assertEqual(enabled, "source-publish" in calls)
+                if enabled:
+                    self.assertLess(calls.index("source-publish"), calls.index("publish-args"))
+                    self.assertTrue(result["result"]["sourcePublication"]["verified"])
+
+    def test_source_failure_does_not_publish_packages_and_preserves_build_for_retry(self):
+        self.core.source_publication_failure = "기본 브랜치 쓰기 권한을 확인해 주세요."
+        self.jobs.start("deploy", CONFIG, token="SECRET")
+        result = self.finish()[-1]
+        self.assertEqual("failed", result["kind"])
+        self.assertEqual(BUILD, result["build"])
+        self.assertNotIn("publish-args", [row[0] for row in self.core.calls])
+
+    def test_unverified_source_prevents_channel_publish(self):
+        self.core.source_verified = False
+        self.jobs.start("deploy", CONFIG, token="SECRET")
+        self.assertEqual("failed", self.finish()[-1]["kind"])
+        self.assertNotIn("publish-args", [row[0] for row in self.core.calls])
+
+    def test_source_only_requires_no_sdk_build_and_keeps_token_transient(self):
+        self.jobs.start("source-publish", CONFIG, token="SECRET")
+        events = self.finish()
+        self.assertEqual("done", events[-1]["kind"])
+        self.assertEqual(["save", "source-publish"], [row[0] for row in self.core.calls])
+        self.assertNotIn("SECRET", json.dumps(events))
+
     def test_failure_message_redacts_token_and_encoded_token(self):
         self.core.failure = "token TEST/SECRET query TEST%2FSECRET"
         self.jobs.start("publish", CONFIG, build_result=BUILD, token="TEST/SECRET")
@@ -320,7 +362,7 @@ class PublisherJobsTests(unittest.TestCase):
         self.assertEqual("done", events[-1]["kind"])
         self.assertEqual(BUILD, events[-1]["result"]["build"])
         self.assertTrue(events[-1]["result"]["publication"]["verified"])
-        self.assertEqual(["save", "prepare", "build", "publish-args", "publish"], [row[0] for row in self.core.calls])
+        self.assertEqual(["save", "prepare", "build", "source-publish", "publish-args", "publish"], [row[0] for row in self.core.calls])
         self.assertEqual(BUILD, next(row for row in events if row["kind"] == "build-ready")["build"])
         self.assertNotIn("ONE_CLICK_TOKEN", json.dumps(events))
 
@@ -650,12 +692,12 @@ class PublisherEntrypointTests(unittest.TestCase):
             return jobs.drain()[-1]
         jobs = PublisherJobs(fixture.root, factory)
         with patch("local_app.windows_process.powershell_path", return_value="fixture-powershell.exe"):
-            jobs.start("build", fixtures.CONFIG)
+            jobs.start("build", {**fixtures.CONFIG, "includeSource": False})
             built = complete(jobs)
         self.assertEqual("done", built["kind"], built)
         original = deepcopy(built["result"])
         registry.fail_asset = True
-        jobs.start("publish", fixtures.CONFIG, build_result=original, token="fixture-token")
+        jobs.start("publish", {**fixtures.CONFIG, "includeSource": False}, build_result=original, token="fixture-token")
         self.assertEqual("failed", complete(jobs)["kind"])
         (fixture.root / "local_app/server.py").write_text("new source arrived after building", encoding="utf-8")
         resumed = PublisherJobs(fixture.root, factory)

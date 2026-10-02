@@ -309,7 +309,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual([updates.API_URL], self.transport.calls)
         self.installer.assert_not_called()
         self.assertEqual({'currentVersion', 'status', 'autoCheck', 'lastChecked', 'release',
-                          'progress', 'error', 'canInstall', 'source'}, set(result))
+                          'progress', 'error', 'canInstall', 'source', 'startupSequence'}, set(result))
         self.assertEqual({'version', 'title', 'notes', 'publishedAt', 'url'}, set(result['release']))
         result['release']['version'] = '1.0.0'
         self.assertEqual(VERSION, self.manager.snapshot()['release']['version'])
@@ -332,6 +332,10 @@ class ManagerTests(unittest.TestCase):
         self.assertIs(self.manager._cancel, self.installer.call_args.kwargs['cancel'])
         self.manager.install(VERSION)
         self.assertEqual(1, self.installer.call_count)
+        calls = list(self.transport.calls)
+        self.clock[0] += updates.CHECK_INTERVAL
+        self.assertEqual('launching', self.manager.check(startup=True)['status'])
+        self.assertEqual(calls, self.transport.calls)
 
     def test_current_or_older_release_is_not_installable(self):
         for version in ['0.21.10', '0.20.0']:
@@ -366,7 +370,9 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual('disabled', self.manager.configure(False)['status'])
         another = self.make()
         another.start()
+        another.check(startup=True)
         self.assertFalse(another.snapshot()['autoCheck'])
+        self.assertEqual(2, another.snapshot()['startupSequence'])
         self.assertEqual([], self.transport.calls)
         another.check(manual=True)
         self.assertEqual('available', self.finish(another)['status'])
@@ -377,6 +383,7 @@ class ManagerTests(unittest.TestCase):
     def test_demo_never_checks_writes_or_installs(self):
         manager = self.make(demo=True)
         manager.start()
+        manager.check(startup=True)
         manager.check(manual=True)
         manager.configure(True)
         self.assertEqual('disabled', manager.snapshot()['status'])
@@ -400,10 +407,132 @@ class ManagerTests(unittest.TestCase):
         for _ in range(5):
             manager.start()
             manager.check(manual=True)
+            manager.check(startup=True)
         self.assertLess(time.monotonic() - before, .5)
         unblock.set()
         self.finish(manager)
         self.assertEqual([updates.API_URL], original.calls)
+
+    def test_startup_refreshes_persisted_current_release_before_background_ttl(self):
+        self.manager = self.make(current_version=VERSION)
+        self.assertEqual('current', self.checked()['status'])
+        self.clock[0] += 5 * 60
+        self.transport = Transport('0.23.3')
+        another = self.make(current_version=VERSION)
+        self.assertEqual('current', another.snapshot()['status'])
+        self.assertEqual(0, another.snapshot()['startupSequence'])
+        self.assertEqual('checking', another.start()['status'])
+        result = self.finish(another)
+        self.assertEqual('available', result['status'])
+        self.assertEqual('0.23.3', result['release']['version'])
+        self.assertEqual(1, result['startupSequence'])
+        self.assertEqual([updates.API_URL], self.transport.calls)
+        another.start()
+        self.assertEqual(1, another.snapshot()['startupSequence'])
+        self.installer.assert_not_called()
+
+    def test_window_reopen_rearms_offer_but_shares_persisted_manual_cooldown(self):
+        self.manager.check(startup=True)
+        self.finish()
+        self.clock[0] += updates.MANUAL_INTERVAL - 1
+        self.manager.check(startup=True)
+        self.manager.check(manual=True)
+        self.assertEqual(2, self.manager.snapshot()['startupSequence'])
+        self.assertEqual(1, len(self.transport.calls))
+        another = self.make()
+        another.check(startup=True)
+        self.assertEqual(1, another.snapshot()['startupSequence'])
+        self.assertEqual(1, len(self.transport.calls))
+        self.clock[0] += 1
+        another.check(startup=True)
+        self.finish(another)
+        self.assertEqual(2, len(self.transport.calls))
+        another.check(manual=True)
+        self.assertEqual(2, len(self.transport.calls))
+        self.clock[0] += updates.MANUAL_INTERVAL
+        another.check(manual=True)
+        self.finish(another)
+        another.check(startup=True)
+        self.assertEqual(3, len(self.transport.calls))
+        self.assertEqual(3, another.snapshot()['startupSequence'])
+        self.assertNotIn('startupSequence', json.loads(another.path.read_text()))
+
+    def test_gitlab_startup_discovers_channel_without_a_release_page(self):
+        from local_app.update_source import UpdateSource
+        source = UpdateSource(provider='gitlab', base_url='https://gitlab.example', project_id='123')
+        def channel(version):
+            metadata, _ = release(version)
+            return json.dumps({'schema': 1, 'channel': 'stable', 'version': version,
+                'publishedAt': metadata['published_at'], 'title': metadata['name'], 'notes': metadata['body'],
+                'files': [{'name': row['name'], 'size': row['size'], 'sha256': row['digest'][7:]}
+                          for row in metadata['assets']]}).encode()
+        transport = Mock(return_value=channel('0.23.2'))
+        manager = self.make(current_version='0.23.2', source=source, transport=transport)
+        manager.start()
+        self.assertEqual('current', self.finish(manager)['status'])
+        self.clock[0] += updates.MANUAL_INTERVAL
+        transport.return_value = channel('0.23.3')
+        manager.check(startup=True)
+        result = self.finish(manager)
+        self.assertEqual('available', result['status'])
+        self.assertEqual('0.23.3', result['release']['version'])
+        self.assertEqual('', result['release']['url'])
+        self.assertTrue(result['canInstall'])
+        self.assertEqual([source.latest_url, source.latest_url], [call.args[0] for call in transport.call_args_list])
+        self.installer.assert_not_called()
+
+    def test_background_status_checks_never_rearm_startup_offer(self):
+        self.manager.check(startup=True)
+        self.finish()
+        for _ in range(3):
+            self.manager.snapshot()
+            self.manager.check()
+        self.clock[0] += updates.MANUAL_INTERVAL
+        self.manager.check(manual=True)
+        self.finish()
+        self.clock[0] += updates.CHECK_INTERVAL
+        self.manager.check()
+        self.finish()
+        self.assertEqual(1, self.manager.snapshot()['startupSequence'])
+        self.assertEqual(3, len(self.transport.calls))
+
+    def test_failed_startup_check_keeps_manual_cooldown(self):
+        self.transport.failure = HTTPError(updates.API_URL, 429, 'private details', {}, None)
+        self.manager.check(startup=True)
+        self.assertEqual('error', self.finish()['status'])
+        self.manager.check(startup=True)
+        self.manager.check(manual=True)
+        self.assertEqual(1, len(self.transport.calls))
+        self.assertEqual(2, self.manager.snapshot()['startupSequence'])
+        self.assertIn('요청 한도', self.manager.snapshot()['error'])
+        self.installer.assert_not_called()
+
+    def test_startup_does_not_interrupt_installer_or_restart_ready_handoff(self):
+        self.checked()
+        entered, unblock = threading.Event(), threading.Event()
+        def installer(*args, **kwargs):
+            entered.set()
+            self.assertTrue(unblock.wait(2))
+            return {'status': 'ready'}
+        self.manager.installer = installer
+        self.manager.install(VERSION)
+        self.assertTrue(entered.wait(1))
+        calls = list(self.transport.calls)
+        self.clock[0] += updates.CHECK_INTERVAL
+        self.assertEqual('ready', self.manager.check(startup=True)['status'])
+        self.assertEqual(calls, self.transport.calls)
+        unblock.set()
+        self.assertEqual('ready', self.finish()['status'])
+        self.assertEqual('ready', self.manager.check(startup=True)['status'])
+        self.assertEqual(calls, self.transport.calls)
+
+    def test_invalid_check_modes_do_not_change_state_or_access_network(self):
+        for kwargs in ({'startup': 'true'}, {'startup': 1}, {'manual': None},
+                       {'manual': True, 'startup': True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                self.manager.check(**kwargs)
+        self.assertEqual(0, self.manager.snapshot()['startupSequence'])
+        self.assertEqual([], self.transport.calls)
 
     def test_scheduler_uses_cancellable_fifteen_minute_wait_and_only_requests_check(self):
         manager = self.make()
@@ -500,6 +629,8 @@ class ManagerTests(unittest.TestCase):
         self.manager.transport = transport
         self.manager.install(VERSION)
         self.assertTrue(entered.wait(1))
+        self.clock[0] += updates.CHECK_INTERVAL
+        self.assertEqual('downloading', self.manager.check(startup=True)['status'])
         before = time.monotonic()
         self.manager.close()
         self.assertLess(time.monotonic() - before, .2)
@@ -507,6 +638,9 @@ class ManagerTests(unittest.TestCase):
         self.finish()
         self.installer.assert_not_called()
         self.assertFalse(self.manager.snapshot()['canInstall'])
+        calls = list(original.calls)
+        self.manager.check(startup=True)
+        self.assertEqual(calls, original.calls)
 
     def test_failed_launcher_process_becomes_retryable_error_without_exposing_handle(self):
         process = Mock()

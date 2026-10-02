@@ -76,6 +76,27 @@ class AppUpdateRoutesTests(unittest.TestCase):
                          (200, self.snapshot))
         self.manager.install.assert_called_once_with('9.0.0')
 
+    def test_window_startup_check_uses_automatic_check_contract_only(self):
+        self.assertEqual(self.request({'action': 'startup'}), (200, self.snapshot))
+        self.manager.check.assert_called_once_with(startup=True)
+        self.manager.configure.assert_not_called()
+        self.manager.install.assert_not_called()
+
+    def test_window_startup_check_keeps_auth_origin_and_input_boundaries(self):
+        body = {'action': 'startup'}
+        self.assertEqual(self.request(body, auth=False)[0], 403)
+        self.assertEqual(self.request(body, origin='https://example.com')[0], 403)
+        for field in ('manual', 'force', 'url', 'version', 'autoCheck'):
+            with self.subTest(field=field):
+                self.assertEqual(self.request({**body, field: True})[0], 400)
+        self.manager.check.assert_not_called()
+        self.manager.configure.assert_not_called()
+        self.manager.install.assert_not_called()
+
+    def test_regular_status_poll_does_not_signal_a_window_startup(self):
+        self.assertEqual(self.request(), (200, self.snapshot))
+        self.manager.check.assert_called_once_with()
+
     def test_shutdown_cancels_download_and_rejects_install(self):
         self.assertTrue(self.app.close())
         self.manager.close.assert_called_once()

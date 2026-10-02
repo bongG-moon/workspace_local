@@ -416,6 +416,7 @@ class UpdateManager:
         self._thread = None
         self._scheduler = None
         self._started = False
+        self._startup_sequence = 0
         self._auto = True
         self._last_checked = None
         self._metadata = None
@@ -481,6 +482,7 @@ class UpdateManager:
             release = {'version': data['tag_name'][1:], 'title': data['name'], 'notes': data['body'],
                        'publishedAt': data['published_at'], 'url': data['html_url']}
         return {'currentVersion': self.current_version, 'status': self._status, 'autoCheck': self._auto,
+                'startupSequence': self._startup_sequence,
                 'source': self.source.public(),
                 'lastChecked': self._last_checked, 'release': release, 'progress': self._progress,
                 'error': self._error, 'canInstall': bool(self._trusted and self._newer() and self.installer
@@ -499,7 +501,7 @@ class UpdateManager:
             if not self.demo and not self.source.error and not self._cancel.is_set():
                 self._scheduler = threading.Thread(target=self._schedule, name='workspace-update-schedule', daemon=True)
                 self._scheduler.start()
-        return self.check()
+        return self.check(startup=True)
 
     def _schedule(self):
         # A tray session can stay open for weeks. Wake cheaply; check() applies
@@ -524,16 +526,22 @@ class UpdateManager:
                 self._status = self._resting_status()
             return self._snapshot()
 
-    def check(self, manual=False):
-        if type(manual) is not bool:
+    def check(self, manual=False, *, startup=False):
+        if type(manual) is not bool or type(startup) is not bool or manual and startup:
             raise ValueError('업데이트 확인 요청을 확인해 주세요.')
         with self._lock:
+            # An explicit window opening rearms the UI offer even when the last
+            # request is recent. Ordinary polling and focus changes never do.
+            if startup:
+                self._startup_sequence += 1
             if self.demo or self.source.error or self._cancel.is_set() or self._busy or self._status in ('ready', 'launching'):
                 return self._snapshot()
             if not manual and not self._auto:
                 return self._snapshot()
             now = self.clock()
-            interval = MANUAL_INTERVAL if manual else CHECK_INTERVAL
+            # Window openings bypass the background TTL, but share the manual
+            # cooldown (including failures) to bound duplicate/reopen requests.
+            interval = MANUAL_INTERVAL if manual or startup else CHECK_INTERVAL
             if self._last_checked is not None and now - self._last_checked < interval:
                 return self._snapshot()
             self._last_checked = now
