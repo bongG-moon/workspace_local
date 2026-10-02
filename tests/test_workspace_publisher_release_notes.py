@@ -214,9 +214,11 @@ class ReleaseNotesTests(unittest.TestCase):
                                    (ROOT / 'local_app/server.py').read_text(encoding='utf-8-sig'), re.M).group(1)
         result = load_notes(ROOT, source_version)
         self.assertEqual('bundled', result['source'])
-        self.assertEqual(['0.23.2', '0.23.1', '0.23.0'], [item['version'] for item in result['history'][:3]])
-        self.assertIn('HTTPS 서버 주소, 숫자 프로젝트 ID, 게시 토큰', result['notes'])
-        self.assertIn('glpat-', result['notes'])
+        self.assertEqual(source_version, result['history'][0]['version'])
+        history = {item['version']: item for item in result['history']}
+        self.assertTrue({'0.23.2', '0.23.1', '0.23.0'} <= history.keys())
+        self.assertIn('HTTPS 서버 주소, 숫자 프로젝트 ID, 게시 토큰', history['0.23.2']['notes'])
+        self.assertIn('glpat-', history['0.23.2']['notes'])
         self.assertNotIn('HTTP 주소', result['notes'])
         self.assertNotIn('프로젝트 경로를 자동', result['notes'])
 

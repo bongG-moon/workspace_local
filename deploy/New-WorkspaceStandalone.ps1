@@ -17,20 +17,35 @@ New-Item -ItemType Directory -Path $bundleDirectory -Force | Out-Null
 & (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory $bundleDirectory -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython | Out-Null
 $bundle = @(Get-ChildItem -LiteralPath $bundleDirectory -Filter '*.zip')
 if ($bundle.Count -ne 1) { throw 'Expected exactly one source bundle.' }
-$payloadRoot = Join-Path $stage 'payload'
-Expand-Archive -LiteralPath $bundle[0].FullName -DestinationPath $payloadRoot
-$appRoot = Join-Path $payloadRoot 'Company-Workspace'
-# Package the same application-only files as the VBS delivery. Python remains
-# an existing-PC prerequisite and is checked by the shared launcher at runtime.
-if (Test-Path -LiteralPath (Join-Path $appRoot 'runtime')) { throw 'Application-only EXE must not contain an interpreter runtime.' }
-$manifestRows = @(Get-ChildItem -LiteralPath $payloadRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
-    $relative = $_.FullName.Substring($payloadRoot.Length + 1).Replace('\','/')
-    ((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "`t" + $relative)
-})
+# Reuse the verified bundle directly. Extracting and recompressing another
+# temporary tree repeats file-lock exposure without changing the payload.
+$payloadZip = $bundle[0].FullName
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::OpenRead($payloadZip)
+$sha = [Security.Cryptography.SHA256]::Create()
+$names = @{}
+try {
+    $manifestRows = @(foreach ($entry in ($archive.Entries | Sort-Object FullName)) {
+        if (-not $entry.Name) { continue }
+        $relative = $entry.FullName.Replace('\','/')
+        if (-not $relative.StartsWith('Company-Workspace/', [StringComparison]::Ordinal) -or
+            $relative -match '(^|/)\.\.?(/|$)|[\x00-\x1f:]' -or $names.ContainsKey($relative)) {
+            throw 'Invalid or duplicate application ZIP path.'
+        }
+        if ($relative.StartsWith('Company-Workspace/runtime/', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Application-only EXE must not contain an interpreter runtime.'
+        }
+        $names[$relative] = $true
+        $entryStream = $entry.Open()
+        try {
+            ([BitConverter]::ToString($sha.ComputeHash($entryStream)).Replace('-','').ToLowerInvariant() + "`t" + $relative)
+        } finally { $entryStream.Dispose() }
+    })
+    if ($manifestRows.Count -lt 1) { throw 'Empty application ZIP.' }
+} finally { $sha.Dispose(); $archive.Dispose() }
 $manifest = Join-Path $stage 'WorkspacePayload.manifest.tsv'
 [IO.File]::WriteAllText($manifest, (($manifestRows -join "`n") + "`n"), $utf8)
-$payloadZip = Join-Path $stage 'WorkspacePayload.zip'
-Compress-Archive -LiteralPath $appRoot -DestinationPath $payloadZip -CompressionLevel Optimal
 $payloadHash = (Get-FileHash -LiteralPath $payloadZip -Algorithm SHA256).Hash.ToLowerInvariant()
 $buildInfo = Join-Path $stage 'WorkspaceBuild.txt'
 [IO.File]::WriteAllText($buildInfo, ($version + "`n" + $payloadHash + "`n"), $utf8)

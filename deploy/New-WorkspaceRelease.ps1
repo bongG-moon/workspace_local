@@ -94,7 +94,8 @@ $releaseGuide
 [IO.File]::WriteAllText((Join-Path $exeStage 'README.txt'), $instructions, $utf8)
 [IO.File]::WriteAllText((Join-Path $exeStage ($exeName + '.sha256')), ($exeHash + '  ' + $exeName + "`n"), $utf8)
 Copy-Item -LiteralPath $vbsSource[0].FullName -Destination $vbsZip
-Compress-Archive -Path (Join-Path $exeStage '*') -DestinationPath $exeZip -CompressionLevel Optimal
+& $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $exeStage --output $exeZip --contents-only
+if ($LASTEXITCODE -ne 0) { throw 'EXE ZIP creation failed. Check the file and retry details above; release checksums were not published.' }
 $rows = @($vbsZip, $exeZip) | ForEach-Object {
     (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($_)
 }
