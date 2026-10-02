@@ -28,6 +28,8 @@ Workspace-Python-Diagnostic-*.json
 scripts/test-lab/ws38-diagnostic/reportRun/
 *.pem
 *.key
+# Site-specific, non-secret deployment settings are generated during packaging.
+workspace-update-source.json
 # Optional upstream sources and generated duplicate manual output.
 company-agent-plugin/scripts/
 company-agent-plugin/resources/manuals/

@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$OutputDirectory, [string]$VerificationDirectory)
+param([string]$OutputDirectory, [string]$VerificationDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -14,7 +14,7 @@ if (Test-Path -LiteralPath $exe) { throw 'Output EXE exists; choose another outp
 $stage = Join-Path $repoRoot ('build\standalone-build-' + [Guid]::NewGuid().ToString('N'))
 $bundleDirectory = Join-Path $stage 'bundle'
 New-Item -ItemType Directory -Path $bundleDirectory -Force | Out-Null
-& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory $bundleDirectory | Out-Null
+& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory $bundleDirectory -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython | Out-Null
 $bundle = @(Get-ChildItem -LiteralPath $bundleDirectory -Filter '*.zip')
 if ($bundle.Count -ne 1) { throw 'Expected exactly one source bundle.' }
 $payloadRoot = Join-Path $stage 'payload'

@@ -1,4 +1,4 @@
-"""Bounded, opt-in installation of this application's public GitHub releases.
+"""Bounded, opt-in updates from the application's bundled, trusted source.
 
 Only release discovery runs automatically. Network data is never a command or
 path: the installer receives an already verified application ZIP as bytes. Existing
@@ -7,6 +7,7 @@ Claude configuration and the running installation are not changed here.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timedelta
 import io
 import json
 import math
@@ -22,6 +23,7 @@ import zipfile
 import zlib
 
 from .history import HistoryStore, read, safe
+from .update_source import CONFIG_NAME, MAX_CONFIG, GITHUB_SOURCE, UpdateSource, from_bytes
 
 
 REPOSITORY = 'bongG-moon/workspace_local'
@@ -105,12 +107,13 @@ class _Redirects(HTTPRedirectHandler):
     max_redirections = 5
     max_repeats = 2
 
-    def __init__(self, initial, cancel, deadline):
+    def __init__(self, initial, cancel, deadline, validator=None):
         self.initial, self.cancel, self.deadline = initial, cancel, deadline
+        self.validator = validator or _download_url
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         _active(self.cancel, self.deadline)
-        _download_url(newurl, self.initial)
+        self.validator(newurl, self.initial)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -128,15 +131,37 @@ def github_download(url, *, limit, deadline, cancel, progress=None):
     if url != API_URL and (parsed.hostname != 'github.com' or parsed.query
                           or not parsed.path.startswith(f'/{REPOSITORY}/releases/download/')):
         raise UpdateError()
-    request = Request(url, headers={
+    return _http_download(url, limit=limit, deadline=deadline, cancel=cancel, progress=progress, headers={
         'Accept': 'application/vnd.github+json' if url == API_URL else 'application/octet-stream',
         'User-Agent': 'Company-Workspace-Updater',
         'X-GitHub-Api-Version': '2022-11-28',
         'Accept-Encoding': 'identity',
     })
-    opener = build_opener(_Redirects(url, cancel, deadline))
+
+
+def source_download(source, url, *, limit, deadline, cancel, progress=None):
+    if source.provider == 'github' and not source.error:
+        return github_download(url, limit=limit, deadline=deadline, cancel=cancel, progress=progress)
+    if source.provider != 'gitlab' or source.error:
+        raise UpdateError()
+    def validate(value, initial):
+        try:
+            return source.validate_download(value, initial)
+        except ValueError as exc:
+            raise UpdateError() from exc
+    validate(url, url)
+    return _http_download(url, limit=limit, deadline=deadline, cancel=cancel, progress=progress,
+        validator=validate, headers={'Accept': 'application/json' if url == source.latest_url else 'application/octet-stream',
+            'User-Agent': 'Company-Workspace-Updater', 'Accept-Encoding': 'identity', 'Cache-Control': 'no-cache'})
+
+
+def _http_download(url, *, limit, deadline, cancel, headers, progress=None, validator=None):
+    _active(cancel, deadline)
+    validate = validator or _download_url
+    request = Request(url, headers=headers)
+    opener = build_opener(_Redirects(url, cancel, deadline, validate))
     with opener.open(request, timeout=max(.1, min(8, deadline - time.monotonic()))) as response:
-        _download_url(response.geturl(), url)
+        validate(response.geturl(), url)
         if response.status != 200 or response.headers.get('Content-Encoding', 'identity') != 'identity':
             raise UpdateError()
         size = response.headers.get('Content-Length')
@@ -210,6 +235,49 @@ def parse_release(payload):
             'assets': [selected[name] for name in expected]}
 
 
+def parse_manifest(payload, source):
+    """Normalize an anonymous GitLab channel manifest; URLs stay local policy."""
+    fields = {'schema', 'channel', 'version', 'publishedAt', 'title', 'notes', 'files'}
+    if (source.provider != 'gitlab' or source.error or not isinstance(payload, dict)
+            or set(payload) != fields or type(payload.get('schema')) is not int
+            or payload['schema'] != 1 or payload['channel'] != 'stable'
+            or not isinstance(payload['title'], str) or not isinstance(payload['notes'], str)):
+        raise UpdateError()
+    version = payload['version']
+    version_tuple(version)
+    published = payload['publishedAt']
+    try:
+        if (not isinstance(published, str) or not re.fullmatch(
+                r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|\+00:00)', published)
+                or datetime.fromisoformat(published.replace('Z', '+00:00')).utcoffset() != timedelta(0)):
+            raise ValueError()
+    except ValueError as exc:
+        raise UpdateError() from exc
+    files = payload['files']
+    vbs, exe = f'Company-Workspace-{version}-vbs.zip', f'Company-Workspace-{version}-exe.zip'
+    required = {vbs, 'SHA256SUMS.txt'}
+    limits = {vbs: MAX_ARCHIVE, exe: MAX_ARCHIVE, 'SHA256SUMS.txt': MAX_CHECKSUMS}
+    if not isinstance(files, list) or not 2 <= len(files) <= 3:
+        raise UpdateError()
+    selected = {}
+    for item in files:
+        if not isinstance(item, dict) or set(item) != {'name', 'size', 'sha256'}:
+            raise UpdateError()
+        name, size, digest = item['name'], item['size'], item['sha256']
+        if (not isinstance(name, str) or name not in limits or name in selected
+                or type(size) is not int or not 0 < size <= limits[name]
+                or not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)):
+            raise UpdateError()
+        selected[name] = {'name': name, 'size': size, 'digest': 'sha256:' + digest, 'state': 'uploaded',
+                          'browser_download_url': source.asset_url(version, name)}
+    if not required <= set(selected):
+        raise UpdateError()
+    return {'tag_name': 'v' + version, 'draft': False, 'prerelease': False, 'html_url': '',
+            'name': _plain(payload['title'], 300) or f'Company Workspace {version}',
+            'body': _plain(payload['notes'], MAX_NOTES), 'published_at': published,
+            'assets': [selected[vbs], selected['SHA256SUMS.txt']]}
+
+
 def _checksum(data, filename):
     try:
         text = data.decode('utf-8-sig')
@@ -229,7 +297,7 @@ def _checksum(data, filename):
     return matches[0]
 
 
-def verify_archive(data, version):
+def verify_archive(data, version, source=None):
     """Verify the common application payload used by both EXE and VBS editions.
 
     No member is extracted here. The installer validates paths again when it
@@ -284,13 +352,16 @@ def verify_archive(data, version):
                 raise UpdateError()
             # Read all members in bounded chunks to check CRC without retaining
             # their expanded contents. Only the small version declaration is kept.
-            server = None
+            server, bundled_source = None, None
             for info in infos:
                 total = 0
                 is_server = info.filename.replace('\\', '/') == 'Company-Workspace/local_app/server.py'
+                is_source = info.filename.replace('\\', '/') == 'Company-Workspace/' + CONFIG_NAME
                 if is_server and info.file_size > 2 * 1024 * 1024:
                     raise UpdateError()
-                source = bytearray()
+                if is_source and info.file_size > MAX_CONFIG:
+                    raise UpdateError()
+                member_source = bytearray()
                 with archive.open(info) as stream:
                     while True:
                         chunk = stream.read(64 * 1024)
@@ -299,16 +370,24 @@ def verify_archive(data, version):
                         total += len(chunk)
                         if total > info.file_size:
                             raise UpdateError()
-                        if is_server:
-                            source.extend(chunk)
+                        if is_server or is_source:
+                            member_source.extend(chunk)
                 if total != info.file_size:
                     raise UpdateError()
                 if is_server:
-                    server = source.decode('utf-8-sig')
+                    server = member_source.decode('utf-8-sig')
+                if is_source:
+                    bundled_source = bytes(member_source)
             if server is None or re.findall(r'^WORKSPACE_VERSION = [\"\']([^\"\']+)[\"\']\s*$', server, re.M) != [version]:
                 raise UpdateError()
     except (OSError, ValueError, RuntimeError, NotImplementedError, zipfile.BadZipFile, zlib.error) as exc:
         raise UpdateError() from exc
+    if source is not None and source.provider == 'gitlab':
+        try:
+            if from_bytes(bundled_source).identity != source.identity:
+                raise ValueError()
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise UpdateError() from exc
     return data, hashlib.sha256(data).hexdigest()
 
 
@@ -320,12 +399,16 @@ class UpdateManager:
     close() signals cancellation without waiting on network or disk operations.
     """
     def __init__(self, state, current_version, *, demo=False, installer=None, transport=None,
-                 clock=time.time, handoff_status=None):
+                 clock=time.time, handoff_status=None, source=None):
         version_tuple(current_version)
         self.current_version = current_version
         self.path = Path(state) / 'app-updates.json'
         self.demo, self.installer = bool(demo), installer
-        self.transport, self.clock = transport or github_download, clock
+        self.source = source if source is not None else GITHUB_SOURCE
+        if not isinstance(self.source, UpdateSource):
+            raise ValueError('업데이트 서버 설정의 형식을 확인해 주세요.')
+        self.transport = transport or (lambda url, **kwargs: source_download(self.source, url, **kwargs))
+        self.clock = clock
         self.handoff_status = handoff_status
         self._lock = threading.RLock()
         self._cancel = threading.Event()
@@ -344,19 +427,27 @@ class UpdateManager:
             self._load()
         else:
             self._auto, self._status = False, 'disabled'
+        if self.source.error and not self.demo:
+            self._error, self._status, self._trusted = self.source.error, 'error', False
 
     def _load(self):
         try:
             if not safe(self.path).exists():
                 return
             saved = read(self.path, MAX_METADATA)
-            if not isinstance(saved, dict) or saved.get('schemaVersion') != 1 or type(saved.get('autoCheck')) is not bool:
+            if not isinstance(saved, dict) or saved.get('schemaVersion') not in (1, 2) or type(saved.get('autoCheck')) is not bool:
                 raise UpdateError()
+            self._auto = saved['autoCheck']
+            same_source = (saved.get('sourceIdentity') == self.source.identity if saved['schemaVersion'] == 2
+                           else self.source.provider == 'github')
+            if not same_source or self.source.error:
+                self._status = self._resting_status()
+                return
             checked = saved.get('lastChecked')
             if checked is not None and (type(checked) not in (float, int) or not math.isfinite(checked)
                                         or checked < 0 or checked > self.clock() + 300):
                 raise UpdateError()
-            metadata = parse_release(saved['release']) if saved.get('release') is not None else None
+            metadata = self._parse(saved['release']) if saved.get('release') is not None else None
             self._auto, self._last_checked, self._metadata = saved['autoCheck'], checked, metadata
             self._trusted = saved.get('verified') is True and metadata is not None
             self._status = self._resting_status()
@@ -364,8 +455,15 @@ class UpdateManager:
             self._error, self._status = '업데이트 설정을 읽지 못했습니다. 다시 확인해 주세요.', 'error'
 
     def _persist(self):
-        payload = {'schemaVersion': 1, 'autoCheck': self._auto, 'lastChecked': self._last_checked,
-                   'release': self._metadata, 'verified': self._trusted}
+        release = self._metadata
+        if release is not None and self.source.provider == 'gitlab':
+            release = {'schema': 1, 'channel': 'stable', 'version': release['tag_name'][1:],
+                       'publishedAt': release['published_at'], 'title': release['name'], 'notes': release['body'],
+                       'files': [{'name': a['name'], 'size': a['size'], 'sha256': a['digest'][7:]}
+                                 for a in release['assets']]}
+        payload = {'schemaVersion': 2, 'sourceIdentity': self.source.identity,
+                   'autoCheck': self._auto, 'lastChecked': self._last_checked,
+                   'release': release, 'verified': self._trusted}
         HistoryStore(self.path.parent)._write(self.path, json.dumps(payload, ensure_ascii=True).encode('ascii'))
 
     def _newer(self):
@@ -383,9 +481,10 @@ class UpdateManager:
             release = {'version': data['tag_name'][1:], 'title': data['name'], 'notes': data['body'],
                        'publishedAt': data['published_at'], 'url': data['html_url']}
         return {'currentVersion': self.current_version, 'status': self._status, 'autoCheck': self._auto,
+                'source': self.source.public(),
                 'lastChecked': self._last_checked, 'release': release, 'progress': self._progress,
                 'error': self._error, 'canInstall': bool(self._trusted and self._newer() and self.installer
-                    and not self.demo and not self._busy and not self._cancel.is_set()
+                    and not self.demo and not self.source.error and not self._busy and not self._cancel.is_set()
                     and self._status in ('available', 'error'))}
 
     def snapshot(self):
@@ -397,7 +496,7 @@ class UpdateManager:
             if self._started:
                 return self._snapshot()
             self._started = True
-            if not self.demo and not self._cancel.is_set():
+            if not self.demo and not self.source.error and not self._cancel.is_set():
                 self._scheduler = threading.Thread(target=self._schedule, name='workspace-update-schedule', daemon=True)
                 self._scheduler.start()
         return self.check()
@@ -429,7 +528,7 @@ class UpdateManager:
         if type(manual) is not bool:
             raise ValueError('업데이트 확인 요청을 확인해 주세요.')
         with self._lock:
-            if self.demo or self._cancel.is_set() or self._busy or self._status in ('ready', 'launching'):
+            if self.demo or self.source.error or self._cancel.is_set() or self._busy or self._status in ('ready', 'launching'):
                 return self._snapshot()
             if not manual and not self._auto:
                 return self._snapshot()
@@ -451,20 +550,27 @@ class UpdateManager:
             raise UpdateError()
         return data
 
+    def _parse(self, value):
+        return parse_manifest(value, self.source) if self.source.provider == 'gitlab' else parse_release(value)
+
     def _failure(self, exc, *, install=False):
         if isinstance(exc, UpdateError):
             message = str(exc)
+        elif self.source.provider == 'gitlab' and isinstance(exc, HTTPError) and exc.code in (401, 403, 404):
+            message = '사내 업데이트 파일에 접근하지 못했습니다. 배포 담당자에게 익명 다운로드 설정과 게시 경로를 확인해 주세요.'
         elif isinstance(exc, HTTPError) and exc.code in (403, 429):
             message = _MESSAGES['rate']
+            if self.source.provider == 'gitlab':
+                message = '사내 업데이트 서버의 요청 한도에 도달했습니다. 잠시 후 다시 확인해 주세요.'
         else:
             message = _MESSAGES['install' if install else 'network']
         self._error, self._status, self._progress = message, 'error', None
 
     def _check(self):
         try:
-            raw = self._fetch(API_URL, MAX_METADATA, time.monotonic() + CHECK_DEADLINE)
+            raw = self._fetch(self.source.latest_url, MAX_METADATA, time.monotonic() + CHECK_DEADLINE)
             try:
-                metadata = parse_release(json.loads(raw.decode('utf-8')))
+                metadata = self._parse(json.loads(raw.decode('utf-8')))
             except (ValueError, TypeError, RecursionError) as exc:
                 raise UpdateError() from exc
             with self._lock:
@@ -522,7 +628,7 @@ class UpdateManager:
             data = self._asset(archive, MAX_ARCHIVE, deadline, self._progressed)
             if hashlib.sha256(data).hexdigest() != expected:
                 raise UpdateError()
-            package, digest = verify_archive(data, version)
+            package, digest = verify_archive(data, version, source=self.source)
             _active(self._cancel, deadline)
             # This callback acquires the application's session lock. It must
             # never run under our lock (bootstrap holds them in the other order).

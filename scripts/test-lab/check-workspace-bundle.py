@@ -3,11 +3,13 @@ import argparse
 import hashlib
 from pathlib import Path
 import re
+import sys
 import zipfile
 
 root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument("bundle", type=Path)
+parser.add_argument("--update-config", type=Path, help="Expected non-secret GitLab settings injected during packaging")
 args = parser.parse_args()
 count = 0
 expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELIABILITY.md","Company-Workspace.vbs", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md", "docs/WORKSPACE_USER_GUIDE.html", "docs/WORKSPACE_0.15.0_CLAUDE.md",
@@ -32,7 +34,7 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
 seen = set()
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
-                 'docs/WORKSPACE_APP_UPDATES.md'})
+                 'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md'})
 expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py', 'local_app/web/path-picker.js', 'local_app/web/path-picker.css'})
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})
@@ -42,11 +44,20 @@ expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','dep
                  'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',
                  'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})
 expected.add('docs/WORKSPACE_0.20.0_NOTIFICATIONS.md')
+expected.add('local_app/update_source.py')
 expected.update({'local_app/file_preview.py','local_app/executions.py','local_app/web/rich-content.js','local_app/web/rich-content.css','local_app/web/execution-view.js','local_app/web/execution-view.css','docs/WORKSPACE_0.21.0_RICH_CHAT.md'})
 generated = {'desktop/' + name for name in ('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll',
              'Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')}
 expected.update(generated)
 import json
+configuration_bytes = None
+if args.update_config is not None:
+    sys.path.insert(0, str(root))
+    from local_app.update_source import source_from_config
+    configured = source_from_config(json.loads(args.update_config.read_text(encoding='utf-8-sig')))
+    assert configured.provider == 'gitlab'
+    configuration_bytes = (json.dumps(configured.config, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
+    expected.add('workspace-update-source.json')
 desktop = json.loads((root/'build/desktop-host/desktop-build.json').read_text())
 lock = json.loads((root/'deploy/WebView2.lock.json').read_text())
 assert desktop['sdkSha256'] == lock['sha256'] and desktop['sdkVersion'] == lock['version']
@@ -66,9 +77,12 @@ with zipfile.ZipFile(args.bundle) as bundle:
         seen.add(relative)
         assert ".." not in Path(relative).parts and not relative.startswith("/"), name
         assert not any(part in {"__pycache__", "history.json", "runtime.json", ".env", ".claude"} for part in Path(relative).parts), name
-        source = root / 'build/desktop-host' / Path(relative).name if relative in generated else root / relative
-        assert source.is_file(), name
-        assert bundle.read(entry) == source.read_bytes(), "Stale bundle content: " + name
+        if relative == 'workspace-update-source.json':
+            assert configuration_bytes is not None and bundle.read(entry) == configuration_bytes, "Unexpected update settings"
+        else:
+            source = root / 'build/desktop-host' / Path(relative).name if relative in generated else root / relative
+            assert source.is_file(), name
+            assert bundle.read(entry) == source.read_bytes(), "Stale bundle content: " + name
         count += 1
     assert seen == expected, expected - seen
     assert {name for name in seen if name.startswith("docs/") and name.endswith(".html")} == {

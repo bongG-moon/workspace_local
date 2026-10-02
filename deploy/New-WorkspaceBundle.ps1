@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([string]$OutputDirectory)
+param([string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'dist' }
@@ -46,9 +46,10 @@ $files = @(
     'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py',
     'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
     'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py',
-    'local_app\app_updates.py', 'local_app\update_install.py',
+    'local_app\app_updates.py', 'local_app\update_install.py', 'local_app\update_source.py',
     'local_app\web\app-updates.js', 'local_app\web\app-updates.css',
     'docs\WORKSPACE_APP_UPDATES.md',
+    'docs\WORKSPACE_GITLAB_PUBLISHER.md',
     'local_app\web\upgrade-handoff.js', 'local_app\web\upgrade-handoff.css',
     'local_app\web\rich-content.js', 'local_app\web\rich-content.css', 'local_app\web\execution-view.js', 'local_app\web\execution-view.css',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
@@ -61,13 +62,18 @@ foreach ($relative in $files) {
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $payload $relative) -ErrorAction Stop
     if (-not (Test-Path -LiteralPath (Join-Path $payload $relative) -PathType Leaf)) { throw ('Bundle copy missing: ' + $relative) }
 }
+if ($UpdateConfig) {
+    $configInput = (Resolve-Path -LiteralPath $UpdateConfig).Path
+    & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\prepare-workspace-update-source.py') --input $configInput --output (Join-Path $payload 'workspace-update-source.json')
+    if ($LASTEXITCODE -ne 0) { throw 'Invalid GitLab update settings. No application bundle was created.' }
+}
 $desktopBuild = & (Join-Path $PSScriptRoot 'New-WorkspaceDesktop.ps1')
 $desktopPayload = Join-Path $payload 'desktop'
 New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.22.0-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.0-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 Compress-Archive -LiteralPath $payload -DestinationPath $zip -CompressionLevel Optimal
 Get-FileHash -LiteralPath $zip -Algorithm SHA256 | Select-Object Path, Hash

@@ -39,7 +39,7 @@ from .app_dispatch import DispatchController
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.22.0"
+WORKSPACE_VERSION = "0.23.0"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -172,9 +172,11 @@ class LocalApp:
         from .upgrade_handoff import UpgradeHandoff
         self.upgrade = UpgradeHandoff(self, WORKSPACE_VERSION)
         from .app_updates import UpdateManager
+        from .update_source import load_source
         self.app_updates = UpdateManager(state, WORKSPACE_VERSION,
             demo=demo or self._injected_command, installer=self._install_app_update,
-            handoff_status=lambda: self.upgrade.status())
+            handoff_status=lambda: self.upgrade.status(),
+            source=load_source(Path(__file__).resolve().parents[1]))
         self.update_warning = None
 
     def _install_app_update(self, version, package_bytes, sha256, *, cancel=None):

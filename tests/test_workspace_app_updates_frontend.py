@@ -163,6 +163,22 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal(calls,0);
         })()""")
 
+    def test_gitlab_and_unknown_sources_never_expose_remote_release_links(self):
+        self.run_case(r"""
+          for(const provider of ['gitlab','other']){
+            WorkspaceAppUpdates.observe({...available,source:{provider,label:'사내 배포 서버'},
+              release:{...available.release,url:'https://private.example/releases?token=SECRET'}});
+            assert.equal($('app-update-source').textContent,'사내 배포 서버');
+            assert.equal($('app-update-release-link').hidden,true);
+            assert.equal($('app-update-release-link').attributes.href,'#');
+            assert.equal($('app-update-sidebar-badge').hidden,false);
+            assert.equal($('app-update-install').disabled,false);
+          }
+          WorkspaceAppUpdates.observe({...available,source:{provider:'github',label:'공개 배포'}});
+          assert.equal($('app-update-release-link').hidden,false);
+          assert.equal($('app-update-release-link').attributes.href,'https://github.com/bongG-moon/workspace_local/releases/tag/v0.22.1');
+        """)
+
     def test_install_is_explicit_locked_and_progress_does_not_interrupt_drafts(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='작성 중인 업무';attachments=['keep.csv'];

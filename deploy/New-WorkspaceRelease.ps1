@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$StandaloneExe, [string]$OutputDirectory)
+param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
@@ -21,7 +21,7 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $stage = Join-Path $repoRoot ('build\workspace-release-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage, $outputRoot -Force | Out-Null
-& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') | Out-Null
+& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython | Out-Null
 $vbsSource = @(Get-ChildItem -LiteralPath (Join-Path $stage 'vbs') -Filter '*.zip')
 if ($vbsSource.Count -ne 1) { throw 'Expected one VBS source bundle.' }
 # Read resources only. Loading this local assembly does not run its entry point.
@@ -62,6 +62,7 @@ $exeName = 'Company-Workspace-' + $version + '.exe'
 Copy-Item -LiteralPath $StandaloneExe -Destination (Join-Path $exeStage $exeName)
 $exeHash = (Get-FileHash -LiteralPath $StandaloneExe -Algorithm SHA256).Hash.ToLowerInvariant()
 $utf8 = New-Object Text.UTF8Encoding($false)
+$releaseGuide = if ($UpdateConfig) { 'Open Settings > App update inside the app for internal update notes and downloads.' } else { 'https://github.com/bongG-moon/workspace_local/releases/tag/v' + $version }
 $instructions = @"
 Company Workspace $version - single EXE edition
 
@@ -88,7 +89,7 @@ Keep the EXE as the entry point; README and hash are for reference.
 Existing Python and Claude remain installed and managed separately on the PC.
 
 Korean guide and the alternative VBS ZIP:
-https://github.com/bongG-moon/workspace_local/releases/tag/v$version
+$releaseGuide
 "@
 [IO.File]::WriteAllText((Join-Path $exeStage 'README.txt'), $instructions, $utf8)
 [IO.File]::WriteAllText((Join-Path $exeStage ($exeName + '.sha256')), ($exeHash + '  ' + $exeName + "`n"), $utf8)

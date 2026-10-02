@@ -21,14 +21,17 @@ globalThis.WorkspaceAppUpdates = (() => {
   function normalize(value){
     if(!value||typeof value!=="object"||!statuses.has(value.status))return null;
     const currentVersion=stableVersion(value.currentVersion)?value.currentVersion:"";
+    const provider=value.source==null?"github":value.source.provider;
+    const source={provider,label:typeof value.source?.label==="string"?value.source.label.slice(0,120)
+      :provider==="github"?"GitHub 공개 배포":provider==="gitlab"?"사내 배포 서버":"배포 서버"};
     const release=value.release&&newer(value.release.version,currentVersion)?{
       version:value.release.version,title:String(value.release.title||`Company Workspace ${value.release.version}`),
       notes:typeof value.release.notes==="string"?value.release.notes:"업데이트 내용이 아직 제공되지 않았어요.",
       publishedAt:value.release.publishedAt,
       // Never use a URL supplied by release notes or remote metadata.
-      url:`https://github.com/bongG-moon/workspace_local/releases/tag/v${value.release.version}`
+      url:provider==="github"?`https://github.com/bongG-moon/workspace_local/releases/tag/v${value.release.version}`:""
     }:null;
-    return {currentVersion,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
+    return {currentVersion,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
       release,progress:typeof value.progress==="number"&&Number.isFinite(value.progress)?Math.max(0,Math.min(100,value.progress)):null,
       error:typeof value.error==="string"?value.error:null,canInstall:value.canInstall===true};
   }
@@ -61,6 +64,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("settings-open").setAttribute("title",available?"설정 · 새 버전 사용 가능":"설정");
     $("app-update-current").textContent=snapshot.currentVersion||"확인 중";
     $("app-update-latest").textContent=release?.version||(snapshot.status==="current"?snapshot.currentVersion:"확인 전");
+    $("app-update-source").textContent=snapshot.source?.label||"배포 서버";
     $("app-update-checked").textContent=dateText(snapshot.lastChecked,true);
     $("app-update-auto").checked=snapshot.autoCheck;$("app-update-auto").disabled=isBusy||installUncertain;
     $("app-update-check").disabled=isBusy;
@@ -73,7 +77,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-title").textContent=release?.title||"앱 업데이트";
     $("app-update-release-meta").textContent=release?`버전 ${release.version} · ${release.publishedAt?dateText(release.publishedAt):"게시일 확인 필요"}`:"";
     $("app-update-notes").textContent=release?.notes||"업데이트 내용을 확인하고 있어요.";
-    $("app-update-release-link").hidden=!available;
+    $("app-update-release-link").hidden=!release?.url;
     $("app-update-release-link").setAttribute("href",release?.url||"#");
     $("app-update-install").hidden=!available;
     $("app-update-install").disabled=!available||!snapshot.canInstall||isBusy||installSubmitted||installUncertain;
