@@ -230,10 +230,10 @@ class PublisherWindow:
                 self.mutable.append(entry)
             return entry
 
-        field(settings, 0, "GitLab 웹 주소", self.fields["baseUrl"])
+        field(settings, 0, "GitLab 서버 주소 (HTTPS)", self.fields["baseUrl"])
         field(settings, 1, "프로젝트 ID", self.fields["projectId"])
         field(settings, 2, "소스 반영 주소 (SSH)", self.fields["remoteUrl"])
-        ttk.Label(settings, text="프로젝트의 웹 주소와 프로젝트 ID, SSH 복제 주소를 입력해 주세요.\n"
+        ttk.Label(settings, text="서버 주소 예: https://gitlab.company.example — 프로젝트의 /그룹/저장소 경로는 제외합니다.\n"
                   "설정은 이 폴더의 build/publisher/config.json에만 저장하며 소스에 포함하지 않습니다.",
                   style="Note.TLabel", wraplength=730).grid(row=3, column=0, columnspan=2, sticky="w", pady=(7, 0))
         field(release, 0, "현재 소스의 버전 태그", self.fields["releaseTag"], readonly=True)

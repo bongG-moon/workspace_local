@@ -22,6 +22,8 @@ python -X utf8 Publish-Workspace.py
 
 GitLab HTTPS 주소, 숫자 Project ID, 소스를 반영할 SSH 주소를 입력합니다. 설정은 Git에서 제외된 `build/publisher/` 아래에 저장됩니다. 게시용 토큰은 파일에 저장하지 않으며 게시할 때만 입력합니다. 사용자 앱에 포함되는 설정에는 서버 주소와 프로젝트 정보만 들어갑니다.
 
+서버 주소는 `https://gitlab.company.example`처럼 GitLab의 시작 주소를 넣습니다. 프로젝트 페이지 주소에 붙는 `/그룹/저장소`는 제외합니다. GitLab 자체가 `/gitlab` 같은 하위 경로에 설치되어 있다면 그 부분은 포함합니다. Project ID는 해당 프로젝트 화면에 표시되는 숫자입니다.
+
 게시용 Deploy Token에는 해당 프로젝트의 `write_package_registry` 권한을 부여합니다. Git 저장소 푸시는 사내 PC에 이미 설정된 본인의 Git 인증을 사용합니다. Git에 사용하는 SSH 키와 패키지 게시용 토큰은 서로 다른 용도입니다. 사내 정책이 Deploy Token을 금지하면 지원하는 CI Job Token 방식이나 관리자가 허용한 게시 환경을 사용합니다.
 
 ## 매번 배포하기

@@ -361,6 +361,33 @@ class GitAndBuildTests(unittest.TestCase):
         self.assertIn('TimeoutExpired', content)
         self.assertIn('partial compiler output', content)
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell is required')
+    def test_windows_powershell_build_child_restores_modules_without_changing_parent(self):
+        from local_app.windows_process import powershell_path
+        source = self.publisher.work_root / ('build-' + 'd' * 32) / 'source'
+        source.mkdir(parents=True)
+        script = source / 'check-modules.ps1'
+        script.write_text("$ErrorActionPreference = 'Stop'\n"
+                          "if (($env:PSModulePath -split ';') -contains (Join-Path $PSScriptRoot 'incompatible-parent-modules')) { throw 'parent module path leaked' }\n"
+                          "[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'input.txt'), 'module probe')\n"
+                          "$digest = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'input.txt') -Algorithm SHA256).Hash\n"
+                          "Compress-Archive -LiteralPath (Join-Path $PSScriptRoot 'input.txt') -DestinationPath (Join-Path $PSScriptRoot 'probe.zip')\n"
+                          "Expand-Archive -LiteralPath (Join-Path $PSScriptRoot 'probe.zip') -DestinationPath (Join-Path $PSScriptRoot 'expanded')\n"
+                          "if ((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'expanded/input.txt') -Algorithm SHA256).Hash -ne $digest) { throw 'hash mismatch' }\n"
+                          "[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'module-check.txt'), $digest)\n", encoding='utf-8')
+        incompatible = source / 'incompatible-parent-modules'
+        incompatible.mkdir()
+        poisoned = os.environ.get('PSModulePath', '') + ';' + str(incompatible)
+        with patch.dict(os.environ, {'PSModulePath': poisoned}):
+            self.publisher._run([powershell_path(), '-NoProfile', '-NoLogo', '-ExecutionPolicy', 'Bypass',
+                                 '-File', str(script)], cwd=source, timeout=30)
+            self.assertEqual(poisoned, os.environ['PSModulePath'])
+        self.assertEqual(hashlib.sha256(b'module probe').hexdigest(),
+                         (source / 'module-check.txt').read_text().lower())
+        with zipfile.ZipFile(source / 'probe.zip') as archive:
+            self.assertEqual(b'module probe', archive.read('input.txt'))
+        self.assertIn('결과: exit 0', next((source.parent / 'logs').glob('*.log')).read_text(encoding='utf-8'))
+
     def test_config_stays_ignored_and_rejects_token(self):
         self.publisher.save_config(CONFIG)
         self.assertEqual('', self.run_git('status', '--porcelain'))

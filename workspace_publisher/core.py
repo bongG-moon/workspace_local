@@ -95,6 +95,12 @@ class Publisher:
         environment = os.environ.copy()
         environment['PYTHONDONTWRITEBYTECODE'] = '1'
         environment['PYTHONUTF8'] = '1'
+        if Path(arguments[0]).name.lower() == 'powershell.exe':
+            # PowerShell 7 can export its own incompatible modules to Python.
+            # Let only this Windows PowerShell child rebuild its default paths.
+            for key in list(environment):
+                if key.casefold() == 'psmodulepath':
+                    del environment[key]
         try:
             completed = subprocess.run(arguments, cwd=cwd, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
