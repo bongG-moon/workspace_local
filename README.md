@@ -1,29 +1,34 @@
-# Company Workspace 0.23.1
+# Company Workspace 0.23.2
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.1/Company-Workspace-0.23.1-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.1/Company-Workspace-0.23.1-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.2/Company-Workspace-0.23.2-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.2/Company-Workspace-0.23.2-vbs.zip)**
 
-[0.23.1 변경 안내](docs/VALIDATION_0.23.1.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.2 변경 안내](docs/VALIDATION_0.23.2.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.1.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.2.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
+## 0.23.2 변경
+
+- 사내 배포 창의 기본 입력을 **HTTPS 서버 주소, 숫자 프로젝트 ID, 게시용 토큰**으로 줄였습니다. **배포하기** 한 번으로 완성 파일 확인, 필요한 빌드, 게시와 다운로드 검증을 이어갑니다.
+- `glpat-` 액세스 토큰을 올바른 인증 방식으로 전송합니다. 기본은 자동 감지이며 고급 설정에서 Personal / Project Access Token, Deploy Token, CI Job Token을 직접 선택할 수 있습니다.
+- 소스 ZIP에 포함된 현재 버전의 릴리즈 기록을 자동으로 채웁니다. 변경 내용 편집, 원문 복원, 과거 기록 보기를 제공하며 GitHub 실시간 조회는 하지 않습니다.
+- SDK는 처음 필요할 때만 준비 화면을 표시합니다. 다음 버전에서는 이전 폴더의 `build/desktop-sdk/` 안에 있는 SDK 파일을 다시 선택할 수 있습니다. 게시 실패 시 검증된 같은 파일로 재시도합니다.
+- [토큰 권한과 단계별 사내 배포 안내](docs/WORKSPACE_GITLAB_PUBLISHER.md)를 확인하세요. 기존 PC·Claude 개인 설정은 유지하며 사내 GitLab 권한·인증서·네트워크와 사용자 PC 실행은 현장에서 확인해야 합니다.
+
 ## 0.23.1 변경
 
 - 사내 반입에는 GitHub **Code → Download ZIP**을 사용할 수 있습니다. 이 소스 ZIP에는 완성된 EXE·DLL·SDK 패키지가 없고, Git 설치나 `.git` 복원 없이 빌드·게시할 수 있습니다.
-- 압축을 풀고 `python -X utf8 Publish-Workspace.py`를 실행합니다. 사내 GitLab 주소와 Project ID를 입력하고 SDK를 준비하면 소스 수정 없이 사내용 EXE/VBS를 만듭니다.
-- SDK는 사내에서 명시적으로 다운로드하거나 승인된 SDK 파일을 선택합니다. 시작이나 빌드 시 몰래 내려받지 않으며, 지정된 버전과 해시가 맞아야 사용합니다.
-- ZIP의 소스 목록과 파일 해시를 빌드 전후 확인합니다. Git 이력이 없는 ZIP에서는 Git 소스 반영만 생략하고 패키지 게시와 앱 업데이트를 지원합니다.
-- [단계별 사내 배포 안내](docs/WORKSPACE_GITLAB_PUBLISHER.md)를 확인하세요. 실제 메일 반입 허용 여부와 사내 GitLab 연결은 사내에서 확인해야 합니다.
+- SDK를 직접 다운로드하거나 승인된 파일로 준비하고, ZIP의 소스 목록과 파일 해시를 빌드 전후 확인합니다. Git 이력이 없는 ZIP에서도 패키지 게시와 앱 업데이트를 지원합니다. [0.23.1 검증 기록](docs/VALIDATION_0.23.1.md)
 
 ## 0.23.0 변경
 

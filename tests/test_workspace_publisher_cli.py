@@ -67,7 +67,7 @@ class PublisherCliTests(unittest.TestCase):
 
     def test_zip_configure_skips_git_remote_and_release_prompts(self):
         prompts = []
-        values = iter(["https://gitlab.example", "42", "deploy", "새 버전", "변경 안내", ""])
+        values = iter(["https://gitlab.example", "42"])
         def answer(prompt):
             prompts.append(prompt)
             return next(values)
@@ -80,6 +80,32 @@ class PublisherCliTests(unittest.TestCase):
         saved = self.publisher.save_config.call_args.args[0]
         self.assertEqual("", saved["releaseTag"])
         self.assertEqual("42", saved["projectId"])
+        self.assertEqual("https://gitlab.example", saved["baseUrl"])
+        self.assertEqual(2, len(prompts))
+
+    def test_http_configure_rejected_before_save(self):
+        with patch("builtins.input", side_effect=["http://gitlab.example", "42"]):
+            code, _ = self.invoke(["configure"])
+        self.assertEqual(1, code)
+        self.publisher.save_config.assert_not_called()
+
+    def test_deploy_prepares_verified_build_then_publishes_with_runtime_only_token(self):
+        build = {'version': '0.23.2', 'files': []}
+        self.publisher.prepare_deploy.return_value = build
+        self.publisher.publish.return_value = {'verified': True}
+        with patch('getpass.getpass', return_value='fixture-private-token'):
+            code, output = self.invoke(['deploy'])
+        self.assertEqual(0, code)
+        self.publisher.prepare_deploy.assert_called_once()
+        self.assertEqual(build, self.publisher.publish.call_args.args[1])
+        self.assertEqual('fixture-private-token', self.publisher.publish.call_args.args[2])
+        self.assertNotIn('fixture-private-token', output)
+
+    def test_deploy_without_token_does_not_build(self):
+        with patch('getpass.getpass', return_value=''):
+            code, _ = self.invoke(['deploy'])
+        self.assertEqual(1, code)
+        self.publisher.prepare_deploy.assert_not_called()
 
     def test_missing_or_misplaced_sdk_arguments_fail_before_action(self):
         for args in (["sdk-import"], ["status", "--url", "https://example"], ["build", "--file", "sdk.nupkg"]):

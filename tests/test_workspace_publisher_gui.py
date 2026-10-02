@@ -12,8 +12,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from workspace_publisher.gui import (DEFAULT_CONFIG, PublisherJobs, PublisherWindow,
-                                     build_identity, public_text, settings_only, source_can_sync)
+from workspace_publisher.gui import (DEFAULT_CONFIG, TOKEN_LABELS, PublisherJobs, PublisherWindow,
+                                     build_identity, public_result, public_text, settings_only, source_can_sync)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +26,9 @@ BUILD = {"version": "0.22.0", "commit": "a" * 40, "directory": "C:/build/output"
 SDK = {"status": "ready", "version": "1.0.4258.31", "path": "C:/build/sdk.nupkg", "message": "SDK 준비 완료"}
 ARCHIVE = {"version": "0.23.1", "sourceKind": "archive", "sourceId": "b" * 64,
            "commit": "", "branch": "", "clean": True, "releaseTag": "", "canSync": False}
+RELEASE_NOTES = {"version": "0.22.0", "title": "새 버전 안내", "notes": "사용 흐름을 개선했습니다.",
+                 "history": [{"version": "0.22.0", "title": "새 버전 안내", "notes": "사용 흐름을 개선했습니다."}],
+                 "source": "bundled"}
 
 
 class FakeCore:
@@ -41,13 +44,22 @@ class FakeCore:
         self.restore_failure = None
         self.source_failure = None
         self.source = deepcopy(SOURCE)
+        self.config = deepcopy(CONFIG)
+        self.notes = deepcopy(RELEASE_NOTES)
+        self.notes_failure = None
+        self.publication_failure = None
 
     def factory(self, root, *, emit):
         state = self
 
         class Publisher:
             def load_config(self):
-                return deepcopy(CONFIG)
+                return deepcopy(state.config)
+
+            def release_notes(self):
+                if state.notes_failure:
+                    raise ValueError(state.notes_failure)
+                return deepcopy(state.notes)
 
             def inspect_source(self):
                 if state.source_failure:
@@ -81,8 +93,14 @@ class FakeCore:
                 state.last_build = deepcopy(BUILD)
                 return deepcopy(BUILD)
 
+            def prepare_deploy(self, config, *, build_result=None, cancel=None):
+                state.calls.append(("prepare", deepcopy(config)))
+                return deepcopy(build_result or state.last_build) or self.build(config, cancel=cancel)
+
             def publish(self, config, built, token, token_kind="deploy", *, cancel=None):
                 state.calls.append(("publish-args", deepcopy(built), token, token_kind))
+                if state.publication_failure:
+                    raise ValueError(state.publication_failure)
                 self.run("publish", config, cancel)
                 if state.leak_token:
                     emit({"kind": "info", "message": "token=" + token})
@@ -291,6 +309,45 @@ class PublisherJobsTests(unittest.TestCase):
         self.assertEqual(notes, settings_only({**CONFIG, "notes": notes})["notes"])
         self.assertEqual("[게시 토큰 숨김]", public_text("MY_SECRET", "MY_SECRET"))
 
+    def test_public_result_removes_private_token_header_keys_at_every_depth(self):
+        result = public_result({"headers": {"PRIVATE-TOKEN": "secret", "Content-Type": "application/json"},
+                                "nested": [{"private-token": "another-secret", "message": "ok"}]})
+        self.assertEqual({"headers": {"Content-Type": "application/json"}, "nested": [{"message": "ok"}]}, result)
+
+    def test_deploy_builds_and_publishes_in_one_job_without_sync_or_connection(self):
+        self.jobs.start("deploy", CONFIG, token="ONE_CLICK_TOKEN")
+        events = self.finish()
+        self.assertEqual("done", events[-1]["kind"])
+        self.assertEqual(BUILD, events[-1]["result"]["build"])
+        self.assertTrue(events[-1]["result"]["publication"]["verified"])
+        self.assertEqual(["save", "prepare", "build", "publish-args", "publish"], [row[0] for row in self.core.calls])
+        self.assertEqual(BUILD, next(row for row in events if row["kind"] == "build-ready")["build"])
+        self.assertNotIn("ONE_CLICK_TOKEN", json.dumps(events))
+
+    def test_failed_deploy_returns_ready_files_and_retry_does_not_rebuild(self):
+        self.core.publication_failure = "서버 연결 실패 RETRY_SECRET"
+        self.jobs.start("deploy", CONFIG, token="RETRY_SECRET")
+        events = self.finish()
+        self.assertEqual("failed", events[-1]["kind"])
+        self.assertEqual(BUILD, events[-1]["build"])
+        self.assertNotIn("RETRY_SECRET", json.dumps(events))
+        self.core.calls.clear()
+        self.core.publication_failure = None
+        self.jobs.start("deploy", CONFIG, build_result=events[-1]["build"], token="NEXT_TOKEN")
+        self.assertEqual("done", self.finish()[-1]["kind"])
+        self.assertNotIn("build", [row[0] for row in self.core.calls])
+        self.assertEqual(BUILD, next(row[1] for row in self.core.calls if row[0] == "publish-args"))
+
+    def test_release_notes_error_does_not_block_loading_existing_build(self):
+        self.core.notes_failure = "원문 버전 불일치"
+        self.core.last_build = deepcopy(BUILD)
+        self.jobs.start("load")
+        event = self.finish()[-1]
+        self.assertEqual("done", event["kind"])
+        self.assertEqual(BUILD, event["result"]["build"])
+        self.assertIn("원문 버전", event["result"]["notesNotice"])
+        self.assertEqual(["restore"], [row[0] for row in self.core.calls])
+
 
 class PublisherWindowTests(unittest.TestCase):
     def setUp(self):
@@ -480,6 +537,100 @@ class PublisherWindowTests(unittest.TestCase):
         self.finish()
         self.assertTrue(self.window.closed)
 
+    def test_minimal_archive_screen_hides_advanced_notes_and_ready_sdk_controls(self):
+        self.core.source = deepcopy(ARCHIVE)
+        self.reopen()
+        self.assertEqual("", self.window.advanced_frame.winfo_manager())
+        self.assertEqual("", self.window.notes_frame.winfo_manager())
+        self.assertEqual("", self.window.sdk_frame.winfo_manager())
+        self.assertEqual("", self.window.git_frame.winfo_manager())
+        self.assertEqual("배포하기", self.window.deploy_button.cget("text"))
+        self.assertEqual("normal", str(self.window.deploy_button.cget("state")))
+        self.assertIn("SDK 준비됨", self.window.sdk_label.get())
+        self.window.toggle_advanced()
+        self.assertEqual("pack", self.window.advanced_frame.winfo_manager())
+        self.window.toggle_notes()
+        self.assertEqual("pack", self.window.notes_frame.winfo_manager())
+        self.window._sdk({"status": "missing"})
+        self.window.refresh_controls()
+        self.assertEqual("pack", self.window.sdk_frame.winfo_manager())
+        self.assertEqual("disabled", str(self.window.deploy_button.cget("state")))
+
+    def test_basic_fields_use_https_server_and_numeric_project_id_with_auto_token_kind(self):
+        self.assertIn("baseUrl", self.window.fields)
+        self.assertIn("projectId", self.window.fields)
+        self.assertNotIn("repositoryUrl", self.window.fields)
+        self.assertEqual("auto", self.window.config()["tokenKind"])
+        self.assertEqual(self.window.server_entry.winfo_parent(), self.window.project_entry.winfo_parent())
+        self.assertEqual(self.window.server_entry.winfo_parent(), self.window.token_entry.winfo_parent())
+        self.assertEqual(set(TOKEN_LABELS.values()), set(self.window.token_selector.cget("values")))
+        for kind in TOKEN_LABELS:
+            self.window.token_kind.set(TOKEN_LABELS[kind])
+            self.assertEqual(kind, self.window.config()["tokenKind"])
+
+    def test_legacy_deploy_setting_opens_in_auto_mode_and_glpat_token_stays_memory_only(self):
+        self.core.config["tokenKind"] = "deploy"
+        self.core.calls.clear()
+        self.reopen()
+        self.assertEqual("auto", self.window.config()["tokenKind"])
+        self.assertEqual(["restore"], [row[0] for row in self.core.calls])
+        self.window.token.set("glpat-FIXTURE_ONLY")
+        self.window.start("deploy")
+        self.finish()
+        published = next(row for row in self.core.calls if row[0] == "publish-args")
+        self.assertEqual(("glpat-FIXTURE_ONLY", "auto"), published[2:])
+        saved = next(row[1] for row in self.core.calls if row[0] == "save")
+        self.assertNotIn("glpat-FIXTURE_ONLY", json.dumps(saved))
+        self.assertNotIn("glpat-FIXTURE_ONLY", self.window.log.get("1.0", "end"))
+
+    def test_user_release_edits_survive_status_source_and_settings_refresh_then_restore_explicitly(self):
+        self.assertEqual(RELEASE_NOTES["notes"], self.window.notes.get("1.0", "end-1c"))
+        self.window.fields["title"].set("사내 안내 제목")
+        self.window.notes.delete("1.0", "end")
+        self.window.notes.insert("1.0", "사내에서 추가한 안내")
+        self.window.mark_notes_edited()
+        for action in ("sdk-status", "inspect", "load"):
+            self.window.start(action)
+            self.finish()
+            self.assertEqual("사내 안내 제목", self.window.fields["title"].get())
+            self.assertEqual("사내에서 추가한 안내", self.window.notes.get("1.0", "end-1c"))
+        self.window.restore_notes()
+        self.assertEqual(RELEASE_NOTES["title"], self.window.fields["title"].get())
+        self.assertEqual(RELEASE_NOTES["notes"], self.window.notes.get("1.0", "end-1c"))
+        self.assertFalse(self.window.notes_edited)
+
+    def test_saved_custom_or_intentionally_empty_notes_survive_source_refresh(self):
+        for title, notes in (("저장한 사내 안내", "사내 배포 설명"), ("", "")):
+            with self.subTest(title=title):
+                self.core.config.update(title=title, notes=notes, notesVersion="0.22.0")
+                self.reopen()
+                self.window.start("inspect")
+                self.finish()
+                self.assertEqual(title, self.window.fields["title"].get())
+                self.assertEqual(notes, self.window.notes.get("1.0", "end-1c"))
+
+    def test_deploy_failure_keeps_build_and_edited_notes_for_same_file_retry(self):
+        self.window.fields["baseUrl"].set("https://gitlab.example")
+        self.window.fields["projectId"].set("42")
+        self.window.fields["title"].set("사내 안내")
+        self.core.publication_failure = "게시 서버가 응답하지 않았습니다."
+        self.window.token.set("FIRST_DEPLOY")
+        self.window.start("deploy")
+        self.finish()
+        original = deepcopy(self.window.build_result)
+        self.assertEqual(BUILD, original)
+        self.assertIn("응답하지", self.window.status.get())
+        self.assertEqual("사내 안내", self.window.fields["title"].get())
+        self.assertEqual("normal", str(self.window.deploy_button.cget("state")))
+        self.core.publication_failure = None
+        self.core.calls.clear()
+        self.window.token.set("RETRY_DEPLOY")
+        self.window.start("deploy")
+        self.finish()
+        self.assertNotIn("build", [row[0] for row in self.core.calls])
+        self.assertEqual(original, next(row[1] for row in self.core.calls if row[0] == "publish-args"))
+        self.assertIn("게시 완료", self.window.status.get())
+
 
 class PublisherEntrypointTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("git"), "Git is used only to construct a Download ZIP fixture")
@@ -561,7 +712,7 @@ class PublisherEntrypointTests(unittest.TestCase):
             self.assertEqual("done", result["kind"])
             self.assertEqual("0.22.0", result["result"]["source"]["version"])
             self.assertTrue(result["result"]["source"]["clean"])
-            self.assertEqual(CONFIG, result["result"]["config"])
+            self.assertEqual({**CONFIG, "notesVersion": "0.22.0"}, result["result"]["config"])
 
 
 if __name__ == "__main__":

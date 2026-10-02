@@ -1,4 +1,4 @@
-# Company Workspace — Claude Code 업무 화면 0.23.1
+# Company Workspace — Claude Code 업무 화면 0.23.2
 
 기존 Claude Code를 Windows 앱 화면에서 사용하는 도구입니다. 터미널 명령이나 `cd` 대신 업무 폴더를 선택하고, 질문·첨부·승인·결과 확인을 화면에서 진행합니다. 앱 전용 로그인은 없으며 AI 업무에는 현재 Windows 사용자의 기존 Claude Code와 인증을 사용합니다.
 
@@ -85,7 +85,7 @@ X로 창을 숨겨도 트레이가 정상 동작 중이면 서버·Claude 작업
 Windows 10/11 x64, Windows PowerShell, .NET Framework 4.6.2 이상, **WebView2 Evergreen Runtime**, **이미 설치된 Python 3.11 이상**이 필요합니다. VBS 방식은 Windows Script Host도 필요합니다. EXE와 VBS 모두 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.
 
 1. 받은 ZIP을 새 폴더에 압축 해제합니다.
-2. EXE 묶음은 `Company-Workspace-0.23.1.exe`, VBS 묶음은 `Company-Workspace.vbs`를 실행합니다.
+2. EXE 묶음은 `Company-Workspace-0.23.2.exe`, VBS 묶음은 `Company-Workspace.vbs`를 실행합니다.
 3. **새 업무**에서 폴더를 선택하고 작업 위치를 확인한 뒤 요청을 입력합니다.
 
 새 업무의 기본 위치는 Windows가 알려 준 실제 **바탕화면 아래 Company Workspace**입니다. 기존 폴더를 선택하거나 저장 위치를 바꿀 수 있습니다. 기존 업무 폴더와 Claude 설정을 자동으로 이동하지 않습니다.
@@ -189,6 +189,6 @@ Ctrl+S로 보관한 입력은 같은 업무에서 입력창이 비어 있을 때
 
 ## 확인 범위
 
-이 문서는 0.23.1 사용법과 구현 범위입니다. 소스 변경만으로 배포 파일이 갱신되거나 모든 회사 PC에서 검증이 끝난 것은 아닙니다. 0.23.1 빌드·실제 실행·공개 배포 결과는 별도 검증 기록으로 확인해야 합니다. 이전 버전의 검증 기록은 그 버전에 대한 기록으로 유지합니다.
+이 문서는 0.23.2 사용법과 구현 범위입니다. 소스 변경만으로 배포 파일이 갱신되거나 모든 회사 PC에서 검증이 끝난 것은 아닙니다. 0.23.2 빌드·실제 실행·공개 배포 결과는 별도 검증 기록으로 확인해야 합니다. 이전 버전의 검증 기록은 그 버전에 대한 기록으로 유지합니다.
 
 사내 배포 담당자는 [GitLab 배포 도구 안내](WORKSPACE_GITLAB_PUBLISHER.md)에 따라 소스 수정 없이 사내 배포본을 만들 수 있습니다. 일반 사용자는 제공받은 사내 ZIP을 처음 한 번 실행한 뒤 설정의 앱 업데이트를 사용합니다.

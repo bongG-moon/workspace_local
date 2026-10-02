@@ -5,13 +5,13 @@ import json
 from pathlib import Path
 
 from .core import Publisher
-from .config import PublisherError
+from .config import PublisherError, normalize
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Company Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish',
+    parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish', 'deploy', 'notes',
                                           'sdk-status', 'sdk-import', 'sdk-download'))
     parser.add_argument('--file', type=Path, help='sdk-import에서 선택할 사내의 .nupkg 파일')
     parser.add_argument('--url', help='sdk-download의 선택적 사내 HTTPS 주소. 생략하면 고정된 NuGet 주소 사용. 저장하지 않음')
@@ -44,20 +44,13 @@ def main(argv=None):
                 print('Download ZIP 모드: Git 없이 빌드·게시할 수 있습니다. Git 소스 반영은 생략합니다.')
             elif not config['releaseTag']:
                 config['releaseTag'] = source['releaseTag']
-            fields = [('baseUrl', 'GitLab HTTPS 주소'), ('projectId', '프로젝트 숫자 ID')]
-            if not archive:
-                fields += [('remoteName', '사내 원격 이름(origin 사용 안 함)'),
-                           ('remoteUrl', '사내 저장소 SSH 주소(소스 반영을 생략하면 비워 둠)'),
-                           ('releaseTag', '함께 반영할 릴리스 태그')]
-            fields += [('tokenKind', '토큰 종류 deploy 또는 job'), ('title', '변경 안내 제목'), ('notes', '변경 안내')]
-            for key, label in fields:
-                entered = input(f"{label} [{config[key]}]: ").strip()
-                if entered:
-                    config[key] = entered
-            origins = input('추가 다운로드 허용 HTTPS 출처(쉼표로 구분, 없으면 Enter): ').strip()
-            if origins:
-                config['allowedDownloadOrigins'] = [value.strip() for value in origins.split(',') if value.strip()]
+            config['baseUrl'] = input(f"사내 GitLab HTTPS 서버 주소 [{config['baseUrl']}]: ").strip() or config['baseUrl']
+            config['projectId'] = input(f"숫자 Project ID [{config['projectId']}]: ").strip() or config['projectId']
+            config = normalize(config)
+            print('변경 내용은 소스의 배포 기록에서 자동으로 채웠습니다. 편집은 배포 창에서 할 수 있습니다.')
             result = publisher.save_config(config)
+        elif args.action == 'notes':
+            result = publisher.release_notes()
         elif args.action == 'status':
             result = publisher.inspect_source()
         elif args.action == 'check':
@@ -72,11 +65,14 @@ def main(argv=None):
         elif args.action == 'build':
             result = publisher.build(config)
         else:
-            result = publisher.load_last_build(config)
-            if result is None:
-                raise PublisherError('먼저 build 명령으로 배포 파일을 만들어 주세요.')
             token = getpass.getpass('게시용 토큰(저장하지 않음): ')
             try:
+                if not token.strip():
+                    raise PublisherError('게시용 토큰을 입력해 주세요.')
+                result = (publisher.prepare_deploy(config) if args.action == 'deploy'
+                          else publisher.load_last_build(config))
+                if result is None:
+                    raise PublisherError('먼저 build 명령으로 배포 파일을 만들어 주세요.')
                 result = publisher.publish(config, result, token, token_kind=config['tokenKind'])
             finally:
                 token = ''

@@ -16,7 +16,7 @@ class PublisherError(ValueError):
 
 DEFAULTS = {'schema': 1, 'baseUrl': '', 'projectId': '', 'remoteName': 'intranet',
             'remoteUrl': '', 'releaseTag': '', 'title': '', 'notes': '',
-            'allowedDownloadOrigins': [], 'tokenKind': 'deploy'}
+            'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': ''}
 VERSION = re.compile(r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z')
 
 
@@ -70,17 +70,19 @@ def normalize(config, *, require_target=True):
     if type(value['schema']) is not int or value['schema'] != 1:
         raise PublisherError('지원하지 않는 게시 설정 버전입니다.')
     for key, limit in [('baseUrl', 2048), ('projectId', 20), ('remoteName', 80), ('remoteUrl', 2048),
-                       ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20)]:
+                       ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20)]:
         if not isinstance(value[key], str) or len(value[key].encode('utf-8')) > limit or '\x00' in value[key]:
             raise PublisherError('게시 설정에 너무 길거나 올바르지 않은 값이 있습니다.')
-    for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title'):
+    for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title', 'notesVersion'):
         value[key] = value[key].strip()
     if require_target or value['baseUrl']:
         value['baseUrl'] = https_base(value['baseUrl'])
     if (require_target or value['projectId']) and not re.fullmatch(r'[1-9][0-9]{0,19}', value['projectId']):
         raise PublisherError('GitLab 프로젝트 ID에 숫자를 입력해 주세요.')
-    if value['tokenKind'] not in {'deploy', 'job'}:
-        raise PublisherError('게시 토큰 종류는 Deploy Token 또는 CI Job Token이어야 합니다.')
+    if value['notesVersion']:
+        checked_version(value['notesVersion'])
+    if value['tokenKind'] not in {'auto', 'access', 'deploy', 'job'}:
+        raise PublisherError('게시 토큰 종류는 자동 감지, Access Token, Deploy Token 또는 CI Job Token이어야 합니다.')
     value['allowedDownloadOrigins'] = list(dict.fromkeys(https_base(item, origin_only=True) for item in origins))
     return value
 

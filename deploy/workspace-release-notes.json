@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "currentVersion": "0.23.2",
+  "releases": [
+    {
+      "version": "0.23.2",
+      "title": "Company Workspace 0.23.2 — 간편한 사내 배포",
+      "notes": "- 사내 GitLab HTTPS 서버 주소, 숫자 프로젝트 ID, 게시 토큰 세 가지를 입력해 배포를 준비합니다.\n- glpat-로 시작하는 Access Token을 자동으로 인식하고, 토큰 종류에 맞는 인증 방식으로 게시합니다.\n- 소스 ZIP에 포함된 현재 버전의 변경 내용과 이전 릴리스 기록을 외부 접속 없이 불러옵니다. 게시 전에 제목과 변경 내용을 수정할 수 있습니다.\n- 게시를 다시 시도할 때 이미 만든 배포 파일을 검증해 같은 파일로 이어서 게시합니다.\n- GitHub Code → Download ZIP 반입, SDK 준비, EXE/VBS 빌드와 GitLab 패키지 업데이트를 이어서 지원합니다."
+    },
+    {
+      "version": "0.23.1",
+      "title": "Company Workspace 0.23.1 — Download ZIP으로 사내 배포",
+      "notes": "- GitHub Code → Download ZIP으로 받은 소스를 Git 설치나 .git 복원 없이 사내에서 빌드하고 게시합니다.\n- 소스 ZIP에는 완성된 EXE·DLL·WebView2 SDK 패키지를 넣지 않습니다. 사내 빌드 PC에서 EXE/VBS 배포본을 만듭니다.\n- SDK 상태를 확인하고 승인된 파일 선택 또는 명시적 다운로드로 준비합니다. 고정된 SDK 버전과 SHA256을 확인합니다.\n- 소스 파일의 누락·변경·추가 여부와 빌드 전후 체크섬을 확인합니다. Git 이력이 없는 ZIP에서는 Git 소스 반영만 생략합니다."
+    },
+    {
+      "version": "0.23.0",
+      "title": "Company Workspace 0.23.0 — 사내 GitLab 배포와 업데이트",
+      "notes": "- Python 배포 도구에서 사내 Git 저장소 반영, 별도 폴더의 EXE/VBS 빌드와 GitLab Generic Package 게시를 진행합니다.\n- 배포 파일의 인증 없는 다운로드와 체크섬을 확인한 뒤 최신 버전과 변경 내용을 게시합니다.\n- 게시 실패 후 배포 창을 다시 열어도 직전 빌드를 검증해 불러오고 같은 파일로 재시도할 수 있습니다.\n- 사내 배포본은 지정된 GitLab에서 업데이트를 받습니다. 사용자 앱에 게시 토큰이나 SSH 개인키를 포함하지 않으며 기존 공개 배포본의 GitHub 업데이트를 유지합니다."
+    }
+  ]
+}

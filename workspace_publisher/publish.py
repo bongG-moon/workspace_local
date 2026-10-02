@@ -27,6 +27,53 @@ MAX_CHANNEL = 256 * 1024
 MAX_RESPONSE = 64 * 1024
 
 
+def resolve_token_kind(token, token_kind='auto'):
+    """Choose a header without persisting or displaying the credential.
+
+    Older publisher settings defaulted to deploy even for glpat- access tokens.
+    Recognize that prefix for both automatic and legacy deploy selections.
+    Servers with a custom access-token prefix can select access explicitly.
+    """
+    if (not isinstance(token_kind, str) or token_kind not in {'auto', 'access', 'deploy', 'job'} or not isinstance(token, str)
+            or not 1 <= len(token) <= 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token)):
+        raise PublisherError('게시용 Access Token, Deploy Token 또는 CI Job Token을 입력해 주세요. 토큰은 저장하지 않습니다.')
+    if token_kind in {'auto', 'deploy'} and token.startswith('glpat-'):
+        return 'access'
+    return 'deploy' if token_kind == 'auto' else token_kind
+
+
+def _status_text(status):
+    return f'HTTP {status}' if type(status) is int else 'HTTP 오류'
+
+
+def _upload_error(status, token_kind, *, channel=False):
+    reason = {
+        401: '인증이 거절되었습니다. 토큰의 종류·만료·취소 여부를 확인해 주세요.',
+        403: '게시 권한이 거절되었습니다. 토큰 권한과 대상 프로젝트의 패키지 게시 권한을 확인해 주세요.',
+        404: '프로젝트나 게시 주소를 찾지 못했거나 접근 권한 때문에 숨겨졌습니다. HTTPS 서버 주소·숫자 프로젝트 ID·대상 프로젝트 권한을 확인해 주세요.',
+    }.get(status, '패키지 게시 요청이 거절되었습니다. 서버의 패키지 정책을 확인해 주세요.')
+    permissions = {
+        'access': 'Access Token에는 api 범위와 대상 프로젝트의 패키지 게시 권한이 필요합니다.',
+        'deploy': 'Deploy Token에는 대상 프로젝트 또는 그룹의 write_package_registry 범위가 필요합니다.',
+        'job': 'CI Job Token에는 실행 중인 작업의 대상 프로젝트 접근 권한이 필요합니다. 다른 프로젝트라면 Job Token 허용 목록도 확인해 주세요.',
+    }[token_kind]
+    suffix = '게시한 버전 파일은 유지했습니다.' if channel else '업데이트 채널은 변경하지 않았습니다.'
+    if channel and status not in {401, 403, 404}:
+        suffix += ' 중복 파일 정책에 막혔다면 관리자에게 company-workspace-channel / 0.0.0 / latest.json만 확인해 달라고 요청해 주세요.'
+    target = '채널 파일 갱신' if channel else '버전 파일 게시'
+    return PublisherError(f'{target}에 실패했습니다 ({_status_text(status)}). {reason} {permissions} '
+                          'write_registry는 컨테이너 레지스트리용이며 Generic Package 게시 권한을 대신하지 않습니다. ' + suffix)
+
+
+def _read_error(status, context):
+    reason = {
+        401: '서버가 인증을 요구합니다. 앱은 토큰 없이 업데이트를 읽으므로 패키지의 익명 읽기 허용이 필요합니다.',
+        403: '인증 없는 읽기가 거절되었습니다. 프로젝트와 패키지의 익명 읽기 정책을 확인해 주세요.',
+        404: '파일이나 프로젝트를 찾지 못했거나 접근 권한 때문에 숨겨졌습니다. HTTPS 서버 주소·숫자 프로젝트 ID·익명 읽기 권한을 확인해 주세요.',
+    }.get(status, '서버 응답과 패키지의 익명 읽기 권한을 확인해 주세요.')
+    return PublisherError(f'{context} ({_status_text(status)}). {reason}')
+
+
 @dataclass
 class Response:
     status: int
@@ -158,9 +205,9 @@ def connection(config, *, transport=None, cancel=None):
     transport = transport or HTTPSClient(source['allowedDownloadOrigins'])
     response = transport('GET', endpoint(config, '0.0.0', 'latest.json', channel=True), max_bytes=MAX_CHANNEL, cancel=cancel)
     if response.status == 404:
-        return {'ok': True, 'published': False, 'message': 'GitLab에 연결했습니다. 아직 채널 파일이 없거나 익명 읽기가 허용되지 않았습니다. 게시 단계에서 익명 다운로드를 반드시 확인합니다.'}
+        return {'ok': True, 'published': False, 'message': 'GitLab에서 HTTP 404를 받았습니다. 아직 채널 파일이 없거나 익명 읽기가 허용되지 않았을 수 있습니다. HTTPS 서버 주소와 숫자 프로젝트 ID도 확인해 주세요. 게시 단계에서 익명 다운로드를 반드시 확인합니다.'}
     if response.status != 200:
-        raise PublisherError('앱에서 인증 없이 업데이트를 읽을 수 없습니다. GitLab 패키지의 익명 읽기 권한을 확인해 주세요.')
+        raise _read_error(response.status, '앱에서 인증 없이 업데이트를 읽을 수 없습니다')
     try:
         value = json.loads(response.body)
         parse_manifest(value, source_from_config(source))
@@ -169,18 +216,17 @@ def connection(config, *, transport=None, cancel=None):
     return {'ok': True, 'published': True, 'message': '앱과 같은 익명 읽기 방식으로 기존 업데이트 채널을 확인했습니다.'}
 
 
-def publish(config, result, token, *, token_kind='deploy', transport=None, emit=lambda event: None, cancel=None):
+def publish(config, result, token, *, token_kind='auto', transport=None, emit=lambda event: None, cancel=None):
     active(cancel)
     source = runtime_config(config)
-    if token_kind not in {'deploy', 'job'} or not isinstance(token, str) or not 1 <= len(token) <= 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
-        raise PublisherError('게시용 Deploy Token 또는 CI Job Token을 입력해 주세요. 토큰은 저장하지 않습니다.')
+    token_kind = resolve_token_kind(token, token_kind)
     version = checked_version(result.get('version'))
     files = verify_files(Path(result['directory']), version, source)
     expected = [{key: row[key] for key in ('name', 'size', 'sha256')} for row in result.get('files', [])]
     if expected != [{key: row[key] for key in ('name', 'size', 'sha256')} for row in files]:
         raise PublisherError('빌드 이후 배포 파일이 바뀌었습니다. 다시 빌드한 결과를 게시해 주세요.')
     transport = transport or HTTPSClient(source['allowedDownloadOrigins'])
-    header = {'DEPLOY-TOKEN' if token_kind == 'deploy' else 'JOB-TOKEN': token,
+    header = {{'access': 'PRIVATE-TOKEN', 'deploy': 'DEPLOY-TOKEN', 'job': 'JOB-TOKEN'}[token_kind]: token,
               'Content-Type': 'application/octet-stream'}
     for file in files:
         active(cancel)
@@ -192,16 +238,18 @@ def publish(config, result, token, *, token_kind='deploy', transport=None, emit=
             emit({'kind': 'info', 'message': file['name'] + ': 같은 파일이 이미 있어 재사용합니다.'})
             continue
         if existing.status != 404:
-            raise PublisherError('패키지의 익명 읽기 권한을 확인하지 못했습니다. 공개 읽기와 게시 토큰 권한을 확인해 주세요.')
+            raise _read_error(existing.status, '패키지의 익명 읽기 권한을 확인하지 못했습니다. 업데이트 채널은 변경하지 않았습니다')
         emit({'kind': 'progress', 'message': file['name'] + ' 게시 중'})
         raw = _file(Path(file['path']))
         if hashlib.sha256(raw).hexdigest() != file['sha256']:
             raise PublisherError('게시 직전에 파일이 바뀌었습니다. 다시 빌드해 주세요.')
         uploaded = transport('PUT', url, headers=header, data=raw, max_bytes=MAX_RESPONSE, cancel=cancel)
         if uploaded.status not in {200, 201}:
-            raise PublisherError('버전 파일을 게시하지 못했습니다. 토큰의 write_package_registry 권한과 패키지 정책을 확인해 주세요. 채널은 변경하지 않았습니다.')
+            raise _upload_error(uploaded.status, token_kind)
         verified = transport('GET', url, max_bytes=MAX_FILE, cancel=cancel)
-        if verified.status != 200 or len(verified.body) != file['size'] or hashlib.sha256(verified.body).hexdigest() != file['sha256']:
+        if verified.status != 200:
+            raise _read_error(verified.status, '게시한 버전 파일의 익명 다운로드를 확인하지 못했습니다. 업데이트 채널은 변경하지 않았습니다')
+        if len(verified.body) != file['size'] or hashlib.sha256(verified.body).hexdigest() != file['sha256']:
             raise PublisherError('게시한 버전 파일을 앱과 같은 익명 다운로드로 검증하지 못했습니다. 채널은 변경하지 않았습니다.')
     active(cancel)
     manifest = {'schema': 1, 'channel': 'stable', 'version': version,
@@ -215,7 +263,7 @@ def publish(config, result, token, *, token_kind='deploy', transport=None, emit=
     channel_url = endpoint(config, version, 'latest.json', channel=True)
     previous = transport('GET', channel_url, max_bytes=MAX_CHANNEL, cancel=cancel)
     if previous.status not in {200, 404}:
-        raise PublisherError('기존 채널을 확인하지 못했습니다. 게시한 버전 파일은 유지했고 채널은 변경하지 않았습니다.')
+        raise _read_error(previous.status, '기존 채널을 확인하지 못했습니다. 게시한 버전 파일은 유지했고 채널은 변경하지 않았습니다')
     if previous.status == 200:
         try:
             old = json.loads(previous.body)
@@ -238,9 +286,11 @@ def publish(config, result, token, *, token_kind='deploy', transport=None, emit=
     emit({'kind': 'progress', 'message': '모든 버전 파일을 검증했습니다. 마지막으로 업데이트 채널을 게시합니다.'})
     uploaded = transport('PUT', channel_url, headers=header, data=body, max_bytes=MAX_RESPONSE, cancel=cancel)
     if uploaded.status not in {200, 201}:
-        raise PublisherError('채널 파일 갱신이 거절되었습니다. 관리자에게 company-workspace-channel / 0.0.0 / latest.json만 정리해 달라고 요청한 뒤 재시도하세요. 버전 파일은 삭제하지 않습니다.')
+        raise _upload_error(uploaded.status, token_kind, channel=True)
     actual = transport('GET', channel_url, max_bytes=MAX_CHANNEL, cancel=cancel)
-    if actual.status != 200 or actual.body != body:
+    if actual.status != 200:
+        raise _read_error(actual.status, '게시한 채널의 익명 다운로드를 확인하지 못했습니다. 성공으로 처리하지 않았습니다')
+    if actual.body != body:
         raise PublisherError('채널을 게시했지만 앱이 읽는 내용이 새 내용과 다릅니다. 관리자가 company-workspace-channel / 0.0.0 / latest.json의 중복 파일만 정리한 뒤 재시도하세요. 성공으로 처리하지 않았습니다.')
     return {'version': version, 'url': channel_url, 'verified': True,
             'message': '버전 파일과 최신 채널의 익명 다운로드·체크섬 확인을 마쳤습니다. 사내 사용자 PC에서도 최초 실행을 확인해 주세요.'}

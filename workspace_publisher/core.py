@@ -14,7 +14,7 @@ import uuid
 import zipfile
 
 from . import git_sync, source_archive
-from .config import PublisherError, active, atomic_json, normalize, runtime_config, safe_path
+from .config import PublisherError, active, atomic_json, checked_version, normalize, runtime_config, safe_path
 from . import publish as publishing
 
 
@@ -31,18 +31,70 @@ class Publisher:
         self.emit({'kind': 'progress', 'message': message})
 
     def load_config(self):
+        value = normalize({}, require_target=False)
         if not self.config_path.exists():
-            return normalize({}, require_target=False)
+            return self._note_defaults(value)
         try:
             path = safe_path(self.config_path)
             if path.stat().st_size > 65536:
                 raise ValueError()
-            return normalize(json.loads(path.read_text(encoding='utf-8-sig')), require_target=False)
+            value = normalize(json.loads(path.read_text(encoding='utf-8-sig')), require_target=False)
         except (OSError, ValueError, TypeError) as exc:
             raise PublisherError('로컬 게시 설정을 읽지 못했습니다. 게시 창에서 설정을 다시 저장해 주세요. 토큰은 저장하지 않습니다.') from exc
+        return self._note_defaults(value)
+
+    def current_version(self):
+        """Read just the local version; a fresh build still verifies all source."""
+        try:
+            path = safe_path(self.repo_root / 'local_app/server.py')
+            if path.stat().st_size > 1024 * 1024:
+                raise ValueError()
+            matches = re.findall(r'^WORKSPACE_VERSION = [\"\']([^\"\']+)[\"\']\s*$',
+                                 path.read_text(encoding='utf-8-sig'), re.M)
+            if len(matches) != 1:
+                raise ValueError()
+            return checked_version(matches[0])
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise PublisherError('현재 소스의 버전을 확인하지 못했습니다. 새 소스 ZIP을 확인해 주세요.') from exc
+
+    def release_notes(self):
+        from .release_notes import load_notes
+        return load_notes(self.repo_root, self.current_version())
+
+    def _note_defaults(self, value):
+        # Settings/artifact recovery remains available even if the source or
+        # its bundled notes need repair. The GUI surfaces that notice separately.
+        try:
+            current = self.current_version()
+            old_version = value.get('notesVersion', '')
+            if not old_version:
+                tag = value.get('releaseTag', '').removeprefix('v')
+                if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', tag):
+                    old_version = tag
+                else:
+                    saved = self._owned(self.work_root / 'last-build.json')
+                    if saved.exists() and saved.stat().st_size <= 256 * 1024:
+                        try:
+                            old_version = checked_version(json.loads(saved.read_text(encoding='utf-8'))['version'])
+                        except (OSError, ValueError, KeyError, TypeError):
+                            pass
+            if old_version == current:
+                return {**value, 'notesVersion': current}
+            if not old_version and (value['title'] or value['notes']):
+                value['notesVersion'] = current
+                return value  # Preserve explicit notes saved by older versions.
+            defaults = self.release_notes()
+            return {**value, 'title': defaults['title'], 'notes': defaults['notes'], 'notesVersion': current}
+        except (PublisherError, OSError):
+            return value
 
     def save_config(self, config):
         value = normalize(config, require_target=False)
+        if not value.get('notesVersion'):
+            try:
+                value['notesVersion'] = self.current_version()
+            except PublisherError:
+                pass  # A verified completed build may still be republished.
         # Refuse accidental settings commits in a differently configured checkout.
         if self._has_git():
             git_sync.git(self.repo_root, 'check-ignore', '--quiet', '--', 'build/publisher/config.json')
@@ -265,7 +317,7 @@ class Publisher:
         self._info('소스를 바꾸지 않고 배포 파일 세 개를 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
         return result
 
-    def _validated_build(self, config, build_result):
+    def _validated_build_metadata(self, build_result):
         try:
             legacy_fields = {'version', 'commit', 'directory', 'sourceRoot', 'files', 'runtimeConfig'}
             if (not isinstance(build_result, dict)
@@ -288,6 +340,20 @@ class Publisher:
             saved_path = self._owned(stage / 'build-result.json')
             if saved_path.stat().st_size > 256 * 1024 or json.loads(saved_path.read_text(encoding='utf-8')) != build_result:
                 raise ValueError()
+            checked_version(build_result['version'])
+            from local_app.update_source import source_from_config
+            source = source_from_config(build_result['runtimeConfig'])
+            if source.provider != 'gitlab' or source.config != build_result['runtimeConfig']:
+                raise ValueError()
+            if not isinstance(build_result['files'], list) or len(build_result['files']) != 3:
+                raise ValueError()
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise PublisherError('이전 빌드 기록을 확인하지 못했습니다. 원래 빌드 폴더와 기록을 복원하거나 새 소스 폴더에서 진행해 주세요.') from exc
+        return directory
+
+    def _validated_build(self, config, build_result):
+        directory = self._validated_build_metadata(build_result)
+        try:
             expected_source = runtime_config(config)
             if build_result['runtimeConfig'] != expected_source:
                 raise ValueError()
@@ -314,9 +380,43 @@ class Publisher:
         active(cancel)
         return recovered
 
-    def publish(self, config, build_result, token, token_kind='deploy', *, cancel=None):
+    def publish(self, config, build_result, token, token_kind='auto', *, cancel=None):
         active(cancel)
         config = normalize(config)
         self._validated_build(config, build_result)
         return publishing.publish(config, build_result, token, token_kind=token_kind,
                                   transport=self.transport, emit=self.emit, cancel=cancel)
+
+    def prepare_deploy(self, config, *, build_result=None, cancel=None):
+        """Reuse verified bytes on retry; build when this version has no artifact."""
+        active(cancel)
+        config = normalize(config)
+        candidate = build_result
+        if candidate is None:
+            saved = self._owned(self.work_root / 'last-build.json')
+            if saved.exists():
+                # Inspect only bounded metadata here. Applicable artifacts are
+                # always fully verified before reuse, never silently rebuilt if
+                # corrupt. A different target/version gets a separate new build.
+                try:
+                    if saved.stat().st_size > 256 * 1024:
+                        raise ValueError()
+                    candidate = json.loads(saved.read_text(encoding='utf-8'))
+                    if not isinstance(candidate, dict):
+                        raise ValueError()
+                except (OSError, ValueError, TypeError) as exc:
+                    raise PublisherError('이전 빌드 기록을 확인하지 못했습니다. 원래 기록을 복원하거나 새 소스 폴더에서 진행해 주세요.') from exc
+        if candidate is not None:
+            self._validated_build_metadata(candidate)
+        try:
+            version = self.current_version()
+        except PublisherError:
+            if candidate is None:
+                raise
+            return self._validated_build(config, candidate)
+        if (isinstance(candidate, dict) and candidate.get('version') == version
+                and candidate.get('runtimeConfig') == runtime_config(config)):
+            checked = self._validated_build(config, candidate)
+            self._info('이전에 만든 배포 파일을 확인했습니다. 같은 파일로 게시를 이어갑니다.')
+            return checked
+        return self.build(config, cancel=cancel)
