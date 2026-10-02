@@ -43,8 +43,8 @@ $files = @(
     'local_app\web\startup-health.js', 'local_app\web\startup-health.css',
     'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\layout.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
     'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
-    'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py',
-    'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
+    'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py', 'local_app\progress_log.py',
+    'local_app\web\progress-view.js', 'local_app\web\progress-view.css', 'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
     'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py',
     'local_app\app_updates.py', 'local_app\update_install.py', 'local_app\update_source.py',
     'local_app\web\app-updates.js', 'local_app\web\app-updates.css',
@@ -73,7 +73,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.4-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.5-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

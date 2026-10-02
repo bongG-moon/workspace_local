@@ -717,6 +717,7 @@ class ClaudeSession:
                          "session_id": self.session_id or "", "parent_tool_use_id": None})
         except Exception as exc:
             if not self.stopping and not self.closed:
+                self._progress_error(str(exc))
                 self._interrupt_executions()
                 self.emit("error", {"message": str(exc)})
             self.close()
@@ -745,10 +746,12 @@ class ClaudeSession:
                     self.handle(data)
         except Exception as exc:
             if not self.closed and not self.stopping:
+                self._progress_error(str(exc))
                 self._interrupt_executions()
                 self.emit("error", {"message": str(exc)})
         finally:
             if not self.closed and not self.stopping:
+                self._progress_error('CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요.')
                 self._interrupt_executions()
                 self.emit("error", {"message": "CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요."})
             self.close()
@@ -844,6 +847,14 @@ class ClaudeSession:
                     capture.interrupt(closed=True)
             return capture
 
+    def _progress_error(self, message):
+        capture = getattr(self, '_progress_capture_state', None)
+        if capture is not None and self.busy:
+            try:
+                capture.error(message)
+            except Exception:
+                pass
+
     def _interrupt_executions(self, *, closed=False, activity=True):
         if closed:
             self._execution_closed = True
@@ -851,12 +862,26 @@ class ClaudeSession:
         if capture is not None:
             capture.interrupt(closed=closed)
         if activity:
+            progress = getattr(self, '_progress_capture_state', None)
+            if progress is not None:
+                progress.finish()
             self._tool_activity_finished = True
             capture = getattr(self, '_tool_activity_state', None)
             if capture is not None:
                 capture.interrupt()
 
     def _begin_tool_activity_turn(self):
+        progress = getattr(self, '_progress_capture_state', None)
+        if progress is not None:
+            progress.finish()
+        from .progress_log import ProgressCapture
+        from collections import OrderedDict
+        tombstones = getattr(self, '_progress_tombstones', None)
+        if tombstones is None:
+            tombstones = self._progress_tombstones = OrderedDict()
+        self._progress_capture_state = ProgressCapture(
+            lambda value: self.emit('progress_record', value),
+            run_id=getattr(self, '_tool_activity_run_id', None), tombstones=tombstones)
         old = getattr(self, '_tool_activity_state', None)
         if old is not None:
             old.interrupt()
@@ -915,6 +940,14 @@ class ClaudeSession:
                     return
                 self._fork_confirmed = True
                 self.resume_id = self._fork_target
+        # Detail projection is tied to a submitted root request. Preparing a
+        # connection or changing its settings must not create activity history.
+        progress = getattr(self, '_progress_capture_state', None)
+        if progress is not None and self.busy and not self.stopping:
+            try:
+                progress.handle(data)
+            except Exception:
+                pass  # Recording detail must never interrupt the CLI reader.
         if kind == "control_response":
             response = data.get("response", {})
             if response.get("request_id") == self.initialize_id:

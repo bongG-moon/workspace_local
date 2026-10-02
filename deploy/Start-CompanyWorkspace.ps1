@@ -155,7 +155,7 @@ function Get-WorkspacePythonExecutable {
     $probeCode = @'
 import json, sys
 result = {"executable": sys.executable, "version": list(sys.version_info[:3]), "modules": True, "missingModules": []}
-for name in ("http.server", "ssl", "ctypes", "subprocess", "pathlib", "threading", "zipfile", "urllib.request"):
+for name in ("http.server", "ssl", "ctypes", "subprocess", "pathlib", "threading", "zipfile", "urllib.request", "sqlite3"):
     try:
         __import__(name)
     except Exception:
@@ -252,7 +252,7 @@ print("WORKSPACE_PYTHON_V1:" + json.dumps(result, ensure_ascii=True, separators=
                         if ($parts[0] -lt 3 -or ($parts[0] -eq 3 -and $parts[1] -lt 11)) { $status = 'old_version' }
                         elseif (-not $reply.modules) {
                             $status = 'missing_module'
-                            $missingModules = @($reply.missingModules | Where-Object { $_ -is [string] -and $_ -in @('http.server','ssl','ctypes','subprocess','pathlib','threading','zipfile','urllib.request') } | Select-Object -Unique)
+                            $missingModules = @($reply.missingModules | Where-Object { $_ -is [string] -and $_ -in @('http.server','ssl','ctypes','subprocess','pathlib','threading','zipfile','urllib.request','sqlite3') } | Select-Object -Unique)
                         }
                         else { $status = 'accepted' }
                     } catch { $status = 'invalid_response' }
@@ -387,7 +387,7 @@ try {
     Assert-WorkspaceNormalProcess -Context $context
     $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.4' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.5' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -413,7 +413,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.4'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.5'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -428,7 +428,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.4'
+        $targetVersion = [version]'0.23.5'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $upgradeNeeded = $runningVersion -lt $targetVersion
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and

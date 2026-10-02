@@ -21,6 +21,7 @@
   <script src="/upgrade-handoff.js" defer></script>
   <link rel="stylesheet" href="/app-updates.css">
   <script src="/app-updates.js" defer></script>
+  <script src="/progress-view.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/path-picker.js" defer></script>
   <script src="/rich-content.js" defer></script>
@@ -29,6 +30,7 @@
   <link rel="stylesheet" href="/rich-content.css">
   <link rel="stylesheet" href="/execution-view.css">
   <link rel="stylesheet" href="/tool-activity.css">
+  <link rel="stylesheet" href="/progress-view.css">
   <script src="/rendering.js" defer></script>
   <script src="/attachments.js" defer></script>
   <script src="/workflow.js" defer></script>
@@ -83,7 +85,8 @@
       <div class="sidebar-label">최근 업무<span class="small-dot"></span></div>
       <nav id="sessions" class="session-list" aria-label="최근 업무"><p class="sidebar-empty">진행한 업무가 이곳에 모여요.</p></nav>
       <div class="sidebar-footer">
-        <button id="settings-open" class="nav-button" aria-label="설정" title="설정"><svg class="icon"><use href="#i-settings"/></svg><span>설정</span><span id="app-update-sidebar-badge" class="app-update-badge" aria-hidden="true" hidden>새 버전</span></button>
+        <button id="settings-open" class="nav-button" aria-label="설정" title="설정"><svg class="icon"><use href="#i-settings"/></svg><span>설정</span></button>
+        <button id="app-update-sidebar-badge" class="app-update-sidebar-button" type="button" aria-label="새 버전 업데이트" title="새 버전 업데이트" aria-haspopup="dialog" aria-controls="app-update-dialog" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 4v11m-4-4 4 4 4-4M5 17v3h14v-3"/></svg></button>
         <button id="shortcuts-open" class="nav-button" type="button" aria-label="단축키 안내" title="단축키 안내" aria-haspopup="dialog" aria-controls="shortcuts-dialog"><svg class="icon" aria-hidden="true"><use href="#i-keyboard"/></svg><span>단축키</span></button>
         <button id="help" class="nav-button" aria-label="사용 도움말" title="사용 도움말"><svg class="icon"><use href="#i-help"/></svg><span>사용 도움말</span></button>
       </div>
@@ -126,6 +129,7 @@
         <div id="branch-origin" class="branch-origin" hidden><span id="branch-origin-status"></span><button id="branch-source-open" class="text-button" type="button">원래 대화 보기 ↗</button></div>
         <div id="imported-context" class="imported-context" hidden><span id="imported-context-label"></span><button id="imported-continue" class="quiet-button" type="button">이 세션 연결하고 이어가기</button></div>
         <section id="conversation" class="conversation" aria-label="업무 대화" aria-live="polite" hidden></section>
+        <section id="progress-view" class="progress-view" hidden aria-label="진행 내용"></section>
         <div id="requests" class="requests" aria-live="assertive"></div>
         <div id="workspace-choice" class="requests" aria-live="polite" hidden></div>
         <div id="verification-status" class="verification-status" role="status" aria-live="polite" hidden></div>
@@ -168,7 +172,7 @@
         <div id="files" class="files"><div class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-doc"/></svg></div><strong>자료를 더해 보세요</strong><p>아래 ‘자료 추가’로 파일을 고르면<br>원하는 일을 바로 부탁할 수 있어요.</p></div></div>
       </section>
       <section id="results-panel" class="inspector-panel" role="tabpanel" aria-labelledby="results-tab" hidden><div class="result-intro"><h2>이번 요청의 결과</h2><p>이번 요청 전후에 확인한 파일 변경을<br>여기서 바로 확인하세요.</p></div><button id="changes-open" class="quiet-button changes-launch" type="button">파일 변경 비교</button><div id="results-list" class="results-list"></div><div id="empty-results" class="empty-files"><div class="empty-file-icon"><svg class="icon"><use href="#i-box"/></svg></div><strong>결과가 놓일 자리예요</strong><p>업무가 끝나면 새로 생기거나<br>달라진 파일을 모아 보여드릴게요.</p></div></section>
-      <div class="inspector-foot"><div class="inspector-tip"><span class="tip-icon"><svg class="icon"><use href="#i-spark"/></svg></span><p>다음 작업도 자연스럽게<br><strong>“이 내용을 조금 더 다듬어줘”</strong></p></div><details class="details"><summary>진행 기록 보기</summary><ol id="activity"></ol><p class="muted">실행 중 확인한 활동이 표시돼요.</p></details></div>
+      <div class="inspector-foot"><div class="inspector-tip"><span class="tip-icon"><svg class="icon"><use href="#i-spark"/></svg></span><p>다음 작업도 자연스럽게<br><strong>“이 내용을 조금 더 다듬어줘”</strong></p></div><button id="progress-open" class="text-button" type="button">진행 기록 보기</button></div>
     </aside>
     <button id="layout-backdrop" class="layout-backdrop" type="button" aria-label="펼친 패널 닫기" tabindex="-1" hidden></button>
   </div>

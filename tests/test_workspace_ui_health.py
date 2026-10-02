@@ -55,6 +55,17 @@ class UiHealthTests(unittest.TestCase):
                 frontend_row(event(**changes))
         self.assertFalse(self.log.path.exists())
 
+    def test_progress_load_failure_survives_restart_without_record_contents(self):
+        self.assertTrue(self.log.frontend(event(event='module', module='progress-view',
+            reason='missing-handler', missing=['progress-view'],
+            message='PRIVATE TOOL OUTPUT', records=[{'text': 'PRIVATE TOOL OUTPUT'}])))
+        restarted = UiHealthLog(self.state, '0.23.4')
+        row = restarted.rows[-1]
+        self.assertEqual(('progress-view', 'missing-handler', ['progress-view']),
+                         (row['module'], row['reason'], row['missing']))
+        self.assertNotIn('records', row)
+        self.assertNotIn('PRIVATE', self.log.path.read_text())
+
     def test_native_context_correlates_server_window_and_document(self):
         self.assertTrue(self.log.native({'type':'ready', 'pid':321, 'hwnd':456,
             'runtime':'154.0.123.5', 'url':'secret'}))

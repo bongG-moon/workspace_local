@@ -13,8 +13,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const nodes=new Map(),storage=new Map(),events=new Map(),windowEvents=new Map(),intervals=new Map();
 let now=1000000,nextTimer=1,reloads=0,storageFails=false;
 function node(id){if(!nodes.has(id))nodes.set(id,{id,hidden:false,textContent:'',dataset:{},disabled:false,onclick:null,tagName:'BUTTON',closest(){return this;}});return nodes.get(id);}
-const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls', 'input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','upgrade-handoff':'WorkspaceUpgrade','app-updates':'WorkspaceAppUpdates'};
-const controls=['new-chat','settings-open','shortcuts-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close','app-update-check','app-update-notes-open','app-update-install'];
+const modules={'path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls', 'input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','progress-view':'WorkspaceProgressView','upgrade-handoff':'WorkspaceUpgrade','app-updates':'WorkspaceAppUpdates'};
+const controls=['new-chat','settings-open','shortcuts-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close','app-update-check','app-update-notes-open','app-update-install','progress-open'];
 const posted=[],restores=[],directCalls=[];
 const context={assert,console,URL,URLSearchParams,Math,JSON,Object,Map,Set,Date:{now:()=>now},location:{href:'http://127.0.0.1:1234/',hash:'#token=TEST_AUTH_SECRET',reload:()=>reloads++},
  crypto:{randomUUID:()=> '12345678-abcd-1234-abcd-123456789abc'},
@@ -113,6 +113,38 @@ class WorkspaceStartupHealthFrontendTests(unittest.TestCase):
           }
           assert.equal(readReloads(),0);
         })()""")
+
+    def test_missing_progress_reader_blocks_only_its_control_and_never_reports_ready(self):
+        self.run_case(r"""(async()=>{
+          installAll();delete WorkspaceProgressView;health.attach(hooks);
+          fire('error',{target:{tagName:'SCRIPT',src:'/progress-view.js'}});
+          fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(health.snapshot().modules['progress-view'].reason,'resource-error');
+          assert.equal(JSON.stringify(health.snapshot().missing),JSON.stringify(['progress-view']));
+          assert.ok(!posted.some(row=>row.event==='startup'&&row.status==='ready'));
+          let blocked=0;fire('click',{target:node('progress-open'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.match(node('startup-health-text').textContent,/다시 열어/);
+          fire('click',{target:node('settings-open'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.equal(health.snapshot().modules.app.status,'ready');
+          globalThis.WorkspaceProgressView={};fire('load',{target:{tagName:'SCRIPT',src:'/progress-view.js'}});
+          assert.equal(health.snapshot().modules['progress-view'].status,'ready');
+          assert.equal(health.snapshot().missing.length,0);assert.equal(readReloads(),0);
+        })()""")
+
+    def test_progress_global_without_attached_open_handler_is_not_ready(self):
+        self.run_case(r"""(async()=>{
+          installAll();node('progress-open').onclick=null;health.attach(hooks);
+          fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(health.snapshot().modules['progress-view'].reason,'missing-handler');
+          let blocked=0;fire('click',{target:node('progress-open'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.equal(readReloads(),0);
+          node('progress-open').onclick=()=>{};health.check();
+          assert.equal(health.snapshot().modules['progress-view'].status,'ready');
+        })()""")
+
+    def test_progress_reader_loads_before_app_attaches_its_controls(self):
+        page = (ROOT / 'local_app/web/index.html').read_text(encoding='utf-8')
+        self.assertLess(page.index('/progress-view.js'), page.index('/app.js'))
 
     def test_resource_and_runtime_failure_records_are_sanitized_and_bounded(self):
         self.run_case(r"""(async()=>{

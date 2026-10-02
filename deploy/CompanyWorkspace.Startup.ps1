@@ -30,7 +30,7 @@ function ConvertTo-WorkspacePythonChecks {
     param([object[]] $Checks)
     $allowed = @('missing', 'unsupported_command', 'start_failed', 'exit_failed', 'timed_out',
         'invalid_response', 'old_version', 'missing_module', 'accepted', 'output_timeout', 'output_limit', 'not_found', 'environment_failed')
-    $modules = @('http.server', 'ssl', 'ctypes', 'subprocess', 'pathlib', 'threading', 'zipfile', 'urllib.request')
+    $modules = @('http.server', 'ssl', 'ctypes', 'subprocess', 'pathlib', 'threading', 'zipfile', 'urllib.request', 'sqlite3')
     $count = 0
     foreach ($check in $Checks) {
         if ($null -eq $check -or $count -ge 40) { continue }
@@ -68,7 +68,7 @@ function Write-WorkspacePythonDiagnostic {
         $null = [IO.Directory]::CreateDirectory($directory)
         if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         $path = Join-Path $directory ('python-check-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
-        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.23.4';
+        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.23.5';
             createdUtc=[DateTime]::UtcNow.ToString('o'); sourceRoot=[IO.Path]::GetFullPath($AppRoot);
             powershellVersion=$PSVersionTable.PSVersion.ToString(); attemptId=$AttemptId; code=('WS-' + $Code); checks=$clean }
         # Allowlisted metadata only: no stderr, wrapper/profile bodies, auth,
@@ -93,7 +93,7 @@ function Read-WorkspaceRecentPythonDiagnostic {
         foreach ($file in $files) {
             try {
                 $report = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.23.4' -or
+                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.23.5' -or
                     $report.sourceRoot -ne [IO.Path]::GetFullPath($AppRoot) -or $report.code -ne ('WS-' + $Code) -or $report.attemptId -ne $AttemptId) { continue }
                 return [pscustomobject]@{ path=$file.FullName; checks=@(ConvertTo-WorkspacePythonChecks -Checks $report.checks) }
             } catch {}

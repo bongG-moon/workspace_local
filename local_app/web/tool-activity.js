@@ -45,7 +45,10 @@ globalThis.WorkspaceToolActivity = (() => {
       const card=el("article",null,"message tool-activity-card"),detail=el("details",null,"tool-activity-detail"),summary=el("summary",null,"tool-activity-summary");
       const icon=el("span","≋","tool-activity-symbol"),title=el("span","도구·스킬 활동","tool-activity-title"),count=el("span",null,"tool-activity-count"),status=el("span",null,"tool-activity-group-state"),list=el("ol",null,"tool-activity-list");
       icon.setAttribute("aria-hidden","true");card.dataset.runId=run==="legacy"?"":run;summary.append(icon,title,count,status);detail.append(summary,list);card.append(detail);
-      group={run,card,detail,summary,count,status,list};groups.set(run,group);detail.ontoggle=()=>populate(group);place(card,run);
+      group={run,card,detail,summary,count,status,list};groups.set(run,group);detail.ontoggle=()=>{
+        if(detail.open&&globalThis.WorkspaceProgressView){detail.open=false;list.replaceChildren();globalThis.WorkspaceProgressView.open(run==="legacy"?null:run);}
+        else populate(group);
+      };place(card,run);
     }
     group.count.textContent=String(rows.length);
     const open=rows.filter(pending),errors=rows.filter(record=>record.state==="error"),unknown=rows.filter(record=>record.state==="interrupted");
@@ -60,7 +63,8 @@ globalThis.WorkspaceToolActivity = (() => {
     badge.hidden=true;button.hidden=true;status.title="";
     if(!current())return;
     const run=liveRun||(!["starting","running","approval","question"].includes(active.state)?active.lastRunId:null),rows=run?forRun(run):[];
-    if(rows.length){button.hidden=false;button.textContent=`활동 ${rows.length}`;button.setAttribute("aria-label",`이번 요청의 도구·스킬 활동 ${rows.length}개 보기`);button.onclick=()=>{
+    if(rows.length){button.hidden=false;button.textContent=globalThis.WorkspaceProgressView?"진행 내용":`활동 ${rows.length}`;button.setAttribute("aria-label","이번 요청의 진행 내용 보기");button.onclick=()=>{
+      if(current()&&globalThis.WorkspaceProgressView){globalThis.WorkspaceProgressView.open(run==="legacy"?null:run);return;}
       if(!current())return;const group=groups.get(run);if(!group)return;
       if(!group.card.parentElement&&!group.card.parent)place(group.card,run);
       group.detail.open=true;populate(group);group.summary.focus();group.card.scrollIntoView({block:"nearest",inline:"nearest"});

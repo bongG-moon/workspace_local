@@ -242,7 +242,7 @@ public static class WorkspaceTokenAudit
             result.status = "missing";
             return result;
         }
-        string code = "import sys\ntry:\n import http.server,ssl,ctypes,subprocess,pathlib,threading,zipfile,urllib.request\nexcept Exception:\n sys.exit(82)\nsys.exit(0 if sys.version_info >= (3,11) else 81)";
+        string code = "import sys\ntry:\n import http.server,ssl,ctypes,subprocess,pathlib,threading,zipfile,urllib.request,sqlite3\nexcept Exception:\n sys.exit(82)\nsys.exit(0 if sys.version_info >= (3,11) else 81)";
         string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(code));
         using (Process process = new Process())
         {

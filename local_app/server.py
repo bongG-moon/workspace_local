@@ -35,11 +35,12 @@ from .windows_process import powershell_path
 from .attention import AttentionNotifier, snapshot as attention_snapshot
 from .attachments import AttachmentStore, MAX_UPLOAD
 from .app_dispatch import DispatchController
+from .progress_log import ProgressStore
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.4"
+WORKSPACE_VERSION = "0.23.5"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -136,6 +137,7 @@ class LocalApp:
         self._viewed_until = 0
         self.attachment_store = AttachmentStore(state)
         self.file_diffs = FileDiffStore(state / 'file-changes')
+        self.progress_logs = ProgressStore(state / 'progress')
         self.error = None
         self.workspace_location_error = None
         self.managed_workspace_root = None
@@ -330,6 +332,7 @@ class LocalApp:
             "artifacts": list(item.get("artifacts", [])),
             "executions": list(item.get("executions", [])),
             "toolActivity": list(item.get("toolActivity", [])),
+            "progress": self.progress_logs.metadata(item['id']),
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
@@ -1005,7 +1008,7 @@ class LocalApp:
             item = self.sessions.get(sid)
             if item is None or item.get('bridge') is not bridge:
                 return
-            if kind == 'tool_activity' and (not getattr(bridge, '_tool_activity_run_id', None)
+            if kind in {'tool_activity', 'progress_record'} and (not getattr(bridge, '_tool_activity_run_id', None)
                     or bridge._tool_activity_run_id != item.get('lastRunId')):
                 return  # Connection preparation is not a submitted user turn.
             self.emit(sid, kind, data)
@@ -1042,6 +1045,24 @@ class LocalApp:
             if self.session_visibility.contains(sid):
                 return
             item = self.get(sid, _internal=True)
+            if kind == 'progress_record':
+                # Never relabel a late callback as the new request, and never
+                # retain detail in the normal history/event mirror.
+                if (not isinstance(data, dict) or not item.get('lastRunId')
+                        or data.get('runId') != item['lastRunId']
+                        or item.get('state') not in {'starting', 'running', 'approval', 'question'}):
+                    return
+                metadata = self.progress_logs.append(sid, data)
+                if metadata is None:
+                    return
+                item['seq'] += 1
+                # One pending metadata notification is enough. Coalescing keeps
+                # high-volume tools from evicting approvals or terminal events.
+                item['events'] = [event for event in item['events'] if event['type'] != 'progress_changed']
+                item['events'].append({'seq': item['seq'], 'type': 'progress_changed',
+                                       'data': {'runId': item['lastRunId'], 'progress': metadata}})
+                item['events'] = item['events'][-300:]
+                return
             if kind in {'request', 'choice'} or kind == 'status' and data.get('state') in {'starting', 'running'}:
                 self.upgrade.invalidate()
             if kind in {'connected', 'model_changed', 'effort_changed', 'permission_mode_changed', 'control_restore_changed'}:
@@ -1492,6 +1513,12 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(.15)
             if route.path == "/api/session":
                 return self.reply(app.public(app.get(sid)))
+            if route.path == '/api/progress':
+                with app.lock:
+                    app.get(sid)  # Same visibility/session boundary as /api/session.
+                    return self.reply(app.progress_logs.page(sid,
+                        before=query.get('before', [None])[0], limit=query.get('limit', ['50'])[0],
+                        run_id=query.get('runId', [None])[0]))
             if route.path == "/api/capabilities":
                 with app.lock:
                     selected = app.public(app.get(sid)) if sid else None
@@ -1564,6 +1591,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
                       "/tool-activity.js": ("tool-activity.js", "text/javascript; charset=utf-8"),
                       "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
+                      "/progress-view.js": ("progress-view.js", "text/javascript; charset=utf-8"),
+                      "/progress-view.css": ("progress-view.css", "text/css; charset=utf-8"),
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),

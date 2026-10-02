@@ -1,5 +1,6 @@
 """Startup release offers respect workflow focus and explicit installation."""
 import json
+import re
 import subprocess
 import unittest
 
@@ -53,7 +54,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'app-updates.js'});\n"
             "context.WorkspaceStartupHealth={attach(){},bootstrapReady:async()=>{"
-            "context.updaterReadyAtBootstrap=['app-update-check','app-update-notes-open','app-update-install']"
+            "context.updaterReadyAtBootstrap=['app-update-check','app-update-sidebar-badge','app-update-notes-open','app-update-install']"
             ".every(id=>typeof get(id).onclick==='function');},bootstrapFailed(){}};\n"
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});\n"
             + "vm.runInContext(" + json.dumps(before_start) + ",context,{filename:'before-start.js'});",
@@ -75,7 +76,8 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal($('app-update-settings-badge').hidden,false);
           assert.equal($('app-update-current').textContent,'0.22.0');
           assert.equal($('app-update-latest').textContent,'0.22.1');
-          assert.match($('settings-open').attributes['aria-label'],/새 버전/);
+          assert.equal($('settings-open').attributes['aria-label'],'설정');
+          assert.equal($('app-update-sidebar-badge').attributes['aria-label'],'새 버전 0.22.1 업데이트');
           assert.equal($('app-update-dialog').open,true);
           assert.equal($('app-update-notes').textContent,available.release.notes);
           assert.equal($('app-update-install').textContent,'업데이트하기');
@@ -121,6 +123,67 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           $('app-update-notes-open').onclick();assert.equal($('app-update-dialog').open,true);
           assert.equal($('app-update-dialog').dataset.offer,'manual');
         })()""", AVAILABLE)
+
+    def test_sidebar_update_button_stays_after_later_and_only_opens_changelog(self):
+        self.run_case(r"""(async()=>{
+          const button=$('app-update-sidebar-badge');
+          $('app-update-dismiss').onclick();WorkspaceAppUpdates.observe(available);
+          assert.equal(button.hidden,false);assert.equal(button.disabled,false);
+          assert.equal(button.attributes.title,'새 버전 0.22.1 업데이트');
+          assert.equal(button.attributes['aria-expanded'],'false');assert.equal(updateTimers.size,0);
+          const calls=[];api=async(path,data)=>{calls.push(data);return available;};
+          button.focus();button.onclick();
+          assert.equal($('app-update-dialog').open,true);assert.equal($('app-update-dialog').dataset.offer,'manual');
+          assert.equal(button.attributes['aria-expanded'],'true');
+          assert.equal(document.activeElement,$('app-update-close'));
+          assert.equal($('app-update-notes').textContent,available.release.notes);
+          assert.notEqual($('settings-dialog').open,true);assert.equal(calls.length,0);
+          await runUpdateTimer();assert.deepEqual(calls,[undefined]);
+          $('app-update-close').onclick();assert.equal(document.activeElement,button);
+          assert.equal(button.hidden,false);assert.equal(button.attributes['aria-expanded'],'false');
+          assert.equal(updateTimers.size,0);assert.equal(startupRequests.length,1);
+        })()""", AVAILABLE)
+
+    def test_sidebar_button_hides_for_current_and_invalid_versions_without_requests(self):
+        self.run_case(r"""
+          let calls=0;api=async()=>{calls++;throw Error('No request expected');};
+          const button=$('app-update-sidebar-badge');
+          for(const state of [current,{...available,release:{...available.release,version:'<svg onload=install()>'}}]){
+            WorkspaceAppUpdates.observe(state);button.onclick();
+            assert.equal(button.hidden,true);assert.equal(button.disabled,true);
+            assert.equal(button.attributes.title,'새 버전 업데이트');
+            assert.notEqual($('app-update-dialog').open,true);
+          }
+          assert.equal(calls,0);assert.equal(updateTimers.size,0);
+        """)
+
+    def test_sidebar_notes_remain_accessible_with_auto_check_off_and_unsupported_install(self):
+        self.run_case(r"""
+          assert.equal(startupRequests.length,0);assert.notEqual($('app-update-dialog').open,true);
+          const button=$('app-update-sidebar-badge');button.focus();button.onclick();
+          assert.equal($('app-update-dialog').open,true);assert.equal(button.disabled,false);
+          assert.equal($('app-update-install').disabled,true);
+          $('app-update-dialog').oncancel({preventDefault(){}});
+          assert.equal(document.activeElement,button);assert.equal(button.hidden,false);
+          assert.equal(updateTimers.size,0);assert.equal(startupRequests.length,0);
+        """, {**AVAILABLE, 'autoCheck': False, 'canInstall': False})
+
+    def test_sidebar_focus_falls_back_to_settings_if_release_disappears(self):
+        self.run_case(r"""
+          $('app-update-dismiss').onclick();
+          const button=$('app-update-sidebar-badge');button.focus();button.onclick();
+          WorkspaceAppUpdates.observe(current);assert.equal(button.hidden,true);
+          $('app-update-close').onclick();assert.equal(document.activeElement,$('settings-open'));
+          assert.equal(button.attributes['aria-expanded'],'false');assert.equal(updateTimers.size,0);
+        """, AVAILABLE)
+
+    def test_stopped_sidebar_click_does_not_reopen_or_schedule_reads(self):
+        self.run_case(r"""
+          $('app-update-dismiss').onclick();WorkspaceAppUpdates.stop();
+          $('app-update-sidebar-badge').onclick();
+          assert.equal($('app-update-dialog').open,false);assert.equal(updateTimers.size,0);
+          assert.equal(startupRequests.length,1);
+        """, AVAILABLE)
 
     def test_native_reopen_sequence_rearms_but_stale_and_same_sequence_do_not(self):
         self.run_case(r"""
@@ -440,6 +503,23 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.assertIn('white-space:pre-wrap', css)
         self.assertNotIn('innerHTML', script)
         self.assertNotIn('setInterval(', script)
+
+    def test_shipped_sidebar_indicator_is_an_independent_keyboard_button(self):
+        page = (ROOT / "local_app/web/index.html").read_text(encoding="utf-8")
+        button = re.search(r'<button\b[^>]*\bid="app-update-sidebar-badge"[^>]*>(.*?)</button>', page, re.S)
+        self.assertIsNotNone(button)
+        self.assertIn('type="button"', button.group())
+        self.assertIn('aria-haspopup="dialog"', button.group())
+        self.assertIn('aria-controls="app-update-dialog"', button.group())
+        self.assertIn('aria-label="새 버전 업데이트"', button.group())
+        self.assertIn(' hidden', button.group())
+        self.assertIn('<svg', button.group(1))
+        self.assertNotIn('새 버전', button.group(1))
+        self.assertNotIn('tabindex="-1"', button.group())
+        settings = re.search(r'<button\b[^>]*\bid="settings-open"[^>]*>.*?</button>', page, re.S)
+        self.assertIsNotNone(settings)
+        self.assertNotIn('app-update-sidebar-badge', settings.group())
+        self.assertIn('id="app-update-settings-badge"', page)
 
 
 if __name__ == "__main__":

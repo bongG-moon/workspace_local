@@ -79,9 +79,12 @@ globalThis.WorkspaceAppUpdates = (() => {
   function render(){
     if(!$("app-update-status"))return;
     const release=snapshot.release,available=!!release,label=message(),isBusy=busy();
-    $("app-update-sidebar-badge").hidden=!available;$("app-update-settings-badge").hidden=!available;
-    $("settings-open").setAttribute("aria-label",available?"설정 · 새 버전 사용 가능":"설정");
-    $("settings-open").setAttribute("title",available?"설정 · 새 버전 사용 가능":"설정");
+    const sidebarButton=$("app-update-sidebar-badge"),sidebarLabel=release?`새 버전 ${release.version} 업데이트`:"새 버전 업데이트";
+    sidebarButton.hidden=!available;sidebarButton.disabled=!available;
+    sidebarButton.setAttribute("aria-label",sidebarLabel);sidebarButton.setAttribute("title",sidebarLabel);
+    sidebarButton.setAttribute("aria-expanded",String($("app-update-dialog").open===true));
+    $("app-update-settings-badge").hidden=!available;
+    $("settings-open").setAttribute("aria-label","설정");$("settings-open").setAttribute("title","설정");
     $("app-update-current").textContent=snapshot.currentVersion||"확인 중";
     $("app-update-latest").textContent=release?.version||(snapshot.status==="current"?snapshot.currentVersion:"확인 전");
     $("app-update-source").textContent=snapshot.source?.label||"배포 서버";
@@ -184,24 +187,26 @@ globalThis.WorkspaceAppUpdates = (() => {
     return ok;
   }
   function openNotes(automatic=false){
-    if(!snapshot.release)return;
+    if(stopped||!snapshot.release)return;
     startupOfferDone=true;clearTimeout(offerTimer);offerTimer=null;
     returnFocus=document.activeElement&&document.activeElement!==document.body?document.activeElement:$("settings-open");render();
     $("app-update-dialog").dataset.offer=automatic?"startup":"manual";
     if($("app-update-offer-intro"))$("app-update-offer-intro").hidden=!automatic;
     if(!$("app-update-dialog").open)hooks.openDialog("app-update-dialog");
+    $("app-update-sidebar-badge").setAttribute("aria-expanded","true");
     $(automatic?"app-update-dismiss":"app-update-close").focus();schedule(!automatic);
   }
   function bind(){
     $("app-update-check").onclick=check;
     $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError?read():check();
     $("app-update-auto").onchange=()=>request({action:"configure",autoCheck:$("app-update-auto").checked});
-    $("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
+    $("app-update-sidebar-badge").onclick=$("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
     $("app-update-close").onclick=$("app-update-dismiss").onclick=()=>$("app-update-dialog").close();
     $("app-update-dialog").oncancel=event=>{event.preventDefault();$("app-update-dialog").close();};
     $("app-update-dialog").onclose=()=>{
-      const owner=returnFocus?.closest?.("dialog");
-      if(!closingForHandoff&&returnFocus?.isConnected&&!returnFocus.disabled&&(!owner||owner.open))returnFocus.focus();
+      $("app-update-sidebar-badge").setAttribute("aria-expanded","false");
+      const target=returnFocus?.hidden?$("settings-open"):returnFocus,owner=target?.closest?.("dialog");
+      if(!closingForHandoff&&target?.isConnected&&!target.disabled&&(!owner||owner.open))target.focus();
       returnFocus=null;schedule();
     };
     document.addEventListener("visibilitychange",wake);

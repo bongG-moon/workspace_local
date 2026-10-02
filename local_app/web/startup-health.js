@@ -23,6 +23,7 @@ globalThis.WorkspaceStartupHealth = (() => {
     "rich-content":{file:"rich-content.js",global:"WorkspaceRichContent"},
     "execution-view":{file:"execution-view.js",global:"WorkspaceExecutionView"},
     "tool-activity":{file:"tool-activity.js",global:"WorkspaceToolActivity"},
+    "progress-view":{file:"progress-view.js",global:"WorkspaceProgressView",buttons:["progress-open"]},
     "upgrade-handoff":{file:"upgrade-handoff.js",global:"WorkspaceUpgrade"},
     "app-updates":{file:"app-updates.js",global:"WorkspaceAppUpdates",buttons:["app-update-check","app-update-notes-open","app-update-install"]}
   };

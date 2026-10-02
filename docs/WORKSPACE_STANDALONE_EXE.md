@@ -1,8 +1,8 @@
-# Company Workspace 단일 EXE — 0.23.4
+# Company Workspace 단일 EXE — 0.23.5
 
-`Company-Workspace-0.23.4.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
+`Company-Workspace-0.23.5.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
 
-현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md), 일반 Claude Code 중심으로 정리한 범위는 [0.15.0 안내](WORKSPACE_0.15.0_CLAUDE.md)를 참고하세요. 이 문서는 사용법이며 0.23.4 빌드·현장 실행·공개 배포 완료를 증명하는 기록은 아닙니다.
+현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md), 일반 Claude Code 중심으로 정리한 범위는 [0.15.0 안내](WORKSPACE_0.15.0_CLAUDE.md)를 참고하세요. 이 문서는 사용법이며 0.23.5 빌드·현장 실행·공개 배포 완료를 증명하는 기록은 아닙니다.
 
 ## 필요한 환경과 실행 순서
 
@@ -48,7 +48,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 
 `WS-37`·`WS-38`은 확인한 Python 후보와 실패 이유를 구분합니다. 기록 저장에 성공하면 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치를 안내합니다. 기록에는 로컬 설치 경로가 포함될 수 있지만 인증 값이나 표준 오류 원문은 저장하지 않습니다.
 
-시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.4 진단 표기는 **`ws33-39`**, 대상 소스는 **`workspace-0.23.4`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
+시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.5 진단 표기는 **`ws33-40`**, 대상 소스는 **`workspace-0.23.5`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
 
 진단과 실행은 Windows의 UAC·영구 실행 정책·기존 파일 ACL을 바꾸지 않습니다. PowerShell의 이번 실행에 적용한 옵션으로 모든 그룹 정책·AppLocker·WDAC·Script Host 제한을 해결할 수 있다고 보장하지 않습니다.
 
