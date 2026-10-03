@@ -623,6 +623,24 @@ class ClaudeSession:
             "message": "기존 Claude Code의 인증을 확인하지 못했습니다. 이 앱은 터미널과 같은 로그인을 사용하며 별도 계정 설정은 없습니다. "
                        "터미널에서 Claude가 정상 응답하는지 확인한 뒤 다시 보내 주세요. 앱은 다음 요청에서 갱신된 인증을 다시 읽습니다."})
 
+    def _is_expected_stop_result(self, data, previous_session):
+        # Only the observed user-interrupt diagnostic is benign. A marker
+        # embedded in another error, an unknown signature or another session
+        # must still use the normal failure/recovery path.
+        if (not self.stopping or not previous_session
+                or self._fork_source and not self._connection_info.get('sessionId')
+                or data.get('session_id') not in (None, previous_session)):
+            return False
+        errors = data.get('errors', [])
+        if not isinstance(errors, list):
+            return False
+        details = [value for value in [data.get('result', ''), *errors] if value != '']
+        expected = {'result_type=user', 'last_content_type=n/a', 'stop_reason=tool_use'}
+        return bool(details) and all(
+            isinstance(value, str) and len(parts := value.split()) == 4
+            and parts[0] == '[ede_diagnostic]' and set(parts[1:]) == expected
+            for value in details)
+
     def start(self):
         with self.lock:
             if self.closed or self.stopping:
@@ -1186,10 +1204,12 @@ class ClaudeSession:
                 return
             self._interrupt_executions(activity=bool(data.get('is_error') or not self.tasks))
             self.last_result = data
+            previous_session = self.session_id
             self.session_id = data.get("session_id") or self.session_id
             text = data.get("result", "")
             error_text = "; ".join(map(str, data.get("errors", []))) or text
-            if data.get("is_error") and self._auth_error(error_text):
+            if data.get("is_error") and (self._auth_error(error_text)
+                                        or isinstance(text, str) and self._auth_error(text)):
                 self._authentication_failed()
                 return
             if text and _text_fingerprint(text) not in self.seen_text and not data.get('is_error'):
@@ -1208,6 +1228,11 @@ class ClaudeSession:
                 diagnostic = '[ede_diagnostic]' in error_text
                 if diagnostic and self.session_id:
                     self.resume_id = self.session_id
+                if self._is_expected_stop_result(data, previous_session):
+                    # Keep last_result for diagnosis without an error banner,
+                    # failed notification or completed-result event. Report
+                    # stopped only after _finish_stop confirms owned CLI exit.
+                    return
                 self.emit("error", {"code": 'cli_turn_incomplete' if diagnostic else "task_failed",
                     "nextAction": '현재 결과를 확인한 뒤 같은 대화에서 후속 요청' if diagnostic else "자료와 연결 상태를 확인하고 다시 요청",
                     **({'resumeSessionId': self.resume_id, 'diagnosticCode': 'ede_diagnostic'} if diagnostic else {}),
@@ -1335,8 +1360,8 @@ class ClaudeSession:
         # Stop only this app-owned process. Never kill arbitrary claude/Office processes.
         if self.closed:
             return
-        self._interrupt_executions(closed=True)
         self.stopping = True
+        self._interrupt_executions(closed=True)
         if self.process is None:
             if self.close():
                 # start() may have been inside Popen while we observed None.
