@@ -73,7 +73,7 @@ globalThis.WorkspacePathPicker = (() => {
       const data=await api("/api/browse-paths",{kind:owner.kind,path:path||undefined,query,initial},owner.controller.signal);
       if(view!==owner||ticket!==serial)return;
       owner.path=data.path;owner.parent=data.parent;owner.entries=data.entries;owner.directoryReady=true;ui.path.value=data.path;renderLocations(data);renderRows();
-      note(data.limited?"폴더가 커서 일부 항목만 표시해요. 이름을 검색하거나 Windows 탐색기로 선택해 주세요.":!data.entries.length?(query?"이 이름의 항목을 찾지 못했어요.":owner.kind==="folder"?"하위 폴더가 없어요. 현재 폴더를 선택할 수 있어요.":"첨부할 문서·이미지·소스 파일이 없어요."):owner.kind==="folder"?"폴더를 열고 아래에서 ‘이 폴더 선택’을 눌러 주세요.":"문서·이미지·소스 파일을 선택하세요. 여러 폴더에서 담을 수 있어요.");
+      note(data.limited?"폴더가 커서 일부 항목만 표시해요. 이름을 검색하거나 Windows 탐색기로 선택해 주세요.":!data.entries.length?(query?"이 이름의 항목을 찾지 못했어요.":owner.kind==="folder"?"하위 폴더가 없어요. 현재 폴더를 선택할 수 있어요.":"첨부할 문서·이미지·소스·압축·EXE 파일이 없어요."):owner.kind==="folder"?"폴더를 열고 아래에서 ‘이 폴더 선택’을 눌러 주세요.":"문서·이미지·소스·압축·EXE 파일을 선택하세요. 여러 폴더에서 담을 수 있어요.");
     }catch(error){if(view!==owner||ticket!==serial)return;if(error.name!=="AbortError")note(error.message,true);}
     finally{if(view===owner&&ticket===serial){owner.loading=false;ui.list.setAttribute("aria-busy","false");ui.go.disabled=false;ui.up.disabled=!owner.parent;renderSelection();}}
   }

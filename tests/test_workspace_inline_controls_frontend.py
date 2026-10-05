@@ -60,6 +60,28 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal(calls,0);assertDraft();
         })()""")
 
+    def test_stopping_and_cleanup_failure_lock_all_chips_and_close_existing_panel(self):
+        self.run_case(r"""(async()=>{
+          let calls=0;api=async()=>{calls++;throw new Error('must not call while stopping');};
+          const ids=['composer-model','composer-effort','composer-permission'];
+          for(const state of ['stopping','failed']){
+            applyStopState({stopState:null});setStatus('done');
+            await $('composer-model').onclick();const previousChoice=choose('회사 모델');
+            assert.equal($('composer-controls-panel').hidden,false);
+            handleEvent({type:'status',data:{state:state==='stopping'?'stopping':'error',stopState:state,cleanupRetryable:state==='failed'}});
+            for(const id of ids)assert.equal($(id).disabled,true,id+' must remain disabled');
+            assert.equal($('composer-controls-panel').hidden,true);
+            assert.match($('composer-control-status').textContent,/중지 상태/);
+            for(const id of ids)await $(id).onclick();await previousChoice.onclick();
+            $('prompt').focus();let prevented=false;
+            assert.equal(WorkspaceInlineControls.keydown({key:'Tab',shiftKey:true,preventDefault(){prevented=true;}}),false);
+            assert.equal(prevented,false);assert.equal(calls,0);assertDraft();
+            handleEvent({type:'status',data:{state:'stopped',stopState:'stopped',connectionStopped:false,cleanupRetryable:false}});
+            for(const id of ids)assert.equal($(id).disabled,false,id+' must unlock after confirmed stop');
+            assert.equal(active.connection.connected,true);assertDraft();
+          }
+        })()""")
+
     def test_blocked_restore_keeps_actual_catalog_available_without_repeated_connect_or_send(self):
         self.run_case(r"""(async()=>{
           active.connection=null;active.modelOverride='stale-model';const calls=[];

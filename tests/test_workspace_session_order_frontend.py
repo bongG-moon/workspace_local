@@ -84,6 +84,24 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.equal(pin('A').attributes['aria-pressed'],'false');assert.equal(notices.at(-1),'disk unavailable');
         })()""")
 
+    def test_delayed_keyboard_reorder_preserves_new_input_focus(self):
+        self.run_case(r"""(async()=>{
+          let reply;api=()=>new Promise(resolve=>reply=resolve);handle('A').focus();
+          const pending=handle('A').onkeydown({key:'ArrowUp',altKey:true,preventDefault(){}});
+          $('prompt').focus();$('prompt').value='이동을 기다리며 작성';reply({sessionOrder:boot.sessionOrder});
+          assert.equal(await pending,true);assert.equal(document.activeElement,$('prompt'));
+          assert.equal($('prompt').value,'이동을 기다리며 작성');assert.equal(ids(),'C,A,B');
+        })()""")
+
+    def test_delayed_reorder_failure_does_not_take_focus_from_open_dialog(self):
+        self.run_case(r"""(async()=>{
+          let reject;api=()=>new Promise((_,fail)=>reject=fail);handle('A').focus();
+          const pending=moveSession('A','C','before');showDialog('folder-dialog');$('task-name').focus();
+          reject(Error('다시 시도해 주세요'));assert.equal(await pending,false);
+          assert.equal(document.activeElement,$('task-name'));assert.equal($('folder-dialog').open,true);
+          assert.equal(ids(),'C,B,A');
+        })()""")
+
     def test_pin_button_updates_only_target_and_failed_pin_keeps_original_ui(self):
         self.run_case(r"""(async()=>{
           active={id:'C',title:'업무 C',state:'idle',workspace:'C:/C',messages:[{text:'keep conversation'}]};$('prompt').value='keep draft';
@@ -109,6 +127,15 @@ class SessionOrderFrontendTests(unittest.TestCase):
           const pending=updateSession('A',{pinned:true});assert.equal(await moveSession('B','C','before'),false);
           assert.equal(calls,1);assert.equal(pin('A').attributes['aria-pressed'],'false');
           reply({...sessions[0],pinned:true,updated:10});await pending;assert.equal(ids(),'A,C,B');assert.equal(sessionOrderSaving,false);
+        })()""")
+
+    def test_delayed_pin_does_not_take_focus_from_a_new_input(self):
+        self.run_case(r"""(async()=>{
+          let reply;api=()=>new Promise(resolve=>reply=resolve);pin('A').focus();
+          const pending=pin('A').onclick();$('prompt').focus();$('prompt').value='새 질문 작성 중';
+          reply({...sessions[0],pinned:true,updated:10});await pending;
+          assert.equal(document.activeElement,$('prompt'));assert.equal($('prompt').value,'새 질문 작성 중');
+          assert.equal(pin('A').attributes['aria-pressed'],'true');
         })()""")
 
     def test_pointer_threshold_cancel_capture_loss_and_escape_never_save(self):

@@ -229,11 +229,13 @@ class PrepareConnectionTests(unittest.TestCase):
         self.assertIsNotNone(self.app.get(self.sid)['bridge'].process.poll())
         self.assertEqual([], self.app.get(self.sid)['messages'])
 
-    def test_code_reference_is_forwarded_as_path_and_executable_is_rejected(self):
+    def test_code_executable_archive_references_are_paths_and_never_opened_automatically(self):
         source = self.root / 'example.py'
         source.write_text('raise AssertionError("never execute")', encoding='utf-8')
-        blocked = self.root / 'program.exe'
-        blocked.write_bytes(b'not executable')
+        executable = self.root / 'program.exe'
+        executable.write_bytes(b'not executable')
+        archive = self.root / 'bundle.tar.gz'
+        archive.write_bytes(b'not archive')
         self.assertIn('.py', REFERENCE_FILE_TYPES)
         self.assertIn('.py', SAFE_FILES)
         from local_app.file_preview import build_preview
@@ -243,16 +245,22 @@ class PrepareConnectionTests(unittest.TestCase):
         self.assertEqual('python', preview['language'])
         self.assertEqual('raise AssertionError("never execute")', preview['text'])
         with patch('local_app.external_apps.os.startfile', create=True) as launch:
-            with self.assertRaises(ValueError):
-                open_document(source)
+            for path in (source, executable, archive):
+                with self.assertRaises(ValueError):
+                    open_document(path)
             launch.assert_not_called()
-        with self.assertRaises(ValueError):
-            self.app.send(self.sid, 'read it', [str(blocked)])
-        self.app.send(self.sid, 'Explain @example.py', [str(source)])
+        for path in (executable, archive):
+            with self.assertRaises(ValueError):
+                self.app.allowed_file(self.sid, path)
+        self.app.send(self.sid, 'Explain @example.py', [str(source), str(executable), str(archive)])
         eventually(lambda: self.app.get(self.sid)['state'] == 'done')
         prompt = self.frames()[-1]['message']['content']
         self.assertTrue(prompt.startswith('Explain @example.py'))
         self.assertIn(json.dumps(str(source)), prompt)
+        self.assertIn(json.dumps(str(executable)), prompt)
+        self.assertIn(json.dumps(str(archive)), prompt)
+        self.assertNotIn('not executable', prompt)
+        self.assertNotIn('not archive', prompt)
         self.assertNotIn('raise AssertionError', prompt)
 
     def test_http_requires_auth_and_existing_lifecycle_gate(self):

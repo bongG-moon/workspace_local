@@ -5,18 +5,41 @@ if (key) { sessionStorage.setItem("workspaceToken", key); history.replaceState(n
 const token = sessionStorage.getItem("workspaceToken") || "";
 let active = null, sessions = [], attachments = [], pollController = null, boot = {}, started = null, previewPath = null;
 let selectionGeneration = 0, sending = false, appClosed = false, quitting = false;
+let shutdownState = null, shutdownIssues = [], checkingShutdown = false;
+const stopStates = new Map(), stopRequests = new Map();
+let stopNoticeOwner = null;
+function stopState(item=active){return item?(stopStates.get(item.id)?.state??item.stopState??null):null;}
+function stopBlocked(){return stopRequests.has(active?.id)||["stopping","failed"].includes(stopState());}
+function cleanupRetryable(item=active){return item?(stopStates.get(item.id)?.cleanupRetryable??item.cleanupRetryable)===true:false;}
+function applyStopState(value,id=active?.id){
+  if(!id||!value||!Object.prototype.hasOwnProperty.call(value,"stopState"))return false;
+  const state=["stopping","failed","stopped"].includes(value.stopState)?value.stopState:null;
+  const previous=stopStates.get(id);
+  if(state===null&&previous?.state==="stopping"&&stopRequests.has(id))return false;
+  stopStates.set(id,{state,cleanupRetryable:value.cleanupRetryable===true,revision:(previous?.revision||0)+1});
+  if(active?.id===id){active.stopState=state;active.cleanupRetryable=value.cleanupRetryable===true;if(typeof value.connectionStopped==="boolean")active.connectionStopped=value.connectionStopped;if(value.connectionStopped===true&&active.connection)active.connection={...active.connection,connected:false};}
+  return true;
+}
+function renderStopFeedback(){
+  if(appClosed)return;
+  if(stopState()==="failed")error("이전 작업의 중지를 확인하지 못했어요. 작성한 요청은 그대로 보관했습니다. 중지 상태를 정리한 뒤 직접 다시 보내 주세요.","stop");
+  else if(stopNoticeOwner)error("");
+}
 let managedRootChoice = null, folderChoiceGeneration = 0;
 let previewContext = null, previewGeneration = 0, previewData = null;
 let attachmentPicking = false, pathInputContext = null;
 let choiceView = null, choiceSubmission = null, modelChanging = false, permissionChanging = false, effortChanging = false, connectionPreparing = false;
+const restartingConnections = new Map(), pendingRequestAnswers = new Map();
+function connectionRestarting(){return !!active&&(restartingConnections.has(active.id)||active.connection?.restarting===true);}
+globalThis.WorkspaceConnectionRestart={isCurrent:connectionRestarting,isAny:()=>restartingConnections.size>0,refreshControls:updateRestartControls};
 const answeredChoices = new Set(), renderedQueuedRequests = new Set();
 const drafts = new Map(), streaming = new Map();
 const hiddenSessionIds = new Set(), hidingSessionIds = new Set();
 const modalStack = [];
 let pendingConfirmation = null;
 const busyStates = new Set(["starting", "running", "approval", "question"]);
-const statusLabels = {idle:"준비됐어요. 원하는 일을 알려 주세요", starting:"기존 업무 환경에 연결하고 있어요", running:"업무를 진행하고 있어요", approval:"실행 전 확인이 필요해요", question:"다음 단계에 필요한 답변을 기다려요", done:"요청을 마쳤어요. 결과를 확인하거나 이어서 요청하세요", error:"잠시 멈췄어요. 연결 상태를 확인해 주세요", stopped:"작업을 멈췄어요. 이미 변경된 파일은 유지됩니다"};
-const stateNames = {idle:"대기", starting:"준비 중", running:"진행 중", approval:"승인 대기", question:"답변 대기", done:"응답 완료", error:"확인 필요", stopped:"중지"};
+const statusLabels = {idle:"준비됐어요. 원하는 일을 알려 주세요", starting:"기존 업무 환경에 연결하고 있어요", running:"업무를 진행하고 있어요", stopping:"현재 작업을 중지하고 있어요. 작성 중인 내용은 유지됩니다", approval:"실행 전 확인이 필요해요", question:"다음 단계에 필요한 답변을 기다려요", done:"요청을 마쳤어요. 결과를 확인하거나 이어서 요청하세요", error:"잠시 멈췄어요. 연결 상태를 확인해 주세요", stopped:"작업을 멈췄어요. 이미 변경된 파일은 유지됩니다"};
+const stateNames = {idle:"대기", starting:"준비 중", running:"진행 중", stopping:"중지 중", approval:"승인 대기", question:"답변 대기", done:"응답 완료", error:"확인 필요", stopped:"중지"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function basename(path=""){return String(path).split(/[\\/]/).filter(Boolean).pop()||path;}
 function showDialog(id){const dialog=$(id);for(let i=modalStack.length-1;i>=0;i--)if(!modalStack[i].open||modalStack[i]===dialog)modalStack.splice(i,1);dialog.showModal();modalStack.push(dialog);}
@@ -37,8 +60,12 @@ function confirmAction({title,message,confirmLabel="확인",danger=false,returnF
     dialog.oncancel=event=>{event.preventDefault();dialog.close("cancel");};
     dialog.onclose=()=>{
       const accepted=dialog.returnValue==="confirm";pendingConfirmation=null;dialog.onclose=dialog.oncancel=null;
-      const restoreFocus=()=>{const owner=returnFocus?.closest?.("dialog");if(returnFocus?.isConnected&&!returnFocus.disabled&&(!owner||owner.open))returnFocus.focus();};
-      restoreFocus();resolve(accepted);setTimeout(restoreFocus,0);
+      const current=document.activeElement,owner=returnFocus?.closest?.("dialog");
+      // Native dialog.close() normally restores focus itself. Do not restore it
+      // again after the caller has opened another dialog or selected an input.
+      const needsReturn=!current||current===document.body||!current.isConnected||current.closest?.("dialog")===dialog;
+      if(needsReturn&&returnFocus?.isConnected&&!returnFocus.disabled&&!returnFocus.closest?.("[hidden],[inert]")&&(!owner||owner.open))returnFocus.focus({preventScroll:true});
+      resolve(accepted);
     };
     $("action-cancel").onclick=$("action-close").onclick=()=>dialog.close("cancel");
     $("action-confirm").onclick=()=>dialog.close("confirm");
@@ -46,27 +73,36 @@ function confirmAction({title,message,confirmLabel="확인",danger=false,returnF
   });
   return pendingConfirmation;
 }
-function error(text){$("error-banner").textContent=text||"";$("error-banner").hidden=!text;$("recovery-actions").hidden=!text||appClosed;}
+function error(text,kind=null){
+  stopNoticeOwner=kind==="stop"?active?.id:null;
+  $("error-banner").textContent=text||"";$("error-banner").hidden=!text||appClosed;$("recovery-actions").hidden=!text||appClosed;
+  $("connection-settings").hidden=kind==="stop";
+  const label=kind==="stop"?(cleanupRetryable()?"중지 다시 시도":"Claude Code 재시작"):"연결 다시 확인",button=$("reconnect");
+  if(button.lastChild?.nodeType===3)button.lastChild.textContent=label;else button.textContent=label;
+}
 async function api(path,data,signal){
+  if(appClosed&&data!==undefined&&!["/api/quit","/api/ui-health"].includes(path))throw new Error("앱 종료를 진행 중이에요. 위의 종료 안내를 확인해 주세요.");
   const finish=globalThis.WorkspaceUpgrade?.begin(path,data!==undefined);
   try{
     const options={headers:{Authorization:`Bearer ${token}`},signal};
     if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
     let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
-    const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;if(path==="/api/upgrade")failure.upgrade=value.upgrade;throw failure;}return value;
+    const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;for(const field of ["stopState","cleanupRetryable","connectionStopped"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];if(path==="/api/upgrade")failure.upgrade=value.upgrade;if(Array.isArray(value.shutdownIssues))failure.shutdownIssues=value.shutdownIssues;for(const field of ["closing","closed","shutdownState"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];throw failure;}return value;
   }finally{finish?.();}
 }
 function setStatus(state,label,runId){
-  if(active)active.state=state;globalThis.WorkspaceSessionImport?.render();const busy=busyStates.has(state),running=state==="starting"||state==="running";
+  const stopping=stopState()==="stopping"||stopRequests.has(active?.id),stopFailed=stopState()==="failed";
+  if(stopping){state="stopping";label=stopRequests.get(active?.id)?.disconnect?"업무 연결을 종료하고 있어요. 작성 중인 내용은 유지됩니다":statusLabels.stopping;}else if(stopFailed){state="error";label="작업 중지 확인이 필요해요";}
+  if(active)active.state=state;globalThis.WorkspaceSessionImport?.render();const busy=!appClosed&&(busyStates.has(state)||stopping),running=!appClosed&&(state==="starting"||state==="running"||stopping);
   globalThis.WorkspaceProductivityActions?.update();
-  $("status-text").textContent=label||statusLabels[state]||"진행 상태를 확인하고 있어요";$("status").classList.toggle("busy",running);$("status").dataset.state=state;globalThis.WorkspaceToolActivity?.statusChanged(state,$("status-text").textContent,runId);
+  $("status-text").textContent=appClosed?shutdownLabel():label||statusLabels[state]||"진행 상태를 확인하고 있어요";$("status").classList.toggle("busy",running);$("status").dataset.state=appClosed?"stopped":state;globalThis.WorkspaceToolActivity?.statusChanged(state,$("status-text").textContent,runId);
   globalThis.WorkspaceProgressView?.currentRun(runId||active?.lastRunId);
   const choosing=!!choiceSubmission&&choiceSubmission.sessionId===active?.id,dispatching=!!globalThis.WorkspaceWorkflow?.isSubmitting();
-  $("send").hidden=busy;$("send").disabled=busy||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceAttachments?.isUploading()||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||!!boot.error||appClosed;$("stop").hidden=!busy;$("task-title").disabled=!active||busy;$("task-pin").disabled=!active;
+  $("send").hidden=busy;$("send").disabled=busy||stopFailed||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceAttachments?.isUploading()||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||connectionRestarting()||!!boot.error||appClosed;$("stop").hidden=!busy;$("stop").disabled=stopping||connectionRestarting()||appClosed;for(const card of $("requests").children)card.inert=stopBlocked()||connectionRestarting()||appClosed;$("task-title").disabled=!active||busy||appClosed;$("task-pin").disabled=!active||appClosed;
   $("prompt").readOnly=sending||choosing||dispatching||appClosed;$("attach").disabled=sending||choosing||attachmentPicking||appClosed;$("attach-path").disabled=sending||choosing||appClosed;
   if(sending||choosing||appClosed)globalThis.WorkspaceComposer?.close();
   if(running&&!started)started=Date.now();if(!running)started=null;if(active){const row=sessions.find(s=>s.id===active.id);if(row)row.state=state;renderSessions();}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
-  globalThis.WorkspaceAppUpdates?.contextChanged();
+  updateRestartControls();renderStopFeedback();globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(()=>{$("elapsed").textContent=["question","approval"].includes(active?.state)?"응답 대기":started?`${Math.floor((Date.now()-started)/1000)}초`:"";},1000);
 function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
@@ -150,7 +186,12 @@ async function moveSession(id,targetId,position,container="sessions"){
   sessionOrderSaving=true;boot.sessionOrder={manual:true,ids,warning:null};renderSessions();
   try{const result=await api("/api/session/reorder",{id,targetId,position});boot.sessionOrder=result.sessionOrder;toast("업무 순서를 저장했어요.");return true;}
   catch(e){boot.sessionOrder=previous;toast(e.message);return false;}
-  finally{sessionOrderSaving=false;renderSessions();focusSessionHandle(id,container);}
+  finally{
+    const focused=document.activeElement,dialog=[...modalStack].reverse().find(item=>item.open);
+    const restore=(!dialog||dialog===$(container).closest?.("dialog"))&&(!focused||focused===document.body||!focused.isConnected||
+      (focused.classList?.contains("session-drag")&&focused.closest?.(".session-row")?.dataset.sessionId===id));
+    sessionOrderSaving=false;renderSessions();if(restore)focusSessionHandle(id,container);
+  }
 }
 function sessionRow(item,button,container){
   const row=el("div",null,"session-row"+(container==="home-recents"?" recent-row":""));row.dataset.sessionId=item.id;
@@ -166,7 +207,7 @@ function sessionRow(item,button,container){
     if(target)return moveSession(item.id,target.id,event.key==="ArrowUp"?"before":"after",container);};
   const pin=el("button",null,"session-pin"),icon=el("span",null,"session-pin-icon");pin.type="button";pin.disabled=sessionOrderSaving||appClosed;
   pin.setAttribute("aria-label",`${item.title} ${item.pinned?"고정 해제":"고정"}`);pin.setAttribute("aria-pressed",String(!!item.pinned));pin.title=item.pinned?"고정 해제":"상단에 고정";icon.setAttribute("aria-hidden","true");pin.append(icon);
-  pin.onclick=async()=>{try{await updateSession(item.id,{pinned:!item.pinned});}catch(e){toast(e.message);}finally{const next=[...$(container).children].find(row=>row.dataset.sessionId===item.id);next?.querySelector(".session-pin")?.focus();}};
+  pin.onclick=async()=>{try{await updateSession(item.id,{pinned:!item.pinned});}catch(e){toast(e.message);}finally{const focused=document.activeElement;if(!focused||focused===document.body||!focused.isConnected||focused===pin){const next=[...$(container).children].find(row=>row.dataset.sessionId===item.id);next?.querySelector(".session-pin")?.focus({preventScroll:true});}}};
   const remove=el("button",null,"session-remove");remove.type="button";remove.disabled=sessionOrderSaving||appClosed||hidingSessionIds.has(item.id);
   remove.setAttribute("aria-label",`${item.title} 목록에서 삭제`);remove.title="목록에서 삭제";
   const removeIcon=el("span",null,"session-remove-icon");removeIcon.setAttribute("aria-hidden","true");remove.append(removeIcon);
@@ -175,13 +216,19 @@ function sessionRow(item,button,container){
 }
 async function hideSession(id,returnFocus){
   const item=sessions.find(row=>row.id===id);if(!item||hidingSessionIds.has(id)||appClosed)return false;
+  const container=["sessions","home-recents","all-sessions"].find(name=>[...$(name).children].some(row=>row.querySelector(".session-remove")===returnFocus))||"sessions";
+  const position=[...$(container).children].findIndex(row=>row.dataset.sessionId===id);
+  const needsReturn=()=>{const current=document.activeElement;return !current||current===document.body||!current.isConnected||current.closest?.(".session-row")?.dataset.sessionId===id;};
+  const focusNeighbor=()=>{const rows=[...$(container).children].filter(row=>row.dataset.sessionId),row=rows[Math.min(Math.max(0,position),rows.length-1)];const next=row?.querySelector(container==="home-recents"?".recent-card":".session")||$(container==="all-sessions"?"tasks-close":"new-chat");next.focus({preventScroll:true});};
   const accepted=await confirmAction({title:"업무 목록에서 삭제할까요?",message:`‘${item.title}’을 앱 목록에서만 지웁니다. Claude 대화 기록과 작업 폴더의 파일은 그대로 남아요. 진행 중인 작업이나 남은 이어 할 일·실행 예약이 있으면 먼저 정리해 주세요.`,confirmLabel:"목록에서 삭제",returnFocus});
   if(!accepted||hidingSessionIds.has(id)||appClosed)return false;
   hidingSessionIds.add(id);renderSessions();
   try{
     await api("/api/session/hide",{id,confirmed:true});hiddenSessionIds.add(id);sessions=sessions.filter(row=>row.id!==id);
     if(boot.sessionOrder?.ids)boot.sessionOrder.ids=boot.sessionOrder.ids.filter(value=>value!==id);
-    if(active?.id===id){showHome();$("home-button").focus();}else{renderSessions();$($("tasks-dialog").open?"task-search":"session-search").focus();}
+    const restore=needsReturn();
+    if(active?.id===id){showHome();if(restore){if(container==="all-sessions"&&$("tasks-dialog").open)focusNeighbor();else $("home-button").focus({preventScroll:true});}}
+    else{renderSessions();if(restore)focusNeighbor();}
     globalThis.WorkspaceAttention?.refresh?.();toast("업무 목록에서 삭제했어요. 대화 기록과 파일은 보존했습니다.");return true;
   }catch(e){toast(e.message);return false;}
   finally{hidingSessionIds.delete(id);renderSessions();}
@@ -190,7 +237,7 @@ function renderSessions(){
   // Polling must not replace the native drag source before its drop event.
   if(sessionDragId)return;
   sessions=sessions.filter(item=>!hiddenSessionIds.has(item.id));
-  let focused=null;for(const container of ["sessions","home-recents","all-sessions"])for(const row of $(container).children)for(const selector of [".session-drag",".session-pin",".session-remove"])if(row.querySelector(selector)===document.activeElement)focused={container,id:row.dataset.sessionId,selector};
+  let focused=null;for(const container of ["sessions","home-recents","all-sessions"])for(const row of $(container).children)for(const selector of [".session-drag",".session-pin",".session-remove",".session",".recent-card"])if(row.querySelector(selector)===document.activeElement)focused={container,id:row.dataset.sessionId,selector};
   const query=$("session-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
   $("sessions").replaceChildren();$("home-recents").replaceChildren();
   if(boot.sessionOrder?.warning)$("sessions").append(el("p",boot.sessionOrder.warning,"sidebar-empty"));
@@ -280,15 +327,16 @@ function renderMessage(message){
 function applyDelta(data){const sk=streamKey(data);let article=streaming.get(sk);if(!article){article=renderMessage({role:"assistant",text:"",runId:data.runId});article.classList.add("streaming");article.dataset.streamText="";streaming.set(sk,article);}if(data.runId)article.dataset.runId=data.runId;const old=article.dataset.streamText||"",incoming=String(data.text||""),available=Math.max(0,MESSAGE_TEXT_LIMIT-old.length);if(article.dataset.streamTruncated!=="true")article.dataset.streamText=old+incoming.slice(0,available);if(data.uiTruncated||incoming.length>available)article.dataset.streamTruncated="true";article.dataset.messageSize=String(article.dataset.streamText.length);article.querySelector(".message-body").textContent=article.dataset.streamText;messageTruncation(article,article.dataset.streamTruncated==="true");boundConversation(article);}
 function renderDelta(data){if(globalThis.WorkspaceStream)WorkspaceStream.enqueue(data,applyDelta);else applyDelta(data);}
 function renderConnection(info){
+  updateRestartControls();
   const connected=info && info.connected!==false;
   const names=list=>(Array.isArray(list)?list:[]).map(x=>typeof x==="string"?x:x?.name||x?.id||"이름 미제공").join(", ");
   $("settings-runtime").textContent=boot.runtime?`실행 위치: ${boot.runtime.entry}\n설정 위치: ${boot.runtime.configRoot}`:"실행 위치를 아직 확인하지 않았어요.";
   $("settings-status").textContent=boot.demo?"화면 체험 연결 · 실제 AI 호출 없음":boot.error?"기존 Claude 연결 확인이 필요해요":connected?"이 업무의 Claude 연결이 확인됐어요":info?"이전 연결이 종료됐어요. 다음 요청에서 다시 연결합니다":"실행 파일 확인 완료 · 실제 응답은 업무를 시작한 뒤 확인합니다";
   $("connection-badge").textContent=boot.demo?"화면 체험":boot.error?"연결 확인 필요":connected?"업무 연결됨":info?"업무 연결 종료":"Claude 실행 준비됨";
-  $("connection-badge").title=boot.demo?"실제 Claude를 호출하지 않는 체험 화면입니다.":boot.error?"설정에서 Claude 실행 환경을 확인해 주세요.":connected?"선택한 업무의 Claude 연결이 활성화되어 있습니다.":info?"다음 요청을 보내면 이 업무에 다시 연결합니다.":"Claude 실행 파일을 확인했습니다. 업무를 시작하거나 스킬·도구의 ‘연결하고 목록 확인’을 누르면 해당 업무에 연결합니다.";
-  $("diagnostics").textContent=info?`현재 모델: ${info.model||"미제공"}\n사용 가능한 스킬: ${names(info.skills)||"CLI 목록 미제공"}\n연결 도구: ${(info.mcp||[]).map(x=>`${x.name}: ${x.status}`).join(", ")||"CLI 목록 미제공"}\n플러그인: ${names(info.plugins)||"CLI 목록 미제공"}`:"업무를 시작하면 현재 모델과 연결 도구를 표시해요.";renderConnectionOptions();updateModelControls();updatePermissionControls();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceSessionImport?.render();
+  $("connection-badge").title=boot.demo?"실제 Claude를 호출하지 않는 체험 화면입니다.":boot.error?"설정에서 Claude 실행 환경을 확인해 주세요.":connected?"선택한 업무의 Claude 연결이 활성화되어 있습니다.":info?"다음 요청을 보내면 이 업무에 다시 연결합니다.":"Claude 실행 파일을 확인했습니다. 업무를 시작하거나 스킬·기능의 ‘연결하고 목록 확인’을 누르면 해당 업무에 연결합니다.";
+  $("diagnostics").textContent=info?`현재 모델: ${info.model||"미제공"}\n사용 가능한 스킬: ${names(info.skills)||"CLI 목록 미제공"}\n연결된 기능(MCP): ${(info.mcp||[]).map(x=>`${x.name}: ${x.status}`).join(", ")||"CLI 목록 미제공"}\n플러그인: ${names(info.plugins)||"CLI 목록 미제공"}`:"업무를 시작하면 현재 모델과 연결된 기능(MCP)을 표시해요.";renderConnectionOptions();updateModelControls();updatePermissionControls();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceSessionImport?.render();updateRestartControls();
 }
-function connectionLocked(){return !active||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed;}
+function connectionLocked(){return !active||stopBlocked()||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||connectionRestarting()||appClosed;}
 function controlRestoreState(){const value=active?.connection?.controlRestore;return value?.status==="needs_input"&&value.canSend===false?value:null;}
 function controlRestoreIssues(){const issues=controlRestoreState()?.issues;return (Array.isArray(issues)?issues:[]).filter(issue=>issue&&["model","effort","permissionMode"].includes(issue.control));}
 function hasControlRestoreIssue(control){return controlRestoreIssues().some(issue=>issue.control===control);}
@@ -340,12 +388,12 @@ function renderWorkspaceChoice(){
     if(choice.allowCustom===true){const label=el("label","다른 의견이나 요청","choice-custom-label");input=el("input");input.type="text";input.maxLength=2000;input.setAttribute("aria-label","보고서 디자인 직접 입력");input.placeholder="원하는 디자인을 직접 입력하세요";custom=el("button","직접 입력한 답변 보내기","quiet-button");custom.type="button";custom.onclick=()=>submitWorkspaceChoice({text:input.value.trim()},key);input.onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();custom.onclick();}};const row=el("div",null,"choice-custom-row");row.append(input,custom);card.append(label,row);buttons.push(custom);}
     const note=el("p",null,"choice-state-note");note.setAttribute("role","status");card.append(note);container.append(card);choiceView={key,sessionId:active.id,choiceId:choice.id,card,buttons,input,note};
   }
-  const pending=choiceSubmission?.key===key,ready=["idle","done"].includes(active.state)&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!appClosed;
+  const pending=choiceSubmission?.key===key,ready=["idle","done"].includes(active.state)&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!appClosed;
   for(const button of choiceView.buttons)button.disabled=!ready;if(choiceView.input)choiceView.input.disabled=!ready;
   choiceView.note.textContent=pending?"선택한 답변을 보내고 있어요.":ready?"선택한 내용은 이 업무의 다음 요청으로 전달합니다.":"현재 응답이 끝나면 선택할 수 있어요.";
 }
 async function submitWorkspaceChoice(answer,expectedKey){
-  const view=choiceView;if(!view||view.key!==expectedKey||active?.id!==view.sessionId||active?.choice?.id!==view.choiceId||answeredChoices.has(view.key)||!["idle","done"].includes(active.state)||sending||choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed)return;
+  const view=choiceView;if(!view||view.key!==expectedKey||active?.id!==view.sessionId||active?.choice?.id!==view.choiceId||answeredChoices.has(view.key)||!["idle","done"].includes(active.state)||sending||choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||connectionRestarting()||appClosed)return;
   if("text" in answer&&!answer.text)return toast("답변을 입력하거나 위의 디자인을 선택해 주세요.");
   if(!active.trusted){chooseFolder(true);$("folder-form").dataset.afterTrust="choice";return toast("업무 폴더를 다시 확인한 뒤 디자인을 선택해 주세요.");}
   const sid=view.sessionId,ticket=selectionGeneration;choiceSubmission=view;setStatus(active.state);error("");
@@ -363,15 +411,21 @@ async function submitWorkspaceChoice(answer,expectedKey){
 }
 function saveDraft(){drafts.set(active?.id||"home",{text:$("prompt").value,attachments:[...attachments]});}
 function restoreDraft(id){const draft=drafts.get(id||"home");$("prompt").value=draft?.text||"";attachments=[...(draft?.attachments||[])];renderAttachments();}
-function taskHeader(){globalThis.WorkspaceSessionImport?.render();globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceCapabilities?.isOpen()?"스킬·도구":active?.title||"업무 홈";$("task-title").hidden=$("task-pin").hidden=!active;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||globalThis.WorkspaceCapabilities?.isOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);}
+function taskHeader(){
+  // Keep the task mounted for background events; only its view is suspended.
+  const catalog=!!globalThis.WorkspaceCapabilities?.isOpen();
+  $("task-view").hidden=!active||catalog;
+  $("workspace-summary").hidden=catalog;
+  updateRestartControls();globalThis.WorkspaceSessionImport?.render();globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceCapabilities?.isOpen()?"스킬·기능":active?.title||"업무 홈";$("task-title").hidden=$("task-pin").hidden=!active||catalog;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||globalThis.WorkspaceCapabilities?.isOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);}
 async function selectSession(id,{keepDraft=false}={}){
+  if(appClosed)return false;
   if(hiddenSessionIds.has(id))throw new Error("업무 목록에서 삭제한 항목입니다. 기존 세션 활용하기에서 다시 불러올 수 있어요.");
   if(hidingSessionIds.has(id))throw new Error("업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.");
   if(!keepDraft)saveDraft();const ticket=++selectionGeneration;if(pollController)pollController.abort();
   const resumeCurrent=()=>{if(ticket===selectionGeneration&&active&&!appClosed){pollController=new AbortController();poll(active.id,active.seq||0,pollController.signal);}};
   let item;
   try{item=await api(`/api/session?id=${encodeURIComponent(id)}`);}catch(e){if(ticket!==selectionGeneration)return false;resumeCurrent();throw e;}
-  if(ticket!==selectionGeneration)return false;
+  if(ticket!==selectionGeneration||appClosed)return false;
   if(hiddenSessionIds.has(id)||hidingSessionIds.has(id)){resumeCurrent();return false;}
   // Keep the current conversation, streaming buffers and controls intact
   // until the target is available. A removed inbox entry must not interrupt
@@ -379,14 +433,23 @@ async function selectSession(id,{keepDraft=false}={}){
   globalThis.WorkspaceCapabilities?.close();
   globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();
   globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();
-  streaming.clear();active=item;globalThis.WorkspaceRichContent?.reset(id);globalThis.WorkspaceExecutionView?.reset(id);globalThis.WorkspaceToolActivity?.reset(id);globalThis.WorkspaceProgressView?.reset(id,item.progress,item.lastRunId);started=null;error("");
+  streaming.clear();active=item;applyStopState(item);globalThis.WorkspaceRichContent?.reset(id);globalThis.WorkspaceExecutionView?.reset(id);globalThis.WorkspaceToolActivity?.reset(id);globalThis.WorkspaceProgressView?.reset(id,item.progress,item.lastRunId);started=null;error("");
   $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();active.messages.forEach(message=>{renderMessage(message);if(message.requestId)renderedQueuedRequests.add(message.requestId);});globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length)$("conversation").append(el("p","업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   taskHeader();if(!keepDraft)restoreDraft(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshFiles();refreshResults();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
-function showHome(clear=false){globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
-async function poll(id,after,signal){while(!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
+function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
+async function poll(id,after,signal){while(!appClosed&&!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(appClosed||signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
+  if(["status","error","result"].includes(event.type)){
+    // A result already on the wire cannot cancel an explicit stop intent.
+    const staleTerminal=stopState()==="stopping"&&event.type!=="status"&&d.stopState==null;
+    if(!staleTerminal){const changed=applyStopState(d)||(event.type==="status"&&d.state==="stopped"&&applyStopState({stopState:"stopped"}));if(changed&&!stopBlocked())renderConnection(active.connection);}
+  }
+  if(event.type==="connection_restart_finished"){
+    active.connection=d.connection||null;if(d.connection&&"modelOverride" in d.connection)active.modelOverride=d.connection.modelOverride;
+    renderConnection(active.connection);setStatus(d.state||active.state);globalThis.WorkspaceComposer?.connectionChanged();globalThis.WorkspaceCapabilities?.contextChanged(true);globalThis.WorkspaceWorkflow?.refresh();return;
+  }
   if(event.type==="progress_changed"){active.progress=d.progress;globalThis.WorkspaceProgressView?.metadata(d.progress);return;}
   if(event.type==="run_activity"){globalThis.WorkspaceToolActivity?.runActivity(d);return;}
   if(Array.isArray(d.toolActivity))for(const record of d.toolActivity)globalThis.WorkspaceToolActivity?.render(record);
@@ -402,7 +465,7 @@ function handleEvent(event){
   if(event.type==="request_closed"){for(const n of $("requests").children)if(n.dataset.requestId===d.id)n.remove();if(d.state)setStatus(d.state);else if(!$("requests").children.length&&busyStates.has(active?.state))setStatus("running");}
   if(event.type==="execution")globalThis.WorkspaceExecutionView?.render(d);
   if(event.type==="tool_activity"){ $("conversation").querySelector(".conversation-empty")?.remove();globalThis.WorkspaceToolActivity?.render(d); }
-  if(event.type==="result"){if(d.lastRunId)active.lastRunId=d.lastRunId;if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus("done");refreshFiles();refreshResults(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
+  if(event.type==="result"){if(d.lastRunId)active.lastRunId=d.lastRunId;if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus(stopState()==="stopped"?"stopped":"done");refreshFiles();refreshResults(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
   if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();}if(event.type==="notice")toast(d.message);
   if(["queue_changed","schedule_changed","dispatch_changed","result","status"].includes(event.type))globalThis.WorkspaceWorkflow?.refresh();
   globalThis.WorkspaceCapabilities?.contextChanged(["connected","model_changed","error"].includes(event.type)||(event.type==="status"&&d.state==="stopped"));
@@ -414,7 +477,7 @@ function revealRequest(card){
   if(!card)return;const sid=active?.id;
   requestAnimationFrame(()=>{if(active?.id===sid&&[...$("requests").children].includes(card)&&!globalThis.WorkspaceCapabilities?.isOpen())card.scrollIntoView({block:"nearest",inline:"nearest"});});
 }
-function sessionMetadata(item){return {id:item.id,title:item.title,workspace:item.workspace,connectionState:item.connection?.connected?"live":item.connection?"last-seen":item.connectionState||"unavailable",created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0};}
+function sessionMetadata(item){return {stopState:item.stopState,cleanupRetryable:item.cleanupRetryable,connectionStopped:item.connectionStopped,id:item.id,title:item.title,workspace:item.workspace,connectionState:item.connection?.connected?"live":item.connection?"last-seen":item.connectionState||"unavailable",created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0};}
 async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?sessionMetadata(next):s);if(active?.id===id){active.updated=next.updated;active.artifactCount=next.artifactCount;active.title=next.title;globalThis.WorkspaceProgressView?.metadata(next.progress);taskHeader();}renderSessions();}catch(e){toast(e.message);}}
 function approvalSummary(request){
   const input=request.input||{},tool=request.tool||"업무 도구",target=input.file_path||input.path||input.notebook_path;
@@ -440,7 +503,7 @@ function renderRequest(request){
     }else selection.textContent="이번 요청에만 적용됩니다.";
   }
   const actions=el("div",null,"request-actions"),deny=el("button",questions?"답변하지 않기":"거절","quiet-button"),allow=el("button",questions?"답변하고 계속":"확인하고 승인","send-button");deny.type=allow.type="button";const sid=active.id;
-  async function answer(yes){if(pending||active?.id!==sid||![...$("requests").children].includes(card)||appClosed)return;const answers={};if(yes&&questions){for(const field of fields){const values=field.inputs.filter(n=>n.checked).map(n=>n.value);if(field.custom.value.trim()){if(!field.q.multiSelect)values.length=0;values.push(field.custom.value.trim());}if(!values.length)return toast("각 질문의 답변을 선택하거나 입력해 주세요.");answers[field.q.question]=values.join(", ");}}const permissionChoiceId=yes&&!questions?permissionInputs.find(input=>input.checked)?.value:"";pending=true;allow.disabled=deny.disabled=true;for(const input of permissionInputs)input.disabled=true;try{await api("/api/respond",{id:sid,requestId:request.id,allow:yes,answers,...(permissionChoiceId?{permissionChoiceId}:{})});}catch(e){if(active?.id===sid&&[...$("requests").children].includes(card)){error(e.message);pending=false;allow.disabled=deny.disabled=false;for(const input of permissionInputs)input.disabled=false;}}}
+  async function answer(yes){if(pending||connectionRestarting()||active?.id!==sid||![...$("requests").children].includes(card)||appClosed)return;const answers={};if(yes&&questions){for(const field of fields){const values=field.inputs.filter(n=>n.checked).map(n=>n.value);if(field.custom.value.trim()){if(!field.q.multiSelect)values.length=0;values.push(field.custom.value.trim());}if(!values.length)return toast("각 질문의 답변을 선택하거나 입력해 주세요.");answers[field.q.question]=values.join(", ");}}const permissionChoiceId=yes&&!questions?permissionInputs.find(input=>input.checked)?.value:"";pending=true;pendingRequestAnswers.set(sid,(pendingRequestAnswers.get(sid)||0)+1);updateRestartControls();allow.disabled=deny.disabled=true;for(const input of permissionInputs)input.disabled=true;try{await api("/api/respond",{id:sid,requestId:request.id,allow:yes,answers,...(permissionChoiceId?{permissionChoiceId}:{})});}catch(e){if(active?.id===sid&&[...$("requests").children].includes(card)){error(e.message);pending=false;allow.disabled=deny.disabled=false;for(const input of permissionInputs)input.disabled=false;}}finally{const remaining=(pendingRequestAnswers.get(sid)||1)-1;if(remaining)pendingRequestAnswers.set(sid,remaining);else pendingRequestAnswers.delete(sid);updateRestartControls();}}
   deny.onclick=()=>answer(false);allow.onclick=()=>answer(true);actions.append(deny,allow);const footer=el("div",null,"request-footer");footer.append(selection,actions);card.append(footer);$("requests").append(card);return card;
 }
 function renderAttachments(){globalThis.WorkspaceComposer?.close();globalThis.WorkspaceAttachments?.renderNote();$("attachments").replaceChildren();for(const path of attachments){const chip=el("span",null,"attachment");chip.title=path;chip.append(el("span",basename(path)));if(globalThis.WorkspaceAttachments?.isCopy(path))chip.append(el("small","복사본","attachment-copy"));const remove=el("button","×");remove.type="button";remove.setAttribute("aria-label",basename(path)+" 첨부 취소");remove.disabled=sending||!!choiceSubmission;remove.onclick=()=>{if(sending||choiceSubmission)return;attachments=attachments.filter(p=>p!==path);globalThis.WorkspaceComposer?.removeFileReference(path);renderAttachments();saveDraft();};chip.append(remove);$("attachments").append(chip);}}
@@ -487,9 +550,10 @@ async function preview(path){
   $("external-html-note").hidden=!/\.html?$/i.test(path);showDialog("preview-dialog");
 }
 function folderMode(){const managed=$("folder-mode-new").checked;$("folder-existing-fields").hidden=managed;$("folder-new-fields").hidden=!managed;$("folder-input").required=!managed;$("new-workspace-location").textContent=managedRootChoice||boot.managedWorkspaceRoot||boot.workspaceLocationError||"저장 위치를 선택해 주세요.";$("managed-location-note").textContent="이 위치 아래에 이번 업무 전용 폴더를 만듭니다. 기존 업무는 이동하지 않아요.";}
-function chooseFolder(resume=false){$("import-open").hidden=resume;$("folder-title").textContent=resume?"이전 업무 폴더에서 이어갈까요?":"새 업무를 시작해 볼까요?";$("folder-description").textContent=resume?"기존 대화와 폴더를 그대로 사용합니다. 이 폴더의 Claude 설정·후크·MCP 실행을 확인해 주세요.":"이름을 정하면, 대화와 결과를 함께 모아둘게요.";$("folder-dialog").setAttribute("aria-label",resume?"기존 업무 폴더 확인":"새 업무 시작");$("confirm-folder-label").textContent=resume?"확인하고 이어가기":"업무 시작";folderChoiceGeneration++;managedRootChoice=null;$("folder-input").value=active?.workspace||boot.defaultWorkspace||"";$("trust").checked=false;$("folder-form").dataset.resume=resume?"yes":"no";$("folder-form").dataset.afterTrust="";$("folder-input").readOnly=resume;$("browse-folder").disabled=resume;$("choose-managed").disabled=resume;$("folder-mode-new").disabled=$("folder-mode-existing").disabled=resume;$("folder-mode-new").checked=!resume;$("folder-mode-existing").checked=resume;$("task-name").value=resume?active.title:"";$("task-name").disabled=resume;folderMode();showDialog("folder-dialog");}
+function chooseFolder(resume=false){if(appClosed)return;$("import-open").hidden=resume;$("folder-title").textContent=resume?"이전 업무 폴더에서 이어갈까요?":"새 업무를 시작해 볼까요?";$("folder-description").textContent=resume?"기존 대화와 폴더를 그대로 사용합니다. 이 폴더의 Claude 설정·후크·MCP 실행을 확인해 주세요.":"이름을 정하면, 대화와 결과를 함께 모아둘게요.";$("folder-dialog").setAttribute("aria-label",resume?"기존 업무 폴더 확인":"새 업무 시작");$("confirm-folder-label").textContent=resume?"확인하고 이어가기":"업무 시작";folderChoiceGeneration++;managedRootChoice=null;$("folder-input").value=active?.workspace||boot.defaultWorkspace||"";$("trust").checked=false;$("folder-form").dataset.resume=resume?"yes":"no";$("folder-form").dataset.afterTrust="";$("folder-input").readOnly=resume;$("browse-folder").disabled=resume;$("choose-managed").disabled=resume;$("folder-mode-new").disabled=$("folder-mode-existing").disabled=resume;$("folder-mode-new").checked=!resume;$("folder-mode-existing").checked=resume;$("task-name").value=resume?active.title:"";$("task-name").disabled=resume;folderMode();showDialog("folder-dialog");}
 async function submit(){
-  if(sending||choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||globalThis.WorkspaceAttachments?.isUploading()||globalThis.WorkspaceWorkflow?.isSubmitting()||appClosed)return;
+  if(sending||choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||globalThis.WorkspaceConnectionRestart?.isCurrent()||globalThis.WorkspaceAttachments?.isUploading()||globalThis.WorkspaceWorkflow?.isSubmitting()||appClosed)return;
+  if(globalThis.WorkspaceStop?.blocked()){saveDraft();toast(stopState()==="failed"?"중지 상태를 정리한 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.":"현재 작업의 중지가 끝난 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.");return;}
   if(busyStates.has(active?.state)){if(globalThis.WorkspaceWorkflow)return WorkspaceWorkflow.send("enqueue");return;}
   if(!$("prompt").value.trim())return $("prompt").focus();
   if(/^\/effort(?:\s|$)/u.test($("prompt").value.trim())){
@@ -505,7 +569,7 @@ async function submit(){
     return;
   }
   if(globalThis.WorkspaceComposer?.beforeSubmit()===false)return;
-  const owner=active,sid=active.id,ticket=selectionGeneration,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
+  const owner=active,sid=active.id,ticket=selectionGeneration,stopRevision=globalThis.WorkspaceStop?.revision(active.id)||0,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
   $("conversation").querySelector(".conversation-empty")?.remove();
   const pending=renderMessage({role:"user",text,files,pending:true});pending.classList.add("pending");pending.querySelector(".message-label").textContent="전송 중";globalThis.WorkspaceStream?.jump();
   try{
@@ -518,12 +582,14 @@ async function submit(){
     // discard partial messages received before the POST acknowledgement.
   }catch(e){
     pending.remove();
-    if(e.code==="control_restore_required"&&globalThis.WorkspaceInlineControls){
+    if(globalThis.WorkspaceStop?.handleFailure(e,sid,stopRevision)){
+      if(active?.id===sid&&selectionGeneration===ticket&&!appClosed)saveDraft();
+    }else if(e.code==="control_restore_required"&&globalThis.WorkspaceInlineControls){
       if(active?.id===sid&&selectionGeneration===ticket&&!appClosed){
         if(e.connection)applyConnectionState(e.connection);
         saveDraft();WorkspaceInlineControls.restoreFailure(e.message);renderConnection(active.connection);
       }
-    }else error(e.message);
+    }else if(active?.id===sid&&selectionGeneration===ticket&&!appClosed)error(e.message);
   }finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
 $("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{
@@ -541,12 +607,59 @@ async function browseWorkspace(managed){const button=$(managed?"choose-managed":
 $("browse-folder").onclick=()=>browseWorkspace(false);
 $("choose-managed").onclick=()=>browseWorkspace(true);
 $("attach").onclick=async()=>{if(attachmentPicking||sending||choiceSubmission||appClosed)return;const ticket=selectionGeneration,sid=active?.id||null;attachmentPicking=true;$("attach").disabled=true;try{toast("파일 선택 창을 열고 있어요.");const options={kind:"files",initialDirectory:active?.workspace||boot.defaultWorkspace,existingPaths:[...attachments]};const d=await (globalThis.WorkspacePathPicker?WorkspacePathPicker.open(options):api("/api/pick",{kind:"files"}));if(ticket!==selectionGeneration||sid!==(active?.id||null)||appClosed)return;attachments=[...new Set([...attachments,...d.paths])].slice(0,12);renderAttachments();saveDraft();}catch(e){if(ticket===selectionGeneration&&sid===(active?.id||null))error(e.message);}finally{attachmentPicking=false;setStatus(active?.state||"idle");}};
-$("attach-path").onclick=()=>{pathInputContext={id:active?.id||null,generation:selectionGeneration};showDialog("path-dialog");};$("path-form").onsubmit=e=>{if(e.submitter?.value!=="ok")return;if(!pathInputContext||pathInputContext.id!==(active?.id||null)||pathInputContext.generation!==selectionGeneration)return;const p=$("path-input").value.trim().replace(/^"|"$/g,"");if(p)attachments=[...new Set([...attachments,p])].slice(0,12);renderAttachments();saveDraft();$("path-input").value="";};
+$("attach-path").onclick=()=>{if(appClosed)return;pathInputContext={id:active?.id||null,generation:selectionGeneration};showDialog("path-dialog");};$("path-form").onsubmit=e=>{if(appClosed||e.submitter?.value!=="ok")return;if(!pathInputContext||pathInputContext.id!==(active?.id||null)||pathInputContext.generation!==selectionGeneration)return;const p=$("path-input").value.trim().replace(/^"|"$/g,"");if(p)attachments=[...new Set([...attachments,p])].slice(0,12);renderAttachments();saveDraft();$("path-input").value="";};
 $("tasks-open").onclick=()=>{$("task-search").value="";renderAllSessions();showDialog("tasks-dialog");$("task-search").focus();};$("tasks-close").onclick=()=>$("tasks-dialog").close();$("task-search").oninput=renderAllSessions;
 $("new-chat").onclick=()=>{showHome(true);chooseFolder();};$("home-button").onclick=()=>showHome();$("session-search").oninput=renderSessions;
 $("choose-folder").onclick=$("workspace-button").onclick=$("workspace-summary").onclick=()=>chooseFolder(!!active);
-document.querySelectorAll(".task-card,[data-prompt].prompt-shortcut").forEach(button=>button.onclick=()=>{$("prompt").value=button.dataset.prompt;$("prompt").focus();});
-$("stop").onclick=async()=>{if(globalThis.WorkspaceShortcuts)return WorkspaceShortcuts.stop();try{await api("/api/stop",{id:active.id});toast("중지 요청을 보냈어요. 완료된 파일 변경은 유지됩니다.");refreshResults();}catch(e){error(e.message);}};
+document.querySelectorAll(".task-card,[data-prompt].prompt-shortcut").forEach(button=>button.onclick=()=>{if(appClosed)return;$("prompt").value=button.dataset.prompt;$("prompt").focus();});
+function handleStopFailure(failure,id=active?.id,revision=stopStates.get(id)?.revision||0){
+  if(!["stop_in_progress","stop_cleanup_unverified"].includes(failure.code))return false;
+  const latest=stopStates.get(id);
+  // An older rejected send must not overwrite a newer confirmed stop event.
+  if(latest&&latest.revision!==revision&&!["stopping","failed"].includes(latest.state)){
+    if(active?.id===id)toast("중지가 끝났어요. 작성한 요청을 직접 다시 보내 주세요.");
+    return true;
+  }
+  applyStopState({stopState:failure.code==="stop_in_progress"?"stopping":"failed",cleanupRetryable:failure.cleanupRetryable===true,connectionStopped:failure.connectionStopped},id);
+  if(active?.id===id&&!appClosed){if(failure.connection){active.connection=failure.connection;renderConnection(active.connection);}if(failure.code==="stop_in_progress")error("");setStatus(active.state);}
+  return true;
+}
+async function requestStop({disconnect=false}={}){
+  if(!active||appClosed||connectionRestarting()||stopRequests.has(active.id)||stopState()==="stopping")return;
+  if(stopState()==="failed"?!cleanupRetryable():!disconnect&&!busyStates.has(active.state))return;
+  const owner=active,id=owner.id,previousState=owner.state;
+  saveDraft();stopRequests.set(id,{disconnect});applyStopState({stopState:"stopping"},id);
+  const revision=stopStates.get(id).revision;
+  error("");setStatus("stopping");renderConnection(owner.connection);
+  try{
+    const result=await api("/api/stop",{id,...(disconnect?{disconnect:true}:{})});
+    // The response can precede a later stop event on the network. Keep the
+    // newest lifecycle evidence and never resume or resend a user request.
+    if(result.session&&(stopStates.get(id)?.revision||0)===revision){
+      applyStopState(result.session,id);
+      if(active?.id===id){if(result.session.connection!==undefined)active.connection=result.session.connection;if(result.session.state)active.state=result.session.state;}
+    }
+    if(active?.id===id&&!appClosed)toast(disconnect?"업무 연결의 종료를 요청했어요. 대화와 작성 중인 내용은 유지됩니다.":"중지 요청을 보냈어요. 작성 중인 내용과 완료된 파일 변경은 유지됩니다.");
+  }catch(failure){
+    if(!handleStopFailure(failure,id,revision)){
+      // A failed acknowledgement is not proof that the stop failed. Read
+      // once to recover its state; this never opens a connection or sends work.
+      try{
+        const item=await api(`/api/session?id=${encodeURIComponent(id)}`);
+        if((stopStates.get(id)?.revision||0)===revision){
+          applyStopState(Object.prototype.hasOwnProperty.call(item,"stopState")?item:{stopState:null},id);
+          if(active?.id===id){active.state=item.state||previousState;if(item.connection!==undefined)active.connection=item.connection;}
+        }
+        if(active?.id===id&&!appClosed&&!stopBlocked())toast(failure.message);
+      }catch(_){if((stopStates.get(id)?.revision||0)===revision)applyStopState({stopState:"failed",cleanupRetryable:false},id);}
+    }
+  }finally{
+    stopRequests.delete(id);
+    if(active?.id===id&&!appClosed){setStatus(active.state);renderConnection(active.connection);}
+  }
+}
+globalThis.WorkspaceStop={request:requestStop,blocked:stopBlocked,handleFailure:handleStopFailure,revision:id=>stopStates.get(id)?.revision||0};
+$("stop").onclick=requestStop;
 $("refresh-files").onclick=()=>{refreshFiles();refreshResults();};$("files-tab").onclick=()=>setPanel("sources");$("results-tab").onclick=()=>setPanel("results");
 // Panel visibility is owned by layout.js, including compact viewports.
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
@@ -596,8 +709,91 @@ $("shortcuts-dialog").onclose=()=>{
 function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
 $("settings-dialog").onclose=()=>globalThis.WorkspaceAppUpdates?.settingsClosed();
-async function reconnect(){const buttons=[$("reconnect"),$("settings-refresh")];buttons.forEach(b=>b.disabled=true);try{const response=await api("/api/reconnect",active?{id:active.id}:{});boot=response;sessions=response.sessions;renderConnection(active?.connection);renderSessions();if(boot.error){error(boot.error);return;}error("");toast("실행 연결을 다시 확인했어요. 이전 요청은 다시 보내지 않았습니다.");if(active)await selectSession(active.id);else setStatus("idle");}catch(e){error(e.message);}finally{buttons.forEach(b=>b.disabled=false);}}
-$("reconnect").onclick=$("settings-refresh").onclick=reconnect;
+function restartConnectionLocked(){
+  return !active||stopState()==="stopping"||stopRequests.has(active?.id)||boot.demo||appClosed||quitting||connectionRestarting()||connectionPreparing||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||nativeOpening||attachmentPicking||pendingRequestAnswers.has(active?.id)||!!pendingConfirmation||!!globalThis.WorkspaceAttachments?.isUploading()||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceComposer?.waitForPreparation?.()||!!globalThis.WorkspaceInlineControls?.waitForPreparation?.()||!!globalThis.WorkspaceCapabilities?.isPreparing?.(active?.id)||modalStack.some(dialog=>dialog.open&&dialog!==$("settings-dialog"));
+}
+function updateRestartControls(){
+  const restarting=connectionRestarting(),blocked=restartConnectionLocked(),top=$("restart-connection"),settings=$("settings-restart-connection");
+  top.hidden=!active||!!globalThis.WorkspaceCapabilities?.isOpen();top.disabled=settings.disabled=!!blocked;
+  $("native").disabled=appClosed||nativeOpening||stopBlocked();
+  $("settings-disconnect").disabled=!!blocked||stopRequests.has(active?.id)||active?.connectionStopped===true||(!active?.connection&&!cleanupRetryable());
+  const label=restarting?"Claude Code를 다시 연결하고 있어요":boot.demo?"체험 화면에서는 Claude Code를 재시작하지 않습니다":active?`Claude Code 재시작 · ${active.title||"현재 업무"}`:"업무를 선택하면 Claude Code를 재시작할 수 있어요";
+  top.title=label;top.setAttribute("aria-label",label);top.setAttribute("aria-busy",String(restarting));settings.setAttribute("aria-busy",String(restarting));
+  $("connection-restart-message").textContent=restarting?"현재 업무의 Claude Code를 다시 연결하고 있어요. 작성 중인 입력은 유지됩니다.":!active?"먼저 재시작할 업무를 선택해 주세요.":boot.demo?"체험 화면에서는 실제 Claude Code를 실행하지 않습니다.":`적용 업무: ${active.title||"현재 업무"} · 다른 업무의 연결과 개인 설정은 유지됩니다.`;
+  $("settings-refresh").disabled=appClosed||stopBlocked()||restartingConnections.size>0||connectionPreparing;
+  $("reconnect").disabled=appClosed||stopState()==="stopping"||stopRequests.has(active?.id)||restartingConnections.size>0||connectionPreparing;
+  if(appClosed){$("connection-badge").textContent=shutdownLabel();$("connection-badge").title="종료가 끝날 때까지 새 작업과 연결 변경을 진행하지 않습니다.";$("settings-status").textContent=shutdownLabel();}
+  else if(stopBlocked()){$("connection-badge").textContent=stopState()==="failed"?"중지 확인 필요":"작업 중지 중";$("connection-badge").title="작성한 요청은 유지됩니다. 중지 상태를 확인한 뒤 직접 다시 보내 주세요.";$("settings-status").textContent=$("connection-badge").title;}
+  else if(restarting){$("connection-badge").textContent="Claude 재시작 중";$("connection-badge").title=label;$("settings-status").textContent="현재 업무의 Claude Code를 다시 연결하고 있어요.";}
+}
+function applyRestartSession(item){
+  if(!item||item.id!==active?.id)return;
+  // The snapshot cursor replaces any old-child events still waiting in a poll.
+  // Input and attachment drafts stay in place throughout this refresh.
+  if(pollController)pollController.abort();
+  globalThis.WorkspaceStream?.reset();globalThis.WorkspaceExecutionView?.reset(item.id);globalThis.WorkspaceToolActivity?.reset(item.id);
+  streaming.clear();active=item;applyStopState(item);started=null;choiceView=null;
+  $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();
+  for(const message of item.messages||[]){renderMessage(message);if(message.requestId)renderedQueuedRequests.add(message.requestId);}
+  globalThis.WorkspaceExecutionView?.restore(item.executions,item.artifacts);globalThis.WorkspaceToolActivity?.restore(item.toolActivity,item.runActivity);globalThis.WorkspaceProgressView?.reset(item.id,item.progress,item.lastRunId);
+  for(const request of item.requests||[])renderRequest(request);
+  if(!item.messages?.length&&!item.toolActivity?.length)$("conversation").append(el("p","업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
+  sessions=sessions.map(row=>row.id===item.id?sessionMetadata(item):row);taskHeader();renderConnection(item.connection);setStatus(item.state);renderSessions();
+  globalThis.WorkspaceWorkflow?.refresh();globalThis.WorkspaceStream?.changed();refreshFiles();refreshResults();
+  pollController=new AbortController();void poll(item.id,item.seq||0,pollController.signal);
+}
+async function restartConnection(){
+  if(restartConnectionLocked())return null;
+  const context={id:active.id,generation:selectionGeneration},same=()=>active?.id===context.id&&selectionGeneration===context.generation&&!appClosed;
+  const confirmStop=()=>confirmAction({title:"현재 작업을 중지하고 Claude Code를 재시작할까요?",message:"진행 중인 요청과 응답 대기를 중지합니다. 이미 변경한 파일과 작성 중인 입력은 유지되며, 이전 요청은 자동으로 다시 보내지 않습니다. 이어 할 일과 실행 예약은 일시 정지되며 직접 재개할 수 있어요.",confirmLabel:"중지하고 재시작",danger:true});
+  restartingConnections.set(context.id,context);saveDraft();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();setStatus(active.state);
+  let failure="",response=null;
+  try{
+    let stopRunning=busyStates.has(active.state)||!!$("requests").children.length||!!active.requests?.length||!!active.choice;
+    if(stopRunning&&(!await confirmStop()||!same()))return null;
+    if(!same())return null;
+    const request=()=>api("/api/restart-connection",{id:context.id,...(stopRunning?{stopRunning:true}:{})});
+    try{response=await request();}
+    catch(err){
+      // A schedule may start between the click and the server check. Only an
+      // explicit confirmation authorizes stopping that newly active request.
+      if(err.code!=="restart_requires_stop"||stopRunning||!same())throw err;
+      if(!await confirmStop()||!same())return null;
+      stopRunning=true;response=await request();
+    }
+    if(!same())return null;
+    if(response?.ok!==true||response.session?.id!==context.id)throw new Error("재시작 결과를 확인하지 못했어요. 연결 상태를 확인한 뒤 다시 시도해 주세요.");
+    applyRestartSession(response.session);
+    globalThis.WorkspaceCapabilities?.contextChanged(true);error("");
+    toast(response.workflowPaused?"현재 업무의 Claude Code를 다시 열었어요. 이어 할 일과 예약은 일시 정지 상태입니다. 필요한 항목을 직접 재개해 주세요.":"현재 업무의 Claude Code를 다시 열었어요. 다음 요청부터 새 연결을 사용합니다.");
+    return response;
+  }catch(err){
+    if(!same())return null;
+    failure=err.message||"Claude Code를 다시 연결하지 못했어요. 연결 상태를 확인한 뒤 다시 시도해 주세요.";
+    // A failed start may already have stopped the previous child. Refresh only
+    // observed state; never pretend that the old connection remains alive.
+    try{const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);if(same())applyRestartSession(item);}catch{}
+    if(same()){error(failure);toast(failure);}
+    return {ok:false,error:failure};
+  }finally{
+    if(restartingConnections.get(context.id)===context)restartingConnections.delete(context.id);
+    renderConnection(active?.connection);setStatus(active?.state||"idle");updateRestartControls();
+    if(same()){
+      if(failure)$("connection-restart-message").textContent=failure;
+      globalThis.WorkspaceComposer?.connectionChanged();
+    }
+  }
+}
+$("restart-connection").onclick=$("settings-restart-connection").onclick=restartConnection;
+async function reconnect(){if(appClosed||stopBlocked()||restartingConnections.size||connectionPreparing||sending||choiceSubmission||modelChanging||permissionChanging||effortChanging)return;const buttons=[$("reconnect"),$("settings-refresh")];buttons.forEach(b=>b.disabled=true);try{const response=await api("/api/reconnect",active?{id:active.id}:{});boot=response;sessions=response.sessions;renderConnection(active?.connection);renderSessions();if(boot.error){error(boot.error);return;}error("");toast("실행 연결을 다시 확인했어요. 이전 요청은 다시 보내지 않았습니다.");if(active)await selectSession(active.id);else setStatus("idle");}catch(e){error(e.message);}finally{buttons.forEach(b=>b.disabled=false);updateRestartControls();}}
+$("settings-refresh").onclick=reconnect;$("reconnect").onclick=()=>stopNoticeOwner===active?.id&&stopState()==="failed"?(cleanupRetryable()?requestStop():restartConnection()):reconnect();
+$("settings-disconnect").onclick=async()=>{
+  if($("settings-disconnect").disabled||restartConnectionLocked())return;
+  const context={id:active.id,generation:selectionGeneration},same=()=>active?.id===context.id&&selectionGeneration===context.generation&&!appClosed;
+  const busy=busyStates.has(active.state)||!!$("requests").children.length||!!active.requests?.length||!!active.choice;
+  if(busy&&!await confirmAction({title:"현재 작업을 중지하고 업무 연결을 종료할까요?",message:"진행 중인 요청을 멈추고 현재 업무의 Claude Code 연결을 종료합니다. 대화, 파일, 작성 중인 입력은 유지되며 이전 요청은 자동으로 다시 보내지 않습니다.",confirmLabel:"중지하고 연결 종료",danger:true}))return;
+  if(same())await requestStop({disconnect:true});
+};
 async function setModel(model){
   if(connectionLocked()||!active?.connection?.capabilities?.setModel)return null;
   const id=active.id,ticket=selectionGeneration,stillCurrent=()=>active?.id===id&&selectionGeneration===ticket&&!appClosed;
@@ -660,8 +856,9 @@ async function useCurrentControl(control){
   }catch(e){return stillCurrent()?{ok:false,error:e.message}:null;}
   finally{changing(false);setStatus(active?.state||"idle");}
 }
-$("task-title").onclick=()=>{if(!active)return;$("rename-input").value=active.title;showDialog("rename-dialog");};
+$("task-title").onclick=()=>{if(appClosed||!active)return;$("rename-input").value=active.title;showDialog("rename-dialog");};
 async function updateSession(id,change){
+  if(appClosed)return false;
   const pinning=typeof change.pinned==="boolean";
   if(pinning&&(sessionOrderSaving||sessionDragId))throw new Error("업무 순서 변경을 마친 뒤 고정해 주세요.");
   if(pinning){sessionOrderSaving=true;renderSessions();}
@@ -669,16 +866,16 @@ async function updateSession(id,change){
   finally{if(pinning){sessionOrderSaving=false;renderSessions();}}
 }
 $("rename-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();const id=active?.id;if(!id)return;try{await updateSession(id,{title:$("rename-input").value.trim()});$("rename-dialog").close();}catch(e){toast(e.message);}};
-$("task-pin").onclick=async()=>{if(!active)return;const id=active.id,pinned=!active.pinned;try{await updateSession(id,{pinned});}catch(e){toast(e.message);}};
+$("task-pin").onclick=async()=>{if(appClosed||!active)return;const id=active.id,pinned=!active.pinned;try{await updateSession(id,{pinned});}catch(e){toast(e.message);}};
 let nativeOpening=false;
 $("native").onclick=async()=>{
   if(!active)return toast("먼저 업무를 선택해 주세요.");
-  if(nativeOpening||appClosed)return;
-  if(busyStates.has(active.state)||sending||modelChanging||permissionChanging||effortChanging||connectionPreparing)return toast("진행 중인 요청을 마치거나 중지한 뒤 원본 Claude Code를 열어 주세요.");
+  if(nativeOpening||appClosed||stopBlocked())return;
+  if(busyStates.has(active.state)||sending||modelChanging||permissionChanging||effortChanging||connectionPreparing||connectionRestarting())return toast("진행 중인 요청을 마치거나 중지한 뒤 원본 Claude Code를 열어 주세요.");
   const id=active.id,ticket=selectionGeneration,stillCurrent=()=>active?.id===id&&selectionGeneration===ticket&&!appClosed;
   nativeOpening=true;$("native").disabled=true;saveDraft();
   try{
-    await api("/api/stop",{id});
+    await api("/api/stop",{id,disconnect:true});
     const deadline=Date.now()+30000;
     while(stillCurrent()){
       const session=await api(`/api/session?id=${encodeURIComponent(id)}`);
@@ -694,27 +891,92 @@ $("native").onclick=async()=>{
       await new Promise(resolve=>setTimeout(resolve,200));
     }
   }catch(e){if(stillCurrent())toast(e.message);}
-  finally{nativeOpening=false;$("native").disabled=appClosed;}
+  finally{nativeOpening=false;$("native").disabled=appClosed||stopBlocked();}
 };
 $("hide-window").onclick=async()=>{if(appClosed||boot.window?.hideSupported!==true)return;$("hide-window").disabled=true;saveDraft();try{const result=await api("/api/window/hide",{});if(result.hidden!==true)throw Error(result.message||"이 창을 숨길 수 없습니다. 창을 닫아도 업무는 계속됩니다.");$("settings-dialog").close();}catch(e){toast(e.message);}finally{$("hide-window").disabled=false;}};
-$("quit").onclick=async()=>{
-  if(quitting||!await confirmAction({title:"앱을 완전히 종료할까요?",message:"진행 중인 업무를 중지하고 앱 연결을 종료합니다. 앱이 꺼져 있는 동안에는 예약도 실행되지 않습니다. 이미 만들어진 파일은 유지됩니다.",confirmLabel:"완전히 종료",danger:true}))return;
-  quitting=true;appClosed=true;$("quit").disabled=true;$("settings-dialog").close();
+function shutdownLabel(){return shutdownState==="closed"?"앱 종료 완료":shutdownState==="failed"?"종료 확인 필요":shutdownState==="requested"?"종료 요청 전달됨":"앱을 종료하고 있어요";}
+function bootstrapShutdownState(value){return value.closed===true?"closed":value.shutdownState==="failed"?"failed":value.closing===true||value.shutdownState==="closing"?"closing":null;}
+function renderShutdown(){
+  const state=shutdownState,checking=state==="closing"||state==="requested";
+  const text=state==="closed"?"앱 종료가 완료됐어요. 이 창을 닫고 실행기로 다시 열 수 있습니다.":state==="failed"?"일부 업무 연결의 종료를 확인하지 못했어요. 새 작업은 잠시 멈춘 상태이며, 작성 중인 내용은 유지됩니다.":state==="requested"?"종료 요청을 전달했지만 완료는 아직 확인하지 못했어요. 새 작업을 시작하지 않고 종료 상태를 확인할 수 있습니다.":"업무 연결을 정리하고 있어요. 종료 완료를 확인할 때까지 새 작업을 시작하지 않습니다.";
+  $("shutdown-banner").hidden=false;$("shutdown-banner").dataset.state=state;
+  $("shutdown-title").textContent=shutdownLabel();$("shutdown-text").textContent=text;
+  const unverified=shutdownIssues.some(issue=>issue?.code==="descendants_unverified");
+  $("shutdown-detail").textContent=state==="failed"&&shutdownIssues.length?(unverified?"연결에서 실행한 일부 작업이 끝났는지 추가 확인이 필요합니다.":"일부 업무 연결을 정리하는 중 문제가 생겼습니다."):"";
+  $("shutdown-detail").hidden=!$("shutdown-detail").textContent;
+  $("shutdown-retry").hidden=state==="closed";$("shutdown-retry").disabled=quitting||checkingShutdown;
+  $("shutdown-retry").textContent=checking?"종료 상태 확인":"종료 다시 시도";
+  $("quit").disabled=quitting||checkingShutdown||state!=="failed";
+  setStatus(active?.state||"idle");error(text);
+}
+function enterShutdown(state,issues=[]){
+  if(active||$("prompt").value||attachments.length)saveDraft();
+  appClosed=true;shutdownState=state;shutdownIssues=Array.isArray(issues)?issues:[];
+  $("settings-dialog").close();
   globalThis.WorkspaceCapabilities?.close();
-  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();closePreview();
+  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
   if(pollController)pollController.abort();
-  setStatus(active?.state||"idle","앱을 종료하고 있어요");
-  error("업무 연결을 정리하고 있어요. 종료 완료 안내가 나올 때까지 잠시 기다려 주세요.");
+  for(const id of ["new-chat","choose-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
+  renderShutdown();
+}
+async function requestShutdown(payload={}){
+  if(quitting||checkingShutdown||shutdownState==="closed")return;
+  const challenge=typeof payload.confirmationId==="string",dialog=$("action-dialog");
+  let recoveryNotice="";quitting=true;
+  if(challenge){
+    // Keep the live screen intact until the server accepts the one-use choice.
+    // A stale confirmation must not leave a running app in shutdown mode.
+    saveDraft();$("action-title").textContent="작업을 정리하고 종료하고 있어요";
+    $("action-message").textContent="이 앱에서 실행한 작업과 연결을 종료하고 있습니다. 잠시 기다려 주세요.";
+    for(const id of ["action-confirm","action-cancel","action-close"])$(id).disabled=true;
+    dialog.oncancel=event=>event.preventDefault();showDialog("action-dialog");
+  }else enterShutdown("closing",shutdownIssues);
   try{
-    const result=await api("/api/quit",{});
-    const confirmed=result.closed===true;
-    $("status-text").textContent=confirmed?"앱 종료 완료":"종료 요청 전달됨";
-    error(confirmed?"앱 종료가 완료됐어요. 이 창을 닫고 실행기로 다시 열 수 있습니다.":"종료를 요청했어요. 이전 버전은 완료 상태를 알려주지 않습니다. 잠시 후 실행기로 다시 열어 주세요.");
+    const result=await api("/api/quit",payload);
+    const state=bootstrapShutdownState(result)||"requested";
+    if(challenge)enterShutdown(state,result.shutdownIssues);else shutdownState=state;
+    if(Array.isArray(result.shutdownIssues))shutdownIssues=result.shutdownIssues;
   }catch(e){
-    $("status-text").textContent="종료 확인 필요";
-    error("종료 완료를 확인하지 못했어요. 설정에서 앱 종료를 다시 누르거나 잠시 후 실행기로 다시 열어 주세요.");
-    $("quit").disabled=false;
-  }finally{quitting=false;}
+    if(challenge&&e.code==="quit_confirmation_expired"&&e.closing!==true){
+      recoveryNotice="종료 확인 시간이 지났어요. 작업은 그대로입니다. 완전 종료를 다시 선택해 주세요.";
+    }else{
+      if(challenge)enterShutdown("failed",e.shutdownIssues);else shutdownState="failed";
+      if(Array.isArray(e.shutdownIssues))shutdownIssues=e.shutdownIssues;
+    }
+  }finally{
+    if(challenge){dialog.oncancel=null;dialog.close();for(const id of ["action-confirm","action-cancel","action-close"])$(id).disabled=false;}
+    quitting=false;if(appClosed)renderShutdown();else setStatus(active?.state||"idle");if(recoveryNotice)toast(recoveryNotice);
+  }
+}
+let nativeQuitConfirmation=null;
+function confirmShutdownChallenge(confirmationId){
+  if(typeof confirmationId!=="string"||!/^[a-f0-9]{32}$/.test(confirmationId)||appClosed||quitting)return false;
+  if(nativeQuitConfirmation===confirmationId)return true;
+  if(nativeQuitConfirmation||pendingConfirmation)return false;
+  nativeQuitConfirmation=confirmationId;
+  void (async()=>{
+    try{
+      const accepted=await confirmAction({title:"작업 중인 내용이 있습니다. 그래도 종료하시겠습니까?",message:"이 앱의 진행 중인 작업과 승인·답변 대기를 모두 중지하고 종료합니다. 이미 저장된 대화와 파일은 유지되며, 앱이 꺼져 있는 동안 예약은 실행되지 않습니다.",confirmLabel:"종료",danger:true});
+      if(accepted)await requestShutdown({confirmed:true,confirmationId});
+      else await api("/api/quit",{confirmed:false,confirmationId});
+    }catch(e){toast(e.code==="quit_confirmation_expired"?"종료 확인이 만료됐어요. 작업은 그대로입니다.":"종료 선택을 전달하지 못했어요. 앱 상태를 확인한 뒤 다시 시도해 주세요.");}
+    finally{if(nativeQuitConfirmation===confirmationId)nativeQuitConfirmation=null;}
+  })();
+  return true; // Native ACK confirms only that the dialog is shown.
+}
+async function checkShutdown(){
+  if(quitting||checkingShutdown||shutdownState==="closed")return;
+  checkingShutdown=true;renderShutdown();
+  try{const result=await api("/api/bootstrap");shutdownState=bootstrapShutdownState(result)||"requested";if(Array.isArray(result.shutdownIssues))shutdownIssues=result.shutdownIssues;}
+  catch(_){shutdownState="failed";}
+  finally{checkingShutdown=false;renderShutdown();}
+}
+$("shutdown-retry").onclick=()=>shutdownState==="failed"?requestShutdown():checkShutdown();
+$("quit").onclick=async()=>{
+  if(quitting||checkingShutdown||shutdownState==="closed")return;
+  if(appClosed){if(shutdownState==="failed")await requestShutdown();return;}
+  if(!await confirmAction({title:sessions.some(row=>busyStates.has(row.state)||row.state==="stopping")||busyStates.has(active?.state)||active?.choice?"작업 중인 내용이 있습니다. 그래도 종료하시겠습니까?":"앱을 완전히 종료할까요?",message:"이 앱의 진행 중인 작업과 승인·답변 대기를 모두 중지하고 종료합니다. 이미 저장된 대화와 파일은 유지되며, 앱이 꺼져 있는 동안 예약은 실행되지 않습니다.",confirmLabel:"종료",danger:true}))return;
+  await requestShutdown({confirmed:true});
 };
 // A screen recovery carries only this tab's unsent drafts, never a request to execute.
 function captureScreenRecovery(){
@@ -740,22 +1002,22 @@ async function restoreScreenRecovery(snapshot){
     if(!row.text&&!row.attachments.length)return false;
     return row.id!=="home"&&!sessions.some(item=>item.id===row.id)&&!(row.id===id&&same(drafts.get("home")));
   }).map(row=>row.id).concat(stashConflicts);
-  if(exists){
+  if(exists&&!appClosed){
     const selection=selectSession(id,{keepDraft:true}),ticket=selectionGeneration;
     const selected=await selection;
     if(selected===false||active?.id!==id||selectionGeneration!==ticket)return {selectionChanged:true,conflicts:conflicts()};
     restoreDraft(id);return {conflicts:conflicts()};
   }
   if(id&&!liveDraftIds.has("home")){const previous=drafts.get(id);if(previous)drafts.set("home",{text:previous.text,attachments:[...previous.attachments]});}
-  restoreDraft("home");return {missingSession:!!id,conflicts:conflicts()};
+  restoreDraft("home");return {missingSession:!!id&&!exists,conflicts:conflicts()};
 }
 globalThis.WorkspaceStartupHealth?.attach({
   report:record=>api("/api/ui-health",record),capture:captureScreenRecovery,restore:restoreScreenRecovery,
-  canReload:()=>!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
+  canReload:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
 });
 globalThis.WorkspaceUpgrade?.attach({
   api:(path,data)=>api(path,data),capture:captureScreenRecovery,restore:restoreScreenRecovery,
-  canCapture:()=>!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
+  canCapture:()=>!restartingConnections.size&&!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
   openRecovery:id=>showDialog(id),taskTitle:id=>sessions.find(row=>row.id===id)?.title,
   confirmRecovery:()=>confirmAction({title:"이전 초안 보관을 해제할까요?",message:"필요한 내용을 복사했는지 확인해 주세요. 이전 창에서 별도로 보관한 초안 기록만 지우며, 현재 화면의 입력 내용과 대화·파일은 유지합니다.",confirmLabel:"보관 해제"}),
   failed:message=>toast(message),restored:outcome=>toast(outcome?.missingSession?"작성 중이던 내용을 업무 홈에 복원했어요.":"이전 창의 작성 내용과 첨부 자료를 이어서 사용할 수 있어요.")
@@ -763,7 +1025,14 @@ globalThis.WorkspaceUpgrade?.attach({
 globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,signal),
   legacy:(id,runId)=>active?.id===id?(active.toolActivity||[]).filter(row=>!runId||row.runId===runId):[]});
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
-  canOfferUpdate:()=>!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
-async function init(){try{boot=await api("/api/bootstrap");sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
+  canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
+async function init(){try{
+  boot=await api("/api/bootstrap");const shutdown=bootstrapShutdownState(boot);
+  // Set the gate before rendering or starting any background integration.
+  if(shutdown){appClosed=true;shutdownState=shutdown;}
+  sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");
+  if(shutdown){enterShutdown(shutdown,boot.shutdownIssues);await globalThis.WorkspaceStartupHealth?.bootstrapReady();return;}
+  globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
+}catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

@@ -5,7 +5,9 @@ globalThis.WorkspaceAttachments = (() => {
   const mime = "application/x-company-workspace-file";
   let drag = null, serial = 0, uploading = false, depth = 0;
   const pathKey = value => String(value).replace(/\\/g,"/").toLowerCase();
-  const merge = (before, incoming) => { const seen = new Set(); return [...before,...incoming].filter(path => {const key=pathKey(path);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,12); };
+  const limit = (name, fallback) => Number.isSafeInteger(boot.attachmentPolicy?.[name]) && boot.attachmentPolicy[name]>0 ? boot.attachmentPolicy[name] : fallback;
+  const maxAttachments = () => limit("maxAttachments",12);
+  const merge = (before, incoming) => { const seen = new Set(); return [...before,...incoming].filter(path => {const key=pathKey(path);if(seen.has(key))return false;seen.add(key);return true;}).slice(0,maxAttachments()); };
   const locked = () => sending || !!choiceSubmission || appClosed || uploading;
   function renderNote() {
     note.hidden = !uploading && !attachments.some(path=>copies.has(pathKey(path)));
@@ -34,9 +36,23 @@ globalThis.WorkspaceAttachments = (() => {
   }
   const accepts = event => [...(event.dataTransfer?.types || [])].some(type => type === "Files" || type === mime);
   async function upload(file, context) {
-    const response = await fetch(`/api/attachments/upload?id=${encodeURIComponent(context.id)}`, {
-      method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/octet-stream","X-File-Name":encodeURIComponent(file.name)},body:file
-    });
+    const extensions=boot.attachmentPolicy?.extensions,name=String(file.name).toLowerCase();
+    if(Array.isArray(extensions)&&!extensions.some(extension=>typeof extension==="string"&&name.endsWith(extension.toLowerCase()))) {
+      throw new Error(`‘${file.name}’은 첨부를 지원하지 않는 파일 형식입니다.`);
+    }
+    // Check metadata before sending bytes so a rejected large body cannot hide
+    // the actual type, session, or quota error behind a closed connection.
+    const prepared=await api("/api/attachments/prepare",{id:context.id,name:file.name,size:file.size});
+    if(appClosed)throw new Error("앱이 종료되어 파일 전송을 시작하지 않았습니다.");
+    if(prepared?.ok!==true)throw new Error("파일 전송 준비를 확인하지 못했습니다. 자료 목록을 확인해 주세요.");
+    let response;
+    try {
+      response = await fetch(`/api/attachments/upload?id=${encodeURIComponent(context.id)}`, {
+        method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/octet-stream","X-File-Name":encodeURIComponent(file.name)},body:file
+      });
+    } catch (_) {
+      throw new Error("파일 전송 중 앱과 연결이 끊겼습니다. 복사 여부를 확인하지 못했으니 자료 목록을 먼저 확인해 주세요.");
+    }
     let value;try {value=await response.json();}catch (_) {throw new Error("파일 복사 결과를 확인하지 못했습니다. 자료 목록을 확인해 주세요.");}
     if (!response.ok) throw new Error(value.error || "파일을 복사하지 못했습니다.");
     if (typeof value.path !== "string" || value.copied !== true) throw new Error("파일 복사 응답을 확인하지 못했습니다.");
@@ -52,7 +68,7 @@ globalThis.WorkspaceAttachments = (() => {
     const key = event.dataTransfer.getData(mime);
     if (key) {
       if (!drag || key !== drag.key || drag.sessionId !== context.id || drag.generation !== context.generation) return toast("현재 업무의 자료를 다시 끌어 주세요.");
-      if (!attachments.some(path=>pathKey(path)===pathKey(drag.path)) && attachments.length>=12) return toast("자료는 한 번에 12개까지 추가할 수 있습니다.");
+      if (!attachments.some(path=>pathKey(path)===pathKey(drag.path)) && attachments.length>=maxAttachments()) return toast(`자료는 한 번에 ${maxAttachments()}개까지 추가할 수 있습니다.`);
       attach([drag.path],context);drag=null;toast("원본 파일을 자료에 추가했습니다.");return;
     }
     const directory = [...(event.dataTransfer.items || [])].some(item => {
@@ -61,8 +77,9 @@ globalThis.WorkspaceAttachments = (() => {
     if (directory) return toast("폴더 대신 파일을 끌어 주세요. 업무 폴더는 ‘저장 위치 선택’에서 지정할 수 있습니다.");
     const files = [...(event.dataTransfer.files || [])];
     if (!files.length) return toast("폴더 대신 파일을 끌어 주세요. 경로로 추가할 수도 있습니다.");
-    if (attachments.length + files.length > 12) return toast("자료는 한 번에 12개까지 추가할 수 있습니다.");
-    if (files.some(file=>file.size > 50*1024*1024)) return toast("끌어 놓는 파일은 각각 50MB 이하여야 합니다. 큰 파일은 ‘자료 추가’로 원본을 선택해 주세요.");
+    if (attachments.length + files.length > maxAttachments()) return toast(`자료는 한 번에 ${maxAttachments()}개까지 추가할 수 있습니다.`);
+    const maxBytes=limit("maxUploadBytes",50*1024*1024);
+    if (files.some(file=>file.size > maxBytes)) return toast(`끌어 놓는 파일은 각각 ${Math.floor(maxBytes/1024/1024)}MB 이하여야 합니다. 큰 파일은 ‘자료 추가’로 원본을 선택해 주세요.`);
     uploading=true;note.hidden=false;note.textContent="앱 관리 공간에 파일 복사본을 저장하고 있습니다. 원본은 변경하지 않습니다.";setStatus(active.state);
     let completed=0;
     try {

@@ -42,6 +42,7 @@ class NotificationRoutingTests(unittest.TestCase):
             is_foreground=lambda sid: False, on_open=self.app.open_task, cooldown=0)
         self.addCleanup(self.app.desktop.close)
         self.payload = {'id': 'a' * 64, 'title': '분기 실적 보고서', 'kind': 'attention',
+                        'summary': '보고서 형식을 골라 주세요',
                         'message': MESSAGES['attention'], 'sessionId': self.sid,
                         'privatePrompt': 'must never leave the server',
                         'requests': [{'command': 'private command'}]}
@@ -50,6 +51,7 @@ class NotificationRoutingTests(unittest.TestCase):
         callback = lambda: None
         self.assertTrue(self.app._notify_desktop(self.payload, callback))
         self.assertEqual([{'title': self.payload['title'], 'message': MESSAGES['attention'],
+                           'summary': self.payload['summary'],
                            'kind': 'attention', 'notification_id': 'a' * 64,
                            'on_click': callback}], self.app._desktop_window.calls)
         self.assertEqual([], self.app.tray.calls)
@@ -74,8 +76,14 @@ class NotificationRoutingTests(unittest.TestCase):
         self.app._desktop_window.result = None
         callback = lambda: None
         self.assertTrue(self.app._notify_desktop(self.payload, callback))
-        self.assertEqual([{'title': self.payload['title'], 'message': MESSAGES['attention'],
+        self.assertEqual([{'title': self.payload['title'], 'message': self.payload['summary'],
                            'on_click': callback}], self.app.tray.calls)
+
+    def test_legacy_receipt_without_summary_keeps_fixed_tray_message(self):
+        self.payload.pop('summary')
+        self.app._desktop_window.result = None
+        self.assertTrue(self.app._notify_desktop(self.payload, lambda: None))
+        self.assertEqual(MESSAGES['attention'], self.app.tray.calls[0]['message'])
 
     def test_missing_host_uses_tray_without_needing_to_open_a_window(self):
         self.app._desktop_window = None
@@ -201,6 +209,31 @@ class BackgroundNotificationFlowTests(unittest.TestCase):
         self.assertEqual(['completed'], [call['kind'] for call in self.host.calls])
         self.assertEqual({}, self.item['requests'])
         self.assertIsNone(self.item.get('choice'))
+
+    def test_hidden_question_and_approval_deliver_short_summary_without_raw_tool_content(self):
+        self.hide()
+        self.app.emit(self.sid, 'request', {'id': 'question', 'tool': 'AskUserQuestion', 'input': {
+            'questions': [{'question': '보고서 형식을 골라 주세요', 'options': [{'label': 'PRIVATE OPTION'}]}]}})
+        self.assertEqual('보고서 형식을 골라 주세요', self.host.calls[-1]['summary'])
+        self.assertNotIn('PRIVATE OPTION', str(self.host.calls))
+        self.app.emit(self.sid, 'request_closed', {'id': 'question'})
+        self.app.emit(self.sid, 'request', {'id': 'approval', 'tool': 'Bash', 'input': {
+            'description': '검증 스크립트 실행', 'command': 'PRIVATE COMMAND token=glpat-abcdefghijk'}})
+        self.assertEqual('검증 스크립트 실행', self.host.calls[-1]['summary'])
+        self.assertNotIn('PRIVATE COMMAND', str(self.host.calls))
+        self.assertNotIn('glpat-', str(self.host.calls))
+
+    def test_answered_deferred_summary_is_not_delivered_after_request_closes(self):
+        self.hide()
+        self.host.result = 'busy'
+        self.app.emit(self.sid, 'request', {'id': 'question', 'tool': 'AskUserQuestion', 'input': {
+            'questions': [{'question': '보고서 형식을 골라 주세요'}]}})
+        self.assertEqual(1, len(self.host.calls))
+        self.app.emit(self.sid, 'request_closed', {'id': 'question'})
+        self.host.result = True
+        self.app.desktop.flush_pending()
+        self.assertEqual(1, len(self.host.calls))
+        self.assertEqual({}, self.app.desktop._pending)
 
     def test_hidden_queue_continues_and_complete_quit_closes_cli_and_notification_retry(self):
         self.hide()

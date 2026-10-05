@@ -88,6 +88,17 @@ class WorkspaceAttentionFrontendTests(unittest.TestCase):
           assert.equal($('attention-count').textContent,'1');
         })()""")
 
+    def test_browser_fallback_and_legacy_attention_list_show_same_request_summary(self):
+        self.run_case(r"""(async()=>{
+          const notices=[];globalThis.Notification=class {static permission='granted';constructor(title,options){this.options=options;notices.push(this);}close(){}};
+          await $('notifications-toggle').onclick();
+          api=async()=>attention([{...pending,summary:'보고서 형식을 골라 주세요'}]);WorkspaceAttention.start();await flush();
+          assert.equal(notices.length,1);assert.equal(notices[0].options.body,'업무 B · 승인 대기\n보고서 형식을 골라 주세요');
+          $('attention-open').onclick();const button=$('attention-items').children[0];
+          assert.equal(button.children[1].textContent,'보고서 형식을 골라 주세요');
+          assert.equal(button.children[1].classList.contains('inbox-request-summary'),true);
+        })()""")
+
     def test_denied_notifications_keep_badge_without_repeated_permission_requests(self):
         self.run_case(r"""(async()=>{
           let permissionRequests=0;globalThis.Notification=class {static permission='denied';static async requestPermission(){permissionRequests++;return 'denied';}close(){}};

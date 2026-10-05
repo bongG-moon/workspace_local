@@ -53,22 +53,22 @@ globalThis.WorkspaceComposer = (() => {
   }
   function render(response = {}) {
     list.replaceChildren(); box.hidden = false; input.setAttribute("aria-expanded", "true");
-    $("composer-suggestion-title").textContent = current?.kind === "terminal" ? "Claude Code 터미널 명령"
-      : current?.kind === "file" ? "파일 참조" : "스킬·명령";
+    $("composer-suggestion-title").textContent = current?.kind === "terminal" ? "터미널 실행 명령(!)"
+      : current?.kind === "file" ? "파일 참조" : "스킬·빠른 요청(/명령)";
     $("composer-suggestion-context").textContent = `${active ? basename(active.workspace) : "공통 스킬"} · ${rows.length ? `${rows.length}개 후보` : active ? "현재 업무 기준" : "업무 선택 전"}`;
     $("composer-connect").hidden = !active || current?.kind !== "slash" || response.connectRequired !== true || Boolean(preparing);
     $("composer-connect").disabled = Boolean(preparing);
-    $("composer-connect").textContent = preparing ? "명령 불러오는 중…" : "Claude 명령 불러오기";
+    $("composer-connect").textContent = preparing ? "빠른 요청 불러오는 중…" : "빠른 요청 불러오기";
     $("composer-native").hidden = current?.kind !== "terminal" && !rows.some(row => row.supported === false);
     $("composer-suggestion-note").textContent = rows.length
       ? "↑ ↓ / Ctrl+N·P 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 정보 기준이며 실행 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
-      : response.message || (preparing?.id === active?.id && active ? "Claude 명령을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
-      : !active ? "설치된 공통 스킬에서 일치하는 항목을 찾지 못했어요. 업무를 선택하면 해당 폴더의 명령도 확인할 수 있어요."
-      : response.connectRequired ? "연결에서 명령 목록을 확인하지 못했어요. ‘Claude 명령 불러오기’로 다시 시도할 수 있어요."
+      : response.message || (preparing?.id === active?.id && active ? "빠른 요청 목록을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
+      : !active ? "설치된 공통 스킬에서 일치하는 항목을 찾지 못했어요. 업무를 선택하면 해당 폴더의 빠른 요청도 확인할 수 있어요."
+      : response.connectRequired ? "연결에서 빠른 요청 목록을 확인하지 못했어요. ‘빠른 요청 불러오기’로 다시 시도할 수 있어요."
       : response.message || (response.limited
         ? current?.kind === "file" ? "파일 목록을 일부만 확인했어요. 자료 추가에서 필요한 파일을 직접 선택할 수 있어요." : "현재 업무 연결의 호출 목록을 충분히 확인하지 못했어요. 연결 상태를 확인해 주세요."
         : current?.kind === "file" ? "일치하는 파일이 없어요. 자료 추가로 다른 위치의 파일도 선택할 수 있어요."
-        : current?.query ? "현재 연결이 보고한 목록에 일치하는 명령이 없어요." : "현재 연결이 보고한 스킬·명령 목록이 비어 있어요."));
+        : current?.query ? "현재 연결이 보고한 목록에 일치하는 빠른 요청이 없어요." : "현재 연결이 보고한 스킬·빠른 요청 목록이 비어 있어요."));
     const ticket = generation;
     rows.forEach((row, index) => {
       const button = el("button", null, "composer-suggestion" + (row.supported === false ? " unavailable" : ""));
@@ -90,11 +90,12 @@ globalThis.WorkspaceComposer = (() => {
     activeOption();
   }
   async function refresh() {
+    if(globalThis.WorkspaceConnectionRestart?.isCurrent()){close();return;}
     const request = trigger(); if (!request) { close(); return; }
     const ticket = ++generation; if (controller) controller.abort(); controller = new AbortController();
     current = request; rows = []; selected = 0; render({message:"목록을 확인하고 있어요."});
     if (request.kind === "terminal") {
-      render({message:"! 명령은 원본 Claude Code의 셸 모드에서 실행하세요. 입력 내용은 그대로 유지됩니다."}); return;
+      render({message:"!로 시작하는 실행 명령은 원본 Claude Code의 셸 모드에서 실행하세요. /로 부르는 빠른 요청과는 달라요. 입력 내용은 그대로 유지됩니다."}); return;
     }
     if (request.kind === "file" && !request.sessionId) {
       render({message:"업무를 선택하면 그 폴더의 파일을 바로 추천해요. ‘새 업무’에서 폴더를 선택해 주세요."}); return;
@@ -123,7 +124,7 @@ globalThis.WorkspaceComposer = (() => {
     globalThis.WorkspaceInlineControls?.close();
     dismissed = false;
     close(); current = trigger(); if (!current) return;
-    render({message:current.kind === "file" ? "파일을 찾고 있어요." : "사용 가능한 명령을 찾고 있어요."});
+    render({message:current.kind === "file" ? "파일을 찾고 있어요." : "사용 가능한 빠른 요청을 찾고 있어요."});
     timer = setTimeout(refresh, 140);
   }
   function choose(index, ticket = generation) {
@@ -165,11 +166,11 @@ globalThis.WorkspaceComposer = (() => {
   }
   $("composer-connect").onmousedown = event => event.preventDefault();
   async function prepareConnection({automatic=false} = {}) {
-    if (!active || preparing || sending || choiceSubmission || appClosed) return;
+    if (!active || preparing || sending || choiceSubmission || connectionPreparing || globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed) return;
     if (!active.trusted) { chooseFolder(true); $("folder-form").dataset.afterTrust = "commands"; return; }
     const context = {id:active.id, selection:selectionGeneration}; preparing = context;
     preparationAttempts.add(context.id);
-    $("composer-connect").disabled = true; $("composer-connect").textContent = "명령 불러오는 중…";
+    $("composer-connect").disabled = true; $("composer-connect").textContent = "빠른 요청 불러오는 중…";
     try {
       // Completion and Shift+Tab can ask for the same connection in one key
       // sequence. Share only the in-flight request for this exact task/view.
@@ -187,7 +188,7 @@ globalThis.WorkspaceComposer = (() => {
       }
     } finally {
       if (preparing === context) {
-        preparing = null; $("composer-connect").disabled = false; $("composer-connect").textContent = "Claude 명령 불러오기";
+        preparing = null; $("composer-connect").disabled = false; $("composer-connect").textContent = "빠른 요청 불러오기";
         if (current?.kind === "slash" && !box.hidden && active?.id === context.id && !active.connection?.connected) $("composer-connect").hidden = false;
       }
     }

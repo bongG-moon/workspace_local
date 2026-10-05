@@ -159,7 +159,38 @@ class ShutdownTests(unittest.TestCase):
         self.assertTrue(payload['closed'])
         self.assertEqual(2, bridge.close.call_count)
 
-    def test_quit_drains_request_accepted_before_shutdown(self):
+    def test_failed_shutdown_keeps_recovery_diagnostics_available_and_reports_safe_cause(self):
+        bridge = Mock(closed=True, descendant_cleanup_uncertain=True)
+        bridge.close.return_value = False
+        self.app.get(self.sid)['bridge'] = bridge
+        self.assertEqual(503, self.request('/api/quit', {})[0])
+        status, snapshot = self.request('/api/bootstrap')
+        self.assertEqual(200, status)
+        self.assertEqual([{'sessionId': self.sid, 'code': 'descendants_unverified'}], snapshot['shutdownIssues'])
+        self.app.ui_health.frontend = Mock(return_value=True)
+        self.assertEqual(200, self.request('/api/ui-health', {'event': 'startup', 'status': 'ready'})[0])
+        self.assertEqual(403, self.request('/api/ui-health', {}, authorized=False)[0])
+        self.app.ui_health.frontend.assert_called_once()
+        self.assertEqual(409, self.request('/api/send', {'id': self.sid, 'text': 'must not run'})[0])
+        bridge.descendant_cleanup_uncertain = False
+        bridge.close.return_value = True
+        status, closed = self.request('/api/quit', {})
+        self.assertEqual(200, status)
+        self.assertTrue(closed['closed'])
+        self.assertEqual([], closed['shutdownIssues'])
+
+    def test_shutdown_failure_does_not_expose_exception_text(self):
+        bridge = Mock(closed=True)
+        bridge.close.side_effect = RuntimeError('private raw command and credentials')
+        self.app.get(self.sid)['bridge'] = bridge
+        status, response = self.request('/api/quit', {})
+        self.assertEqual(503, status)
+        self.assertEqual([{'sessionId': self.sid, 'code': 'cleanup_exception'}], response['shutdownIssues'])
+        self.assertNotIn('private raw command', json.dumps(response))
+        bridge.close.side_effect = None
+        bridge.close.return_value = True
+
+    def test_confirmed_quit_closes_child_before_draining_request_accepted_before_shutdown(self):
         started, release = threading.Event(), threading.Event()
         self.releases.append(release)
 
@@ -174,9 +205,9 @@ class ShutdownTests(unittest.TestCase):
         self.app.get(self.sid)['bridge'] = bridge
         earlier = self.pool.submit(self.request, '/api/reconnect', {'id': self.sid})
         self.assertTrue(started.wait(2))
-        quitting = self.pool.submit(self.request, '/api/quit', {})
+        quitting = self.pool.submit(self.request, '/api/quit', {'confirmed': True})
         self.wait_closing()
-        bridge.close.assert_not_called()
+        bridge.close.assert_called_once()
         self.assertFalse(quitting.done())
         self.assertEqual(409, self.request('/api/reconnect', {'id': self.sid})[0])
         release.set()

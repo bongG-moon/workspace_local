@@ -28,19 +28,23 @@ internal static class TestNotificationCard
     private struct NativeRect { internal int Left, Top, Right, Bottom; }
     private static void Check(bool condition, string reason) { if (!condition) throw new Exception(reason); }
     private static void Completed(object card, bool wasOpened) { if (wasOpened) opened++; else dismissed++; }
-    private static Form Card(string kind, string title = "9월 실적 보고서 정리 · 긴 업무 제목 확인용 알림 카드입니다")
+    private static Form Card(string kind, string title = "9월 실적 보고서 정리 · 긴 업무 제목 확인용 알림 카드입니다",
+        string summary = "보고서에 사용할 자료 범위를 선택해 주세요. 선택한 범위로 결과를 정리합니다.")
     {
         return (Form)Activator.CreateInstance(cardType, Private, null, new object[] {
             new String('a', 64), kind, title,
             kind == "attention" ? "승인 또는 답변이 필요해요. 클릭하면 해당 업무를 열어요."
                 : kind == "error" ? "작업 상태를 확인해 주세요. 클릭하면 해당 업무를 열어요."
-                : "작업이 완료됐어요. 클릭하면 결과를 볼 수 있어요.", completed }, null);
+                : "작업이 완료됐어요. 클릭하면 결과를 볼 수 있어요.",
+            kind == "attention" ? summary : "", completed }, null);
     }
     private static void Arrange(Form card, Rectangle area, uint dpi)
     {
         cardType.GetMethod("Arrange", Private).Invoke(card, new object[] { area, dpi });
         Check(area.Contains(card.Bounds), "Card escaped monitor working area");
-        foreach (Control child in card.Controls) Check(card.ClientRectangle.Contains(child.Bounds), "Child escaped card: " + child.Text);
+        foreach (Control child in card.Controls)
+            if (!(child is Label) || child.Text.Length > 0)
+                Check(card.ClientRectangle.Contains(child.Bounds), "Child escaped card: " + child.Text);
     }
     private static int U16(byte[] data, int offset)
     {
@@ -172,7 +176,9 @@ internal static class TestNotificationCard
     private static void CompactLayout(Form card, uint dpi)
     {
         float scale = dpi / 96f;
-        Check(card.ClientSize == new Size((int)Math.Round(340 * scale), (int)Math.Round(96 * scale)), "Unexpected compact card dimensions");
+        var summary = (Label)cardType.GetField("summaryLabel", Private).GetValue(card);
+        bool hasSummary = summary.Text.Length > 0;
+        Check(card.ClientSize == new Size((int)Math.Round(340 * scale), (int)Math.Round((hasSummary ? 120 : 96) * scale)), "Unexpected compact card dimensions");
         int labels = 0, buttons = 0;
         foreach (Control control in card.Controls)
         {
@@ -185,12 +191,20 @@ internal static class TestNotificationCard
             if (control.Text.Length != 0)
                 Check(control.Font.FontFamily.Name.StartsWith("Noto Sans KR", StringComparison.Ordinal), "Private Noto font unavailable: " + control.Text);
         }
-        Check(labels == 2 && buttons == 2, "Compact card must contain only status/title and open/close controls");
+        Check(labels == 3 && buttons == 2, "Compact card must contain status/title/request and open/close controls");
         var status = (Label)cardType.GetField("statusLabel", Private).GetValue(card);
         var title = (Label)cardType.GetField("titleLabel", Private).GetValue(card);
         var action = (Button)cardType.GetField("openButton", Private).GetValue(card);
         Check(Math.Abs(status.Font.Size - 11 * scale) < .01f && Math.Abs(title.Font.Size - 14 * scale) < .01f
             && Math.Abs(action.Font.Size - 12 * scale) < .01f, "Typography hierarchy or DPI sizing changed");
+        if (hasSummary)
+        {
+            Check(summary.Top > title.Bottom && summary.AutoEllipsis, "Request summary must be bounded below the task title");
+            Check(summary.Height <= 36 * scale + 1 && Math.Abs(summary.Font.Size - 12 * scale) < .01f,
+                "Request summary must retain compact two-line sizing");
+            Check(SystemInformation.HighContrast || summary.ForeColor == Color.FromArgb(75, 81, 98),
+                "Request summary is not dark gray");
+        }
         Check(card.Region != null, "Missing uniform manual window region");
         float radius = 10 * scale;
         if (!SystemInformation.HighContrast)
@@ -209,8 +223,11 @@ internal static class TestNotificationCard
             // control's own painting at its actual layout without showing a Form.
             using (var graphics = Graphics.FromImage(image))
                 foreach (Control child in card.Controls)
+                {
+                    if (child is Label && child.Text.Length == 0) continue;
                     using (var childImage = new Bitmap(child.Width, child.Height))
                     { child.DrawToBitmap(childImage, child.ClientRectangle); graphics.DrawImageUnscaled(childImage, child.Location); }
+                }
             image.Save(target);
         }
     }
@@ -262,6 +279,19 @@ internal static class TestNotificationCard
                 CompactLayout(preview, 144);
                 Render(preview, Path.Combine(output, "attention-144-short.png"));
             }
+            foreach (string summary in new[] { "", "검증 스크립트 실행 승인이 필요해요", new String('가', 99) + "…" })
+                using (var preview = Card("attention", "분기 실적 보고서 정리", summary))
+                {
+                    var label = (Label)cardType.GetField("summaryLabel", Private).GetValue(preview);
+                    Check(label.Text == (summary.Length > 0 ? summary : "승인 또는 답변 내용을 확인해 주세요"),
+                        "Missing metadata must retain a safe action label");
+                    foreach (uint dpi in new uint[] { 96, 144, 192 })
+                    {
+                        Arrange(preview, new Rectangle(0, 0, 1280, 720), dpi);
+                        CompactLayout(preview, dpi);
+                        Render(preview, Path.Combine(output, (summary.Length == 0 ? "fallback" : summary.Length < 100 ? "approval" : "long-question") + "-" + dpi + ".png"));
+                    }
+                }
             foreach (bool clickOpen in new[] { true, false })
             {
                 opened = dismissed = 0;
@@ -301,7 +331,7 @@ internal static class TestNotificationCard
             GC.KeepAlive(ownProcess); ownProcess.Dispose();
             Check(gdiBefore > 0 && userBefore > 0 && gdiAfter > 0 && userAfter > 0, "Native handle measurements unavailable");
             Check(gdiAfter <= gdiBefore + 8 && userAfter <= userBefore + 3, "Native handles grew across dispose cycles");
-            Console.WriteLine("PASS: input validation; full Hangul private fonts (actual 400/600 weights and different rendered weight); 3 compact card kinds x 3 DPIs; negative/short work areas; uniform 10-DIP region without legacy shadow or native non-client frame; non-activation styles; accessible open/close exactly once; 64 dispose cycles.");
+            Console.WriteLine("PASS: input validation; full Hangul private fonts (actual 400/600 weights and different rendered weight); 3 compact card kinds and request/fallback/long summaries x 3 DPIs; dark-gray bounded summary below title; negative/short work areas; uniform 10-DIP region without legacy shadow or native non-client frame; non-activation styles; accessible open/close exactly once; 64 dispose cycles.");
             Console.WriteLine("GDI {0}->{1}; USER {2}->{3}. Rendered cards: {4}", gdiBefore, gdiAfter, userBefore, userAfter, output);
             Console.WriteLine("Available DWM assertions (of 9 HWND/DPI samples): NC={0}; corners={1}; border={2}.", nativeNcChecks, nativeCornerChecks, nativeBorderChecks);
             return 0;

@@ -78,7 +78,9 @@ assert.ok(start>=0&&end>start,'Cannot locate shipped completion key handler');
 vm.runInContext(`globalThis.WorkspaceComposer=(()=>{let composing=false,dismissed=false,selected=0;const box={get hidden(){return !completionOpen;}};const rows=[{},{}];function close(){completionOpen=false;}function choose(){completionSelected++;close();input.value='/selected ';input.setSelectionRange(input.value.length);}function activeOption(){} input.addEventListener('compositionstart',()=>{composing=true;});input.addEventListener('compositionend',()=>{composing=false;});${composer.slice(start,end)}return {keydown,close,refresh(){},beforeSubmit(){return true;}};})();`,ctx);
 const inline=read('inline-controls.js');start=inline.indexOf('  function keydown(event)');end=inline.indexOf('  for (const [kind,button]',start);
 assert.ok(start>=0&&end>start,'Cannot locate shipped inline key handler');
-vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
+const inlineStopGate=inline.match(/^  const stopBlocked = .*;$/m)?.[0];
+assert.ok(inlineStopGate,'Cannot locate shipped inline stop gate');
+vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inlineStopGate}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
 vm.runInContext(read('input-keys.js'),ctx);
 vm.runInContext(read('chat-shortcuts.js'),ctx);
 const app=read('app.js');start=app.indexOf('$("composer").onsubmit=');end=app.indexOf('$("folder-form").onsubmit=',start);
@@ -185,6 +187,15 @@ class WorkspaceChatShortcutTests(unittest.TestCase):
           active={id:'B',state:'running',messages:[]};selectionGeneration++;press('Escape');
           assert.equal(calls.length,1);apiDeferred.resolve({});await tick();
           assert.equal(resultRefreshes,0);assert.equal(input.value,'초안');
+        """)
+
+    def test_keyboard_stop_uses_shared_lifecycle_and_never_queues_during_stop(self):
+        self.run_case(r"""
+          active.state='running';set('초안');let stopCalls=0;
+          globalThis.WorkspaceStop={request:()=>{stopCalls++;},blocked:()=>true};
+          press('Escape');ctrl('c');assert.equal(stopCalls,2);assert.equal(calls.length,0);
+          ctrl('x');press('Enter');assert.equal(queued.length,0);assert.equal(input.value,'초안');
+          assert.equal(submitted,0);assert.ok(draftSaves>0);
         """)
 
     def test_ctrl_c_keeps_selection_copy_and_interrupts_only_active_work(self):

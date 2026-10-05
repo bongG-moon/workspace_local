@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from local_app.attention import AttentionNotifier, WindowBinding, WindowsAttention, snapshot
+from local_app.attention import AttentionNotifier, WindowBinding, WindowsAttention, clean_summary, snapshot
 
 
 def task(sid='a', **extra):
@@ -27,9 +27,61 @@ class AttentionSnapshotTests(unittest.TestCase):
         value = snapshot(sessions)
         self.assertEqual((3, 1, 1, 1), tuple(value[key] for key in ('total', 'approvalCount', 'questionCount', 'choiceCount')))
         self.assertEqual({'a', 'b', 'c'}, {row['sessionId'] for row in value['items']})
-        self.assertTrue(all(set(row) == {'id', 'sessionId', 'title', 'kind'} for row in value['items']))
+        self.assertTrue(all(set(row) == {'id', 'sessionId', 'title', 'kind', 'summary'} for row in value['items']))
         self.assertNotIn('SECRET', str(value))
         self.assertEqual(value, snapshot(dict(reversed(list(sessions.items())))))
+
+    def test_request_summaries_project_question_or_description_without_other_tool_arguments(self):
+        sessions = {
+            'a': task(requests={'r': {'id': 'r', 'tool': 'AskUserQuestion', 'input': {
+                'questions': [{'question': '보고서 형식을 골라 주세요', 'options': [{'label': 'PRIVATE OPTION'}]}]}}}),
+            'b': task('b', requests={'r': {'id': 'r', 'tool': 'Bash', 'input': {
+                'description': '검증 스크립트 실행', 'command': 'PRIVATE COMMAND'}}}),
+            'c': task('c', requests={'r': {'id': 'r', 'tool': 'Write', 'input': {'content': 'PRIVATE BODY'}}}),
+            'd': task('d', state='done', choice={'id': 'choice', 'question': '디자인을 선택해 주세요',
+                                               'options': [{'label': 'PRIVATE OPTION'}]}),
+        }
+        rows = {row['sessionId']: row for row in snapshot(sessions)['items']}
+        self.assertEqual('보고서 형식을 골라 주세요', rows['a']['summary'])
+        self.assertEqual('검증 스크립트 실행', rows['b']['summary'])
+        self.assertEqual('파일 저장 승인이 필요해요', rows['c']['summary'])
+        self.assertEqual('디자인을 선택해 주세요', rows['d']['summary'])
+        self.assertNotIn('PRIVATE', str(rows))
+
+    def test_summary_redacts_before_truncating_and_is_stable_for_storage_and_native_transport(self):
+        secret = 'glpat-' + 'x' * 160
+        summary = clean_summary('  인증 token=' + secret + '\n확인\u202e' + '가' * 150)
+        self.assertLessEqual(len(summary), 100)
+        self.assertTrue(summary.endswith('…'))
+        self.assertNotIn('glpat-', summary)
+        self.assertNotRegex(summary, r'[\x00-\x1f\u202e]')
+        self.assertEqual(summary, clean_summary(summary))
+        self.assertEqual('기본 안내', clean_summary('python private-script.py', '기본 안내'))
+        self.assertEqual('기본 안내', clean_summary('가' * 4097, '기본 안내'))
+
+    def test_description_equal_to_command_is_never_used_as_summary(self):
+        request = {'id': 'r', 'tool': 'Bash', 'description': 'git status', 'input': {'command': 'git status'}}
+        value = snapshot({'a': task(requests={'r': request})})
+        self.assertEqual('명령 실행 승인이 필요해요', value['items'][0]['summary'])
+
+    def test_cli_metadata_fallback_uses_meaningful_description_or_title_not_raw_command(self):
+        requests = {
+            'blank': {'id': 'blank', 'tool': 'Bash', 'description': '  ',
+                      'input': {'description': '결과 파일 검사', 'command': 'PRIVATE COMMAND'}},
+            'title': {'id': 'title', 'tool': 'Read', 'title': '보고서 참고 자료 확인',
+                      'input': {'file_path': 'PRIVATE FILE'}},
+            'unsafe': {'id': 'unsafe', 'tool': 'Bash', 'title': 'git status',
+                       'input': {'command': '  git status  '}},
+            'question': {'id': 'question', 'tool': 'AskUserQuestion',
+                         'title': '보고서 출력 형식을 골라 주세요', 'input': {'questions': []}},
+        }
+        rows = {row['sessionId']: row for row in snapshot({
+            key: task(key, requests={'r': value}) for key, value in requests.items()})['items']}
+        self.assertEqual('결과 파일 검사', rows['blank']['summary'])
+        self.assertEqual('보고서 참고 자료 확인', rows['title']['summary'])
+        self.assertEqual('명령 실행 승인이 필요해요', rows['unsafe']['summary'])
+        self.assertEqual('보고서 출력 형식을 골라 주세요', rows['question']['summary'])
+        self.assertNotIn('PRIVATE', str(rows))
 
     def test_same_request_id_in_new_lifetime_gets_new_identity_and_revision(self):
         request = {'id': 'cli-reused', '_attentionId': 'life-1', 'tool': 'Bash'}

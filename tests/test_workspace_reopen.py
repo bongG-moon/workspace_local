@@ -31,7 +31,8 @@ class WorkspaceReopenTests(unittest.TestCase):
 
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
-                       probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False):
+                       probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False,
+                       shutdown_state=None, quit_result='closed'):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -70,10 +71,16 @@ function Get-WorkspaceVerifiedContext {
 }
 function Assert-WorkspaceNormalProcess { param($Context) }
 function Invoke-RestMethod {
-  param($Uri,$Headers,$TimeoutSec)
-  if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap' -or $Headers.Authorization -ne ('Bearer ' + ('a' * 43))) {throw 'incorrect endpoint'}
+  param($Uri,$Headers,$TimeoutSec,$Method,$ContentType,$Body,$MaximumRedirection)
+  if ($Headers.Authorization -ne ('Bearer ' + ('a' * 43))) {throw 'incorrect authentication'}
+  if ($Uri -eq 'http://127.0.0.1:54321/api/quit') {
+    if ($Method -ne 'Post' -or $ContentType -ne 'application/json' -or $Body -ne '{}' -or $MaximumRedirection -ne 0 -or $TimeoutSec -ne 30) {throw 'incorrect cleanup request'}
+    Write-FixtureEvent 'quit' $Uri
+    QUIT_RESULT
+  }
+  if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap') {throw 'incorrect endpoint'}
   Write-FixtureEvent 'health' $Uri
-  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; appRoot=APPROOT; closing=CLOSING; window=[pscustomobject]@{reopenSupported=REOPEN}}
+  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
 }
 function Open-WorkspaceWindow {
   param([Uri]$Uri,[bool]$ReuseSupported)
@@ -99,6 +106,13 @@ function Start-Process { throw 'unexpected process launch' }
                 "ROOT": ps_quote(directory), "VERSION": ps_quote(version_override or (version if same_version else "0.20.0")),
                 "APPROOT": ps_quote(directory if same_root else directory / "other-app"),
                 "CLOSING": "$true" if closing else "$false", "RUNTIME": ps_quote(runtime),
+                "SHUTDOWN_STATE": ps_quote(shutdown_state) if shutdown_state is not None else '$null',
+                "QUIT_RESULT": {
+                    'closed': 'return [pscustomobject]@{ok=$true; closed=$true}',
+                    'rejected': 'return [pscustomobject]@{ok=$false; closed=$false}',
+                    'ambiguous': 'return [pscustomobject]@{ok=$true}',
+                    'unavailable': "throw 'cleanup request unavailable'",
+                }[quit_result],
                 "WAIT_RESULT": "$true" if wait_finished else "$false",
                 "OPEN_RESULT": "throw 'WORKSPACE_STARTUP:40'" if open_failure else "",
                 "DIALOG_PROBE": (
@@ -222,6 +236,35 @@ function Start-Process {
         self.assertEqual(result.returncode, 37, result.stderr)
         self.assertIn("WS-37", result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "wait"])
+
+    def test_failed_shutdown_retries_owned_cleanup_once_before_waiting(self):
+        result, events, _ = self.fixture_launch(same_version=True, closing=True, shutdown_state='failed',
+                                               wait_finished=True, no_browser=True)
+        self.assertEqual(result.returncode, 37, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'quit', 'wait'])
+
+    def test_failed_shutdown_retry_requires_explicit_cleanup_confirmation(self):
+        for reply in ('rejected', 'ambiguous', 'unavailable'):
+            with self.subTest(reply=reply):
+                result, events, _ = self.fixture_launch(same_version=True, closing=True,
+                    shutdown_state='failed', quit_result=reply, wait_finished=True, no_browser=True)
+                self.assertEqual(result.returncode, 39, result.stderr)
+                self.assertEqual([item['kind'] for item in events], ['health', 'quit'])
+                self.assertIn('종료를 마치지 못했습니다', result.stderr)
+                self.assertIn('Check-Workspace.cmd', result.stderr)
+                self.assertNotIn('이전 버전 또는 다른 폴더', result.stderr)
+
+    def test_failed_shutdown_retry_still_waits_for_owned_endpoint_and_record(self):
+        result, events, _ = self.fixture_launch(same_version=True, closing=True, shutdown_state='failed',
+                                               wait_finished=False, no_browser=True)
+        self.assertEqual(result.returncode, 39, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'quit', 'wait'])
+
+    def test_in_progress_shutdown_is_only_observed(self):
+        result, events, _ = self.fixture_launch(same_version=True, closing=True,
+                                               shutdown_state='closing', no_browser=True)
+        self.assertEqual(result.returncode, 39, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'wait'])
 
     def test_shutdown_wait_requires_endpoint_and_runtime_to_disappear(self):
         for endpoint_live, runtime_exists, expected in ((True, True, False), (True, False, False),

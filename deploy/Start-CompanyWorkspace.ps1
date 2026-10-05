@@ -387,7 +387,7 @@ try {
     Assert-WorkspaceNormalProcess -Context $context
     $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.7' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.18' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -413,12 +413,21 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.7'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.18'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
     }
     if ($liveWorkspaceUri -and $workspaceClosing) {
+        if ($health.shutdownState -eq 'failed') {
+            # The previous quit has already closed admission. Ask that exact
+            # authenticated app to retry its own cleanup once; an active closer
+            # is only observed below, never sent repeated quit requests.
+            try {
+                $closed = Invoke-RestMethod -Method Post -Uri ($origin + '/api/quit') -Headers @{ Authorization = ('Bearer ' + $auth) } -ContentType 'application/json' -Body '{}' -TimeoutSec 30 -MaximumRedirection 0
+                if ($closed.closed -ne $true) { throw 'Unconfirmed workspace shutdown' }
+            } catch { throw 'WORKSPACE_STARTUP:39' }
+        }
         if (-not (Wait-WorkspaceShutdown -Origin $origin -Auth $auth -RuntimePath $runtimePath)) {
             throw 'WORKSPACE_STARTUP:39'
         }
@@ -428,7 +437,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.7'
+        $targetVersion = [version]'0.23.18'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $upgradeNeeded = $runningVersion -lt $targetVersion
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and

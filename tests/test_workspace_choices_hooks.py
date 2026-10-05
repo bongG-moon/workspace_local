@@ -199,7 +199,7 @@ class ChoiceAppTests(unittest.TestCase):
         self.addCleanup(self.app.close)
         self.sid = self.app.create(str(self.work), True)['id']
         self.item = self.app.get(self.sid)
-        self.bridge = Mock(closed=False)
+        self.bridge = Mock(closed=False, session_id=None)
         self.item['bridge'] = self.bridge
         self.addCleanup(lambda: self.item.update(bridge=None))
         self.app.emit(self.sid, 'choice', choice())

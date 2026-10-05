@@ -3,6 +3,7 @@
 All replies are synthetic. No browser, Claude process, profile, or network is used.
 """
 from pathlib import Path
+from html.parser import HTMLParser
 import subprocess
 import unittest
 
@@ -61,6 +62,34 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
+    def test_plain_labels_explain_distinct_kinds_without_changing_reported_names(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('A');};
+          WorkspaceCapabilities.open();await flush();
+          assert.equal($('chat-title').textContent,'스킬·기능');
+          assert.match($('capabilities-kind-description').textContent,/업무 절차/);
+          for(const [type,label,meaning,canonical] of [
+            ['tools','실행 기능','개별 동작','Read'],
+            ['mcp','연결된 기능(MCP)','기능 묶음','synthetic-server'],
+            ['commands','빠른 요청(/명령)','/이름','/test-command']]){
+            $('capabilities-'+type+'-tab').onclick();
+            assert.ok($('capabilities-'+type+'-tab').attributes['aria-label'].startsWith(label+' · '));
+            assert.ok($('capabilities-kind-description').textContent.includes(meaning));
+            assert.ok(flatText($('capabilities-list')).includes(canonical));
+          }
+          assert.match($('capabilities-kind-description').textContent,/실행 명령.*달라요/);
+          assert.match($('capabilities-installed-note').textContent,/자동으로 요청을 보내지/);
+          assert.equal(calls.length,1);assert.equal(calls[0].body,undefined);
+        })()""")
+
+    def test_static_catalog_labels_and_description_match_dynamic_ui(self):
+        html = (ROOT / 'local_app/web/index.html').read_text(encoding='utf-8')
+        for kind, label in (('tools', '실행 기능'), ('mcp', '연결된 기능(MCP)'),
+                            ('commands', '빠른 요청(/명령)')):
+            self.assertIn(f'data-capability-kind="{kind}">{label}<span', html)
+        self.assertIn('aria-describedby="capabilities-kind-description"', html)
+        self.assertIn('aria-label="앱 기능과 업무 검색"', html)
+
     def test_common_catalog_prefers_live_connection_until_user_explicitly_chooses(self):
         self.run_case(r"""(async()=>{
           sessions.push({id:'B',title:'진행했던 업무',workspace:'C:\\fixture\\B',state:'done',connectionState:'live'});
@@ -114,13 +143,139 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.equal(WorkspaceCapabilities.isOpen(),false);
         })()""")
 
-    def run_case(self, javascript):
+    def run_case(self, javascript, *, with_progress=False):
+        harness = HARNESS
+        if with_progress:
+            harness = harness.replace(
+                "const nodes=new Map();",
+                "Element.prototype.getBoundingClientRect=function(){return {top:0,bottom:this.clientHeight};};"
+                "const nodes=new Map();",
+            )
+            harness = harness.replace(
+                "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
+                "vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'progress-view.js'});"
+                "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
+            )
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), FIXTURE + javascript,
-             str(ROOT / "local_app/web/capabilities.js")],
-            input=HARNESS, text=True, encoding="utf-8", capture_output=True, timeout=10,
+             str(ROOT / "local_app/web/capabilities.js"), str(ROOT / "local_app/web/progress-view.js")],
+            input=harness, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_task_elements_share_hidden_parent_outside_catalog_and_home_markup(self):
+        class Structure(HTMLParser):
+            void = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+                    'link', 'meta', 'param', 'source', 'track', 'wbr'}
+
+            def __init__(self):
+                super().__init__()
+                self.stack, self.elements = [], {}
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if attrs.get('id'):
+                    if attrs['id'] in self.elements:
+                        raise AssertionError(f"Duplicate element id: {attrs['id']}")
+                    self.elements[attrs['id']] = (attrs, tuple(self.stack))
+                if tag not in self.void:
+                    self.stack.append((tag, attrs.get('id')))
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                if tag not in self.void:
+                    self.handle_endtag(tag)
+
+            def handle_endtag(self, tag):
+                for index in range(len(self.stack) - 1, -1, -1):
+                    if self.stack[index][0] == tag:
+                        del self.stack[index:]
+                        break
+
+        structure = Structure()
+        structure.feed((ROOT / 'local_app/web/index.html').read_text(encoding='utf-8'))
+        attrs, ancestors = structure.elements['task-view']
+        self.assertIn('hidden', attrs)
+        self.assertIn('work-area', [identifier for _, identifier in ancestors])
+        home_attrs = structure.elements['home-button'][0]
+        self.assertNotIn('active', home_attrs.get('class', '').split())
+        self.assertEqual(home_attrs.get('aria-current'), 'page')
+        self.assertEqual(structure.elements['capabilities-open'][0].get('aria-current'), 'false')
+        for identifier in ('branch-origin', 'imported-context', 'conversation',
+                           'progress-view', 'requests', 'workspace-choice', 'verification-status'):
+            with self.subTest(element=identifier):
+                self.assertIn('task-view', [value for _, value in structure.elements[identifier][1]])
+        for identifier in ('welcome', 'capabilities-view', 'composer', 'startup-health',
+                           'upgrade-notice', 'error-banner'):
+            with self.subTest(global_or_other_view=identifier):
+                self.assertNotIn('task-view', [value for _, value in structure.elements[identifier][1]])
+
+    def test_catalog_late_task_events_stay_hidden_and_return_keeps_latest_state_and_draft(self):
+        self.run_case(r"""(async()=>{
+          const taskIds=['branch-origin','imported-context','conversation','progress-view','requests','workspace-choice','verification-status'];
+          const taskView=$('task-view');for(const id of taskIds)taskView.append($(id));
+          const visible=node=>{for(let current=node;current;current=current.parent)if(current.hidden)return false;return true;};
+          active={...active,state:'running',messages:[],verification:{state:'unverified',message:'earlier result'}};
+          const original=active;pollController=new AbortController();const originalPoll=pollController;
+          $('prompt').value='보내지 않은 초안';attachments=[{name:'draft.txt',path:'C:/fixture/draft.txt'}];
+          const originalAttachments=attachments;
+          WorkspaceProgressView.reset('A',{count:3,lastSeq:3,revision:1,available:true},'run-a');
+          taskHeader();renderVerification();assert.equal(taskView.hidden,false);
+          assert.equal($('home-button').attributes['aria-current'],'false');
+          assert.equal(visible($('verification-status')),true);
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('A');};
+          WorkspaceCapabilities.open();await flush();
+          assert.equal(taskView.hidden,true);assert.equal($('chat-title').textContent,'스킬·기능');
+          assert.equal($('home-button').attributes['aria-current'],'false');
+          assert.equal($('capabilities-open').attributes['aria-current'],'page');
+          const search=$('capabilities-search'),area=$('work-area');area.scrollTop=137;
+          handleEvent({type:'verification',data:{state:'needs-review',message:'latest result'}});
+          handleEvent({type:'choice',data:{id:'choice-a',schemaVersion:1,kind:'html-report-style',responseMode:'next-user-message',options:[{id:'minimalism',label:'미니멀리즘'}]}});
+          handleEvent({type:'progress_changed',data:{progress:{count:7,lastSeq:7,revision:2,available:true}}});
+          handleEvent({type:'status',data:{state:'running',label:'자료를 읽는 중'}});
+          for(const id of taskIds)assert.equal(visible($(id)),false,id+' leaked into catalog');
+          assert.equal(taskView.hidden,true);assert.equal(area.scrollTop,137);assert.equal(document.activeElement,search);
+          assert.equal(active,original);assert.equal(active.state,'running');assert.equal(pollController,originalPoll);assert.equal(originalPoll.signal.aborted,false);
+          assert.equal($('prompt').value,'보내지 않은 초안');assert.equal(attachments,originalAttachments);
+          WorkspaceCapabilities.close();
+          assert.equal(taskView.hidden,false);assert.equal($('chat-title').textContent,'업무 A');
+          assert.equal($('home-button').attributes['aria-current'],'false');
+          assert.equal($('capabilities-open').attributes['aria-current'],'false');
+          assert.equal(visible($('verification-status')),true);assert.match(flatText($('verification-status')),/latest result/);
+          assert.equal(visible($('workspace-choice')),true);assert.equal(active.choice.id,'choice-a');
+          assert.match(flatText($('progress-view')),/7개 기록/);assert.equal($('prompt').value,'보내지 않은 초안');
+          assert.equal(attachments,originalAttachments);assert.ok(calls.every(call=>call.body===undefined));
+          showHome();assert.equal(taskView.hidden,true);assert.equal(active,null);
+          assert.equal($('home-button').attributes['aria-current'],'page');
+          assert.equal($('capabilities-open').attributes['aria-current'],'false');
+          WorkspaceCapabilities.open();await flush();assert.equal($('home-button').attributes['aria-current'],'false');
+          assert.equal($('capabilities-open').attributes['aria-current'],'page');
+          WorkspaceCapabilities.close();assert.equal(taskView.hidden,true);
+          assert.equal($('home-button').attributes['aria-current'],'page');
+          assert.equal($('capabilities-open').attributes['aria-current'],'false');
+        })()""", with_progress=True)
+
+    def test_catalog_entry_aborts_expanded_progress_without_resetting_task_history(self):
+        self.run_case(r"""(async()=>{
+          active={...active,state:'running',messages:[],lastRunId:'run-a'};taskHeader();
+          const progress=WorkspaceProgressView,host=$('progress-view');
+          progress.reset('A',{count:5,lastSeq:5,revision:1,available:true},'run-a');
+          let reply,signal;const paths=[];
+          api=(path,body,currentSignal)=>{paths.push(path);return path.startsWith('/api/progress')?
+            new Promise(resolve=>{reply=resolve;signal=currentSignal;}):Promise.resolve(modern('A'));};
+          progress.open('run-a');assert.equal(host.querySelector('details').open,true);
+          WorkspaceCapabilities.open();await flush();
+          assert.equal(signal.aborted,true);assert.equal(host.querySelector('details').open,false);
+          assert.equal(host.querySelector('.progress-body').children.length,0);
+          $('work-area').scrollTop=91;
+          reply({records:[{seq:1,runId:'run-a',kind:'report',text:'stale hidden detail'}],hasMore:false,nextBefore:null});await flush();
+          assert.equal(host.querySelector('.progress-body').children.length,0);assert.equal($('work-area').scrollTop,91);
+          progress.metadata({count:6,lastSeq:6,revision:2,available:true});
+          assert.equal(progress.open('run-a'),false);assert.equal(paths.filter(path=>path.startsWith('/api/progress')).length,1);
+          WorkspaceCapabilities.close();
+          assert.equal(progress.open('run-a'),true);assert.equal(paths.filter(path=>path.startsWith('/api/progress')).length,2);
+          assert.match(paths.at(-1),/id=A.*runId=run-a/);progress.close();
+        })()""", with_progress=True)
 
     def test_late_previous_workspace_reply_cannot_replace_current_catalog(self):
         self.run_case(r"""(async()=>{

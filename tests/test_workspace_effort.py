@@ -232,7 +232,9 @@ class ControlRestoreTests(unittest.TestCase):
     def cancel_turn(self):
         self.app.send(self.sid, 'wait for cancellation', [])
         self.wait(lambda: self.item()['bridge'].busy)
-        self.app.stop(self.sid)
+        # These cases exercise control restoration after a fully closed CLI.
+        # Cooperative stop/reuse is covered by the stop-resume protocol suite.
+        self.app.stop(self.sid, disconnect=True)
         self.wait(lambda: self.item()['bridge'].cleanup_complete and self.item()['state'] == 'stopped')
 
     def test_model_reset_then_cancel_restores_baseline_before_effort_and_one_followup(self):

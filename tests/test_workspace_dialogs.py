@@ -36,6 +36,11 @@ class WorkspaceDialogTests(unittest.TestCase):
 
     def test_confirmation_esc_cancels_and_keeps_underlying_dialog_and_focus(self):
         self.run_case(r"""(async()=>{
+          // Model the real dialog ancestry used by the focus-return fallback.
+          // This DOM double does not perform native dialog.close() focus restoration.
+          $('settings-dialog').tagName='DIALOG';$('settings-dialog').append($('quit'));
+          $('action-dialog').tagName='DIALOG';
+          $('action-dialog').append($('action-cancel'),$('action-close'),$('action-confirm'));
           showDialog('settings-dialog');$('quit').focus();
           let calls=0;api=async()=>{calls++;return {closed:true};};
           const pending=$('quit').onclick();

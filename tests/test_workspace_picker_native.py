@@ -3,11 +3,23 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
 
 from tests import test_workspace_picker as lifecycle
+from local_app.completions import ARCHIVE_FILE_TYPES, REFERENCE_FILE_TYPES
+
+
+class PickerAttachmentPolicyTests(unittest.TestCase):
+    def test_native_filter_has_same_reference_policy_and_archive_group(self):
+        source = (Path(__file__).resolve().parents[1] / 'local_app/WorkspacePicker.cs').read_text(encoding='utf-8')
+        filters = dict(re.findall(r'new FilterSpec\("([^"]+)", "([^"]+)"\)', source))
+        suffixes = lambda value: {pattern.removeprefix('*') for pattern in value.split(';')}
+        self.assertEqual(REFERENCE_FILE_TYPES, suffixes(filters['지원하는 모든 자료']))
+        self.assertEqual(ARCHIVE_FILE_TYPES, suffixes(filters['압축 파일']))
+        self.assertEqual({'.exe'}, suffixes(filters['실행 파일 (EXE)']))
 
 
 @unittest.skipUnless(os.name == "nt" and lifecycle.POWERSHELL, "Windows PowerShell required")

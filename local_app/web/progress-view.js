@@ -7,7 +7,7 @@ globalThis.WorkspaceProgressView = (() => {
   const labels={assistant:"설명",tool_input:"도구 입력",tool_result:"도구 결과",tool_progress:"도구 진행",task:"추가 작업",hook:"자동 처리",status:"상태",result:"결과",error:"오류",report:"보고",notice:"안내"};
   const clean=(value,limit)=>typeof value==="string"?value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,"").slice(0,limit):"";
   const node=(tag,text,className)=>{const value=document.createElement(tag);if(text!==undefined)value.textContent=text;if(className)value.className=className;return value;};
-  let hooks=null,host=null,detail=null,summary=null,count=null,body=null,view=null;
+  let hooks=null,host=null,detail=null,summary=null,count=null,disclosure=null,body=null,view=null;
   let sessionId=null,currentRun=null,filter=null,metadata={count:0,lastSeq:0,revision:0,truncated:false,available:false};
   let expanded=false,generation=0,controller=null,pending=null,timer=null,dirty=false,rows=[],cards=new Map();
   let nextBefore=null,hasMore=false,pageTruncated=false,olderWindow=false,newPending=false,failure="",pageNotice="",loaded=false;
@@ -18,16 +18,22 @@ globalThis.WorkspaceProgressView = (() => {
     truncated:value?.truncated===true,available:value?.available===true};}
   function updateSummary(){
     if(!host)return;host.hidden=!sessionId;
-    summary?.setAttribute("aria-label",filter?"선택한 요청의 진행 내용":"업무의 진행 내용");
+    updateDisclosure();
     count.textContent=filter?"선택한 요청":metadata.count?`${metadata.count}개 기록`:"";
     const opener=document.getElementById("progress-open");if(opener)opener.disabled=!sessionId;
   }
+  function updateDisclosure(){
+    const action=detail?.open?"접기":"펼치기";
+    if(disclosure)disclosure.textContent=action;
+    summary?.setAttribute("aria-label",`${filter?"선택한 요청의 진행 내용":"업무의 진행 내용"} ${action}`);
+  }
   function cancel(){generation++;controller?.abort();controller=null;pending=null;clearTimeout(timer);timer=null;dirty=false;}
   function release(){rows=[];cards.clear();nextBefore=null;hasMore=false;pageTruncated=false;olderWindow=false;newPending=false;failure="";pageNotice="";loaded=false;view=null;body?.replaceChildren();}
-  function close(){cancel();expanded=false;if(detail)detail.open=false;release();}
+  function close(){cancel();expanded=false;if(detail)detail.open=false;updateDisclosure();release();}
   function reset(id=null,value=null,runId=null){close();sessionId=clean(id,160)||null;currentRun=clean(runId,160)||null;filter=null;metadata=normalizeMetadata(value);updateSummary();}
   function isBottom(){return !view||view.scroller.scrollHeight-view.scroller.scrollTop-view.scroller.clientHeight<72;}
   function revealWithinWorkArea(){
+    if(globalThis.WorkspaceCapabilities?.isOpen())return;
     const area=document.getElementById("work-area");if(!area||!host)return;
     const frame=area.getBoundingClientRect(),panel=host.getBoundingClientRect();
     const top=frame.top+(area.clientTop||0),height=area.clientHeight,bottom=top+height;
@@ -164,16 +170,17 @@ globalThis.WorkspaceProgressView = (() => {
     const advanced=next.lastSeq>metadata.lastSeq||next.revision>metadata.revision;metadata=next;return advanced;
   }
   function changed(value){const advanced=acceptMetadata(value);updateSummary();renderState();if(advanced&&expanded)schedule();}
-  function activate(){if(expanded||!sessionId)return;expanded=true;mount();void load("latest",true);}
+  function activate(){if(globalThis.WorkspaceCapabilities?.isOpen()){close();return;}if(expanded||!sessionId)return;expanded=true;mount();void load("latest",true);}
   function open(runId=null){
-    if(!sessionId||!detail)return false;const next=clean(runId,160)||null;
-    if(filter!==next){close();filter=next;}updateSummary();detail.open=true;activate();summary.focus({preventScroll:true});revealWithinWorkArea();return true;
+    if(!sessionId||!detail||globalThis.WorkspaceCapabilities?.isOpen())return false;const next=clean(runId,160)||null;
+    if(filter!==next){close();filter=next;}detail.open=true;updateSummary();activate();summary.focus({preventScroll:true});revealWithinWorkArea();return true;
   }
   function attach(value){
     hooks=value;host=document.getElementById("progress-view");if(!host)return;
     detail=node("details",undefined,"progress-detail");summary=node("summary",undefined,"progress-summary");count=node("span",undefined,"progress-count");body=node("div",undefined,"progress-body");
-    summary.append(node("span","≋","progress-symbol"),node("span","진행 내용"),count);summary.firstChild.setAttribute("aria-hidden","true");detail.append(summary,body);host.replaceChildren(detail);
-    detail.ontoggle=()=>{if(detail.open)activate();else if(expanded)close();};
+    disclosure=node("span","펼치기","disclosure-action");
+    summary.append(node("span","≋","progress-symbol"),node("span","진행 내용","progress-title"),count,disclosure);summary.firstChild.setAttribute("aria-hidden","true");detail.append(summary,body);host.replaceChildren(detail);
+    detail.ontoggle=()=>{updateDisclosure();if(detail.open)activate();else if(expanded)close();};
     const opener=document.getElementById("progress-open");if(opener)opener.onclick=()=>open();updateSummary();
   }
   return {attach,reset,open,close,metadata:changed,currentRun:value=>{currentRun=clean(value,160)||null;renderState();}};

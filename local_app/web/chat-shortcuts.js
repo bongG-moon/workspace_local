@@ -28,7 +28,8 @@ globalThis.WorkspaceShortcuts = (() => {
     edited();return true;
   }
   async function stop(){
-    if(!active||!busyStates.has(active.state)||stopPending||appClosed)return;
+    if(globalThis.WorkspaceStop?.request)return WorkspaceStop.request();
+    if(!active||!busyStates.has(active.state)||stopPending||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     const owner=active.id;stopPending=owner;
     try{await api("/api/stop",{id:owner});if(active?.id===owner){toast("중지 요청을 보냈어요. 완료된 파일 변경은 유지됩니다.");void refreshResults();}}
     catch(error){if(active?.id===owner)toast(error.message);}
@@ -43,6 +44,7 @@ globalThis.WorkspaceShortcuts = (() => {
   }
   function queue(){
     if(!editable())return;
+    if(globalThis.WorkspaceStop?.blocked()){saveDraft();return toast("현재 작업의 중지 상태를 확인한 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.");}
     if(!active)return chooseFolder();
     if(!globalThis.WorkspaceWorkflow?.send)return toast("대기열 기능을 불러오지 못했어요. 입력을 보관한 뒤 화면을 다시 열어 주세요.");
     return globalThis.WorkspaceWorkflow?.send("enqueue");

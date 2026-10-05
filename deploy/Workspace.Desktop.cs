@@ -284,17 +284,21 @@ internal sealed class DesktopWindow : Form
 
     private void Notify(Dictionary<string, object> input, int id)
     {
-        object receiptValue, kindValue, titleValue, messageValue;
+        object receiptValue, kindValue, titleValue, messageValue, summaryValue;
         input.TryGetValue("notificationId", out receiptValue);
         input.TryGetValue("kind", out kindValue);
         input.TryGetValue("title", out titleValue);
         input.TryGetValue("message", out messageValue);
+        input.TryGetValue("summary", out summaryValue);
+        var summary = summaryValue as string ?? "";
         var receipt = receiptValue as string;
         var kind = kindValue as string;
         string reason = null;
         if (receipt == null || !Regex.IsMatch(receipt, @"\A[a-f0-9]{64}\z") ||
             (kind != "completed" && kind != "attention" && kind != "error") ||
-            !WorkspaceNotificationCard.ValidText(titleValue, 100) || !WorkspaceNotificationCard.ValidText(messageValue, 255)) reason = "invalid";
+            !WorkspaceNotificationCard.ValidText(titleValue, 100) || !WorkspaceNotificationCard.ValidText(messageValue, 255) ||
+            (summaryValue != null && !(summaryValue is string)) ||
+            (summary.Length > 0 && !WorkspaceNotificationCard.ValidText(summary, 100))) reason = "invalid";
         else if (exiting || IsDisposed) reason = "unavailable";
         else if (notificationCard != null) reason = "busy";
         else if (!WorkspaceNotificationCard.NotificationsAllowed()) reason = "suppressed";
@@ -304,6 +308,7 @@ internal sealed class DesktopWindow : Form
             try
             {
                 card = new WorkspaceNotificationCard(receipt, kind, (string)titleValue, (string)messageValue,
+                    kind == "attention" ? summary : "",
                     delegate(WorkspaceNotificationCard finished, bool opened)
                     {
                         if (ReferenceEquals(notificationCard, finished)) notificationCard = null;
@@ -333,6 +338,42 @@ internal sealed class DesktopWindow : Form
         if (view != null) view.Focus();
     }
 
+    private async void ConfirmShutdown(Dictionary<string, object> input, int id)
+    {
+        object value;
+        input.TryGetValue("confirmationId", out value);
+        var confirmationId = value as string;
+        string reason = null;
+        if (confirmationId == null || !Regex.IsMatch(confirmationId, @"\A[a-f0-9]{32}\z")) reason = "invalid";
+        else if (exiting || IsDisposed || initializing || recovery != null || view == null ||
+            view.CoreWebView2 == null) reason = "unavailable";
+        if (reason == null)
+        {
+            try
+            {
+                var core = view.CoreWebView2;
+                Uri source;
+                if (!Uri.TryCreate(core.Source, UriKind.Absolute, out source) ||
+                    !SameOrigin(core.Source) || source.AbsolutePath != "/") reason = "unavailable";
+                else
+                {
+                    ActivateWindow();
+                    // This fixed, one-way host call only requests the existing
+                    // themed dialog. User consent travels through the authenticated
+                    // HTTP API with the one-use challenge, never this pipe ACK.
+                    var argument = new JavaScriptSerializer().Serialize(confirmationId);
+                    var result = await core.ExecuteScriptAsync("(function(){var desktop=globalThis.WorkspaceDesktop;" +
+                        "return !!(desktop&&typeof desktop.confirmShutdown==='function'&&" +
+                        "desktop.confirmShutdown(" + argument + ")===true);})()");
+                    if (result != "true") reason = "unavailable";
+                }
+            }
+            catch { reason = "unavailable"; }
+        }
+        DesktopProgram.Emit(new { type = "ack", id = id, ok = true,
+            confirmationShown = reason == null, confirmationReason = reason });
+    }
+
     private void ReadCommands()
     {
         try
@@ -347,6 +388,7 @@ internal sealed class DesktopWindow : Form
                 {
                     if (command == "close") { Exit(); return; }
                     if (command == "notify") { Notify(input, id); return; }
+                    if (command == "confirm_shutdown") { ConfirmShutdown(input, id); return; }
                     if (command == "activate") ActivateWindow();
                     else if (command == "hide" && background) Hide();
                     else { DesktopProgram.Emit(new { type = "ack", id = id, ok = false }); return; }
@@ -465,7 +507,7 @@ internal sealed class WorkspaceNotificationCard : Form
 {
     private readonly string receipt, kind;
     private readonly Action<WorkspaceNotificationCard, bool> completed;
-    private readonly Label statusLabel, titleLabel;
+    private readonly Label statusLabel, titleLabel, summaryLabel;
     private readonly NotificationButton openButton, closeButton;
     private readonly System.Windows.Forms.Timer lifetime;
     private readonly Stopwatch elapsed = Stopwatch.StartNew();
@@ -511,9 +553,13 @@ internal sealed class WorkspaceNotificationCard : Form
     }
 
     internal WorkspaceNotificationCard(string notificationId, string notificationKind,
-        string title, string message, Action<WorkspaceNotificationCard, bool> onCompleted)
+        string title, string message, string summary, Action<WorkspaceNotificationCard, bool> onCompleted)
     {
         receipt = notificationId; kind = notificationKind; completed = onCompleted;
+        // A legacy caller may omit the summary. Attention cards should still
+        // explain the required action instead of showing only a task name.
+        if (kind == "attention" && String.IsNullOrWhiteSpace(summary))
+            summary = "승인 또는 답변 내용을 확인해 주세요";
         highContrast = SystemInformation.HighContrast;
         surface = highContrast ? SystemColors.Window : Color.FromArgb(248, 249, 253);
         ink = highContrast ? SystemColors.WindowText : Color.FromArgb(44, 49, 67);
@@ -530,11 +576,16 @@ internal sealed class WorkspaceNotificationCard : Form
         DoubleBuffered = true;
         Text = "Workspace 알림";
         AccessibleName = kind == "completed" ? "작업 완료 알림" : kind == "attention" ? "응답 대기 알림" : "작업 확인 알림";
-        AccessibleDescription = title + ". " + message;
+        AccessibleDescription = title + ". " + (summary.Length > 0 ? summary : message);
         statusLabel = MakeLabel(kind == "completed" ? "작업 완료" : kind == "attention" ? "응답 대기" : "확인 필요", muted);
         titleLabel = MakeLabel(title, ink);
         titleLabel.AutoEllipsis = true;
         titleLabel.AccessibleName = title;
+        summaryLabel = MakeLabel(summary, highContrast ? SystemColors.WindowText : Color.FromArgb(75, 81, 98));
+        summaryLabel.AutoEllipsis = true;
+        summaryLabel.TextAlign = ContentAlignment.TopLeft;
+        summaryLabel.Visible = summary.Length > 0;
+        summaryLabel.AccessibleName = summary;
         openButton = new NotificationButton(kind == "completed" ? "결과" : "열기", accent,
             highContrast ? SystemColors.HighlightText : Color.White, false);
         closeButton = new NotificationButton("", surface, muted, true);
@@ -632,15 +683,19 @@ internal sealed class WorkspaceNotificationCard : Form
         {
             float intended = Math.Max(.25f, dpi / 96f);
             int gap = Math.Max(0, Math.Min((int)Math.Round(16 * intended), Math.Min(area.Width, area.Height) / 12));
-            scale = Math.Max(.01f, Math.Min(intended, Math.Min((area.Width - gap * 2) / 340f, (area.Height - gap * 2) / 96f)));
-            ClientSize = new Size(Math.Min(area.Width, Px(340)), Math.Min(area.Height, Px(96)));
+            bool hasSummary = summaryLabel.Text.Length > 0;
+            float cardHeight = hasSummary ? 120f : 96f;
+            scale = Math.Max(.01f, Math.Min(intended, Math.Min((area.Width - gap * 2) / 340f, (area.Height - gap * 2) / cardHeight)));
+            ClientSize = new Size(Math.Min(area.Width, Px(340)), Math.Min(area.Height, Px(cardHeight)));
             Location = new Point(Math.Max(area.Left, area.Right - Width - gap), Math.Max(area.Top, area.Bottom - Height - gap));
             var previousFonts = ownedFonts.ToArray(); ownedFonts.Clear();
             SetFont(statusLabel, 11, false); SetFont(titleLabel, 14, true); SetFont(openButton, 12, true);
+            SetFont(summaryLabel, 12, false);
             foreach (var font in previousFonts) font.Dispose();
-            statusLabel.SetBounds(Px(56), Px(20), Px(232), Px(18));
-            titleLabel.SetBounds(Px(56), Px(44), Px(194), Px(26));
-            openButton.SetBounds(Px(260), Px(43), Px(64), Px(28));
+            statusLabel.SetBounds(Px(56), Px(hasSummary ? 13 : 20), Px(232), Px(18));
+            titleLabel.SetBounds(Px(56), Px(hasSummary ? 36 : 44), Px(194), Px(26));
+            summaryLabel.SetBounds(Px(56), Px(68), Px(264), Px(36));
+            openButton.SetBounds(Px(260), Px(hasSummary ? 35 : 43), Px(64), Px(28));
             closeButton.SetBounds(Px(304), Px(10), Px(20), Px(20));
             openButton.CornerRadius = Px(7); closeButton.CornerRadius = Px(5);
             using (var path = Rounded(new RectangleF(0, 0, Width, Height), highContrast ? 0 : Px(10)))

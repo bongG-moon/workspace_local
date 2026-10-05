@@ -14,8 +14,9 @@ globalThis.WorkspaceDesktop = (() => {
     const groups=new Map(), latest=new Map(), result=[], receipts=new Map((snapshot.inbox||[]).map(item=>[item.id,item]));
     for(const item of waiting){
       if(!item || typeof item.sessionId!=="string" || typeof item.id!=="string")continue;
-      if(!groups.has(item.sessionId))groups.set(item.sessionId,{title:item.title||"업무",ids:new Set(),kinds:new Set(),receipts:new Set()});
+      if(!groups.has(item.sessionId))groups.set(item.sessionId,{title:item.title||"업무",ids:new Set(),kinds:new Set(),receipts:new Set(),summary:""});
       const group=groups.get(item.sessionId);group.ids.add(item.id);group.kinds.add(item.kind);
+      if(!group.summary&&typeof item.summary==="string")group.summary=item.summary;
       if(typeof item.notificationId==="string")group.receipts.add(item.notificationId);
     }
     // Older attention receipts for a task are superseded by its current request state.
@@ -36,6 +37,7 @@ globalThis.WorkspaceDesktop = (() => {
       const receipt=current[0], read=group.receipts.size?retained.length===group.ids.size&&retained.every(item=>item.read):receipt?.read===true;
       const status=kinds.size>1?"승인·답변 대기":kinds.has("approval")?"승인 대기":kinds.has("question")?"답변 대기":"선택 대기";
       pending.push({...(receipt||{}),id:"pending:"+sessionId,sessionId,title:group.title,kind:"attention",
+        summary:group.summary||receipt?.summary||"",
         read,readIds:current.filter(item=>!item.read).map(item=>item.id),pending:group.ids.size,status:status+(group.ids.size>1?` ${group.ids.size}건`:""),receipt:!!receipt});
     }
     return [...pending,...result];
@@ -90,9 +92,11 @@ globalThis.WorkspaceDesktop = (() => {
       const button=el("button",null,"inbox-task");button.type="button";button.dataset.inboxKey="open:"+row.id;focusTargets.set(button.dataset.inboxKey,button);
       const meta=el("span",null,"inbox-item-meta"), status=el("span",row.status,"inbox-state");
       meta.append(status,el("span",row.read?"읽음":"읽지 않음","inbox-read-state"));
-      button.append(el("strong",row.title||"업무"),meta);
+      button.append(el("strong",row.title||"업무"));
+      if(row.summary)button.append(el("span",row.summary,"inbox-request-summary"));
+      button.append(meta);
       if(row.createdAt)button.append(el("time",new Date(row.createdAt*1000).toLocaleString("ko-KR",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}),"inbox-time"));
-      button.setAttribute("aria-label",`${row.title||"업무"} · ${row.status} · ${row.read?"읽음":"읽지 않음"} · 업무 열기`);
+      button.setAttribute("aria-label",`${row.title||"업무"}${row.summary?` · ${row.summary}`:""} · ${row.status} · ${row.read?"읽음":"읽지 않음"} · 업무 열기`);
       button.onclick=()=>openRow(row);card.append(button);
       if(row.readIds.length){
         const read=el("button","읽음","text-button inbox-read");read.type="button";read.disabled=reading||appClosed;
@@ -158,5 +162,5 @@ globalThis.WorkspaceDesktop = (() => {
   $("desktop-open").onclick=()=>open();$("desktop-close").onclick=()=>close();$("desktop-read").onclick=()=>markRead();
   $("desktop-toggle").onclick=()=>configure({enabled:!snapshot.preferences.enabled});
   for(const key of ["completed","attention","errors"])$("desktop-"+key).onchange=()=>configure({[key]:$("desktop-"+key).checked});
-  return {apply,follow,presence,open,close};
+  return {apply,follow,presence,open,close,confirmShutdown:confirmationId=>confirmShutdownChallenge(confirmationId)};
 })();

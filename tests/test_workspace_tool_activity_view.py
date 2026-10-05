@@ -29,6 +29,36 @@ class ToolActivityViewTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_summary_copy_separates_total_activity_and_errors(self):
+        self.run_case(r"""
+          active.state='done';WorkspaceToolActivity.reset('A');
+          WorkspaceToolActivity.restore(Array.from({length:5},(_,index)=>({...record,id:'tool-'+index,state:index<3?'error':'completed'})));
+          const summary=conversation.children[0].querySelector('.tool-activity-summary');
+          // The DOM double does not aggregate textContent; concatenate with no added spacing.
+          const copied=summary.children.map(node=>node.textContent).join('');
+          assert.equal(copied,'≋ 도구·스킬 활동 · 5건 · 오류 3건');
+          assert.equal(summary.querySelector('.tool-activity-symbol').attributes['aria-hidden'],'true');
+          assert.equal(conversation.children[0].dataset.activityState,'error');
+          assert.equal(active.toolActivity.length,5);
+          assert.equal(active.toolActivity.filter(item=>item.state==='error').length,3);
+        """)
+
+    def test_summary_copy_keeps_counts_clear_through_activity_updates(self):
+        self.run_case(r"""
+          WorkspaceToolActivity.render(record);
+          const summary=conversation.children[0].querySelector('.tool-activity-summary');
+          const copied=()=>summary.children.map(node=>node.textContent).join('');
+          assert.equal(copied(),'≋ 도구·스킬 활동 · 1건 · 요청 1건');
+          WorkspaceToolActivity.render({...record,state:'running'});
+          WorkspaceToolActivity.render({...record,id:'second'});
+          assert.equal(copied(),'≋ 도구·스킬 활동 · 2건 · 진행·대기 2건');
+          WorkspaceToolActivity.render({...record,state:'completed'});
+          WorkspaceToolActivity.render({...record,id:'second',state:'completed'});
+          assert.equal(copied(),'≋ 도구·스킬 활동 · 2건 · 결과 수신');
+          WorkspaceToolActivity.render({...record,id:'unresolved'});setStatus('stopped');
+          assert.equal(copied(),'≋ 도구·스킬 활동 · 3건 · 일부 결과 미확인');
+        """)
+
     def test_requested_and_running_are_distinct_and_do_not_start_work(self):
         self.run_case(r"""
           let calls=0;api=async()=>{calls++;};
@@ -145,7 +175,7 @@ class ToolActivityViewTests(unittest.TestCase):
           assert.equal(detail.querySelector('.tool-activity-child').textContent,'추가 작업자');
           assert.equal(detail.querySelector('.tool-activity-note').hidden,false);
           assert.match(detail.querySelector('.tool-activity-note').textContent,/이전 활동/);
-          assert.equal(detail.querySelector('.tool-activity-count').textContent,'80+');
+          assert.equal(detail.querySelector('.tool-activity-count').textContent,'80건 이상');
           WorkspaceToolActivity.reset();assert.ok($('tool-activity-badge').hidden);assert.ok($('tool-activity-open').hidden);
         """)
 

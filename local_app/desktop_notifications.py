@@ -1,6 +1,6 @@
 """App-owned notification preferences and a small durable activity inbox.
 
-Only task titles and fixed status messages leave the app. Native delivery is a
+Only task titles, sanitized request summaries and fixed status messages leave the app. Native delivery is a
 request, never proof that Windows displayed a banner. No Windows/Claude setting
 is read or changed here. The server supplies foreground and navigation hooks.
 """
@@ -17,6 +17,7 @@ import unicodedata
 import uuid
 
 from .history import HistoryStore, read, safe
+from .attention import DEFAULT_REQUEST_SUMMARY, clean_summary
 
 
 DEFAULTS = {'enabled': True, 'completed': True, 'attention': True, 'errors': True}
@@ -74,6 +75,11 @@ class DesktopNotifications:
                 value = read(self.path, 256 * 1024)
                 self._validate(value)
                 self.data = value
+                # Older receipts omitted this display-only field. Keep their
+                # identity/read/delivery state: loading must never resend them.
+                for row in self.data['inbox']:
+                    if row['kind'] == 'attention':
+                        row['summary'] = clean_summary(row.get('summary'), DEFAULT_REQUEST_SUMMARY)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             # Preserve the original file, including a previous disabled setting.
             # Damaged data must never silently opt the user back into OS banners.
@@ -94,11 +100,14 @@ class DesktopNotifications:
             raise ValueError('Invalid notification state')
         ids = set()
         for row in value['inbox']:
-            if (not isinstance(row, dict) or set(row) != {'id', 'sessionId', 'title', 'kind', 'message', 'createdAt', 'read', 'delivery'}
+            required = {'id', 'sessionId', 'title', 'kind', 'message', 'createdAt', 'read', 'delivery'}
+            if (not isinstance(row, dict) or not required.issubset(row) or set(row) - required - {'summary'}
                     or not _identifier(row['id']) or row['id'] in ids
                     or str(uuid.UUID(row['sessionId'])) != row['sessionId']
                     or row['kind'] not in MESSAGES or row['message'] != MESSAGES[row['kind']]
                     or not isinstance(row['title'], str) or row['title'] != _title(row['title'])
+                    or ('summary' in row and (not isinstance(row['summary'], str)
+                                            or row['summary'] != clean_summary(row['summary'])))
                     or type(row['createdAt']) not in (int, float) or not math.isfinite(row['createdAt'])
                     or type(row['read']) is not bool or row['delivery'] not in DELIVERY):
                 raise ValueError('Invalid notification row')
@@ -298,7 +307,7 @@ class DesktopNotifications:
                 self._finish_attempt(row, token, 'unavailable')
             self._save()
 
-    def publish(self, session_id, title, kind, event_id):
+    def publish(self, session_id, title, kind, event_id, *, summary=''):
         key = notification_id(session_id, kind, event_id)
         # A server hook may acquire the app lock. Never hold our lock across it.
         foreground = False
@@ -325,6 +334,8 @@ class DesktopNotifications:
                 delivery = 'unavailable'
             row = {'id': key, 'sessionId': session_id, 'title': _title(title), 'kind': kind,
                    'message': MESSAGES[kind], 'createdAt': self.clock(), 'read': False, 'delivery': delivery}
+            if kind == 'attention':
+                row['summary'] = clean_summary(summary, DEFAULT_REQUEST_SUMMARY)
             self.data['seen'] = [*self.data['seen'], key][-MAX_SEEN:]
             self.data['inbox'] = [*self.data['inbox'], row][-MAX_INBOX:]
             self._save()  # Record before asking Windows; restart never replays it.

@@ -68,6 +68,25 @@ class ProgressViewTests(unittest.TestCase):
           assert.equal(area.scrollTop,9);assert.equal($('requests').children[0],request);
         """)
 
+    def test_disclosure_native_and_programmatic_changes_keep_labels_and_lazy_lifecycle(self):
+        self.run_case(r"""(async()=>{
+          const summary=find('.progress-summary'),label=find('.disclosure-action');
+          assert.equal(label.textContent,'펼치기');assert.equal(summary.getAttribute('aria-label'),'업무의 진행 내용 펼치기');
+          assert.equal(summary.querySelector('button'),null);assert.equal(calls.length,0);
+          detail.open=true;detail.ontoggle();await flushProgress();
+          assert.equal(label.textContent,'접기');assert.equal(summary.getAttribute('aria-label'),'업무의 진행 내용 접기');
+          assert.equal(calls.length,1);
+          detail.open=false;detail.ontoggle();
+          assert.equal(label.textContent,'펼치기');assert.equal(find('.progress-body').children.length,0);
+          progress.open('run-a');await flushProgress();
+          assert.equal(label.textContent,'접기');assert.equal(summary.getAttribute('aria-label'),'선택한 요청의 진행 내용 접기');
+          progress.metadata(meta(20));assert.equal(label.textContent,'접기');
+          progress.close();assert.equal(label.textContent,'펼치기');assert.equal(progressTimers.size,0);
+          progress.open('run-b');await flushProgress();progress.reset('B',meta(0),'run-b');
+          assert.equal(label.textContent,'펼치기');assert.equal(summary.getAttribute('aria-label'),'업무의 진행 내용 펼치기');
+          assert.equal(detail.open,false);assert.equal(find('.progress-body').children.length,0);
+        })()""")
+
     def test_literal_reports_are_lazy_filtered_and_long_text_expands(self):
         self.run_case(r"""(async()=>{
           const danger='<img src=x onerror=alert(1)>',text=danger+'x'.repeat(60000);
@@ -189,6 +208,37 @@ class ProgressViewTests(unittest.TestCase):
           progress.close();card.querySelector('.tool-activity-details-open').onclick();await flushProgress();assert.equal(detail.open,true);
           $('progress-open').onclick();await flushProgress();assert.ok(!calls.at(-1).path.includes('runId='));assert.equal(host.querySelector('details'),detail);
           showHome();assert.equal(host.hidden,true);assert.equal(find('.progress-body').children.length,0);
+        })()""")
+
+    def test_catalog_blocks_programmatic_and_native_open_until_conversation_returns(self):
+        self.run_case(r"""(async()=>{
+          let catalog=true;globalThis.WorkspaceCapabilities={isOpen:()=>catalog};
+          const area=$('work-area');area.scrollTop=43;area.clientHeight=100;
+          host.getBoundingClientRect=()=>({top:400,bottom:500});$('capabilities-search').focus();
+          assert.equal(progress.open('run-a'),false);assert.equal(calls.length,0);
+          detail.open=true;detail.ontoggle();await flushProgress();
+          assert.equal(find('.progress-body').children.length,0);assert.equal(calls.length,0);
+          progress.metadata(meta(8));assert.equal(progressTimers.size,0);
+          assert.equal(area.scrollTop,43);assert.equal(document.activeElement,$('capabilities-search'));
+          catalog=false;assert.equal(progress.open('run-a'),true);await flushProgress();
+          assert.equal(calls.length,1);assert.match(calls[0].path,/id=A.*runId=run-a/);
+          assert.equal(detail.open,true);assert.notEqual(area.scrollTop,43);
+        })()""")
+
+    def test_deferred_reveal_does_not_scroll_catalog_after_detail_response(self):
+        self.run_case(r"""(async()=>{
+          let catalog=false;globalThis.WorkspaceCapabilities={isOpen:()=>catalog};
+          const frames=[];globalThis.requestAnimationFrame=callback=>frames.push(callback);
+          const area=$('work-area');area.clientHeight=100;area.scrollTop=0;
+          area.getBoundingClientRect=()=>({top:0,bottom:100});
+          host.getBoundingClientRect=()=>({top:400-area.scrollTop,bottom:500-area.scrollTop});
+          api=async()=>page([record(1)]);progress.open();await flushProgress();
+          assert.ok(frames.length>0,'The completed detail response must queue a reveal');
+          catalog=true;area.scrollTop=37;$('capabilities-search').focus();
+          for(const frame of frames)frame();
+          assert.equal(area.scrollTop,37);assert.equal(document.activeElement,$('capabilities-search'));
+          progress.close();assert.equal(find('.progress-body').children.length,0);
+          assert.equal(progressTimers.size,0);
         })()""")
 
     def test_malformed_or_foreign_request_records_never_replace_valid_rows(self):

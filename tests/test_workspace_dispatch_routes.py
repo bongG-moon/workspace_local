@@ -70,6 +70,22 @@ class DispatchRoutesTests(unittest.TestCase):
         self.assertEqual(200, code, value)
         return value
 
+    def test_schedule_overview_requires_auth_and_cannot_start_work(self):
+        for authorized in (False, True):
+            headers = {'Authorization': 'Bearer ' + self.app.token} if authorized else {}
+            request = Request(self.server.origin + '/api/schedules', headers=headers)
+            try:
+                response = urlopen(request, timeout=4)
+            except HTTPError as exc:
+                response = exc
+            with response:
+                value = json.load(response)
+                self.assertEqual(200 if authorized else 403, response.status)
+                if authorized:
+                    self.assertEqual([], value['schedules'])
+                    self.assertEqual(0, value['counts']['total'])
+        self.assertEqual([], self.bridge.sent)
+
     def test_plain_cli_queue_uses_existing_send_history_and_one_delivery(self):
         with patch('local_app.harness_client.HarnessClient._installation', side_effect=AssertionError('No harness needed')):
             value = self.enqueue('follow-up')

@@ -130,6 +130,15 @@ class PathPickerFrontendTests(unittest.TestCase):
           byText('취소').onclick();await opened;
         })()""")
 
+    def test_executable_and_archive_selection_remains_passive_until_apply(self):
+        self.case(r"""(async()=>{
+          const calls=[];api=async(route,data)=>{calls.push({route,data});return data.action==='select'?{paths:data.paths}:result('C:/Desktop',[file('driver.exe'),file('sources.7z')]);};
+          const opened=WorkspacePathPicker.open({kind:'files'});await flush();assert.match(byClass('path-picker-message').textContent,/압축·EXE/);
+          byText('driver.exe').parent.onclick();byText('sources.7z').parent.onclick();assert.equal(calls.length,1);
+          await finish();const value=await opened;assert.equal(value.paths.join('|'),'C:/Desktop/driver.exe|C:/Desktop/sources.7z');
+          assert.equal(calls.length,2);assert.equal(calls[1].route,'/api/browse-paths');assert.equal(calls[1].data.action,'select');
+        })()""")
+
     def test_apply_error_keeps_selection_and_dialog_for_correction(self):
         self.case(r"""(async()=>{
           api=async(route,data)=>{if(data.action==='select')throw Error('선택한 파일이 삭제됐어요');return result('C:/Desktop',[file('report.csv')]);};

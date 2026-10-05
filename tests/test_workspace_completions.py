@@ -64,10 +64,11 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(row['id'], second['items'][0]['id'])
         self.assertNotIn('must not be read', str(result))
 
-    def test_document_and_source_metadata_excludes_binaries_hidden_and_build_folders(self):
+    def test_file_metadata_includes_exe_archives_excludes_other_binaries_hidden_and_build_folders(self):
         expected = {str(self.file(name)) for name in ['report.md', 'app.py', 'run.ps1',
-                                                     'a.json', 'src/view.TSX', 'query.sql']}
-        for name in ['program.exe', 'archive.zip', 'library.dll', '.secret.txt',
+                                                     'a.json', 'src/view.TSX', 'query.sql',
+                                                     'program.exe', 'archive.zip', '한글.tar.gz']}
+        for name in ['library.dll', '.secret.txt',
                      '.claude/CLAUDE.md', 'node_modules/dependency.md', 'dist/copy.md']:
             self.file(name)
         with patch.object(Path, 'open', side_effect=AssertionError('no content reads')):
@@ -80,7 +81,10 @@ class CompletionTests(unittest.TestCase):
         self.assertIn('.py', REFERENCE_FILE_TYPES)
         self.assertIn('.ipynb', REFERENCE_FILE_TYPES)
         self.assertNotIn('.py', DOCUMENT_TYPES)
-        self.assertNotIn('.exe', REFERENCE_FILE_TYPES)
+        self.assertIn('.exe', REFERENCE_FILE_TYPES)
+        self.assertNotIn('.exe', DOCUMENT_TYPES)
+        self.assertIn('.zip', REFERENCE_FILE_TYPES)
+        self.assertNotIn('.zip', DOCUMENT_TYPES)
 
     def test_explicit_external_and_saved_attachments_only_no_parent_enumeration(self):
         selected = self.file('outside/선택.txt', self.base)
@@ -104,9 +108,10 @@ class CompletionTests(unittest.TestCase):
         path = self.file('same.txt')
         script = self.file('script.py')
         executable = self.file('program.exe')
-        result = self.files(attachments=[str(path), str(script), str(executable)],
-                            safe_suffixes={'.txt', '.py', '.exe'})
-        self.assertEqual({str(path), str(script)}, {row['path'] for row in result['items']})
+        library = self.file('program.dll')
+        result = self.files(attachments=[str(path), str(script), str(executable), str(library)],
+                            safe_suffixes={'.txt', '.py', '.exe', '.dll'})
+        self.assertEqual({str(path), str(script), str(executable)}, {row['path'] for row in result['items']})
         result = self.files(safe_suffixes={'.txt'})
         self.assertEqual([str(path)], [row['path'] for row in result['items']])
 

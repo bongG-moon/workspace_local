@@ -14,6 +14,7 @@ from unittest.mock import patch
 import uuid
 
 from local_app.desktop_notifications import DesktopNotifications, MAX_INBOX, MAX_SEEN, notification_id
+from local_app.attention import DEFAULT_REQUEST_SUMMARY
 from local_app.tray import WorkspaceTray, _WindowsTray, _notification_text
 
 
@@ -54,7 +55,45 @@ class DesktopNotificationTests(unittest.TestCase):
             self.clock += 4
         self.assertEqual(3, len(self.deliveries))
         allowed = {'id', 'sessionId', 'title', 'kind', 'message', 'createdAt', 'read', 'delivery'}
-        self.assertTrue(all(set(row) == allowed for row, _ in self.deliveries))
+        self.assertTrue(all(set(row) == allowed | ({'summary'} if row['kind'] == 'attention' else set())
+                            for row, _ in self.deliveries))
+
+    def test_attention_summary_is_sanitized_persisted_and_old_schema_still_loads(self):
+        row = self.center.publish(self.sid, '질문 업무', 'attention', 'question',
+                                  summary='보고서 형식 token=glpat-abcdefghijk 를 확인해 주세요')
+        self.assertNotIn('glpat-', row['summary'])
+        self.assertIn('보고서 형식', row['summary'])
+        self.assertEqual(row['summary'], self.deliveries[0][0]['summary'])
+        reopened = self.make_center()
+        self.assertIsNone(reopened.warning)
+        self.assertEqual(row['summary'], reopened.snapshot()['inbox'][0]['summary'])
+        old = json.loads(self.center.path.read_text('utf-8'))
+        old['inbox'][0].pop('summary')
+        self.center.path.write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
+        legacy = self.make_center()
+        self.assertIsNone(legacy.warning)
+        self.assertEqual(row['id'], legacy.snapshot()['inbox'][0]['id'])
+        self.assertEqual(DEFAULT_REQUEST_SUMMARY, legacy.snapshot()['inbox'][0]['summary'])
+        self.assertTrue(legacy.publish(self.sid, '질문 업무', 'attention', 'question', summary='다른 요약')['duplicate'])
+        self.assertEqual(1, len(self.deliveries))
+
+    def test_legacy_or_empty_attention_calls_always_deliver_a_short_action_label(self):
+        for index, value in enumerate(('', '   ', None, 'python PRIVATE.py')):
+            with self.subTest(summary=value):
+                self.clock += 4
+                row = self.center.publish(self.sid, '질문 업무', 'attention', 'missing-' + str(index), summary=value)
+                self.assertEqual(DEFAULT_REQUEST_SUMMARY, row['summary'])
+                self.assertEqual(DEFAULT_REQUEST_SUMMARY, self.deliveries[-1][0]['summary'])
+        self.assertEqual(4, len(self.deliveries))
+
+    def test_summary_never_replaces_receipt_identity_or_completion_message(self):
+        row = self.center.publish(self.sid, '질문 업무', 'attention', 'question', summary='형식을 골라 주세요')
+        duplicate = self.center.publish(self.sid, '질문 업무', 'attention', 'question', summary='다른 질문')
+        self.assertTrue(duplicate['duplicate'])
+        self.assertEqual(row['summary'], duplicate['summary'])
+        self.clock += 4
+        complete = self.center.publish(self.sid, '완료 업무', 'completed', 'done', summary='불필요한 원문')
+        self.assertNotIn('summary', complete)
 
     def test_duplicate_is_one_delivery_and_remains_deduplicated_after_restart(self):
         original = self.publish()

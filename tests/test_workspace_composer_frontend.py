@@ -40,6 +40,22 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal(drafts.get('A').text,$('prompt').value);assert.equal($('composer-suggestions').hidden,true);
         })()""")
 
+    def test_quick_request_label_is_distinct_from_terminal_execution(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {items:[
+            {id:'help',label:'/help',invocation:'/help',supported:true}]};};
+          type('/he');await WorkspaceComposer.refresh();
+          assert.equal($('composer-suggestion-title').textContent,'스킬·빠른 요청(/명령)');
+          assert.equal($('composer-connect').textContent,'빠른 요청 불러오기');
+          assert.equal(calls[0].body.kind,'slash');
+          $('composer-suggestion-list').children[0].onclick();
+          assert.equal($('prompt').value,'/help ');
+          type('! echo untouched');await WorkspaceComposer.refresh();
+          assert.equal($('composer-suggestion-title').textContent,'터미널 실행 명령(!)');
+          assert.match($('composer-suggestion-note').textContent,/빠른 요청과는 달라요/);
+          assert.equal($('prompt').value,'! echo untouched');assert.equal(calls.length,1);
+        })()""")
+
     def test_file_selection_attaches_once_preserving_surrounding_text(self):
         self.run_case(r"""(async()=>{
           let request;api=async(path,body)=>{request=body;return {items:[{id:'file',label:'월간 실적.xlsx',path:'C:/자료/월간 실적.xlsx',supported:true}]};};
@@ -371,7 +387,7 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal($('composer-connect').hidden,true);
           active=task;active.connection={connected:true};selectionGeneration++;type('/does-not-exist');
           await WorkspaceComposer.refresh();assert.equal($('composer-suggestions').hidden,false);
-          assert.match($('composer-suggestion-note').textContent,/일치하는 명령이 없어요/);
+          assert.match($('composer-suggestion-note').textContent,/일치하는 빠른 요청이 없어요/);
           assert.equal($('composer-suggestion-list').children.length,0);assert.equal($('composer-connect').hidden,true);
         })()""")
 

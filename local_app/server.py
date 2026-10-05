@@ -33,14 +33,14 @@ from .picker_channel import private_picker_directory
 from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
 from .windows_process import powershell_path
 from .attention import AttentionNotifier, snapshot as attention_snapshot
-from .attachments import AttachmentStore, MAX_UPLOAD
+from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_policy
 from .app_dispatch import DispatchController
 from .progress_log import ProgressStore
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.7"
+WORKSPACE_VERSION = "0.23.18"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -113,6 +113,9 @@ def workspace_folder(item):
     return folder(path)
 
 
+SHUTDOWN_DRAIN_TIMEOUT = 5.0
+
+
 class LocalApp:
     def __init__(self, state: Path, command=None, info=None, demo=False, *, managed_workspace_root=None):
         self.state = state
@@ -124,7 +127,9 @@ class LocalApp:
         self._lifecycle = threading.Condition()
         self._active_operations = 0
         self._shutdown_state = 'running'
+        self._shutdown_issues = []
         self._close_lock = threading.Lock()
+        self._quit_confirmation = None
         self.sessions = {}
         self.command, self.info, self.demo = command, info or {}, demo
         self._injected_command = command is not None
@@ -193,20 +198,22 @@ class LocalApp:
     def _notify_desktop(self, payload, on_click):
         if self._desktop_window is not None:
             result = self._desktop_window.notify(title=payload['title'], message=payload['message'],
-                kind=payload['kind'], notification_id=payload['id'], on_click=on_click)
+                kind=payload['kind'], notification_id=payload['id'], on_click=on_click,
+                summary=payload.get('summary', ''))
             # A busy or suppressed card must not escape through a second channel.
             # None means this host cannot offer cards (e.g. an older native host).
             if result is not None:
                 return 'busy' if result == 'busy' else result is True
-        return bool(self.tray and self.tray.notify(title=payload['title'], message=payload['message'], on_click=on_click))
+        return bool(self.tray and self.tray.notify(title=payload['title'],
+            message=payload.get('summary') or payload['message'], on_click=on_click))
 
     def _viewing_task(self, sid):
         return (self._viewed_session == sid and time.monotonic() < self._viewed_until
                 and self.notifier.is_foreground())
 
-    def _publish_notification(self, sid, title, kind, identity):
+    def _publish_notification(self, sid, title, kind, identity, *, summary=''):
         try:
-            self.desktop.publish(sid, title, kind, identity)
+            self.desktop.publish(sid, title, kind, identity, summary=summary)
         except (ValueError, OSError):
             # A desktop delivery problem must not interrupt the CLI reader or
             # turn a completed request into a transport failure.
@@ -325,6 +332,29 @@ class LocalApp:
         with self.lock:
             return self._public(item)
 
+    @staticmethod
+    def stop_state(item):
+        bridge = item.get('bridge')
+        state = getattr(bridge, 'stop_state', None)
+        if state in {'stopping', 'failed', 'stopped'}:
+            return state
+        # Older injected bridges still expose the original admission signals.
+        if getattr(bridge, 'stopping', False) is True:
+            return 'stopped' if getattr(bridge, 'cleanup_complete', False) is True else 'stopping'
+        return None
+
+    def _check_stopping(self, item, *, allow_stop_admission=False):
+        state = self.stop_state(item)
+        if state == 'failed':
+            raise BridgeError('stop_cleanup_unverified',
+                '이전 작업의 중지를 확인하지 못했습니다. 입력 내용은 보내지 않았습니다.',
+                '중지 상태 확인 또는 중지 다시 시도')
+        if (state == 'stopping' or item['id'] in self.dispatch.steering
+                or item.get('_stopAdmission') and not allow_stop_admission):
+            raise BridgeError('stop_in_progress',
+                '현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.',
+                '중지 완료 후 같은 대화에서 이어서 보내기')
+
     def _public(self, item):
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification", "branch") } | {
@@ -340,6 +370,10 @@ class LocalApp:
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
         result['connectionStopped'] = bridge is None or getattr(bridge, 'cleanup_complete', False) is True
+        result['stopState'] = self.stop_state(item)
+        result['cleanupRetryable'] = getattr(bridge, 'cleanup_retryable', False) is True
+        if result['stopState'] == 'stopping':
+            result['state'] = 'stopping'
         live = bool(bridge and not bridge.closed)
         if connection is not None:
             if live and callable(getattr(bridge, 'model_state', None)):
@@ -356,7 +390,8 @@ class LocalApp:
                 connection['modelOverride'] = None
                 connection['permissionModeOverride'] = None
                 connection['effortOverride'] = None
-            connection.update(capabilities=capabilities, connected=live, controlRestore=item.get('_controlRestore'))
+            connection.update(capabilities=capabilities, connected=live, controlRestore=item.get('_controlRestore'),
+                              restarting=bool(item.get('_restarting')))
         if not live:
             result['modelOverride'] = None
             result['permissionModeOverride'] = None
@@ -376,6 +411,7 @@ class LocalApp:
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))} for item in sessions],
                     "sessionOrder": order,
+                    "attachmentPolicy": attachment_policy(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
                     "workspaceLocationError": self.workspace_location_error,
@@ -426,7 +462,79 @@ class LocalApp:
         with self._lifecycle:
             return {'closing': self._shutdown_state != 'running',
                     'closed': self._shutdown_state == 'closed',
-                    'shutdownState': self._shutdown_state}
+                    'shutdownState': self._shutdown_state,
+                    'shutdownIssues': [dict(issue) for issue in self._shutdown_issues]}
+
+    def _require_running(self):
+        # Called under self.lock, matching operation() admission order.
+        with self._lifecycle:
+            if self._shutdown_state != 'running':
+                raise AppClosing('앱을 종료하고 있습니다. 새 작업은 시작하지 않았습니다.')
+
+    def _quit_activity(self):
+        active = []
+        for item in self.sessions.values():
+            bridge = item.get('bridge')
+            pending = getattr(bridge, 'pending', None)
+            if (item.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
+                    or item.get('requests') or item.get('choice')
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_restarting',
+                                                     '_stopAdmission', '_dispatchClaim', '_choiceAnswerClaim'))
+                    or getattr(bridge, 'busy', False) is True
+                    or getattr(bridge, 'stopping', False) is True and self.stop_state(item) == 'stopping'
+                    or isinstance(pending, dict) and bool(pending)
+                    or item['id'] in self.dispatch.steering):
+                active.append(item['id'])
+        return {'activeTaskCount': len(active), 'activeOperationCount': self._active_operations}
+
+    def begin_quit_confirmation(self):
+        with self.lock:
+            current = self._quit_confirmation
+            if current and current['expires'] > time.monotonic():
+                return current['id']
+            identifier = secrets.token_hex(16)
+            self._quit_confirmation = {'id': identifier, 'expires': time.monotonic() + 300}
+            return identifier
+
+    def discard_quit_confirmation(self, identifier):
+        with self.lock:
+            if self._quit_confirmation and self._quit_confirmation['id'] == identifier:
+                self._quit_confirmation = None
+                return True
+            return False
+
+    def resolve_quit_confirmation(self, identifier, confirmed):
+        if type(confirmed) is not bool:
+            raise ValueError('종료 확인 여부를 확인해 주세요.')
+        with self.lock:
+            current = self._quit_confirmation
+            if (not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{32}', identifier)
+                    or not current or current['id'] != identifier or current['expires'] <= time.monotonic()):
+                raise BridgeError('quit_confirmation_expired',
+                    '종료 확인 요청이 만료되었습니다. 앱 종료를 다시 선택해 주세요.', '앱 종료 다시 선택')
+            self._quit_confirmation = None
+        if not confirmed:
+            return {'ok': True, 'cancelled': True, **self.shutdown_status()}
+        return self.request_quit(confirmed=True)
+
+    def request_quit(self, *, confirmed=False):
+        if type(confirmed) is not bool:
+            raise ValueError('종료 확인 여부를 확인해 주세요.')
+        # Activity check and admission close share the operation() lock order.
+        # A cancelled confirmation must leave every service and queue intact.
+        with self.lock:
+            with self._lifecycle:
+                if self._shutdown_state == 'running' and not confirmed:
+                    activity = self._quit_activity()
+                    if activity['activeTaskCount'] or activity['activeOperationCount']:
+                        return {'ok': False, 'code': 'quit_confirmation_required', 'confirmationRequired': True,
+                            'message': '작업 중인 내용이 있습니다. 그래도 종료하시겠습니까?',
+                            **activity, **self.shutdown_status()}
+                if self._shutdown_state in {'running', 'failed'}:
+                    self._shutdown_state = 'closing'
+        succeeded = self.close(force=True)
+        return {'ok': succeeded, **self.shutdown_status(), **({} if succeeded else {
+            'error': '앱에서 시작한 작업의 종료를 확인하지 못했습니다. 현재 상태를 확인한 뒤 종료를 다시 시도해 주세요.'})}
 
     @contextmanager
     def operation(self, *, upgrade_change=False):
@@ -697,11 +805,101 @@ class LocalApp:
         finally:
             self.reconnect_lock.release()
 
+    def restart_connection(self, sid, *, stop_running=False):
+        """Replace only this task's owned CLI, without sending a business turn."""
+        if type(stop_running) is not bool:
+            raise ValueError('진행 중인 업무의 중지 여부를 확인해 주세요.')
+        marker = secrets.token_hex(16)
+        with self.lock:
+            self._require_running()
+            item = self.get(sid)
+            if self.demo:
+                raise ValueError('화면 체험에서는 실제 Claude 연결을 재시작하지 않습니다.')
+            self._check_import_context(item)
+            workspace_folder(item)
+            if not item.get('trusted'):
+                raise ValueError('업무 폴더의 설정·후크·MCP 실행에 동의한 뒤 연결을 재시작해 주세요.')
+            if (any(item.get(key) for key in ('_restarting', '_connecting', '_modelUpdating',
+                                             '_dispatchClaim', '_choiceAnswerClaim')) or sid in self.dispatch.steering):
+                raise BridgeError('restart_transition_busy', '연결이나 설정을 변경하고 있습니다. 끝난 뒤 다시 시작해 주세요.', '현재 변경이 끝난 뒤 재시작')
+            old = item.get('bridge')
+            busy = (item['state'] in {'starting', 'running', 'question', 'approval'}
+                    or bool(item.get('requests') or item.get('choice'))
+                    or getattr(old, 'busy', False) is True or bool(getattr(old, 'pending', {})))
+            if busy and not stop_running:
+                raise BridgeError('restart_requires_stop', '진행 중인 업무와 확인 요청을 중지하고 Claude 연결을 재시작할까요?', '중지 후 재시작 확인')
+            if self.error:
+                raise ValueError(self.error)
+            if not self.connection_capacity_available(item):
+                raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
+            pending = self.dispatch.queue.snapshot(sid)
+            previous_hold = pending.get('reason')
+            workflow_paused = pending.get('paused') is True
+            if (any(row['status'] in {'queued', 'dispatching', 'submitted', 'needs_review'} for row in pending['queue'])
+                    or any(row['enabled'] for row in pending['schedules'])):
+                if not pending.get('paused'):
+                    self.dispatch.queue.pause(sid, 'stopped')
+                workflow_paused = True
+            self._capture_control_baselines(item, old)
+            previous_state = item['state']
+            item['_restarting'] = marker
+            item['_connecting'] = True
+            # Detach before waiting: callbacks from this retired child must not
+            # overwrite the replacement or report a fake completed AI request.
+            item['bridge'] = None
+        try:
+            if old is not None:
+                if (old.close() is not True or getattr(old, 'cleanup_complete', False) is not True
+                        or getattr(old, 'descendant_cleanup_uncertain', False) is True):
+                    with self.lock:
+                        item['bridge'] = old
+                    raise BridgeError('restart_close_unverified',
+                        '이전 Claude 연결의 종료를 확인하지 못했습니다. 새 연결은 시작하지 않았습니다. 현재 작업 상태를 확인해 주세요.',
+                        '이전 연결 종료 상태 확인')
+            with self.lock:
+                # A last result can arrive while EOF is being processed. The
+                # retired bridge owns that identity even though callbacks are ignored.
+                if old is not None and getattr(old, 'session_id', None):
+                    item['sessionId'] = old.session_id
+                if busy:
+                    # The stopped request is never replayed. Delivered queued
+                    # work remains marked for review instead of being requeued.
+                    self.emit(sid, 'status', {'state': 'stopped', 'label': '현재 요청을 중지했어요 · Claude 연결을 다시 준비합니다'})
+                    if previous_hold:
+                        self.dispatch.queue.pause(sid, previous_hold)
+                    elif not workflow_paused:
+                        self.dispatch.queue.resume(sid)
+                else:
+                    item['state'] = previous_state
+                for request_id in list(item.get('requests', {})):
+                    self.emit(sid, 'request_closed', {'id': request_id})
+                if item.get('choice'):
+                    self.emit(sid, 'choice_closed', {'id': item['choice']['id']})
+                item.pop('connection', None)
+            self.completion_discovery.invalidate(item['workspace'])
+            result = self.connect(sid, _restart_claim=marker)
+        finally:
+            with self.lock:
+                if item.get('_restarting') == marker:
+                    item.pop('_restarting', None)
+                    item['_connecting'] = False
+                    # A tab can switch away and return while the HTTP request
+                    # waits. Its new poll must observe the final unlocked state
+                    # even if it no longer owns the original response handler.
+                    current = self.public(item)
+                    self.emit(sid, 'connection_restart_finished', {
+                        'state': current['state'], 'connection': current['connection']})
+        with self.lock:
+            session = self.public(item)
+            return {**result, 'session': session, 'connection': session['connection'],
+                    'workflowPaused': workflow_paused or self.dispatch.queue.snapshot(sid).get('paused') is True}
+
     def set_model(self, sid, model):
         if model is not None and (not isinstance(model, str) or not model.strip() or len(model) > 160 or any(ord(c) < 32 for c in model)):
             raise ValueError('사용할 모델 이름을 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
+            self._check_stopping(item)
             if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
             bridge = item.get('bridge')
@@ -727,6 +925,7 @@ class LocalApp:
             raise ValueError('추론 수준을 확인해 주세요.')
         with self.lock:
             item = self.get(sid)
+            self._check_stopping(item)
             if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무와 확인 요청이 끝난 뒤 추론 수준을 변경해 주세요.')
             bridge = item.get('bridge')
@@ -756,7 +955,9 @@ class LocalApp:
         if mode == 'bypassPermissions' and bypass_confirmed is not True:
             raise ValueError('Bypass는 파일 수정·명령 실행의 승인을 생략합니다. 위험 안내를 확인한 뒤 직접 선택해 주세요.')
         with self.lock:
+            self._require_running()
             item = self.get(sid)
+            self._check_stopping(item)
             if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무와 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.')
             bridge = item.get('bridge')
@@ -817,21 +1018,25 @@ class LocalApp:
         if bridge is not None and not bridge.closed:
             return True
         occupied = sum(1 for row in self.sessions.values() if row is not item and (
-            row.get('_dispatchClaim') or (row.get('bridge') and not row['bridge'].closed)))
+            row.get('_dispatchClaim') or row.get('_restarting') or (row.get('bridge') and not row['bridge'].closed)))
         return occupied < 3
 
-    def connect(self, sid, *, _dispatch_claim=None):
+    def connect(self, sid, *, _dispatch_claim=None, _restart_claim=None):
         """Explicitly prepare one trusted task's CLI; never send a prompt."""
         with self.lock:
+            self._require_running()
             item = self.get(sid)
+            if item.get('_restarting') != _restart_claim:
+                raise ValueError('Claude 연결을 재시작하고 있습니다. 잠시 후 다시 시도해 주세요.')
             if item.get('_dispatchClaim') != _dispatch_claim:
                 raise ValueError('대기 요청을 전송하고 있습니다. 연결 준비는 잠시 후 다시 시도해 주세요.')
+            self._check_stopping(item, allow_stop_admission=_restart_claim is not None)
             self._check_import_context(item)
             if not item.get('trusted'):
                 raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
             root = workspace_folder(item)
             if (item['state'] in {'starting', 'running', 'question', 'approval'}
-                    or item.get('_modelUpdating') or item.get('_connecting')):
+                    or item.get('_modelUpdating') or (item.get('_connecting') and _restart_claim is None)):
                 raise ValueError('현재 업무와 연결 준비가 끝난 뒤 명령을 불러와 주세요.')
             if self.demo:
                 raise ValueError('화면 체험에서는 실제 Claude 명령을 불러오지 않습니다.')
@@ -839,12 +1044,14 @@ class LocalApp:
                 raise ValueError(self.error)
             bridge = item.get('bridge')
             if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
-                raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.')
+                raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.', '이전 연결 중지 상태 확인')
             if bridge is None or bridge.closed:
                 self._capture_control_baselines(item, bridge)
                 if not self.connection_capacity_available(item):
-                    raise ValueError('연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.')
+                    raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
                 resume_options = self._resume_options(item)
+                if _restart_claim is not None and resume_options.get('resume') and not item.get('branch'):
+                    resume_options['require_resume_identity'] = True
                 bridge = ClaudeSession(self.command, self.info, root,
                     lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
                     **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
@@ -877,7 +1084,7 @@ class LocalApp:
                 return {'ok': True, 'connection': session['connection'], 'session': session}
         finally:
             with self.lock:
-                item['_connecting'] = False
+                item['_connecting'] = bool(item.get('_restarting'))
 
     @staticmethod
     def _remember_control(item, name, value):
@@ -1011,6 +1218,9 @@ class LocalApp:
             item = self.sessions.get(sid)
             if item is None or item.get('bridge') is not bridge:
                 return
+            if (kind == 'status' and data.get('state') == 'stopped' and data.get('runId')
+                    and data['runId'] != item.get('lastRunId')):
+                return  # An earlier stop must not overwrite a newly accepted turn.
             if kind in {'tool_activity', 'progress_record', 'run_activity'} and (not getattr(bridge, '_tool_activity_run_id', None)
                     or bridge._tool_activity_run_id != item.get('lastRunId')):
                 return  # Connection preparation is not a submitted user turn.
@@ -1153,8 +1363,14 @@ class LocalApp:
                 if data["state"] == "stopped":
                     item["requests"].clear()
                     item.pop('choice', None)
-                    item['modelOverride'] = None
-                    item['permissionModeOverride'] = None
+                    bridge = item.get('bridge')
+                    # A cooperative interrupt keeps this exact CLI and its
+                    # acknowledged model, effort and permission choices alive.
+                    if bridge is not None and getattr(bridge, 'session_id', None):
+                        item['sessionId'] = bridge.session_id
+                    if bridge is None or bridge.closed:
+                        item['modelOverride'] = None
+                        item['permissionModeOverride'] = None
                     if isinstance(item.get('connection'), dict):
                         item['connection'] = self.public(item)['connection']
                         data['connection'] = item['connection']
@@ -1174,6 +1390,14 @@ class LocalApp:
                 item['modelOverride'] = data.get('modelOverride')
                 item['permissionModeOverride'] = data.get('permissionModeOverride')
             elif kind == "result":
+                # A terminal frame can race the interrupt acknowledgement.
+                # Preserve its conversation identity without announcing a
+                # completed request while the stop still awaits confirmation.
+                if self.stop_state(item) == 'stopping':
+                    if data.get('sessionId'):
+                        item['sessionId'] = data['sessionId']
+                    self.save(sid)
+                    return
                 item["sessionId"] = data.get("sessionId")
                 item["state"] = "done"
                 if item.get('branch') and item['sessionId'] == item['branch']['childSessionId']:
@@ -1187,6 +1411,9 @@ class LocalApp:
                 if "resumeSessionId" in data:
                     item["sessionId"] = data["resumeSessionId"]
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
+            if kind in {'status', 'result', 'error'}:
+                state = self.public(item)
+                data = dict(data, **{key: state[key] for key in ('stopState', 'connectionStopped', 'cleanupRetryable')})
             if terminal:
                 item.pop('runActivity', None)
                 from .executions import normalize_executions
@@ -1211,7 +1438,8 @@ class LocalApp:
                 if hasattr(self, 'desktop'):
                     self.desktop.retain_attention(pending['items'])
                     for notice in pending['items']:
-                        self._publish_notification(notice['sessionId'], notice['title'], 'attention', notice['id'])
+                        self._publish_notification(notice['sessionId'], notice['title'], 'attention', notice['id'],
+                            summary=notice.get('summary', ''))
                     if (kind in {'result', 'error'} and item.get('lastRunId') and not item.get('_modelUpdating') and not item.get('_connecting')
                             and not (kind == 'result' and any(row['sessionId'] == sid for row in pending['items']))):
                         notification_kind = 'error' if kind == 'error' or (data.get('verification') or {}).get('state') == 'needs-review' else 'completed'
@@ -1241,7 +1469,7 @@ class LocalApp:
                 raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
             path = workspace_path(candidate).resolve(strict=True)
             if not path.is_file() or path.suffix.lower() not in REFERENCE_FILE_TYPES:
-                raise ValueError('문서·이미지 또는 소스 파일을 선택해 주세요.')
+                raise ValueError('지원하지 않는 파일 형식입니다. 문서·이미지·소스·EXE·압축 파일을 선택해 주세요.')
             paths.append(str(path))
         return list(dict.fromkeys(paths))
 
@@ -1251,12 +1479,13 @@ class LocalApp:
         if not isinstance(attachments, list) or len(attachments) > 12:
             raise ValueError("파일은 한 번에 12개까지 선택할 수 있습니다.")
         with self.lock:
+            self._require_running()
             current = self.get(sid)
+            if current.get('_restarting'):
+                raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 요청을 보내 주세요.')
             if current.get('_dispatchClaim') != _dispatch_claim:
                 raise ValueError('대기 요청을 전송하고 있습니다. 잠시 후 다시 보내 주세요.')
-            if sid in self.dispatch.steering or (getattr(current.get('bridge'), 'stopping', False) is True
-                    and getattr(current.get('bridge'), 'cleanup_complete', False) is not True):
-                raise ValueError('현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.')
+            self._check_stopping(current)
             self._validate_choice_claim(current, _choice_claim)
             old_bridge = current.get('bridge')
             if current.get('_controlRestore') and old_bridge is not None and not old_bridge.closed:
@@ -1267,13 +1496,13 @@ class LocalApp:
             self.connect(sid, _dispatch_claim=_dispatch_claim)
         with self.lock:
             item = self.get(sid)
+            if item.get('_restarting'):
+                raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 요청을 보내 주세요.')
             if item.get('_controlRestore'):
                 raise ControlRestoreRequired(connection=self.public(item)['connection'])
             if item.get('_dispatchClaim') != _dispatch_claim:
                 raise ValueError('대기 요청을 전송하고 있습니다. 잠시 후 다시 보내 주세요.')
-            if sid in self.dispatch.steering or (getattr(item.get('bridge'), 'stopping', False) is True
-                    and getattr(item.get('bridge'), 'cleanup_complete', False) is not True):
-                raise ValueError('현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.')
+            self._check_stopping(item)
             self._validate_choice_claim(item, _choice_claim)
             if not item.get("trusted") and trusted is not True:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
@@ -1289,10 +1518,10 @@ class LocalApp:
             if not self.demo:
                 bridge = item.get("bridge")
                 if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
-                    raise ValueError('이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.')
+                    raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
                 if bridge is None or bridge.closed:
                     if not self.connection_capacity_available(item):
-                        raise ValueError("연결된 대화가 3개입니다. 다른 대화의 연결을 중지한 뒤 다시 시도해 주세요.")
+                        raise ValueError("연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.")
                     resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
                                            lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
@@ -1352,13 +1581,38 @@ class LocalApp:
             else:
                 bridge.respond(rid, allow, answers, permission_choice_id=permission_choice_id)
 
-    def stop(self, sid):
-        self.dispatch.manual_stop(sid)
-        bridge = self.get(sid).get("bridge")
+    def stop(self, sid, *, disconnect=False):
+        if type(disconnect) is not bool:
+            raise ValueError('연결 종료 여부를 확인해 주세요.')
+        with self.lock:
+            item = self.get(sid)
+            if item.get('_restarting'):
+                raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 다시 시도해 주세요.')
+            if item.get('_stopAdmission'):
+                raise BridgeError('stop_in_progress', '현재 작업을 중지하고 있습니다.', '중지 완료 후 이어서 보내기')
+            self.dispatch.manual_stop(sid)
+            bridge = item.get('bridge')
+            marker = secrets.token_hex(16) if bridge else None
+            if marker:
+                # Admit no new turn between capturing this exact child and
+                # interrupt() acquiring its own lock outside the app lock.
+                item['_stopAdmission'] = marker
+            if not bridge:
+                self.emit(sid, "status", {"state": "stopped", "label": "중지했어요"})
         if bridge:
-            bridge.interrupt()
-        else:
-            self.emit(sid, "status", {"state": "stopped", "label": "중지했어요"})
+            # Capture the target before releasing admission. A concurrent
+            # restart must never turn this click into stopping its new child.
+            try:
+                if disconnect:
+                    bridge.interrupt(disconnect=True)
+                else:
+                    bridge.interrupt()
+            finally:
+                with self.lock:
+                    if item.get('_stopAdmission') == marker:
+                        item.pop('_stopAdmission', None)
+        with self.lock:
+            return {'ok': True, 'session': self.public(self.get(sid))}
 
     def allowed_file(self, sid, value):
         item = self.get(sid)
@@ -1414,39 +1668,58 @@ class LocalApp:
         finally:
             self.dialog_lock.release()
 
-    def close(self):
-        if hasattr(self, 'app_updates'):
-            self.app_updates.close()
-        if hasattr(self, 'dispatch'):
-            self.dispatch.stop()
-        self.notifier.close()
-        if hasattr(self, 'desktop'):
-            self.desktop.close()
-        # Close admission immediately, including when another quit owns cleanup.
-        with self._lifecycle:
-            if self._shutdown_state in {'running', 'failed'}:
-                self._shutdown_state = 'closing'
-            while self._active_operations:
-                self._lifecycle.wait()
+    def close(self, *, force=False):
+        # Close admission before stopping any service, preserving lock ordering.
+        with self.lock:
+            with self._lifecycle:
+                if self._shutdown_state in {'running', 'failed'}:
+                    self._shutdown_state = 'closing'
         with self._close_lock:
             with self._lifecycle:
                 if self._shutdown_state == 'closed':
                     return True
-            with self.lock:
-                bridges = [item['bridge'] for item in self.sessions.values() if item.get('bridge')]
-            succeeded = True
-            for bridge in bridges:
-                try:
-                    # ClaudeSession.close returns explicit process-cleanup evidence.
-                    # A false result must not be replaced by a successful UI message.
-                    if bridge.close() is not True:
-                        succeeded = False
-                except Exception:
-                    succeeded = False
+            if hasattr(self, 'app_updates'):
+                self.app_updates.close()
+            if hasattr(self, 'dispatch'):
+                self.dispatch.stop()
+            self.notifier.close()
+            if hasattr(self, 'desktop'):
+                self.desktop.close()
+            issues = []
+            cleaned = {}
+            def close_bridges():
+                with self.lock:
+                    bridges = [(item['id'], item['bridge']) for item in self.sessions.values() if item.get('bridge')]
+                for sid, bridge in bridges:
+                    if id(bridge) in cleaned:
+                        continue
+                    cleaned[id(bridge)] = bridge  # Retain identity across both snapshots.
+                    try:
+                        # Closing children wakes initialize/control waiters.
+                        if bridge.close() is not True:
+                            code = ('descendants_unverified' if getattr(bridge, 'descendant_cleanup_uncertain', False) is True
+                                    else 'process_cleanup_failed')
+                            issues.append({'sessionId': sid, 'code': code})
+                    except Exception:
+                        issues.append({'sessionId': sid, 'code': 'cleanup_exception'})
+            if force:
+                close_bridges()
+            deadline = time.monotonic() + SHUTDOWN_DRAIN_TIMEOUT
             with self._lifecycle:
-                self._shutdown_state = 'closed' if succeeded else 'failed'
+                while self._active_operations:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        issues.append({'code': 'operations_pending'})
+                        break
+                    self._lifecycle.wait(remaining)
+            # A previously admitted operation may publish its bridge while the
+            # first snapshot is taken. Never miss that child on final cleanup.
+            close_bridges()
+            with self._lifecycle:
+                self._shutdown_issues = issues
+                self._shutdown_state = 'closed' if not issues else 'failed'
                 self._lifecycle.notify_all()
-            return succeeded
+            return not issues
 
 
 class AppClosing(ValueError):
@@ -1519,6 +1792,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.upgrade.status(query.get('requestId', [None])[0]))
             if route.path == '/api/claude-sessions':
                 return self.reply(app.import_sessions(query.get('sessionId', [None])[0]))
+            if route.path == '/api/schedules':
+                return self.reply(app.dispatch.overview())
             if route.path == '/api/dispatch':
                 return self.reply(app.dispatch.snapshot(sid))
             if route.path == "/api/events":
@@ -1665,6 +1940,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("올바른 요청 형식이 아닙니다.")
             app = self.server.app
             route = urlsplit(self.path).path
+            # The recovery screen must be able to acknowledge that it loaded
+            # even after shutdown has closed admission for normal mutations.
+            if route == '/api/ui-health':
+                return self.dispatch_post(route, data)
             if route == '/api/upgrade':
                 result = app.upgrade.action(data)
                 if result.get('closed') is True:
@@ -1675,15 +1954,22 @@ class Handler(BaseHTTPRequestHandler):
                 status = 503 if result.get('state') == 'failed' else 409 if not result.get('ok') else 200
                 return self.reply(result, status)
             if route == "/api/quit":
-                if not app.close():
-                    return self.reply({'ok': False, **app.shutdown_status(),
-                                       'error': 'CLI 연결의 종료를 확인하지 못했습니다. 진행 중인 작업을 확인한 뒤 다시 시도해 주세요.'}, 503)
+                if set(data) - {'confirmed', 'confirmationId'}:
+                    raise ValueError('종료 요청의 항목을 확인해 주세요.')
+                if 'confirmationId' in data:
+                    result = app.resolve_quit_confirmation(data['confirmationId'], data.get('confirmed'))
+                else:
+                    result = app.request_quit(confirmed=data.get('confirmed', False))
+                if result.get('closed') is not True:
+                    status = 409 if result.get('confirmationRequired') else 200 if result.get('cancelled') else 503
+                    return self.reply(result, status)
                 try:
-                    return self.reply({'ok': True, **app.shutdown_status()})
+                    return self.reply(result)
                 finally:
                     # Deliver completion only after cleanup, then stop accepting HTTP.
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
-            read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind'}
+            read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind',
+                                  '/api/attachments/prepare'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
             with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
@@ -1693,19 +1979,42 @@ class Handler(BaseHTTPRequestHandler):
                 payload['code'] = exc.code
             if getattr(exc, 'next_action', None):
                 payload['nextAction'] = exc.next_action
+            if getattr(exc, 'code', None) in {'stop_in_progress', 'stop_cleanup_unverified'}:
+                with app.lock:
+                    item = app.sessions.get(data.get('id'))
+                    if item is not None:
+                        bridge = item.get('bridge')
+                        payload.update(stopState=app.stop_state(item),
+                            connectionStopped=bridge is None or getattr(bridge, 'cleanup_complete', False) is True,
+                            cleanupRetryable=getattr(bridge, 'cleanup_retryable', False) is True)
             if isinstance(exc, ControlRestoreRequired) and exc.connection is not None:
                 payload['connection'] = exc.connection
+            if getattr(exc, 'code', None) == 'quit_confirmation_expired':
+                payload.update(app.shutdown_status())
+                return self.reply(payload, 409)
             return self.reply(payload, 409 if isinstance(exc, AppClosing) else 400)
 
     def upload_attachment(self):
         self.close_connection = True
+        source = None
         if (not self.valid_request() or self.headers.get('Content-Type', '').split(';')[0] != 'application/octet-stream'
                 or self.headers.get('Transfer-Encoding')):
+            # A small unread body can reset the JSON rejection on Windows.
+            # Discard only a bounded declared body; no authentication or file
+            # operation is performed, and oversized bodies are never drained.
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not self.headers.get('Transfer-Encoding') and 0 < length <= MAX_BODY:
+                    self.connection.settimeout(.5)
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
             return self.reply({'error': '허용되지 않은 파일 전송입니다.'}, 403)
         try:
             size = int(self.headers.get('Content-Length', '-1'))
             if not 0 <= size <= MAX_UPLOAD:
                 return self.reply({'error': '끌어서 첨부하는 파일은 50 MB까지 지원합니다. 큰 파일은 경로로 추가해 주세요.'}, 413)
+            source = UploadReader(self.rfile, size)
             self.connection.settimeout(30)
             query = parse_qs(urlsplit(self.path).query)
             sid = query.get('id', [''])[0]
@@ -1714,13 +2023,32 @@ class Handler(BaseHTTPRequestHandler):
             with app.operation(upgrade_change=True):
                 with app.lock:
                     app.get(sid)
-                return self.reply(app.attachment_store.save(sid, name, self.rfile, size))
+                return self.reply(app.attachment_store.save(sid, name, source, size))
         except (ValueError, OSError, KeyError, TypeError) as exc:
+            # Authenticated, size-bounded callers can lose the JSON error on
+            # Windows when the socket closes with unread upload bytes. Preflight
+            # avoids the normal case; drain a race/old-client rejection in chunks
+            # with a total deadline. Never drain unauthenticated/oversized bodies.
+            if source is not None:
+                deadline = time.monotonic() + 2
+                try:
+                    while source.remaining and time.monotonic() < deadline:
+                        self.connection.settimeout(max(.01, deadline - time.monotonic()))
+                        if not source.read(min(1024 * 1024, source.remaining)):
+                            break
+                except OSError:
+                    pass
             return self.reply({'error': str(exc)}, 409 if isinstance(exc, AppClosing) else 400)
 
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/attachments/prepare':
+            if set(data) != {'id', 'name', 'size'}:
+                raise ValueError('첨부할 파일의 이름과 크기를 확인해 주세요.')
+            with app.lock:
+                app.get(sid)
+            return self.reply(app.attachment_store.prepare(data['name'], data['size']))
         if route == '/api/app-update':
             action = data.get('action')
             if action == 'check' and set(data) == {'action'}:
@@ -1757,6 +2085,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.reorder_session(sid, data.get('targetId'), data.get('position')))
         if route == '/api/reconnect':
             return self.reply(app.reconnect(sid))
+        if route == '/api/restart-connection':
+            if set(data) - {'id', 'stopRunning'}:
+                raise ValueError('재시작 요청 형식을 확인해 주세요.')
+            return self.reply(app.restart_connection(sid, stop_running=data.get('stopRunning', False)))
         if route == '/api/connect':
             return self.reply(app.connect(sid))
         if route == '/api/control-restore':
@@ -1838,7 +2170,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route == '/api/choice':
             return self.reply(app.answer_choice(sid, data.get('choiceId'), option_id=data.get('optionId'), text=data.get('text')))
         elif route == "/api/stop":
-            app.stop(sid)
+            if set(data) - {'id', 'disconnect'}:
+                raise ValueError('중지 요청의 항목을 확인해 주세요.')
+            return self.reply(app.stop(sid, disconnect=data.get('disconnect', False)))
         elif route == "/api/open":
             path = app.allowed_file(sid, data.get("path", ""))
             from .external_apps import open_document
@@ -1886,7 +2220,16 @@ def main():
         app.notifier = AttentionNotifier(enabled=True)
     serving = threading.Event()
     def quit_from_tray():
-        if not serving.wait(35) or not app.close():
+        if not serving.wait(35):
+            return False
+        result = app.request_quit()
+        if result.get('confirmationRequired'):
+            identifier = app.begin_quit_confirmation()
+            if window.confirm_shutdown(identifier):
+                return None  # The authenticated screen decision owns completion.
+            app.discard_quit_confirmation(identifier)
+            return False
+        if result.get('closed') is not True:
             return False
         server.shutdown()
         return True

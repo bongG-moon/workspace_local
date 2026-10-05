@@ -194,6 +194,8 @@ class WorkspaceTray:
                     self._pending.discard(action)
                     if failed:
                         self._error = action + '_failed'
+                    elif self._error == action + '_failed':
+                        self._error = ''
                     backend = self._backend
                 if backend is not None:
                     backend.post_update()

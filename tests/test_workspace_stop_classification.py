@@ -1,7 +1,10 @@
 """Explicit-stop classification without a real CLI, authentication, or network."""
 from pathlib import Path
+import json
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 import uuid
@@ -235,6 +238,8 @@ class LocalAppStopClassificationTests(unittest.TestCase):
             self.assertEqual('interrupt', frame['request']['subtype'])
             self.assertTrue(self.bridge.stopping)
             self.bridge.handle(result_frame(self.native_id))
+            self.bridge.handle({'type': 'control_response', 'response': {
+                'subtype': 'success', 'request_id': frame['request_id'], 'response': {}}})
 
         with patch.object(self.bridge, '_write', side_effect=interrupted), \
                 patch('local_app.bridge.threading.Thread') as worker, \
@@ -252,7 +257,9 @@ class LocalAppStopClassificationTests(unittest.TestCase):
         self.assertEqual({}, self.item['requests'])
         self.assertFalse(self.bridge.busy)
         self.assertEqual(set(), self.bridge.tasks)
-        self.assertTrue(self.bridge.cleanup_complete)
+        self.assertFalse(self.bridge.cleanup_complete)
+        self.assertFalse(self.bridge.closed)
+        self.assertEqual('stopped', self.bridge.stop_state)
         self.assertEqual(self.native_id, self.item['sessionId'])
         self.assertEqual([{'role': 'user', 'text': '원래 요청'}], self.item['messages'])
         self.assertFalse(any(row['type'] in {'assistant', 'result', 'error'}
@@ -263,14 +270,14 @@ class LocalAppStopClassificationTests(unittest.TestCase):
                              for row in self.app.desktop.snapshot()['inbox']))
         self.assertEqual('stopped', self.app.dispatch.snapshot(self.sid)['reason'])
 
-    def test_explicit_followup_replaces_stopped_child_and_resumes_same_session(self):
+    def test_explicit_followup_keeps_stopped_child_and_same_session(self):
         self.stop_with_diagnostic()
         previous = self.bridge
         with patch.object(ClaudeSession, 'send', autospec=True) as send:
             self.app.send(self.sid, '후속 요청', [])
         resumed = self.item['bridge']
 
-        self.assertIsNot(previous, resumed)
+        self.assertIs(previous, resumed)
         self.assertFalse(resumed.closed)
         self.assertFalse(resumed.stopping)
         self.assertEqual(self.native_id, resumed.session_id)
@@ -286,6 +293,153 @@ class LocalAppStopClassificationTests(unittest.TestCase):
         self.assertFalse(any(row['type'] == 'error' for row in self.item['events']))
         self.assertFalse(any(row['kind'] == 'error'
                              for row in self.app.desktop.snapshot()['inbox']))
+
+
+class StopProtocolProcessTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='workspace-stop-protocol-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        fixture = Path(__file__).parent / 'fixtures/workspace_stop_cli.py'
+        self.events = []
+        self.bridge = ClaudeSession([sys.executable, '-B', str(fixture.resolve())], {}, self.root,
+                                    lambda kind, data: self.events.append((kind, data)))
+        self.addCleanup(self.bridge.close)
+        self.bridge.prepare()
+
+    def wait(self, predicate):
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(.01)
+        self.fail('isolated stop fixture did not settle')
+
+    def configure(self, **value):
+        (self.root / 'stop-config.json').write_text(json.dumps(value), encoding='utf-8')
+
+    def wire(self):
+        return [json.loads(line) for line in (self.root / 'stop-wire.jsonl').read_text().splitlines()]
+
+    def start_turn(self, text='wait for cancellation'):
+        self.bridge.send(text)
+        self.wait(lambda: any(row.get('type') == 'user' and row['message']['content'] == text
+                              for row in self.wire()))
+
+    def test_ack_and_result_in_either_order_keep_pid_and_explicit_followup(self):
+        for order in ('ack-first', 'result-first'):
+            with self.subTest(order=order):
+                self.configure(order=order)
+                pid, native_id = self.bridge.process.pid, self.bridge.session_id
+                self.bridge.model_override = 'preserved-selection'
+                self.start_turn('wait ' + order)
+                self.bridge.interrupt()
+                self.wait(lambda: self.bridge.stop_state == 'stopped')
+                self.assertFalse(self.bridge.stopping)
+                self.assertFalse(self.bridge.closed)
+                self.assertFalse(self.bridge.cleanup_complete)
+                self.assertIsNone(self.bridge.process.poll())
+                self.assertEqual('preserved-selection', self.bridge.model_override)
+                self.bridge.send('followup ' + order)
+                self.wait(lambda: not self.bridge.busy)
+                self.assertEqual(pid, self.bridge.process.pid)
+                self.assertEqual(native_id, self.bridge.session_id)
+                self.assertFalse(any(kind == 'error' for kind, _ in self.events))
+        self.assertEqual(4, sum(row['type'] == 'user' for row in self.wire()))
+
+    def test_approval_is_drained_and_repeated_stop_does_not_duplicate_interrupt(self):
+        self.configure(delay=.15)
+        self.start_turn('wait approval')
+        self.wait(lambda: bool(self.bridge.pending))
+        self.bridge.interrupt()
+        self.bridge.interrupt()
+        with self.assertRaises(ValueError):
+            self.bridge.send('must not submit before acknowledgement')
+        self.wait(lambda: self.bridge.stop_state == 'stopped')
+        self.assertEqual({}, self.bridge.pending)
+        self.assertEqual(1, sum(row.get('request', {}).get('subtype') == 'interrupt' for row in self.wire()))
+        self.assertFalse(any(row.get('message', {}).get('content', '').startswith('must not') for row in self.wire()))
+
+    def test_idle_stop_preserves_connection_without_protocol_or_forced_cleanup(self):
+        process = self.bridge.process
+        self.bridge.interrupt()
+        self.assertEqual('stopped', self.bridge.stop_state)
+        self.assertFalse(self.bridge.closed)
+        self.assertIsNone(process.poll())
+        self.assertFalse(any(row.get('request', {}).get('subtype') == 'interrupt' for row in self.wire()))
+
+    def test_old_watchdog_cannot_close_followup_turn(self):
+        with patch('local_app.bridge.STOP_RESPONSE_TIMEOUT', .25):
+            self.start_turn()
+            self.bridge.interrupt()
+            self.wait(lambda: self.bridge.stop_state == 'stopped')
+            self.start_turn('wait next turn')
+            time.sleep(.35)
+        self.assertTrue(self.bridge.busy)
+        self.assertFalse(self.bridge.closed)
+        self.assertIsNone(self.bridge.process.poll())
+
+    def test_missing_ack_or_terminal_uses_bounded_owned_cleanup(self):
+        for missing in ('ack', 'result'):
+            with self.subTest(missing=missing):
+                # Each subcase needs its own connection after fallback closes it.
+                if self.bridge.closed:
+                    self.setUp()
+                self.configure(missing=missing)
+                with patch('local_app.bridge.STOP_RESPONSE_TIMEOUT', .15):
+                    self.start_turn()
+                    self.bridge.interrupt()
+                    self.wait(lambda: self.bridge.stop_state == 'stopped')
+                self.assertTrue(self.bridge.cleanup_complete)
+                self.assertTrue(self.bridge.closed)
+
+    def test_real_error_and_auth_failure_are_not_suppressed(self):
+        self.configure(error='Tool execution failed: permission denied', order='result-first')
+        self.start_turn()
+        self.bridge.interrupt()
+        self.wait(lambda: self.bridge.stop_state == 'stopped')
+        self.assertTrue(any(kind == 'error' and data.get('code') == 'task_failed' for kind, data in self.events))
+        self.assertTrue(any(kind == 'status' and data.get('state') == 'error' for kind, data in self.events))
+        self.assertFalse(self.bridge.closed)
+        self.configure(error='Failed to authenticate: OAuth session expired', order='ack-first')
+        self.start_turn('wait authentication')
+        self.bridge.interrupt()
+        self.wait(lambda: any(kind == 'error' and data.get('code') == 'cli_authentication'
+                              for kind, data in self.events))
+        self.assertTrue(self.bridge.closed)
+
+    def test_cancel_before_user_write_never_replays_prompt_or_closes_followup(self):
+        with patch('local_app.bridge.threading.Thread') as worker:
+            self.bridge.send('cancelled before submission')
+            pending = worker.call_args
+        self.bridge.interrupt()
+        self.assertEqual('stopped', self.bridge.stop_state)
+        self.assertFalse(self.bridge.closed)
+        self.bridge.send('explicit next turn')
+        pending.kwargs['target'](*pending.kwargs['args'])
+        self.wait(lambda: not self.bridge.busy)
+        messages = [row['message']['content'] for row in self.wire() if row['type'] == 'user']
+        self.assertEqual(['explicit next turn'], messages)
+
+    def test_first_system_identity_arriving_after_stop_is_retained(self):
+        self.bridge.close()
+        self.configure(deferInit=True)
+        self.bridge = ClaudeSession(self.bridge.command, {}, self.root,
+                                    lambda kind, data: self.events.append((kind, data)))
+        self.addCleanup(self.bridge.close)
+        self.bridge.prepare()
+        self.assertIsNone(self.bridge.session_id)
+        self.start_turn()
+        self.bridge.interrupt()
+        self.wait(lambda: self.bridge.stop_state == 'stopped')
+        self.assertIsNotNone(self.bridge.session_id)
+        self.assertFalse(self.bridge.closed)
+        self.assertFalse(any(kind == 'error' for kind, _ in self.events))
+
+    def test_disconnect_option_closes_owned_connection_for_native_handoff(self):
+        self.bridge.interrupt(disconnect=True)
+        self.wait(lambda: self.bridge.cleanup_complete)
+        self.assertTrue(self.bridge.closed)
 
 
 if __name__ == '__main__':

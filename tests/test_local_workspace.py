@@ -58,7 +58,8 @@ class BridgeTests(unittest.TestCase):
                      "ANTHROPIC_BASE_URL": "https://company.invalid", "ANTHROPIC_MODEL": "existing-model",
                      "USERPROFILE": self.temp.name, "HOME": self.temp.name}
         with patch.dict(os.environ, preserved), patch("local_app.bridge.subprocess.Popen") as popen, \
-                patch("local_app.bridge.threading.Thread"), patch.object(self.bridge, "_write"):
+                patch("local_app.bridge.threading.Thread"), patch("local_app.bridge.WindowsJob"), \
+                patch.object(self.bridge, "_write"):
             self.bridge.start()
             env = popen.call_args.kwargs["env"]
             for key, value in preserved.items():
@@ -360,7 +361,7 @@ class ServerTests(unittest.TestCase):
     def test_bootstrap_identifies_shared_cli_without_claiming_login_success(self):
         with self.request("/api/bootstrap") as response:
             value = json.load(response)
-        self.assertEqual(value["workspaceVersion"], "0.23.7")
+        self.assertEqual(value["workspaceVersion"], "0.23.18")
         self.assertEqual(value["appRoot"], str(ROOT))
         self.assertEqual(value["runtime"]["authentication"], "shared-with-cli")
         self.assertNotIn("loggedIn", value["runtime"])

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from local_app.native_window import DesktopHost, DesktopError
-from local_app.attention import AttentionNotifier, WindowBinding, WindowsAttention
+from local_app.attention import DEFAULT_REQUEST_SUMMARY, AttentionNotifier, WindowBinding, WindowsAttention
 from local_app.ui_health import UiHealthLog
 
 FAKE = r'''
@@ -30,6 +31,10 @@ for line in sys.stdin:
  if request['command']=='fixture_event':
   print(json.dumps({'type':request['eventType'],'notificationId':request['notificationId']}), flush=True)
  reply={'type':'ack','id':request['id'],'ok':True}
+ if request['command']=='confirm_shutdown':
+  if mode=='exit_on_confirm': sys.exit(0)
+  if mode!='confirm_missing':
+   reply['confirmationShown']='true' if mode=='confirm_string' else mode!='confirm_reject'
  if request['command']=='notify':
   if mode=='exit_on_notify': sys.exit(0)
   if mode in ('open_first', 'dismiss_first'):
@@ -184,6 +189,67 @@ class NativeWindowTests(unittest.TestCase):
         with self.assertRaises(DesktopError): self.host.open()
         self.assertEqual([], self.launches)
 
+    def test_shutdown_confirmation_ack_only_means_displayed_and_keeps_host_usable(self):
+        close_requested = Mock()
+        self.host.on_close = close_requested
+        self.host.open()
+        with self.host.lock:
+            self.host._command('hide')
+        self.assertTrue(self.host.confirm_shutdown('a' * 32))
+        self.assertEqual({'command': 'confirm_shutdown', 'confirmationId': 'a' * 32, 'id': 2},
+                         self.request_log()[-1])
+        self.assertIsNone(self.processes[0].poll())
+        close_requested.assert_not_called()
+        self.assertEqual('activated', self.host.open()['action'])
+        self.assertEqual(1, len(self.launches))
+        self.assertNotIn('close', [row['command'] for row in self.request_log()])
+
+    def test_shutdown_confirmation_rejects_invalid_ids_before_ipc(self):
+        self.host.open()
+        for invalid in (None, False, 1, 'a' * 31, 'a' * 33, 'A' * 32, 'a' * 32 + '\n',
+                        "');globalThis.close();//"):
+            with self.subTest(invalid=invalid):
+                self.assertFalse(self.host.confirm_shutdown(invalid))
+        self.assertFalse(self.requests.exists())
+        self.assertIsNone(self.processes[0].poll())
+
+    def test_shutdown_confirmation_unavailable_never_launches_or_reopens_host(self):
+        self.assertFalse(self.host.confirm_shutdown('b' * 32))
+        self.assertEqual([], self.launches)
+        self.host.open()
+        self.host.close()
+        self.assertFalse(self.host.confirm_shutdown('b' * 32))
+        self.assertEqual(1, len(self.launches))
+
+    def test_shutdown_confirmation_requires_explicit_boolean_display_ack(self):
+        for mode in ('confirm_reject', 'confirm_missing', 'confirm_string'):
+            with self.subTest(mode=mode):
+                self.mode = mode
+                self.host.open()
+                self.assertFalse(self.host.confirm_shutdown('c' * 32))
+                self.assertIsNone(self.processes[-1].poll())
+                self.assertEqual('activated', self.host.open()['action'])
+                with self.host.lock:
+                    self.host._dispose()
+
+    def test_shutdown_confirmation_lost_ack_does_not_approve_close_or_duplicate_host(self):
+        self.host.open()
+        for error in (queue.Empty(), OSError('fixture')):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(self.host, '_command', side_effect=error):
+                    self.assertFalse(self.host.confirm_shutdown('d' * 32))
+        self.assertIsNone(self.processes[0].poll())
+        self.assertEqual(1, len(self.launches))
+        self.assertEqual('activated', self.host.open()['action'])
+
+    def test_shutdown_confirmation_pipe_exit_is_failure_without_relaunch(self):
+        self.mode = 'exit_on_confirm'
+        self.host.open()
+        self.assertFalse(self.host.confirm_shutdown('e' * 32))
+        self.processes[0].wait(2)
+        self.assertFalse(self.host.confirm_shutdown('e' * 32))
+        self.assertEqual(1, len(self.launches))
+
     def notify(self, **kwargs):
         values = {'title': '검증 업무', 'message': '작업이 완료됐어요.', 'kind': 'completed',
                   'notification_id': 'a' * 64, 'on_click': Mock()}
@@ -220,19 +286,28 @@ class NativeWindowTests(unittest.TestCase):
         self.host.open()
         self.assertTrue(self.host.notification_available)
         self.assertTrue(self.notify(title='검증\n\x00\u202e' + '업' * 130,
-                                    message='완료\r\t' + '가' * 300, kind='attention'))
+                                    message='완료\r\t' + '가' * 300, kind='attention',
+                                    summary='형식 확인\n token=glpat-abcdefghijk ' + '가' * 150))
         request = self.request_log()[-1]
-        self.assertEqual({'command', 'id', 'notificationId', 'kind', 'title', 'message'}, set(request))
+        self.assertEqual({'command', 'id', 'notificationId', 'kind', 'title', 'message', 'summary'}, set(request))
         self.assertEqual('notify', request['command'])
         self.assertEqual('attention', request['kind'])
         self.assertEqual('a' * 64, request['notificationId'])
         self.assertEqual(100, len(request['title']))
         self.assertEqual(255, len(request['message']))
+        self.assertLessEqual(len(request['summary']), 100)
+        self.assertTrue(request['summary'].endswith('…'))
+        self.assertNotIn('glpat-', request['summary'])
         self.assertNotRegex(request['title'] + request['message'], r'[\x00-\x1f\u202e]')
         self.assertNotIn(self.url, json.dumps(request))
         self.assertNotIn(self.host.profile, json.dumps(request))
         self.assertEqual(1, len(self.launches))
         self.assertEqual(['notify'], [row['command'] for row in self.request_log()])
+
+    def test_legacy_attention_receipt_without_summary_keeps_an_action_line(self):
+        self.host.open()
+        self.assertTrue(self.notify(kind='attention'))
+        self.assertEqual(DEFAULT_REQUEST_SUMMARY, self.request_log()[-1]['summary'])
 
     def test_card_invalid_inputs_are_rejected_before_any_ipc(self):
         self.host.open()

@@ -41,6 +41,19 @@ class WorkspaceInboxFrontendTests(unittest.TestCase):
           assert.equal(active.state,'idle');assert.equal(sessions[1].state,'approval');assert.equal(calls.length,0);
         })()""")
 
+    def test_current_request_summary_appears_under_title_and_never_uses_stale_receipt(self):
+        self.run_case(r"""(()=>{
+          WorkspaceDesktop.apply(snapshot([{...receipt('old'),summary:'이전 요청'}]),
+            {items:[{...pending(),notificationId:'new',summary:'보고서 형식을 골라 주세요'}]});
+          WorkspaceDesktop.open('attention');const button=cards()[0].children[0];
+          assert.equal(button.children[0].textContent,'업무 B');
+          assert.equal(button.children[1].textContent,'보고서 형식을 골라 주세요');
+          assert.equal(button.children[1].classList.contains('inbox-request-summary'),true);
+          assert.doesNotMatch(flatText(cards()[0]),/이전 요청/);
+          assert.match(button.attributes['aria-label'],/보고서 형식을 골라 주세요/);
+          assert.equal(calls.length,0);
+        })()""")
+
     def test_marking_read_preserves_pending_request_and_only_calls_receipt_api(self):
         self.run_case(r"""(async()=>{
           WorkspaceDesktop.apply(snapshot([receipt('new')]),{items:[pending()]});WorkspaceDesktop.open('attention');

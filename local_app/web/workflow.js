@@ -2,6 +2,11 @@
 
 globalThis.WorkspaceWorkflow = (() => {
   let snapshot = null, readGeneration = 0, controller = null, editor = null, trustReturn = null;
+  let overview = null, overviewController = null, overviewGeneration = 0, overviewPage = 0, overviewFocus = null, overviewNavigating = false;
+  let overviewFingerprint = "";
+  const overviewPageSize = 15;
+  const overviewDateFormatter = new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"numeric",day:"numeric",hour:"numeric",minute:"2-digit"});
+  const overviewDateLabel = value => value ? overviewDateFormatter.format(new Date(value*1000)) : "미정";
   const attempts = new Map(), mutations = new Map();
   const current = context => context?.id === active?.id && context.generation === selectionGeneration && !appClosed;
   const capture = () => ({id:active?.id,generation:selectionGeneration});
@@ -23,7 +28,7 @@ globalThis.WorkspaceWorkflow = (() => {
     snapshot = {...next,sessionId:context.id};render();
   }
   function render() {
-    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
+    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
     const queue = pending(), schedules = snapshot?.schedules || [];
     $("followup-actions").hidden = !active || !busy();
     $("followup-queue").disabled = blocked || !active?.trusted;
@@ -59,6 +64,7 @@ globalThis.WorkspaceWorkflow = (() => {
     $("schedule-list").replaceChildren();$("schedule-empty").hidden = schedules.length > 0;
     schedules.forEach(item => {
       const row=el("article",null,"workflow-row"),actions=el("div",null,"workflow-row-actions");
+      row.dataset.scheduleId=item.id;
       row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
       row.append(el("small",item.nextRunAt?`다음 실행: ${dateLabel(item.nextRunAt)}`:"다음 실행 없음","workflow-files"));
       if (item.lastRun?.dueAt || item.lastRun?.status) row.append(el("small",`최근 실행: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
@@ -70,10 +76,85 @@ globalThis.WorkspaceWorkflow = (() => {
     });
   }
   async function refresh() {
-    if (!active || appClosed) return;
+    const overviewRead=refreshOverview();
+    if (!active || appClosed) return overviewRead;
     const context=capture(),ticket=++readGeneration;if(controller)controller.abort();controller=new AbortController();
     try {const value=await api(`/api/dispatch?id=${encodeURIComponent(context.id)}`,undefined,controller.signal);if(ticket===readGeneration)apply(value,context);}
     catch(err){if(err.name!=="AbortError"&&current(context)&&$("workflow-dialog").open)$("workflow-message").textContent=err.message;}
+    finally {await overviewRead;}
+  }
+  function renderOverview() {
+    if(!$("schedule-overview-dialog")?.open)return;
+    const counts=overview?.counts||{},query=$("schedule-overview-search").value.trim().toLocaleLowerCase(),filter=$("schedule-overview-filter").value||"all";
+    $("schedule-overview-summary").textContent=`전체 ${counts.total||0} · 예약·실행 중 ${counts.active||0} · 일시 정지 ${counts.paused||0} · 확인 필요 ${counts.attention||0} · 완료 ${counts.completed||0}`;
+    const items=(overview?.schedules||[]).filter(item=>(filter==="all"||item.category===filter)&&(!query||[item.title,item.workspaceLabel,item.requestSummary].join(" ").toLocaleLowerCase().includes(query)));
+    const pages=Math.max(1,Math.ceil(items.length/overviewPageSize));overviewPage=Math.min(overviewPage,pages-1);
+    const list=$("schedule-overview-list");list.replaceChildren();
+    $("schedule-overview-empty").hidden=items.length>0;
+    $("schedule-overview-empty").textContent=overview?counts.total?"조건에 맞는 예약이 없어요.":"등록한 예약이 없어요. 업무를 선택하고 ‘실행 예약’으로 추가할 수 있습니다.":"예약을 불러오고 있어요.";
+    for(const item of items.slice(overviewPage*overviewPageSize,(overviewPage+1)*overviewPageSize)) {
+      const row=el("article",null,"schedule-overview-row"),heading=el("div",null,"schedule-overview-row-heading"),status=el("span",item.statusLabel,"schedule-overview-state");
+      status.dataset.category=item.category;
+      heading.append(el("strong",item.title),status);row.append(heading);
+      if(item.workspaceLabel)row.append(el("span",item.workspaceLabel,"schedule-overview-folder"));
+      row.append(el("p",item.requestSummary,"schedule-overview-request"));
+      const timing=el("div",null,"schedule-overview-timing");
+      timing.append(el("span",item.kind==="once"?"한 번":scheduleLabel(item)),el("span",item.nextRunAt?`${item.pausedByUser?"예약 시각":"다음"} ${overviewDateLabel(item.nextRunAt)}`:"다음 실행 없음"));row.append(timing);
+      if(item.waitReason)row.append(el("p",item.waitReason,"schedule-overview-reason"));
+      if(item.lastRun?.status)row.append(el("small",`최근 ${overviewDateLabel(item.lastRun.dueAt)} · ${resultNames[item.lastRun.status]||"결과 확인 필요"}`,"schedule-overview-last"));
+      const button=el("button","예약 관리","secondary-button schedule-overview-manage");button.type="button";button.disabled=overviewNavigating||appClosed;
+      button.setAttribute("aria-label",`${item.title} 예약 관리`);button.onclick=()=>manageOverviewSchedule(item);row.append(button);list.append(row);
+    }
+    $("schedule-overview-prev").disabled=overviewPage===0;$("schedule-overview-next").disabled=overviewPage>=pages-1;
+    $("schedule-overview-page").textContent=`${overviewPage+1} / ${pages} · ${items.length}개`;
+  }
+  async function refreshOverview() {
+    if(!$("schedule-overview-dialog")?.open||appClosed||overviewController)return;
+    const ticket=overviewGeneration,request=new AbortController();overviewController=request;
+    try {
+      const value=await api("/api/schedules",undefined,request.signal);
+      if(ticket!==overviewGeneration||request.signal.aborted||!$("schedule-overview-dialog").open||appClosed)return;
+      if(!Array.isArray(value.schedules)||!value.counts)throw new Error("예약 목록을 확인하지 못했어요. 잠시 후 다시 열어 주세요.");
+      // Keep only bounded summaries, never a second copy of requests or logs.
+      const next={...value,schedules:value.schedules.slice(0,100)},fingerprint=JSON.stringify(next);
+      $("schedule-overview-message").textContent=value.warning||"";
+      if(fingerprint!==overviewFingerprint){overview=next;overviewFingerprint=fingerprint;renderOverview();}
+    } catch(err) {
+      if(err.name!=="AbortError"&&ticket===overviewGeneration&&$("schedule-overview-dialog").open) {
+        $("schedule-overview-message").textContent=err.message;
+        if(!overview)$("schedule-overview-empty").textContent="예약을 불러오지 못했어요. 연결을 확인하면 자동으로 다시 확인합니다.";
+      }
+    } finally {if(overviewController===request)overviewController=null;}
+  }
+  async function openOverview() {
+    if(appClosed)return;
+    if(!$("schedule-overview-dialog").open) {
+      overviewFocus=document.activeElement;overviewGeneration++;overviewPage=0;overview=null;overviewFingerprint="";
+      $("schedule-overview-filter").value="all";$("schedule-overview-search").value="";$("schedule-overview-message").textContent="";
+      showDialog("schedule-overview-dialog");renderOverview();$("schedule-overview-search").focus();
+    }
+    await refreshOverview();
+  }
+  function releaseOverview() {
+    if($("schedule-overview-dialog").open)return;
+    overviewGeneration++;overviewController?.abort();overviewController=null;overview=null;overviewFingerprint="";overviewNavigating=false;
+    $("schedule-overview-list").replaceChildren();
+    const previous=overviewFocus;overviewFocus=null;
+    if(previous?.isConnected&&!previous.disabled&&(!previous.closest?.("dialog")||previous.closest("dialog").open))previous.focus();
+  }
+  async function manageOverviewSchedule(item) {
+    if(overviewNavigating||appClosed||!$("schedule-overview-dialog").open)return;
+    const ticket=overviewGeneration;overviewNavigating=true;renderOverview();
+    try {
+      const selected=active?.id===item.sessionId||await selectSession(item.sessionId);
+      if(!selected||ticket!==overviewGeneration||!$("schedule-overview-dialog").open||appClosed)return;
+      overviewFocus=null;$("schedule-overview-dialog").close();render();$("workflow-message").textContent="";showDialog("workflow-dialog");await refresh();
+      if(active?.id===item.sessionId&&$("workflow-dialog").open) {
+        const row=[...$("schedule-list").children].find(node=>node.dataset.scheduleId===item.id);
+        row?.scrollIntoView({block:"nearest"});row?.querySelector("button")?.focus();
+      }
+    } catch(err) {if(ticket===overviewGeneration&&$("schedule-overview-dialog").open)$("schedule-overview-message").textContent=err.message;}
+    finally {overviewNavigating=false;if(ticket===overviewGeneration)renderOverview();}
   }
   function requestId(body) {
     const fingerprint=JSON.stringify(body);
@@ -81,7 +162,7 @@ globalThis.WorkspaceWorkflow = (() => {
     return {fingerprint,id:attempts.get(fingerprint)};
   }
   async function mutate(body,context=capture()) {
-    if (!context.id || mutations.has(context.id) || appClosed) return null;
+    if (!context.id || mutations.has(context.id) || appClosed || (current(context)&&globalThis.WorkspaceConnectionRestart?.isCurrent())) return null;
     const creating=["enqueue","steer","schedule"].includes(body.action),payload={id:context.id,...body},attempt=creating?requestId(payload):null;
     if(attempt)payload.clientRequestId=attempt.id;
     mutations.set(context.id,context);render();setStatus(active?.state||"idle");
@@ -107,7 +188,7 @@ globalThis.WorkspaceWorkflow = (() => {
   }
   function sameDraft(context,text,files) {return current(context)&&$("prompt").value===text&&JSON.stringify(attachments)===JSON.stringify(files);}
   async function send(action) {
-    if (!active || locked() || sending || choiceSubmission || appClosed || globalThis.WorkspaceAttachments?.isUploading()) return;
+    if (!active || locked() || sending || choiceSubmission || appClosed || globalThis.WorkspaceConnectionRestart?.isCurrent() || globalThis.WorkspaceAttachments?.isUploading()) return;
     if(!active.trusted)return chooseFolder(true);
     const text=$("prompt").value,files=[...attachments];if(!text.trim())return $("prompt").focus();
     if (/^\/effort(?:\s|$)/u.test(text.trim())) return toast("현재 요청이 끝난 뒤 Effort를 변경해 주세요. 입력은 그대로 유지합니다.");
@@ -123,7 +204,7 @@ globalThis.WorkspaceWorkflow = (() => {
   function localDate(value) {const date=new Date(value*1000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}
   function editorMode() {const kind=$("schedule-kind").value;$("schedule-once-fields").hidden=kind!=="once";$("schedule-time-fields").hidden=kind==="once";$("schedule-weekdays").hidden=kind!=="weekly";}
   function openEditor(kind,item=null) {
-    if(!active||locked()||appClosed)return;
+    if(!active||locked()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     if(!active.trusted){chooseFolder(true);$("folder-form").dataset.afterTrust="schedule";return;}
     editor={...capture(),kind,item,attachments:[...(item?.attachments||attachments)]};
     $("request-editor-title").textContent=kind==="queue"?"대기 요청 수정":item?"예약 수정":"실행 예약";
@@ -167,7 +248,13 @@ globalThis.WorkspaceWorkflow = (() => {
   $("schedule-open").onclick=$("schedule-add").onclick=()=>openEditor("schedule");
   $("request-editor-close").onclick=$("request-editor-cancel").onclick=()=>$("request-editor-dialog").close();
   $("request-editor-form").onsubmit=saveEditor;$("schedule-kind").onchange=editorMode;
+  $("schedule-overview-open").onclick=openOverview;
+  $("schedule-overview-close").onclick=()=>$("schedule-overview-dialog").close();
+  $("schedule-overview-dialog").addEventListener("close",releaseOverview);
+  $("schedule-overview-filter").onchange=$("schedule-overview-search").oninput=()=>{overviewPage=0;renderOverview();};
+  $("schedule-overview-prev").onclick=()=>{overviewPage=Math.max(0,overviewPage-1);renderOverview();};
+  $("schedule-overview-next").onclick=()=>{overviewPage++;renderOverview();};
   setInterval(refresh,4000);
   render();
-  return {render,refresh,send,mutate,openEditor,saveEditor,contextChanged,requestResume,resumeAfterTrust,isSubmitting:locked};
+  return {render,refresh,send,mutate,openEditor,saveEditor,contextChanged,requestResume,resumeAfterTrust,openOverview,isSubmitting:locked};
 })();

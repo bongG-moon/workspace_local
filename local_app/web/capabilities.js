@@ -9,7 +9,13 @@ globalThis.WorkspaceCapabilities = (() => {
   let commonSession = null, commonExplicit = false, preparing = null;
   const isLive = item => item?.connection?.connected === true || item?.connectionState === "live";
   const kinds = ["skills", "tools", "mcp", "commands"];
-  const names = {skills:"스킬", tools:"도구", mcp:"연결 서버", commands:"명령"};
+  const names = {skills:"스킬", tools:"실행 기능", mcp:"연결된 기능(MCP)", commands:"빠른 요청(/명령)"};
+  const descriptions = {
+    skills:"스킬은 보고서 작성처럼 여러 단계를 따라 일하는 업무 절차예요.",
+    tools:"실행 기능은 AI가 수행하는 개별 동작이에요. 예: 파일 읽기, 화면 읽기. 실제 제공되는 항목만 아래에 표시해요.",
+    mcp:"연결된 기능(MCP)은 외부 앱이나 자료를 AI와 이어 주는 기능 묶음이에요. 개별 동작은 ‘실행 기능’에서 확인하고, 연결 상태는 여기서 확인해요.",
+    commands:"빠른 요청은 입력창에서 /이름으로 부르는 요청이나 기능이에요. 예: /help. PC에서 코드를 실행하는 ‘실행 명령’과는 달라요."
+  };
   const sources = {
     company:"회사 배포", corporate:"회사 배포", unknown:"출처 미확인", managed:"회사 관리", user:"사용자 설치", personal:"개인 설치",
     project:"프로젝트", plugin:"플러그인", external:"외부 플러그인", local:"프로젝트 로컬"
@@ -100,7 +106,7 @@ globalThis.WorkspaceCapabilities = (() => {
   function statusLine() {
     contextLine();
     const selected=runtimeSession();
-    $("capabilities-connect").disabled=!!preparing||!selected||appClosed;
+    $("capabilities-connect").disabled=!!preparing||!selected||appClosed||!!globalThis.WorkspaceConnectionRestart?.isCurrent();
     $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "연결하고 목록 확인";
     const attention = active && ["approval", "question"].includes(active.state)
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
@@ -196,7 +202,7 @@ globalThis.WorkspaceCapabilities = (() => {
       section.append(el("p", category === "internal"
         ? "Claude가 내부적으로 참고하는 보조 스킬이에요. 직접 호출하는 일반 스킬 목록에서는 제외했어요."
         : category === "runtime" ? "Claude 연결이 보고한 목록이에요. 같은 호출명이 설치 목록에 있어도 어느 설치 항목인지 확정하지 않습니다."
-        : category === "builtin" ? "Claude가 업무를 처리할 때 사용하는 기본 도구예요. 목록에 표시돼도 실행 권한을 보장하지 않습니다."
+        : category === "builtin" ? "Claude가 업무를 처리할 때 사용하는 기본 실행 기능이에요. 목록에 표시돼도 실행 권한을 보장하지 않습니다."
         : "설치된 참고 자료예요. 직접 호출하는 스킬이 아니며, Claude가 필요할 때 내용을 참고할 수 있어요.",
         "capability-secondary-note"));
     }
@@ -225,11 +231,11 @@ globalThis.WorkspaceCapabilities = (() => {
       if (row.scopeLabel) metadata.append(el("span", row.scopeLabel));
       if (row._duplicateOrigin && row.candidateId) metadata.append(el("span", `설치 항목 구분: ${row.candidateId.split(":").pop().slice(0, 8)}`));
       if (kind === "tools") {
-        const labels = {builtin:"Claude 기본 도구", harness:"외부 제공 도구", mcp:"연결 서버 도구", unknown:"종류 미확인"};
+        const labels = {builtin:"Claude 기본 실행 기능", harness:"외부 제공 실행 기능", mcp:"MCP에서 제공하는 실행 기능", unknown:"종류 미확인"};
         metadata.append(el("span", `${labels[row.kind] || labels.unknown}${row.server ? " · " + row.server : ""}`));
         metadata.append(el("span", row.descriptionSource === "runtime" ? "설명: 연결에서 제공"
           : row.descriptionSource === "reference" ? "설명: Claude 공식 도구 안내" : "설명: 미제공"));
-        const evidence = {runtime:"연결 메타데이터", reference:"공식 도구명 대조", "qualified-name":"연결 서버 이름 형식", unknown:"미확인"};
+        const evidence = {runtime:"연결 메타데이터", reference:"공식 도구명 대조", "qualified-name":"MCP 연결 이름 형식", unknown:"미확인"};
         metadata.append(el("span", `분류 근거: ${evidence[row.classificationSource] || "미확인"}`));
         if (row.referenceUrl === "https://code.claude.com/docs/en/tools-reference") {
           const link = el("a", "공식 도구 안내"); link.href = row.referenceUrl;
@@ -248,6 +254,7 @@ globalThis.WorkspaceCapabilities = (() => {
   function render() {
     const inventory = skillInventory();
     tabState(inventory); statusLine();
+    $("capabilities-kind-description").textContent = descriptions[kind];
     const list = $("capabilities-list"); list.replaceChildren();
     const current = group(), query = $("capabilities-search").value.trim().toLocaleLowerCase();
     const filtered = rows => rows.filter(row => matches(row, query));
@@ -262,7 +269,7 @@ globalThis.WorkspaceCapabilities = (() => {
         addSection("연결 보고 목록", rows, "runtime", "runtime");
       }
     } else if (kind === "tools" && data?.schemaVersion === 2) {
-      for (const [type, label] of [["harness", "외부 제공 도구"], ["mcp", "연결 서버 도구"], ["unknown", "종류 미확인 도구"], ["builtin", "Claude 기본 도구"]]) {
+      for (const [type, label] of [["harness", "외부 제공 실행 기능"], ["mcp", "MCP에서 제공하는 실행 기능"], ["unknown", "종류 미확인 실행 기능"], ["builtin", "Claude 기본 실행 기능"]]) {
         const rows = filtered((current.items || []).filter(row => (row.kind || "unknown") === type));
         visibleCount += rows.length; addSection(label, rows, "runtime", type);
       }
@@ -297,7 +304,7 @@ globalThis.WorkspaceCapabilities = (() => {
       ? installedNotice ? `${installedNotice} 이 화면에서는 목록만 조회합니다.`
         : data?.schemaVersion !== 1 ? "설치 후보와 연결 보고를 별도로 표시합니다. 설치 발견은 실행 가능 여부를 뜻하지 않습니다. 이 화면에서는 목록만 조회합니다."
         : "설치 정보와 연결에서 확인한 스킬을 함께 보여드려요. 설치만 확인한 스킬은 실제 연결에 로드되지 않을 수 있어요. 이 화면에서는 목록만 조회합니다."
-      : kind === "commands" ? "원본 Claude CLI 전용 명령이 포함될 수 있어요. 이 화면에서는 목록만 확인합니다."
+      : kind === "commands" ? "원본 Claude Code에서만 쓸 수 있는 /명령도 포함될 수 있어요. 이 화면에서는 목록만 확인하며, 자동으로 요청을 보내지 않습니다."
       : "목록에 표시돼도 실행 권한이나 성공을 보장하지 않습니다. 실제 사용 시 기존 승인과 회사 정책을 따릅니다.";
     if (kind === "skills" && data?.installed?.context?.actualCliContextVerified === false) {
       const roots = {explicit:"앱에 지정된", environment:"앱 환경에서 지정된", default:"사용자 기본"};
@@ -327,7 +334,7 @@ globalThis.WorkspaceCapabilities = (() => {
       }
       if (data?.schemaVersion !== 2) summary.append(el("span", "스킬 숫자는 설치·연결 목록의 중복을 합친 일반 스킬 수예요. 내부 보조와 참고 자료는 아래에 따로 표시해요.", "capability-count-note"));
     } else {
-      summary.append(el("span", "숫자는 선택한 업무의 Claude 연결이 보고한 항목 수예요. ‘CLI 미제공’은 0개라는 뜻이 아닙니다. 도구 목록은 첫 실제 요청 후 제공될 수 있어요.", "capability-count-note"));
+      summary.append(el("span", "숫자는 선택한 업무의 Claude 연결이 보고한 항목 수예요. ‘CLI 미제공’은 0개라는 뜻이 아닙니다. 실행 기능 목록은 첫 실제 요청 후 제공될 수 있어요.", "capability-count-note"));
     }
   }
   async function refresh() {
@@ -359,11 +366,13 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   function open() {
     opened = true; app().classList.add("catalog-open");globalThis.WorkspaceLayout?.refresh();
-    globalThis.WorkspaceSessionImport?.render();
+    // Stop only the hidden detail reader; the selected task and event poll continue.
+    globalThis.WorkspaceProgressView?.close();
+    taskHeader();
     $("capabilities-view").hidden = false;
     $("capabilities-open").setAttribute("aria-current", "page");
     $("home-button").setAttribute("aria-current", "false");
-    $("chat-title").textContent = "스킬·도구";
+    $("chat-title").textContent = "스킬·기능";
     $("work-area").scrollTop = 0;
     syncFolders(); data = null; loading = true; render(); refresh();
     $("capabilities-search").focus();
@@ -379,8 +388,8 @@ globalThis.WorkspaceCapabilities = (() => {
     taskHeader();
   }
   async function prepareCatalog() {
-    if(preparing||!runtimeSession()||appClosed)return;
-    const context={key:contextKey(),id:runtimeSession().id};preparing=context;statusLine();
+    if(preparing||!runtimeSession()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
+    const context={key:contextKey(),id:runtimeSession().id};preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
     const current=()=>opened&&!appClosed&&contextKey()===context.key;
     try {
       const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);
@@ -399,9 +408,9 @@ globalThis.WorkspaceCapabilities = (() => {
       sessions=sessions.map(row=>row.id===context.id?{...row,connectionState:"live"}:row);
       if(active?.id===context.id){active.trusted=true;active.connection=response.connection;renderConnection(response.connection);}
       await refresh();
-      if(current())toast("연결 목록을 확인했어요. 도구 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
+      if(current())toast("연결 목록을 확인했어요. 실행 기능 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
     }catch(err){if(current())toast(err.message);}
-    finally{if(preparing===context){preparing=null;if(opened)statusLine();}}
+    finally{if(preparing===context){preparing=null;if(opened)statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();}}
   }
   function contextChanged(reload = false) {
     if (!opened) return;
@@ -443,5 +452,5 @@ globalThis.WorkspaceCapabilities = (() => {
       event.preventDefault(); kind = kinds[next]; render(); $(`capabilities-${kind}-tab`).focus();
     };
   }
-  return {open, close, contextChanged, isOpen: () => opened};
+  return {open, close, contextChanged, isOpen: () => opened, isPreparing: id => preparing?.id === id};
 })();

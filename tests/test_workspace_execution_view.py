@@ -112,3 +112,23 @@ class ExecutionViewTests(unittest.TestCase):
           assert.equal(rows.length,1);assert.equal(rows[0].join(','),'C:/task/a.png');
           assert.equal($('conversation').children.length,1);
         ''')
+
+    def test_disclosure_follows_native_toggle_and_live_record_replacement(self):
+        self.run_case(r'''
+          active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
+          let renders=0;globalThis.WorkspaceRichContent={code(){renders++;}};
+          const record={id:'tool-1',runId:'run-a',tool:'Bash',state:'requested',command:'echo 1'};
+          WorkspaceExecutionView.render(record);
+          const card=$('conversation').children[0];let detail=card.querySelector('details');
+          assert.equal(card.querySelector('.disclosure-action').textContent,'펼치기');
+          assert.equal(card.querySelector('summary').querySelector('button'),null);assert.equal(renders,0);
+          detail.open=true;detail.ontoggle();
+          assert.equal(card.querySelector('.disclosure-action').textContent,'접기');assert.equal(renders,1);
+          WorkspaceExecutionView.render({...record,state:'completed',output:'1'});detail=card.querySelector('details');
+          assert.equal(detail.open,true);assert.equal(card.querySelector('.disclosure-action').textContent,'접기');
+          assert.equal(card.querySelector('.execution-state').textContent,'실행 완료');assert.equal(renders,2);
+          detail.open=false;detail.ontoggle();
+          assert.equal(card.querySelector('.disclosure-action').textContent,'펼치기');assert.equal(renders,2);
+          WorkspaceExecutionView.render({...record,state:'completed',output:'1'});
+          assert.equal(card.querySelector('details').open,false);assert.equal(renders,2);
+        ''')

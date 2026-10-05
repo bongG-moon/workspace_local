@@ -13,6 +13,7 @@ import time
 import unicodedata
 
 from .ui_health import NATIVE_EVENTS
+from .attention import DEFAULT_REQUEST_SUMMARY, clean_summary
 
 
 class DesktopError(OSError):
@@ -181,7 +182,23 @@ class DesktopHost:
                 return event
         raise DesktopError()
 
-    def notify(self, *, title, message, kind, notification_id, on_click):
+    def confirm_shutdown(self, confirmation_id):
+        """Show the app's quit dialog; True acknowledges display, never consent."""
+        if not isinstance(confirmation_id, str) or not re.fullmatch(r'[0-9a-f]{32}', confirmation_id):
+            return False
+        with self.lock:
+            # A missing/unready window must never imply approval or start a new
+            # host. The server retains its work and discards this challenge.
+            if (self.closed or self.process is None or self.process.poll() is not None
+                    or self.reader is None or not self.reader.is_alive()):
+                return False
+            try:
+                reply = self._command('confirm_shutdown', confirmationId=confirmation_id)
+                return reply.get('confirmationShown') is True
+            except (OSError, ValueError, queue.Empty):
+                return False
+
+    def notify(self, *, title, message, kind, notification_id, on_click, summary=''):
         """Offer a card: 'busy' is deferred; None alone permits tray fallback."""
         if (not isinstance(notification_id, str) or not re.fullmatch(r'[0-9a-f]{64}', notification_id)
                 or not isinstance(kind, str) or kind not in {'completed', 'attention', 'error'}
@@ -201,7 +218,8 @@ class DesktopHost:
                 self._notification = pending
             try:
                 reply = self._command('notify', notificationId=notification_id, kind=kind,
-                                      title=clean(title, 100), message=clean(message, 255))
+                                      title=clean(title, 100), message=clean(message, 255),
+                                      summary=clean_summary(summary, DEFAULT_REQUEST_SUMMARY) if kind == 'attention' else '')
                 accepted = reply.get('notificationAccepted') is True
                 reason = reply.get('notificationReason')
             except (OSError, ValueError, queue.Empty):

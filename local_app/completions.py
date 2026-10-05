@@ -19,9 +19,13 @@ from .windows_paths import redirects_path, workspace_path
 MAX_ATTACHMENTS = 12
 MAX_SAVED_ATTACHMENTS = 200
 MAX_COMMANDS = 1000
-# Referencing source text is separate from opening a result in an external app.
-# This list only permits metadata suggestions and does not change that app's
-# document/executable opening policy.
+# Referencing a file is separate from parsing or opening it in an external app.
+# Binary references are metadata/path attachments: never execute or extract them
+# during discovery, selection or upload.
+ARCHIVE_FILE_TYPES = frozenset({
+    '.zip', '.7z', '.rar', '.tar', '.gz', '.tgz', '.bz2', '.tbz', '.tbz2',
+    '.xz', '.txz', '.zst', '.tzst', '.lz', '.lzma', '.lz4', '.cab', '.alz', '.egg',
+})
 REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
     '.py', '.pyi', '.pyw', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts',
     '.tsx', '.jsx', '.css', '.scss', '.sass', '.less', '.json', '.jsonc',
@@ -31,8 +35,8 @@ REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
     '.cfg', '.conf', '.properties', '.log', '.ipynb', '.r', '.rmd',
     '.rb', '.php', '.vue', '.svelte', '.swift', '.kt', '.kts', '.dart',
     '.lua', '.pl', '.ex', '.exs', '.fs', '.fsx', '.vb', '.vbs', '.tex',
-    '.rst', '.adoc', '.graphql', '.gql', '.proto',
-})
+    '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe',
+}) | ARCHIVE_FILE_TYPES
 _COMMAND = re.compile(r'[\w][\w.:-]{0,199}', re.UNICODE)
 _WORDS = re.compile(r'[\W_]+', re.UNICODE)
 _COMMAND_DESCRIPTION = '현재 업무 연결에서 보고한 명령'
@@ -64,6 +68,11 @@ class CompletionDiscovery:
     def __init__(self, client, *, ttl=5., max_contexts=8):
         self.client, self.ttl, self.max_contexts = client, ttl, max_contexts
         self._cache, self._lock = OrderedDict(), threading.Lock()
+
+    def invalidate(self, workspace=None):
+        key = os.path.normcase(str(workspace)) if workspace else None
+        with self._lock:
+            self._cache.pop(key, None)
 
     def inventory(self, workspace=None):
         key = os.path.normcase(str(workspace)) if workspace else None

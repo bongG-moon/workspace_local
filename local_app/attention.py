@@ -1,7 +1,7 @@
 """Pending-work summaries and optional attention for one verified app window.
 
-No document text, tool arguments, authentication tokens, or native handles are
-projected. Native flashing never activates a window or changes user settings.
+Only short, sanitized question/description metadata is projected, never command
+or document bodies. Native flashing never activates a window or changes settings.
 """
 from __future__ import annotations
 
@@ -11,8 +11,64 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import threading
+import unicodedata
+
+from .progress_log import clean_text
+
+
+MAX_SUMMARY = 100
+DEFAULT_REQUEST_SUMMARY = '승인 또는 답변 내용을 확인해 주세요'
+
+
+def clean_summary(value, fallback=''):
+    """Bound a public request label and redact credentials before truncation."""
+    if not isinstance(value, str) or len(value) > 4096:
+        return fallback
+    value = clean_text(value, 16384)[0].replace('[인증 정보 숨김]', '[인증정보숨김]')
+    value = ''.join(' ' if unicodedata.category(char).startswith('C') else char for char in value)
+    value = ' '.join(value.split()).strip()
+    # A banner is not the place to display commands embedded in a description.
+    if not value or '```' in value or re.match(
+            r'(?i)^(?:\$ |& |(?:powershell|pwsh|cmd|bash|sh|python(?:\d+(?:\.\d+)?)?|curl|wget)\s)', value):
+        return fallback
+    return value if len(value) <= MAX_SUMMARY else value[:MAX_SUMMARY - 1].rstrip() + '…'
+
+
+def request_summary(request, kind):
+    """Use known description fields only; arbitrary tool inputs remain private."""
+    if kind == 'choice':
+        return clean_summary(request.get('question'), '선택 항목을 골라 주세요')
+    values = request.get('input')
+    values = values if isinstance(values, dict) else {}
+    if kind == 'question':
+        questions = values.get('questions')
+        if isinstance(questions, list):
+            for question in questions[:4]:
+                if isinstance(question, dict):
+                    value = clean_summary(question.get('question'))
+                    if value:
+                        return value
+        return clean_summary(request.get('title'), '질문에 답변해 주세요')
+    tool = request.get('tool')
+    fallback = ({'Edit': '파일 수정 승인이 필요해요', 'Write': '파일 저장 승인이 필요해요',
+                 'MultiEdit': '파일 수정 승인이 필요해요', 'NotebookEdit': '노트북 수정 승인이 필요해요',
+                 'Read': '자료 읽기 승인이 필요해요', 'Bash': '명령 실행 승인이 필요해요',
+                 'PowerShell': '명령 실행 승인이 필요해요', 'WebFetch': '웹 자료 조회 승인이 필요해요',
+                 'WebSearch': '웹 검색 승인이 필요해요'}.get(tool if isinstance(tool, str) else '',
+                                                            '도구 사용 승인이 필요해요'))
+    # Some CLI versions provide a title instead of a description. Skip blank
+    # or unsafe metadata rather than letting it hide another usable label.
+    command = values.get('command')
+    for description in (request.get('description'), values.get('description'), request.get('title')):
+        if isinstance(description, str) and isinstance(command, str) and description.strip() == command.strip():
+            continue
+        label = clean_summary(description)
+        if label:
+            return label
+    return fallback
 
 
 def snapshot(sessions):
@@ -44,17 +100,17 @@ def snapshot(sessions):
                 if not isinstance(identity, str) or not identity or len(identity) > 256:
                     continue
                 kind = 'question' if request.get('tool') == 'AskUserQuestion' else 'approval'
-                candidates.append((kind, identity))
+                candidates.append((kind, identity, request_summary(request, kind)))
         choice = session.get('choice')
         if (session.get('state') in {'idle', 'done'} and isinstance(choice, dict)
                 and isinstance(choice.get('id'), str) and 0 < len(choice['id']) <= 256):
-            candidates.append(('choice', choice['id']))
-        for kind, identity in candidates:
+            candidates.append(('choice', choice['id'], request_summary(choice, 'choice')))
+        for kind, identity, summary in candidates:
             key = hashlib.sha256(json.dumps([sid, kind, identity], ensure_ascii=True).encode('ascii')).hexdigest()
             if key in seen:
                 continue
             seen.add(key)
-            items.append({'id': key, 'sessionId': sid, 'title': title, 'kind': kind})
+            items.append({'id': key, 'sessionId': sid, 'title': title, 'kind': kind, 'summary': summary})
     items.sort(key=lambda row: row['id'])
     revision = hashlib.sha256(json.dumps(items, ensure_ascii=True, sort_keys=True,
                                         separators=(',', ':')).encode('ascii')).hexdigest()

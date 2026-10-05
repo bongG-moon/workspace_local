@@ -29,11 +29,13 @@ class PathBrowserTests(unittest.TestCase):
         (self.root / '업무 자료').mkdir()
         (self.root / '보고서 😀.CSV').write_text('private contents', encoding='utf-8')
         (self.root / 'app.py').write_text('print(1)', encoding='utf-8')
-        (self.root / 'run.exe').write_bytes(b'not supported')
+        (self.root / 'run.exe').write_bytes(b'opaque executable contents')
+        (self.root / 'bundle.tar.gz').write_bytes(b'opaque archive contents')
+        (self.root / 'library.dll').write_bytes(b'not supported')
         with patch.object(Path, 'open', side_effect=AssertionError('must not read contents')):
             result = self.browse()
-        self.assertEqual(['folder', 'file', 'file'], [row['kind'] for row in result['entries']])
-        self.assertEqual({'업무 자료', '보고서 😀.CSV', 'app.py'}, {r['name'] for r in result['entries']})
+        self.assertEqual(['folder', 'file', 'file', 'file', 'file'], [row['kind'] for row in result['entries']])
+        self.assertEqual({'업무 자료', '보고서 😀.CSV', 'app.py', 'run.exe', 'bundle.tar.gz'}, {r['name'] for r in result['entries']})
         self.assertNotIn('private contents', str(result))
         self.assertEqual(str(self.root), result['path'])
         self.assertEqual(str(self.root.parent), result['parent'])
@@ -223,7 +225,7 @@ class PathBrowserRouteTests(unittest.TestCase):
         path.write_text('')
         self.request({'kind':'files','path':str(self.work)})
         path.unlink()
-        executable = self.work / 'app.exe'
+        executable = self.work / 'library.dll'
         executable.write_bytes(b'')
         for payload in [
                 {'action':'select','kind':'files','paths':[str(path)]},

@@ -8,7 +8,13 @@ from tests.test_workspace_frontend_state import HARNESS, NODE
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = r"""
 sessions=['A','B'].map((id,index)=>({id,title:'업무 '+id,workspace:'C:/'+id,pinned:false,created:index+1,updated:index+1,state:'idle',messages:[],seq:0}));
-boot={};active=sessions[0];let notices=[];toast=text=>notices.push(text);renderSessions();
+boot={};active=sessions[0];let notices=[];toast=text=>notices.push(text);
+// Model dialog ownership, removed subtrees and disabled focus like the browser.
+const proto=Object.getPrototypeOf($('sessions')),originalReplace=proto.replaceChildren;
+proto.closest=function(selector){for(let node=this;node;node=node.parent)if(selector[0]==='.'?node.classList.contains(selector.slice(1)):node.tagName===selector.toUpperCase())return node;return null;};
+proto.focus=function(){if(!this.disabled&&this.isConnected)document.activeElement=this;};
+proto.replaceChildren=function(...nodes){const detach=node=>{node.isConnected=false;for(const child of node.children||[])detach(child);};for(const child of this.children)detach(child);originalReplace.call(this,...nodes);};
+$('action-dialog').tagName='DIALOG';$('action-dialog').append($('action-close'),$('action-cancel'),$('action-confirm'));renderSessions();
 const remove=id=>[...$('sessions').children].find(row=>row.dataset.sessionId===id).querySelector('.session-remove');
 """
 
@@ -56,6 +62,49 @@ class SessionVisibilityFrontendTests(unittest.TestCase):
           active=sessions[1];$('prompt').value='B의 초안';reply({ok:true});assert.equal(await pending,true);
           assert.equal(active.id,'B');assert.equal($('prompt').value,'B의 초안');assert.equal(sessions.length,1);
           sessions=old;renderSessions();assert.equal(sessions.length,1);assert.equal(sessions[0].id,'B');
+        })()""")
+
+    def test_remove_other_task_restores_nearest_task_without_selecting_search_input(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({ok:true});const pending=remove('B').onclick();$('action-confirm').onclick();
+          assert.equal(await pending,true);const remaining=$('sessions').children[0].querySelector('.session');
+          assert.equal(document.activeElement,remaining);assert.equal(active.id,'A');
+          assert.notEqual(document.activeElement,$('session-search'));
+          renderSessions();assert.equal(document.activeElement,$('sessions').children[0].querySelector('.session'));
+        })()""")
+
+    def test_delayed_removal_does_not_take_focus_from_new_input(self):
+        self.run_case(r"""(async()=>{
+          let reply;api=()=>new Promise(resolve=>reply=resolve);const pending=remove('B').onclick();
+          $('action-confirm').onclick();await Promise.resolve();$('prompt').focus();$('prompt').value='이어서 작성 중';
+          reply({ok:true});assert.equal(await pending,true);
+          assert.equal(document.activeElement,$('prompt'));assert.equal($('prompt').value,'이어서 작성 중');
+        })()""")
+
+    def test_current_task_removal_inside_all_tasks_keeps_focus_in_open_dialog(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({ok:true});showDialog('tasks-dialog');
+          const source=[...$('all-sessions').children].find(row=>row.dataset.sessionId==='A').querySelector('.session-remove');
+          source.focus();const pending=source.onclick();$('action-confirm').onclick();assert.equal(await pending,true);
+          assert.equal(active,null);assert.equal($('tasks-dialog').open,true);
+          assert.equal(document.activeElement,$('all-sessions').children[0].querySelector('.session'));
+        })()""")
+
+    def test_confirmation_returns_focus_once_and_does_not_override_next_dialog(self):
+        self.run_case(r"""(async()=>{
+          const timers=[];setTimeout=callback=>{timers.push(callback);return timers.length;};
+          const origin=$('new-chat');origin.focus();let returns=0;origin.focus=()=>{returns++;document.activeElement=origin;};
+          const pending=confirmAction({title:'확인',message:'계속할까요?'});$('action-confirm').onclick();
+          assert.equal(await pending,true);assert.equal(returns,1);
+          showDialog('folder-dialog');$('task-name').focus();for(const timer of timers)timer();
+          assert.equal(document.activeElement,$('task-name'));assert.equal(returns,1);
+        })()""")
+
+    def test_confirmation_close_respects_focus_already_in_another_dialog(self):
+        self.run_case(r"""(async()=>{
+          $('new-chat').focus();const pending=confirmAction({title:'확인',message:'계속할까요?'});
+          showDialog('folder-dialog');$('task-name').focus();$('action-dialog').close('cancel');
+          assert.equal(await pending,false);assert.equal(document.activeElement,$('task-name'));
         })()""")
 
     def test_delayed_selection_of_removed_task_is_ignored_and_current_poll_resumes(self):

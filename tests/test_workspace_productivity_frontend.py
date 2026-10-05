@@ -208,10 +208,11 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
     def test_uploaded_copy_stays_with_original_task_after_switch(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='A 초안';attachments=['C:/A/existing.txt'];saveDraft();
+          api=async()=>({ok:true});
           let reply,call;fetch=(path,options)=>{call={path,options};return new Promise(resolve=>reply=resolve);};
           const file={name:'한글 자료.txt',size:4};
           const event={preventDefault(){},dataTransfer:{types:['Files'],files:[file],getData(){return '';}}};
-          const pending=WorkspaceAttachments.drop(event);assert.equal(WorkspaceAttachments.isUploading(),true);
+          const pending=WorkspaceAttachments.drop(event);assert.equal(WorkspaceAttachments.isUploading(),true);await settle();
           assert.match(call.path,/id=A/);assert.equal(call.options.headers['X-File-Name'],encodeURIComponent(file.name));
           assert.equal(call.options.body,file);
           active={id:'B',title:'B',state:'idle'};selectionGeneration++;attachments=[];$('prompt').value='B 초안';
@@ -344,10 +345,78 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_dropping_copies_reports_failures_without_losing_draft_or_original(self):
         self.run_case(r"""(async()=>{
+          api=async()=>({ok:true});
           $('prompt').value='입력 유지';attachments=['C:/original.csv'];fetch=async()=>({ok:false,json:async()=>({error:'저장 한도'})});
           await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'copy.txt',size:2}]}});
           assert.equal($('prompt').value,'입력 유지');assert.equal(JSON.stringify(attachments),'["C:/original.csv"]');
           assert.equal(WorkspaceAttachments.isUploading(),false);assert.match($('toast').textContent,/저장 한도/);
+        })()""", ("attachments",))
+
+    def test_supported_executable_and_archives_are_preflighted_and_sent_as_original_file_bodies(self):
+        self.run_case(r"""(async()=>{
+          boot.attachmentPolicy={extensions:['.exe','.zip','.7z','.rar','.tar','.gz'],maxUploadBytes:52428800,maxAttachments:12};
+          const files=['agent.EXE','자료.zip','backup.7z','samples.rar','source.tar','bundle.tar.gz'].map(name=>({name,size:20}));
+          const calls=[];let prepared;
+          api=async(path,data)=>{assert.equal(path,'/api/attachments/prepare');prepared=data;calls.push('prepare:'+data.name);return {ok:true,name:data.name,size:data.size};};
+          fetch=async(path,options)=>{
+            const file=files.find(file=>file.name===prepared.name);assert.equal(options.body,file);assert.equal(prepared.id,'A');assert.equal(prepared.size,file.size);
+            assert.equal(options.headers['X-File-Name'],encodeURIComponent(file.name));calls.push('upload:'+file.name);
+            return {ok:true,json:async()=>({path:'C:/managed/'+file.name,copied:true,size:file.size})};
+          };
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],files,getData(){return '';}}});
+          assert.equal(attachments.length,files.length);assert.equal(calls.join('|'),files.flatMap(file=>['prepare:'+file.name,'upload:'+file.name]).join('|'));
+          assert.match($('toast').textContent,/6개 파일/);assert.equal(WorkspaceAttachments.isUploading(),false);
+        })()""", ("attachments",))
+
+    def test_unsupported_extension_rejected_before_upload_without_losing_earlier_success(self):
+        self.run_case(r"""(async()=>{
+          boot.attachmentPolicy={extensions:['.zip']};$('prompt').value='입력 유지';attachments=['C:/original.csv'];
+          let prepares=0,uploads=0;api=async()=>{prepares++;return {ok:true};};
+          fetch=async()=>{uploads++;return {ok:true,json:async()=>({path:'C:/managed/first.zip',copied:true})};};
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'first.zip',size:2},{name:'unsupported.unknown',size:2}]}});
+          assert.equal(prepares,1);assert.equal(uploads,1);assert.equal($('prompt').value,'입력 유지');assert.equal(attachments.join('|'),'C:/original.csv|C:/managed/first.zip');
+          assert.match($('toast').textContent,/unsupported\.unknown/);assert.match($('toast').textContent,/지원하지 않는 파일 형식/);assert.match($('toast').textContent,/1개 파일은 추가/);
+        })()""", ("attachments",))
+
+    def test_preflight_rejection_has_exact_error_and_never_transfers_large_file_body(self):
+        self.run_case(r"""(async()=>{
+          $('prompt').value='입력 유지';attachments=['C:/original.csv'];let uploads=0;
+          api=async()=>{throw Error('첨부 복사본 저장 한도를 초과했습니다.');};fetch=async()=>{uploads++;throw Error('unexpected');};
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'driver.exe',size:30*1024*1024}]}});
+          assert.equal(uploads,0);assert.equal($('prompt').value,'입력 유지');assert.equal(attachments.join('|'),'C:/original.csv');
+          assert.match($('toast').textContent,/첨부 복사본 저장 한도/);assert.equal(WorkspaceAttachments.isUploading(),false);
+        })()""", ("attachments",))
+
+    def test_preflight_failure_after_first_copy_preserves_partial_success(self):
+        self.run_case(r"""(async()=>{
+          let prepares=0,uploads=0;api=async()=>{if(++prepares===2)throw Error('선택한 업무가 종료되었습니다.');return {ok:true};};
+          fetch=async()=>{uploads++;return {ok:true,json:async()=>({path:'C:/managed/first.zip',copied:true})};};
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'first.zip',size:2},{name:'second.7z',size:2}]}});
+          assert.equal(uploads,1);assert.equal(attachments.join('|'),'C:/managed/first.zip');assert.match($('toast').textContent,/업무가 종료/);assert.match($('toast').textContent,/1개 파일은 추가/);
+        })()""", ("attachments",))
+
+    def test_lost_upload_connection_is_localized_and_not_retried(self):
+        self.run_case(r"""(async()=>{
+          $('prompt').value='입력 유지';attachments=['C:/original.csv'];let uploads=0;api=async()=>({ok:true});
+          fetch=async()=>{uploads++;throw new TypeError('Failed to fetch');};
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'driver.exe',size:30*1024*1024}]}});
+          assert.equal(uploads,1);assert.equal($('prompt').value,'입력 유지');assert.equal(attachments.join('|'),'C:/original.csv');assert.equal(WorkspaceAttachments.isUploading(),false);
+          assert.match($('toast').textContent,/파일 전송 중 앱과 연결/);assert.match($('toast').textContent,/복사 여부를 확인하지 못/);assert.doesNotMatch($('toast').textContent,/fetch|지원하지 않는|용량/);
+        })()""", ("attachments",))
+
+    def test_closing_app_while_preparing_upload_does_not_send_file(self):
+        self.run_case(r"""(async()=>{
+          let resolve,uploads=0;api=()=>new Promise(done=>resolve=done);fetch=async()=>{uploads++;};
+          const pending=WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files:[{name:'driver.exe',size:20}]}});
+          appClosed=true;resolve({ok:true});await pending;assert.equal(uploads,0);assert.equal(attachments.length,0);assert.equal(WorkspaceAttachments.isUploading(),false);
+        })()""", ("attachments",))
+
+    def test_server_policy_size_and_count_limits_prevent_upload(self):
+        self.run_case(r"""(async()=>{
+          boot.attachmentPolicy={maxUploadBytes:1024*1024,maxAttachments:1};let calls=0;api=async()=>{calls++;};fetch=async()=>{calls++;};
+          const drop=files=>WorkspaceAttachments.drop({preventDefault(){},dataTransfer:{types:['Files'],getData(){return '';},files}});
+          await drop([{name:'large.zip',size:1024*1024+1}]);assert.match($('toast').textContent,/1MB/);
+          await drop([{name:'a.exe',size:2},{name:'b.zip',size:2}]);assert.match($('toast').textContent,/1개까지/);assert.equal(calls,0);
         })()""", ("attachments",))
 
     def test_tray_hide_is_explicit_and_never_calls_full_quit(self):

@@ -28,8 +28,8 @@ globalThis.WorkspaceAttention = (() => {
     $("notifications-toggle").textContent = enabled ? "브라우저 알림 끄기" : "브라우저 알림 켜기";
     $("notifications-message").textContent = !supported ? "이 환경은 브라우저 알림을 지원하지 않아요. 앱의 대기 배지로 확인할 수 있어요."
       : permission === "denied" ? "브라우저에서 알림을 차단했어요. 대기 배지는 계속 표시합니다."
-      : enabled && permission === "granted" ? "새 승인·질문 대기를 알려드려요. 알림에는 업무 이름만 표시합니다."
-      : "원할 때 켜 주세요. 알림에는 업무 이름만 표시하며 파일 내용이나 실행 명령은 넣지 않습니다.";
+      : enabled && permission === "granted" ? "새 승인·질문 대기를 업무 이름과 짧은 요청 요약으로 알려드려요."
+      : "원할 때 켜 주세요. 업무 이름과 요청 요약을 표시하며 파일 내용이나 실행 명령은 넣지 않습니다.";
     $("native-attention-message").textContent = native.bound ? "이 앱 창의 작업 표시줄 강조가 연결됐어요. 다른 앱의 포커스는 바꾸지 않습니다."
       : "작업 표시줄 강조를 연결하지 못한 환경에서도 앱의 대기 배지와 선택한 브라우저 알림을 사용할 수 있어요.";
   }
@@ -46,7 +46,9 @@ globalThis.WorkspaceAttention = (() => {
       const list = $("attention-items"); list.replaceChildren(); $("attention-empty").hidden = total > 0;
       for (const item of items) {
         const button = el("button", null, "attention-item"); button.type = "button";
-        button.append(el("strong", item.title || "업무"), el("span", waitingLabel(item.kind)));
+        button.append(el("strong", item.title || "업무"));
+        if(item.summary)button.append(el("span",item.summary,"inbox-request-summary"));
+        button.append(el("span", waitingLabel(item.kind)));
         button.onclick = () => openTask(item.sessionId, item.id); list.append(button);
       }
     }
@@ -70,7 +72,8 @@ globalThis.WorkspaceAttention = (() => {
       seen.add(item.id);seenChanged=true;
       if ((snapshot.desktop?.nativeAvailable && snapshot.desktop?.preferences?.enabled && snapshot.desktop?.preferences?.attention) || !enabled || typeof globalThis.Notification !== "function" || Notification.permission !== "granted" || (visible() && active?.id === item.sessionId)) continue;
       try {
-        const notice = new Notification("Company Workspace · 응답이 필요해요", {body:`${item.title || "업무"} · ${waitingLabel(item.kind)}`, tag:item.id});
+        const body=`${item.title || "업무"} · ${waitingLabel(item.kind)}${item.summary?`\n${item.summary}`:""}`;
+        const notice = new Notification("Company Workspace · 응답이 필요해요", {body, tag:item.id});
         notifications.set(item.id, notice);
         notice.onclick = () => { if (items.some(row => row.id === item.id)) { globalThis.focus?.(); openTask(item.sessionId, item.id); } notice.close(); };
       } catch (_) { /* The badge remains available when browser delivery fails. */ }

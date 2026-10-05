@@ -17,12 +17,17 @@ import uuid
 from collections import OrderedDict, deque
 
 from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
+from .windows_job import CREATE_SUSPENDED, WindowsJob
 
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
 MAX_TURN_EVIDENCE = 10000
 CONTROL_TIMEOUT = 10
 PREPARE_TIMEOUT = 60
+CLI_EOF_GRACE = 2
+# EOF grace + taskkill (10s) + two owned-process waits (5s each), with margin.
+CLOSE_WAIT_TIMEOUT = 25
+STOP_RESPONSE_TIMEOUT = 15
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
@@ -165,6 +170,7 @@ class ClaudeSession:
         self.session_id = self._fork_target if fork_session else resume
         self.resume_id = None if fork_session else resume
         self.process = None
+        self._process_job = None
         self.lock = threading.RLock()
         self.ready = threading.Event()
         self.pending = {}
@@ -173,8 +179,13 @@ class ClaudeSession:
         self._close_done = threading.Event()
         self._close_owner = None
         self._close_error = None
+        self.descendant_cleanup_uncertain = False
         self._readers = []
         self.stopping = False
+        self._stop_attempt = None
+        self._stop_confirmed = False
+        self._turn_epoch = 0
+        self._turn_submitted = None
         self.busy = False
         self.initialization_error = None
         self.stderr = deque(maxlen=30)
@@ -226,6 +237,25 @@ class ClaudeSession:
     def cleanup_complete(self):
         """True only after this owned child's cleanup has completed successfully."""
         return self.closed and self._close_done.is_set() and self._close_error is None
+
+    @property
+    def stop_state(self):
+        if self._stop_confirmed:
+            return 'stopped'
+        if not self.stopping:
+            return None
+        if self._close_done.is_set():
+            return 'stopped' if self.cleanup_complete else 'failed'
+        return 'stopping'
+
+    @property
+    def cleanup_error(self):
+        return self._close_error if self._close_done.is_set() else None
+
+    @property
+    def cleanup_retryable(self):
+        return bool(self.closed and self._close_done.is_set() and self._close_error
+                    and not self.descendant_cleanup_uncertain)
 
     @property
     def capabilities(self) -> dict:
@@ -652,11 +682,31 @@ class ClaudeSession:
             env = dict(os.environ)
             # Encoding and a UI presentation signal only; Claude-owned settings stay untouched.
             env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", COMPANY_WORKSPACE_UI="1")
-            self.process = subprocess.Popen(cli_arguments(self.command, self.info, self._fork_source or self.session_id,
-                allow_bypass_permissions=self.allow_bypass_permissions,
-                fork_session=self._fork_source is not None, new_session_id=self._fork_target),
-                cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, creationflags=HIDDEN)
+            try:
+                self._process_job = WindowsJob() if os.name == 'nt' else None
+            except OSError as exc:
+                raise BridgeError('cli_process_ownership_failed',
+                    'CLI와 하위 프로그램의 종료를 확인할 수 있는 연결을 준비하지 못했습니다.',
+                    '앱 다시 연결 또는 기존 터미널 사용') from exc
+            try:
+                self.process = subprocess.Popen(cli_arguments(self.command, self.info, self._fork_source or self.session_id,
+                    allow_bypass_permissions=self.allow_bypass_permissions,
+                    fork_session=self._fork_source is not None, new_session_id=self._fork_target),
+                    cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, creationflags=HIDDEN | (CREATE_SUSPENDED if self._process_job else 0))
+            except Exception:
+                self.close()
+                raise
+            if self._process_job is not None:
+                try:
+                    # Assign before resuming even a terminal wrapper. Its
+                    # descendants remain owned after the wrapper exits.
+                    self._process_job.assign_and_resume(self.process)
+                except OSError as exc:
+                    self.close()
+                    raise BridgeError('cli_process_ownership_failed',
+                        'CLI와 하위 프로그램의 종료를 확인할 수 없어 연결을 시작하지 않았습니다.',
+                        '앱 다시 연결 또는 기존 터미널 사용') from exc
             self._readers = [threading.Thread(target=self._read, daemon=True),
                              threading.Thread(target=self._read_stderr, daemon=True)]
             for reader in self._readers:
@@ -713,8 +763,13 @@ class ClaudeSession:
 
     def send(self, prompt: str):
         with self.lock:
-            if self.busy or self._control_active:
+            if self.stopping or self.busy or self._control_active:
                 raise ValueError("현재 작업 또는 질문이 끝난 뒤 다음 메시지를 보내 주세요.")
+            self._stop_attempt = None
+            self._stop_confirmed = False
+            self._turn_epoch += 1
+            turn_epoch = self._turn_epoch
+            self._turn_submitted = False
             self._begin_tool_activity_turn()
             self.busy = True
             self.last_result = None
@@ -728,28 +783,41 @@ class ClaudeSession:
             self._choice_questions = set()
             self._hook_states = {}
         self.emit("status", {"state": "starting", "label": "기존 Claude 설정을 연결하고 있어요"})
-        threading.Thread(target=self._send_when_ready, args=(prompt,), daemon=True).start()
+        threading.Thread(target=self._send_when_ready, args=(prompt, turn_epoch), daemon=True).start()
 
-    def _send_when_ready(self, prompt):
+    def _send_when_ready(self, prompt, turn_epoch=None):
+        starting = False
         try:
+            with self.lock:
+                if turn_epoch is not None and turn_epoch != self._turn_epoch:
+                    return
             if self.process is None:
+                starting = True
                 self.start()
+                starting = False
             if not self.ready.wait(60):
                 raise ValueError("CLI 준비 응답이 60초 동안 없습니다. 로그인·MCP·시작 후크 상태를 확인해 주세요.")
-            if self.stopping or self.closed:
+            if self.stopping or self.closed or turn_epoch is not None and turn_epoch != self._turn_epoch:
                 return
             if self.initialization_error:
                 raise ValueError(self.initialization_error)
             # Announce activity before writing: a fast result must not be
             # followed by a delayed local "running" event for the same turn.
             self.emit("status", {"state": "running", "label": "요청을 처리하고 있어요"})
-            self._write({"type": "user", "message": {"role": "user", "content": prompt},
-                         "session_id": self.session_id or "", "parent_tool_use_id": None})
+            with self.lock:
+                if self.stopping or self.closed or turn_epoch is not None and turn_epoch != self._turn_epoch:
+                    return
+                self._turn_submitted = True
+                self._write({"type": "user", "message": {"role": "user", "content": prompt},
+                             "session_id": self.session_id or "", "parent_tool_use_id": None})
         except Exception as exc:
-            if not self.stopping and not self.closed:
+            if turn_epoch is not None and turn_epoch != self._turn_epoch:
+                return  # A cancelled sender cannot retire the following turn.
+            if not self.stopping and (not self.closed or starting):
                 self._progress_error(str(exc))
                 self._interrupt_executions()
-                self.emit("error", {"message": str(exc)})
+                self.emit("error", {"message": str(exc), **(
+                    {'code': exc.code, 'nextAction': exc.next_action} if isinstance(exc, BridgeError) else {})})
             self.close()
 
     def _read_stderr(self):
@@ -1007,6 +1075,8 @@ class ClaudeSession:
                 pass
         if kind == "control_response":
             response = data.get("response", {})
+            if self._handle_stop_response(response):
+                return
             if response.get("request_id") == self.initialize_id:
                 if response.get("subtype") == "error":
                     self.initialization_error = "CLI 대화 초기화가 거절되었습니다. 설치 버전을 확인해 주세요."
@@ -1064,6 +1134,13 @@ class ClaudeSession:
             subtype = data.get("subtype")
             if subtype == "init":
                 self.session_id = data.get("session_id") or self.session_id
+                with self.lock:
+                    attempt = self._stop_attempt
+                    if (self.stopping and attempt is not None and attempt['phase'] == 'waiting'
+                            and attempt['session'] is None):
+                        # Some CLIs publish identity only with the first turn.
+                        # Adopt that accepted init, never another known session.
+                        attempt['session'] = self.session_id
                 if not self._model_runtime_reported and self.model_override is None:
                     self.model = data.get("model", "")
                 if self.original_model is None and self.model:
@@ -1202,6 +1279,13 @@ class ClaudeSession:
         elif kind == "result":
             if data.get('parent_tool_use_id'):
                 return
+            stop_attempt = self._stop_attempt if self.stopping else None
+            if stop_attempt is not None and data.get('session_id') != stop_attempt['session']:
+                stop_attempt['failed'] = stop_attempt['terminal_error'] = True
+                stop_attempt['changed'].set()
+                self.emit('error', {'code': 'cli_stop_session_mismatch',
+                    'message': '중지 응답의 대화가 현재 업무와 일치하지 않아 연결을 정리합니다.'})
+                return
             self._interrupt_executions(activity=bool(data.get('is_error') or not self.tasks))
             self.last_result = data
             previous_session = self.session_id
@@ -1210,6 +1294,8 @@ class ClaudeSession:
             error_text = "; ".join(map(str, data.get("errors", []))) or text
             if data.get("is_error") and (self._auth_error(error_text)
                                         or isinstance(text, str) and self._auth_error(text)):
+                if stop_attempt is not None:
+                    stop_attempt['terminal_error'] = True
                 self._authentication_failed()
                 return
             if text and _text_fingerprint(text) not in self.seen_text and not data.get('is_error'):
@@ -1231,7 +1317,9 @@ class ClaudeSession:
                 if self._is_expected_stop_result(data, previous_session):
                     # Keep last_result for diagnosis without an error banner,
                     # failed notification or completed-result event. Report
-                    # stopped only after _finish_stop confirms owned CLI exit.
+                    # stopped only after both the interrupt ACK and this
+                    # terminal result have been consumed by the reader.
+                    self._record_stop_terminal(stop_attempt)
                     return
                 self.emit("error", {"code": 'cli_turn_incomplete' if diagnostic else "task_failed",
                     "nextAction": '현재 결과를 확인한 뒤 같은 대화에서 후속 요청' if diagnostic else "자료와 연결 상태를 확인하고 다시 요청",
@@ -1239,6 +1327,11 @@ class ClaudeSession:
                     "message": ('Claude가 도구 처리 뒤 최종 답변을 완료하지 못했어요. 지금까지의 대화와 파일 변경은 남아 있습니다. '
                                 '결과를 확인한 뒤 같은 대화에서 계속 요청할 수 있어요. 이전 요청을 자동으로 재실행하지 않습니다. '
                                 '(진단: ede_diagnostic)') if diagnostic else error_text or "작업을 완료하지 못했습니다."})
+                self._record_stop_terminal(stop_attempt, error=True)
+            elif stop_attempt is not None:
+                # A result racing the interrupt still drains the current turn.
+                # It must not publish a completed-work notification after Stop.
+                self._record_stop_terminal(stop_attempt)
             elif not self.tasks:
                 self.busy = False
                 self.resume_id = self.session_id
@@ -1288,12 +1381,25 @@ class ClaudeSession:
         current = threading.current_thread()
         with self.lock:
             if self.closed:
-                # Readers may be leaving a callback while another closer waits
-                # for the owned process. They must not wait on that closer.
-                reentrant = current is self._close_owner or current in self._readers
-                owner = False
+                # A completed wait/handle failure is retryable. Do not confuse
+                # it with an unverified descendant tree: the original parent
+                # exiting does not prove that its children have exited too.
+                if (self._close_done.is_set() and self._close_error is not None
+                        and not self.descendant_cleanup_uncertain and current not in self._readers):
+                    self._close_done.clear()
+                    self._close_error = None
+                    self._close_owner = current
+                    process = self.process
+                    owner = True
+                else:
+                    # Readers may be leaving a callback while another closer
+                    # waits for the owned process. They must not wait on it.
+                    reentrant = current is self._close_owner or current in self._readers
+                    owner = False
             else:
                 self.closed, self.busy = True, False
+                if self._stop_attempt is not None:
+                    self._stop_attempt['changed'].set()
                 self.pending.clear()
                 self._permission_choices.clear()
                 for waiter in self._control_waiters.values():
@@ -1304,18 +1410,44 @@ class ClaudeSession:
         if not owner:
             if reentrant:
                 return self._close_done.is_set() and self._close_error is None
-            return self._close_done.wait(21) and self._close_error is None
+            return self._close_done.wait(CLOSE_WAIT_TIMEOUT) and self._close_error is None
         self.ready.set()
         try:
-            if process and process.poll() is None:
-                # EOF lets an owned terminal wrapper reap its CLI child before
-                # forced shutdown. This is bounded, not a business-request retry.
+            if self._process_job is not None:
+                # A wrapper's exit never proves its descendants have exited.
+                # Query our retained kernel job even if Popen already exited.
+                job = self._process_job
+                if process:
+                    try:
+                        process.stdin.close()
+                    except (OSError, ValueError):
+                        pass
+                if process and not job.assigned:
+                    # Assignment failed before any child code was resumed.
+                    # The job cannot own that suspended root; reap its exact
+                    # Popen handle, never a name or a reopened numeric PID.
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                elif not job.wait_empty(CLI_EOF_GRACE):
+                    job.terminate()
+                    if not job.wait_empty(5):
+                        raise OSError('The owned CLI job did not finish terminating.')
+                if process:
+                    process.wait(timeout=5)
+                # Query/termination failures retain ownership for a retry.
+                job.release_empty()
+                needs_stop = False
+            elif process and process.poll() is None:
+                # Allow the terminal wrapper and CLI to finish normal EOF
+                # cleanup before forcing the tree. 300ms was shorter than
+                # ordinary wrapper cleanup and could race its natural exit.
                 try:
                     process.stdin.close()
                 except (OSError, ValueError):
                     pass
                 try:
-                    process.wait(timeout=.3)
+                    process.wait(timeout=CLI_EOF_GRACE)
                     needs_stop = False
                 except subprocess.TimeoutExpired:
                     needs_stop = True
@@ -1332,6 +1464,8 @@ class ClaudeSession:
                     if not tree_stopped:
                         # Use only the handle we created, never search/kill by
                         # name. This fallback cannot prove descendant shutdown.
+                        self.descendant_cleanup_uncertain = True
+                        self._close_error = '앱에서 시작한 CLI의 하위 프로그램 종료를 확인하지 못했습니다. 현재 작업 상태를 확인해 주세요.'
                         process.kill()
                 else:
                     process.terminate()
@@ -1351,34 +1485,142 @@ class ClaudeSession:
                         pass
         except (OSError, subprocess.TimeoutExpired):
             self._close_error = "앱에서 시작한 CLI의 종료를 확인하지 못했습니다. 이미 실행된 작업이나 하위 프로그램의 상태를 확인해 주세요."
-            self.emit("error", {"message": self._close_error})
         finally:
             self._close_done.set()
+        if self._close_error is not None:
+            self.emit('error', {'code': 'cli_cleanup_failed', 'message': self._close_error,
+                'cleanupRetryable': self.cleanup_retryable,
+                'nextAction': '연결 종료 다시 시도' if self.cleanup_retryable else '하위 프로그램 종료 상태 확인'})
         return self._close_error is None
 
-    def interrupt(self):
-        # Stop only this app-owned process. Never kill arbitrary claude/Office processes.
-        if self.closed:
+    def interrupt(self, *, disconnect=False):
+        # Interrupt the turn, not the persistent CLI connection. A follow-up
+        # waits for its control ACK and same-session terminal result to drain.
+        if type(disconnect) is not bool:
+            raise ValueError('연결 종료 여부를 확인해 주세요.')
+        with self.lock:
+            if self.stopping and self.stop_state == 'stopping':
+                if disconnect and self._stop_attempt is not None:
+                    self._stop_attempt['failed'] = True
+                    self._stop_attempt['changed'].set()
+                return
+            if self.closed and self.cleanup_complete:
+                return
+            unsubmitted = self.busy and self._turn_submitted is False
+            idle = (not disconnect and not self.closed and self.process is not None and self.process.poll() is None
+                    and ((self.ready.is_set() and not self.busy and not self.pending
+                          and not self.tasks and not self._control_active) or unsubmitted))
+            if unsubmitted:
+                # A pending sender must never wake up and submit the cancelled
+                # prompt after Stop or after the user's next explicit turn.
+                self._turn_epoch += 1
+                self.busy = False
+            self._stop_confirmed = idle
+            self.stopping = not idle
+            attempt = {'id': 'stop-' + uuid.uuid4().hex, 'session': self.session_id,
+                       'runId': getattr(self, '_tool_activity_run_id', None),
+                       'ack': False, 'terminal': False, 'terminal_error': False,
+                       'failed': disconnect, 'phase': 'waiting', 'changed': threading.Event()}
+            self._stop_attempt = attempt
+        self._interrupt_executions()
+        if idle:
+            self._emit_stopped(attempt, preserved=True)
             return
-        self.stopping = True
-        self._interrupt_executions(closed=True)
+        self.emit('status', {'state': 'stopping', 'stopState': 'stopping',
+                            'label': '현재 요청을 중지하고 있어요'})
         if self.process is None:
             if self.close():
                 # start() may have been inside Popen while we observed None.
                 # close() waits for that owner; report only its actual result.
                 label = ("시작 전에 중지했어요" if self.process is None else
                          "앱의 CLI 연결을 중지했어요 · 이미 만들어진 파일은 유지됩니다")
-                self.emit("status", {"state": "stopped", "label": label})
+                self.stopping = False
+                self._stop_confirmed = True
+                self.emit("status", {"state": "stopped", "stopState": 'stopped', "label": label})
             return
         try:
-            self._write({"type": "control_request", "request_id": "stop-" + uuid.uuid4().hex,
-                         "request": {"subtype": "interrupt"}})
+            if not disconnect:
+                self._write({"type": "control_request", "request_id": attempt['id'],
+                             "request": {"subtype": "interrupt"}})
         except (ValueError, BrokenPipeError, OSError):
-            pass  # The owned process may have exited just before the stop click.
+            attempt['failed'] = True
+            attempt['changed'].set()
         finally:
-            threading.Thread(target=self._finish_stop, daemon=True).start()
+            threading.Thread(target=lambda: self._finish_stop(attempt), daemon=True).start()
 
-    def _finish_stop(self):
-        time.sleep(1)
+    def _handle_stop_response(self, response):
+        with self.lock:
+            attempt = self._stop_attempt
+            if attempt is None or response.get('request_id') != attempt['id']:
+                return False
+            if attempt['phase'] != 'waiting':
+                return True
+            attempt['ack'] = response.get('subtype') == 'success'
+            attempt['failed'] = not attempt['ack']
+            auth = self._auth_error(str(response.get('error', '')))
+            attempt['terminal_error'] = attempt['terminal_error'] or auth
+            attempt['changed'].set()
+        if auth:
+            self._authentication_failed()
+        return True
+
+    def _record_stop_terminal(self, attempt, *, error=False):
+        if attempt is None:
+            return
+        with self.lock:
+            if self._stop_attempt is not attempt or attempt['phase'] != 'waiting':
+                return
+            attempt['terminal'] = True
+            attempt['terminal_error'] = attempt['terminal_error'] or error
+            attempt['changed'].set()
+
+    def _emit_stopped(self, attempt, *, preserved):
+        self.emit('status', {'state': 'error' if attempt.get('terminal_error') else 'stopped',
+            'stopState': 'stopped', 'sessionId': self.session_id,
+            'connectionPreserved': preserved,
+            **({'runId': attempt['runId']} if attempt.get('runId') else {}),
+            'label': '요청 처리 중 오류가 발생했어요' if attempt.get('terminal_error') else
+                     '현재 요청을 중지했어요 · 같은 대화에서 계속 요청할 수 있어요'})
+
+    def _finish_stop(self, attempt=None):
+        attempt = attempt or self._stop_attempt
+        if attempt is not None:
+            deadline = time.monotonic() + STOP_RESPONSE_TIMEOUT
+            while True:
+                with self.lock:
+                    if self._stop_attempt is not attempt or attempt['phase'] != 'waiting':
+                        return
+                    if not self.closed and attempt['ack'] and attempt['terminal'] and not attempt['failed']:
+                        pending = list(self.pending)
+                        self.pending.clear()
+                        self._permission_choices.clear()
+                        self.tasks.clear()
+                        self.busy = self.stopping = False
+                        self._stop_confirmed = True
+                        self.resume_id = self.session_id
+                        attempt['phase'] = 'stopped'
+                        preserved = True
+                        break
+                    remaining = deadline - time.monotonic()
+                    if self.closed or attempt['failed'] or remaining <= 0:
+                        # Claim fallback while admission is still blocked. A
+                        # stale worker can never close a later user turn.
+                        attempt['phase'] = 'fallback'
+                        preserved = False
+                        break
+                    attempt['changed'].clear()
+                attempt['changed'].wait(remaining)
+            if preserved:
+                for rid in pending:
+                    self.emit('request_closed', {'id': rid})
+                self._emit_stopped(attempt, preserved=True)
+                return
         if self.close():
-            self.emit("status", {"state": "stopped", "label": "앱의 CLI 연결을 중지했어요 · 이미 만들어진 파일은 유지됩니다"})
+            self.stopping = False
+            self._stop_confirmed = True
+            if attempt is not None:
+                attempt['phase'] = 'stopped'
+                self._emit_stopped(attempt, preserved=False)
+            else:
+                self.emit('status', {'state': 'stopped', 'stopState': 'stopped',
+                    'label': '앱의 CLI 연결을 중지했어요 · 이미 만들어진 파일은 유지됩니다'})

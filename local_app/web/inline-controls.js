@@ -10,7 +10,8 @@ globalThis.WorkspaceInlineControls = (() => {
   const context = () => ({id:active?.id || null, selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
-  const blocked = () => !active || busyStates.has(active.state) || sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || appClosed;
+  const stopBlocked = () => !!globalThis.WorkspaceStop?.blocked();
+  const blocked = () => !active || stopBlocked() || busyStates.has(active.state) || sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed;
   function close({focus=false} = {}) {
     const old = view; view = null; panel.hidden = true;
     Object.values(buttons).forEach(button => button.setAttribute("aria-expanded", "false"));
@@ -43,7 +44,7 @@ globalThis.WorkspaceInlineControls = (() => {
       button.classList.toggle("bypass-active",kind==="permission"&&info.permissionMode==="bypassPermissions");
       button.setAttribute("aria-expanded", String(view?.kind === kind && !panel.hidden));
     }
-    if (view && (!same(view) || appClosed || (active && busyStates.has(active.state)))) close();
+    if (view && (!same(view) || appClosed || stopBlocked() || (active && busyStates.has(active.state)))) close();
     if(view&&!panel.hidden&&view.optionSignature&&view.optionSignature!==optionSignature()){
       const input=extra.querySelector("input"),inputText=input?.value,inputFocused=input===document.activeElement;
       const focused=[...options.children].find(button=>button===document.activeElement)?.dataset.runtimeValue;
@@ -64,7 +65,7 @@ globalThis.WorkspaceInlineControls = (() => {
     const node = $("composer-control-status"), visibleNotice = same(notice) ? notice : null;
     const changing = modelChanging || permissionChanging || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
     const restoreText = restore ? (issue?.message || "이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.") : "";
-    const text = connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
+    const text = stopBlocked() ? "중지 상태를 확인한 뒤 모델·Effort·승인 모드를 바꿀 수 있어요." : connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
       : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
     node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || visibleNotice?.isError) && !changing));
     if (restore && !changing && !connectionPreparing) {
@@ -268,7 +269,7 @@ globalThis.WorkspaceInlineControls = (() => {
       event.preventDefault(); close(); return true;
     }
     if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.keyCode === 229
-        || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || appClosed || busyStates.has(active.state)) return false;
+        || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || appClosed || stopBlocked() || busyStates.has(active.state)) return false;
     event.preventDefault();
     if (!event.repeat) void cyclePermission();
     return true;

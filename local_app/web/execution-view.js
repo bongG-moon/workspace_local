@@ -33,7 +33,8 @@ globalThis.WorkspaceExecutionView = (() => {
     marker.setAttribute("aria-hidden","true");
     const title=el("span",record.description||`${record.tool || "도구"} 명령`,"execution-title");
     const state=el("span",labels[record.state],"execution-state");
-    summary.append(marker,title,state);detail.append(summary);
+    const disclosure=el("span",wasOpen?"접기":"펼치기","disclosure-action");
+    summary.append(marker,title,state,disclosure);detail.append(summary);
     const content=el("div",null,"execution-content");
     let populated=false;
     const populate=()=>{
@@ -45,7 +46,7 @@ globalThis.WorkspaceExecutionView = (() => {
       } else content.append(el("p",record.state==="requested"?"Claude의 실행 결과를 기다리고 있어요.":record.state==="completed"?"출력 없이 완료됐어요.":"CLI에서 완료 결과를 확인하지 못했어요.","execution-note"));
       if(record.truncated)content.append(el("p","긴 명령·결과의 일부만 표시합니다.","execution-note"));
     };
-    detail.ontoggle=populate;populate();
+    detail.ontoggle=()=>{disclosure.textContent=detail.open?"접기":"펼치기";populate();};populate();
     detail.append(content);card.append(detail);
     while(cards.size>40){const first=cards.keys().next().value;cards.get(first).remove();cards.delete(first);}
     if(typeof boundConversation==="function")boundConversation(card);

@@ -23,7 +23,7 @@ class NativeHandoffFrontendTests(unittest.TestCase):
     def test_delayed_stop_does_not_open_native_until_cleanup_is_confirmed(self):
         self.run_case(r"""(async()=>{
           const paths=[];let polls=0;
-          api=async(path)=>{paths.push(path);if(path.startsWith('/api/session'))return {state:'stopped',connectionStopped:++polls>=3,connection:{connected:false}};return {ok:true};};
+          api=async(path,data)=>{paths.push(path);if(path==='/api/stop')assert.deepEqual(data,{id:'A',disconnect:true});if(path.startsWith('/api/session'))return {state:'stopped',connectionStopped:++polls>=3,connection:{connected:false}};return {ok:true};};
           await $('native').onclick();
           assert.deepEqual(paths,['/api/stop','/api/session?id=A','/api/session?id=A','/api/session?id=A','/api/native']);
           assert.equal($('prompt').value,'/login 입력 초안');assert.equal(attachments.length,1);

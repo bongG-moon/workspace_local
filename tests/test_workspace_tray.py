@@ -80,6 +80,25 @@ class WorkspaceTrayTests(unittest.TestCase):
         self.assertNotIn('secret', str(tray.status()))
         self.assertTrue(tray.available)
 
+    def test_displayed_confirmation_is_neutral_and_clears_previous_exit_failure(self):
+        exits, opens = [], []
+        def request_exit():
+            exits.append(True)
+            # Displaying the confirmation has no shutdown result yet. Cancel
+            # is handled by the API, so the callback must leave the tray alive.
+            return False if len(exits) == 1 else None
+        tray = self.make_tray(on_open=lambda: opens.append(True), on_exit=request_exit)
+        tray.update(running=1, waiting=0)
+        tray._dispatch('exit')
+        self.assertTrue(eventually(lambda: tray.status()['error'] == 'exit_failed'))
+        tray._dispatch('exit')
+        self.assertTrue(eventually(lambda: len(exits) == 2 and not tray.status()['error']))
+        self.assertTrue(tray.available)
+        self.assertFalse(tray._stopping.is_set())
+        self.assertEqual('진행 중 1건 · 승인·질문 대기 0건', tray._text())
+        tray._dispatch('open')
+        self.assertTrue(eventually(lambda: len(opens) == 1))
+
     def test_pending_actions_do_not_block_message_thread_or_duplicate_exit(self):
         entered, release = threading.Event(), threading.Event()
         calls = []

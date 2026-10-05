@@ -63,12 +63,12 @@ globalThis.WorkspaceToolActivity = (() => {
       const card=el("article",null,"message tool-activity-card"),panel=el("section",null,"tool-activity-detail"),heading=el("div",null,"tool-activity-summary");
       const icon=el("span","≋","tool-activity-symbol"),title=el("span","도구·스킬 활동","tool-activity-title"),count=el("span",null,"tool-activity-count"),status=el("span",null,"tool-activity-group-state"),list=el("ol",null,"tool-activity-list");
       const footer=el("div",null,"tool-activity-footer"),note=el("span",null,"tool-activity-note"),button=el("button","입력·결과 자세히 보기","text-button tool-activity-details-open");button.type="button";button.setAttribute("aria-controls","progress-view");
-      icon.setAttribute("aria-hidden","true");card.dataset.runId=run==="legacy"?"":run;heading.append(icon,title,count,status);footer.append(note,button);panel.append(heading,list,footer);card.append(panel);
+      icon.setAttribute("aria-hidden","true");card.dataset.runId=run==="legacy"?"":run;heading.append(icon,document.createTextNode(" "),title,document.createTextNode(" · "),count,document.createTextNode(" · "),status);footer.append(note,button);panel.append(heading,list,footer);card.append(panel);
       group={run,card,count,status,list,note,button,views:new Map(),clipped:false};groups.set(run,group);button.onclick=()=>openDetails(group);place(card,run);
     }
-    setText(group.count,String(rows.length)+(group.clipped?"+":""));
+    setText(group.count,`${rows.length}건${group.clipped?" 이상":""}`);
     const open=rows.filter(pending),errors=rows.filter(record=>record.state==="error"),unknown=rows.filter(record=>record.state==="interrupted");
-    setText(group.status,open.length?`${open.length}개 ${open.some(record=>record.state==="running")?"진행·대기":"요청"}`:errors.length?`${errors.length}개 오류`:unknown.length?"일부 결과 미확인":"결과 수신");
+    setText(group.status,open.length?`${open.some(record=>record.state==="running")?"진행·대기":"요청"} ${open.length}건`:errors.length?`오류 ${errors.length}건`:unknown.length?"일부 결과 미확인":"결과 수신");
     group.card.dataset.activityState=open.length?"pending":errors.length?"error":unknown.length?"interrupted":"completed";
     group.card.dataset.messageSize=String(rows.reduce((sum,record)=>sum+record.tool.length+record.action.length+record.target.length,0));
     preview(group,rows);if(typeof boundConversation==="function")boundConversation(group.card);
