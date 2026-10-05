@@ -1,12 +1,13 @@
 """Integrate persisted follow-ups with the app's existing trusted send path."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+# Calendar calculations live in schedule_time.
 import ntpath
 import threading
 import time
 
 from .work_queue import WorkQueue
+from .schedule_time import first_run as scheduled_first_run
 from .bridge import ControlRestoreRequired
 
 
@@ -125,6 +126,8 @@ class DispatchController:
                     'attachmentCount': len(schedule.get('attachments') or []),
                     'kind': schedule['kind'], 'time': schedule.get('time'),
                     'weekdays': list(schedule.get('weekdays') or []), 'runAt': schedule['runAt'],
+                    'dayOfMonth': schedule.get('dayOfMonth'), 'intervalMinutes': schedule.get('intervalMinutes'),
+                    'startTime': schedule.get('startTime'), 'endTime': schedule.get('endTime'),
                     'nextRunAt': next_at, 'enabled': schedule['enabled'], 'pausedByUser': paused,
                     'category': category, 'statusLabel': label, 'waitReason': reason,
                     'lastRun': {'dueAt': schedule.get('lastDueAt'), 'status': last},
@@ -260,26 +263,8 @@ class DispatchController:
                         self.app.get(sid).pop('_dispatchClaim', None)
 
     @staticmethod
-    def first_run(schedule):
-        if schedule.get('kind') == 'once':
-            return schedule.get('runAt')
-        wall = schedule.get('time')
-        try:
-            parsed = datetime.strptime(wall, '%H:%M')
-            if parsed.strftime('%H:%M') != wall:
-                raise ValueError()
-        except (TypeError, ValueError):
-            raise ValueError('예약할 시간을 HH:MM 형식으로 선택해 주세요.') from None
-        days = schedule.get('weekdays', [])
-        if schedule.get('kind') == 'weekly' and (not isinstance(days, list) or not days or
-                any(type(day) is not int or day not in range(7) for day in days)):
-            raise ValueError('예약할 요일을 선택해 주세요.')
-        now = datetime.now()
-        for offset in range(8):
-            candidate = (now + timedelta(days=offset)).replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
-            if candidate > now and (schedule.get('kind') != 'weekly' or candidate.weekday() in days):
-                return candidate.timestamp()
-        raise ValueError('다음 예약 시각을 확인해 주세요.')
+    def first_run(schedule, now=None):
+        return scheduled_first_run(schedule, time.time() if now is None else now)
 
     def action(self, sid, data):
         with self.app.lock:
@@ -346,8 +331,10 @@ class DispatchController:
                 schedule = data.get('schedule')
                 if not isinstance(schedule, dict):
                     raise ValueError('예약 내용을 확인해 주세요.')
-                values = dict(kind=schedule.get('kind'), run_at=self.first_run(schedule), time=schedule.get('time'),
-                              weekdays=schedule.get('weekdays'), context=context)
+                values = dict(kind=schedule.get('kind'), run_at=self.first_run(schedule, self.queue.clock()), time=schedule.get('time'),
+                              weekdays=schedule.get('weekdays'), context=context,
+                              day_of_month=schedule.get('dayOfMonth'), interval_minutes=schedule.get('intervalMinutes'),
+                              start_time=schedule.get('startTime'), end_time=schedule.get('endTime'))
                 if action == 'schedule':
                     self.queue.add_schedule(sid, text, paths, **values, client_id=data.get('clientRequestId'))
                 else:

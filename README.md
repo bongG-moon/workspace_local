@@ -1,21 +1,29 @@
-# Company Workspace 0.23.18
+# Company Workspace 0.23.19
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.18/Company-Workspace-0.23.18-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.18/Company-Workspace-0.23.18-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.19/Company-Workspace-0.23.19-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.19/Company-Workspace-0.23.19-vbs.zip)**
 
-[0.23.18 변경 안내](docs/VALIDATION_0.23.18.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.19 변경 안내](docs/VALIDATION_0.23.19.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.18.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.19.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+
+## 0.23.19 변경
+
+- 실행 예약에서 한 번·평일·매일·매주·매월·간격 반복을 선택할 수 있습니다. 매주는 요일을 여러 개 고르고, 매월은 날짜를 지정합니다.
+- 간격 반복은 시간·분과 시작·종료 시각으로 설정합니다. 예: 8시간 간격, 07:00~23:59는 07:00·15:00·23:00에 예약합니다.
+- 날짜가 없는 달은 건너뛰며, 기존 대기·승인·재시작 확인·중복 방지 규칙을 유지합니다.
+- 시간·날짜·월별 날짜·간격 입력의 높이·글꼴·여백·테두리를 예약 방식 선택칸에 맞춰 통일했습니다.
+- 사내 반입용 Download ZIP과 배포 도구의 변경 안내도 같은 0.23.19 소스를 사용합니다.
 
 ## 0.23.18 변경
 

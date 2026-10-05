@@ -24,7 +24,7 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/windows_process.py", "local_app/windows_job.py", "local_app/picker_channel.py",
             "local_app/choices.py", "local_app/hook_status.py", "local_app/permission_contract.py",
             "local_app/external_apps.py", "local_app/completions.py", "local_app/attention.py", "local_app/app_window.py",
-            "local_app/session_import.py", "local_app/desktop_notifications.py", "local_app/window_theme.py", "local_app/tray.py", "local_app/attachments.py", "local_app/work_queue.py", "local_app/app_dispatch.py",
+            "local_app/session_import.py", "local_app/desktop_notifications.py", "local_app/window_theme.py", "local_app/tray.py", "local_app/attachments.py", "local_app/work_queue.py", "local_app/schedule_time.py", "local_app/app_dispatch.py",
             "local_app/web/fonts/NotoSansKR-Variable.woff", "local_app/web/fonts/OFL.txt", "local_app/web/fonts/SOURCE.json",
             "local_app/web/index.html", "local_app/web/app.css", "local_app/web/app.js", "local_app/web/capabilities.js",
             "local_app/web/composer.js", "local_app/web/inline-controls.js", "local_app/web/attention.js",

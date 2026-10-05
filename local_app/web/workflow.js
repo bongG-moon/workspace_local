@@ -17,8 +17,17 @@ globalThis.WorkspaceWorkflow = (() => {
     : item?.enabled === false && !(item.kind === "once" && item.nextRunAt == null && ["queued","submitted","done","missed","queue_full","needs_review","previous_pending"].includes(item.lastRun?.status || item.lastStatus));
   const dateLabel = value => value ? new Date(value*1000).toLocaleString("ko-KR") : "미정";
   const weekdayNames = ["월","화","수","목","금","토","일"];
-  const scheduleLabel = item => item.kind === "once" ? dateLabel(item.runAt)
-    : `${item.kind === "weekly" ? (item.weekdays||[]).map(day=>weekdayNames[day]).join("·")+"요일" : "매일"} ${item.time || ""}`;
+  const intervalLabel = minutes => {
+    const hours=Math.floor(minutes/60),extra=minutes%60;
+    return `${hours?`${hours}시간`:""}${hours&&extra?" ":""}${extra?`${extra}분`:""}마다`;
+  };
+  const scheduleLabel = item => {
+    if(item.kind==="once")return dateLabel(item.runAt);
+    if(item.kind==="interval")return `${intervalLabel(item.intervalMinutes)} · ${item.startTime} ~ ${item.endTime}`;
+    const repeat=item.kind==="weekly"?`매주 ${(item.weekdays||[]).map(day=>weekdayNames[day]).join("·")}요일`
+      :item.kind==="weekdays"?"평일 (월~금)":item.kind==="monthly"?`매월 ${item.dayOfMonth||1}일`:"매일";
+    return `${repeat} ${item.time||""}`;
+  };
   const resultNames = {queued:"실행 대기",dispatching:"전송 중",submitted:"요청 전달",done:"요청 완료",needs_review:"전송 확인 필요",missed:"놓친 실행",previous_pending:"이전 요청 대기 중",queue_full:"대기 목록 가득 참",failed:"실패",cancelled:"취소",paused:"일시 정지",error:"확인 필요",stopped:"중지"};
   function apply(value, context) {
     if (!current(context)) return;
@@ -202,7 +211,53 @@ globalThis.WorkspaceWorkflow = (() => {
   }
   async function reorder(from,to) {const items=pending().filter(item=>item.state==="queued");if(from<0||to<0||to>=items.length)return;[items[from],items[to]]=[items[to],items[from]];return mutate({action:"reorder",order:items.map(item=>item.id)});}
   function localDate(value) {const date=new Date(value*1000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}
-  function editorMode() {const kind=$("schedule-kind").value;$("schedule-once-fields").hidden=kind!=="once";$("schedule-time-fields").hidden=kind==="once";$("schedule-weekdays").hidden=kind!=="weekly";}
+  function timeMinutes(value) {
+    if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))return null;
+    const [hours,minutes]=value.split(":").map(Number);return hours*60+minutes;
+  }
+  function scheduleTiming() {
+    const kind=$("schedule-kind").value,rule={kind};
+    if(kind==="once") {
+      rule.runAt=new Date($("schedule-at").value).getTime()/1000;
+      if(!Number.isFinite(rule.runAt)||rule.runAt<=Date.now()/1000)throw Error("앞으로 실행할 날짜와 시간을 선택해 주세요.");
+    } else if(kind==="interval") {
+      const h=$("schedule-interval-hours").value,m=$("schedule-interval-minutes").value;
+      const hours=Number(h),minutes=Number(m),total=hours*60+minutes;
+      if(h.trim()===""||m.trim()===""||!Number.isInteger(hours)||!Number.isInteger(minutes)||hours<0||hours>24||minutes<0||minutes>60||total<1||total>1440)throw Error("반복 간격은 합계 1분~24시간으로 입력해 주세요. 시간과 분은 정수여야 합니다.");
+      rule.intervalMinutes=total;rule.startTime=$("schedule-start-time").value;rule.endTime=$("schedule-end-time").value;
+      if(timeMinutes(rule.startTime)===null||timeMinutes(rule.endTime)===null)throw Error("시작 시간과 종료 시간을 선택해 주세요.");
+      if(rule.startTime>=rule.endTime)throw Error("종료 시간은 시작 시간보다 늦어야 합니다.");
+    } else {
+      if(!["daily","weekdays","weekly","monthly"].includes(kind))throw Error("예약 방식을 선택해 주세요.");
+      rule.time=$("schedule-time").value;if(timeMinutes(rule.time)===null)throw Error("실행 시간을 선택해 주세요.");
+      if(kind==="weekly") {
+        rule.weekdays=[...$("schedule-weekday-options").children].map(node=>node.children[0]).filter(input=>input.checked).map(input=>Number(input.value));
+        if(!rule.weekdays.length)throw Error("실행할 요일을 선택해 주세요.");
+      } else if(kind==="monthly") {
+        rule.dayOfMonth=Number($("schedule-month-day").value);
+        if(!Number.isInteger(rule.dayOfMonth)||rule.dayOfMonth<1||rule.dayOfMonth>31)throw Error("매월 실행할 날짜는 1~31일 중 선택해 주세요.");
+      }
+    }
+    return rule;
+  }
+  function updateSchedulePreview() {
+    try {
+      const rule=scheduleTiming();let text=scheduleLabel(rule);
+      if(rule.kind==="monthly")text+=" · 해당 날짜가 없는 달은 건너뜁니다";
+      if(rule.kind==="interval") {
+        const start=timeMinutes(rule.startTime),end=timeMinutes(rule.endTime),count=Math.ceil((end-start)/rule.intervalMinutes),samples=[];
+        for(let i=0;i<Math.min(count,4);i++){const value=start+i*rule.intervalMinutes;samples.push(`${String(Math.floor(value/60)).padStart(2,"0")}:${String(value%60).padStart(2,"0")}`);}
+        text+=` · ${samples.join(" → ")}${count>4?" …":""} · 하루 ${count}회 예약`;
+      }
+      $("schedule-preview").textContent=text;$("schedule-preview").dataset.invalid="false";
+    } catch(error) {$("schedule-preview").textContent=error.message;$("schedule-preview").dataset.invalid="true";}
+  }
+  function editorMode() {
+    const kind=$("schedule-kind").value;
+    $("schedule-once-fields").hidden=kind!=="once";$("schedule-time-fields").hidden=kind==="once"||kind==="interval";
+    $("schedule-weekdays").hidden=kind!=="weekly";$("schedule-month-fields").hidden=kind!=="monthly";$("schedule-interval-fields").hidden=kind!=="interval";
+    updateSchedulePreview();
+  }
   function openEditor(kind,item=null) {
     if(!active||locked()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     if(!active.trusted){chooseFolder(true);$("folder-form").dataset.afterTrust="schedule";return;}
@@ -213,6 +268,9 @@ globalThis.WorkspaceWorkflow = (() => {
     $("request-editor-files").textContent=editor.attachments.length?`자료 ${editor.attachments.length}개: ${editor.attachments.map(basename).join(", ")}`:"첨부 자료 없음";
     $("schedule-fields").hidden=kind==="queue";
     $("schedule-kind").value=item?.kind||"once";$("schedule-at").value=localDate(item?.runAt||Date.now()/1000+3600);$("schedule-time").value=item?.time||"09:00";
+    $("schedule-month-day").value=String(item?.dayOfMonth||1);
+    $("schedule-interval-hours").value=String(Math.floor((item?.intervalMinutes||30)/60));$("schedule-interval-minutes").value=String((item?.intervalMinutes||30)%60);
+    $("schedule-start-time").value=item?.startTime||"09:00";$("schedule-end-time").value=item?.endTime||"18:00";
     $("schedule-weekday-options").replaceChildren();
     weekdayNames.forEach((name,index)=>{const label=el("label"),input=el("input");input.type="checkbox";input.value=String(index);input.checked=(item?.weekdays||[0]).includes(index);label.append(input,el("span",name));$("schedule-weekday-options").append(label);});
     $("request-editor-error").textContent="";editorMode();showDialog("request-editor-dialog");$("request-editor-text").focus();
@@ -223,9 +281,8 @@ globalThis.WorkspaceWorkflow = (() => {
     if(/^\/effort(?:\s|$)/u.test(text)){$("request-editor-error").textContent="현재 요청이 끝난 뒤 Effort를 변경해 주세요. 입력은 그대로 유지합니다.";return;}
     let schedule;
     if(context.kind!=="queue") {
-      const kind=$("schedule-kind").value;schedule={kind,enabled:!pausedByUser(context.item)};
-      if(kind==="once"){schedule.runAt=new Date($("schedule-at").value).getTime()/1000;if(!Number.isFinite(schedule.runAt)||schedule.runAt<=Date.now()/1000){$("request-editor-error").textContent="앞으로 실행할 날짜와 시간을 선택해 주세요.";return;}}
-      else {schedule.time=$("schedule-time").value;if(!/^\d{2}:\d{2}$/.test(schedule.time))return;if(kind==="weekly"){schedule.weekdays=[...$("schedule-weekday-options").children].map(node=>node.children[0]).filter(input=>input.checked).map(input=>Number(input.value));if(!schedule.weekdays.length){$("request-editor-error").textContent="실행할 요일을 선택해 주세요.";return;}}}
+      try {schedule={...scheduleTiming(),enabled:!pausedByUser(context.item)};}
+      catch(error){$("request-editor-error").textContent=error.message;return;}
     }
     $("request-editor-save").disabled=true;
     try {
@@ -248,6 +305,8 @@ globalThis.WorkspaceWorkflow = (() => {
   $("schedule-open").onclick=$("schedule-add").onclick=()=>openEditor("schedule");
   $("request-editor-close").onclick=$("request-editor-cancel").onclick=()=>$("request-editor-dialog").close();
   $("request-editor-form").onsubmit=saveEditor;$("schedule-kind").onchange=editorMode;
+  for(const id of ["schedule-at","schedule-time","schedule-month-day","schedule-interval-hours","schedule-interval-minutes","schedule-start-time","schedule-end-time"])$(id).oninput=updateSchedulePreview;
+  $("schedule-weekday-options").onchange=updateSchedulePreview;
   $("schedule-overview-open").onclick=openOverview;
   $("schedule-overview-close").onclick=()=>$("schedule-overview-dialog").close();
   $("schedule-overview-dialog").addEventListener("close",releaseOverview);

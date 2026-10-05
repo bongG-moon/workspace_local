@@ -7,7 +7,7 @@ never retried. This module never starts processes or answers permissions.
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import hashlib
 import math
@@ -17,6 +17,7 @@ import time
 import uuid
 
 from .history import HistoryStore, read, safe
+from .schedule_time import KINDS, timing, next_after
 
 POLICY = {
     'runsWhileAppOpen': True, 'requiresAwakePc': True, 'missedRuns': 'skip',
@@ -69,50 +70,35 @@ def _stamp(value):
     return float(value)
 
 
-def _rule(kind, run_at, wall_time, weekdays, now):
-    if not isinstance(kind, str) or kind not in {'once', 'daily', 'weekly'}:
-        raise ValueError('한 번, 매일 또는 매주 예약을 선택해 주세요.')
+def _rule(kind, run_at, wall_time, weekdays, now, *, day_of_month=None,
+          interval_minutes=None, start_time=None, end_time=None):
     first = _stamp(run_at)
     if first <= now:
         raise ValueError('앞으로 실행할 시각을 선택해 주세요.')
     local = datetime.fromtimestamp(first)
-    if wall_time is None:
+    if wall_time is None and kind != 'interval':
         wall_time = local.strftime('%H:%M')
-    try:
-        parsed = datetime.strptime(wall_time, '%H:%M')
-        if parsed.strftime('%H:%M') != wall_time:
-            raise ValueError()
-    except (TypeError, ValueError):
-        raise ValueError('예약 시간은 HH:MM 형식으로 입력해 주세요.') from None
-    if kind == 'weekly':
-        weekdays = [local.weekday()] if weekdays is None else weekdays
-        if (not isinstance(weekdays, list) or not weekdays or len(weekdays) > 7 or
-                any(type(day) is not int or day not in range(7) for day in weekdays)):
-            raise ValueError('예약할 요일을 선택해 주세요.')
-        weekdays = sorted(set(weekdays))
-    else:
-        weekdays = []
-    if kind != 'once' and (local.strftime('%H:%M') != wall_time or
-                          kind == 'weekly' and local.weekday() not in weekdays):
-        raise ValueError('첫 예약 시각과 반복 시간·요일을 맞춰 주세요.')
-    return {'kind': kind, 'runAt': first, 'time': wall_time, 'weekdays': weekdays, 'nextAt': first}
+    if kind == 'weekly' and weekdays is None:
+        weekdays = [local.weekday()]
+    rule = timing(kind, wall_time, weekdays, day_of_month=day_of_month,
+                  interval_minutes=interval_minutes, start_time=start_time, end_time=end_time)
+    if kind != 'once' and kind != 'interval' and (
+            local.strftime('%H:%M') != rule['time']
+            or kind in {'weekly', 'weekdays'} and local.weekday() not in rule['weekdays']
+            or kind == 'monthly' and local.day != rule['dayOfMonth']):
+        raise ValueError('첫 예약 시각과 반복 시간·날짜를 맞춰 주세요.')
+    if kind == 'interval':
+        expected = next_after(rule, first - .001)
+        if not math.isclose(expected, first, rel_tol=0, abs_tol=.0001):
+            raise ValueError('첫 예약 시각과 반복 간격·실행 구간을 맞춰 주세요.')
+    return {**rule, 'runAt': first, 'nextAt': first}
 
 
 def _next_after(schedule, now):
-    if schedule['kind'] == 'once':
-        return None
-    local = datetime.fromtimestamp(now)
-    hour, minute = map(int, schedule['time'].split(':'))
-    # Local calendar days, not fixed 24-hour UTC intervals. Only a future
-    # occurrence is returned; past/missed intervals are never replayed.
-    for offset in range(8):
-        candidate = (local + timedelta(days=offset)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if schedule['kind'] == 'weekly' and candidate.weekday() not in schedule['weekdays']:
-            continue
-        stamp = candidate.timestamp()
-        if stamp > now:
-            return stamp
-    raise ValueError('다음 예약 시각을 확인하지 못했습니다.')
+    rule = timing(schedule['kind'], schedule['time'], schedule.get('weekdays'),
+                  day_of_month=schedule.get('dayOfMonth'), interval_minutes=schedule.get('intervalMinutes'),
+                  start_time=schedule.get('startTime'), end_time=schedule.get('endTime'))
+    return next_after(rule, now)
 
 
 def _paused_by_user(schedule):
@@ -185,7 +171,7 @@ class WorkQueue:
             if row.get('runId') is not None and (not isinstance(row['runId'], str) or len(row['runId']) > 160):
                 raise ValueError('Invalid run identity')
         for schedule in value['schedules']:
-            if type(schedule['enabled']) is not bool or schedule['kind'] not in {'once', 'daily', 'weekly'}:
+            if type(schedule['enabled']) is not bool or schedule['kind'] not in KINDS:
                 raise ValueError('Invalid schedule')
             if 'pausedByUser' in schedule and type(schedule['pausedByUser']) is not bool:
                 raise ValueError('Invalid schedule pause intent')
@@ -198,6 +184,9 @@ class WorkQueue:
                 raise ValueError('Invalid weekdays')
             if schedule['kind'] == 'weekly' and not schedule['weekdays']:
                 raise ValueError('Invalid weekdays')
+            timing(schedule['kind'], schedule['time'], schedule['weekdays'],
+                   day_of_month=schedule.get('dayOfMonth'), interval_minutes=schedule.get('intervalMinutes'),
+                   start_time=schedule.get('startTime'), end_time=schedule.get('endTime'))
         for sid, reason in value['holds'].items():
             _sid(sid)
             if reason not in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required'}:
@@ -349,7 +338,8 @@ class WorkQueue:
                     schedule['context'] = dict(context)
             self._save()
 
-    def add_schedule(self, sid, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, client_id=None):
+    def add_schedule(self, sid, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, client_id=None,
+                     day_of_month=None, interval_minutes=None, start_time=None, end_time=None):
         text, attachments = _prompt(text, [] if attachments is None else attachments)
         sid, context = _sid(sid), _context(context)
         if client_id is not None and (not isinstance(client_id, str) or not client_id or len(client_id) > 160):
@@ -357,8 +347,10 @@ class WorkQueue:
         receipt_key = hashlib.sha256(('schedule\0' + sid + '\0' + client_id).encode()).hexdigest() if client_id is not None else None
         # A retried daily/weekly registration can compute a different first
         # timestamp at midnight. Its wall-time rule still identifies the intent.
-        digest = hashlib.sha256(json.dumps([text, attachments, context, kind,
-                                run_at if kind == 'once' else None, time, weekdays], sort_keys=True).encode()).hexdigest()
+        intent = [text, attachments, context, kind, run_at if kind == 'once' else None, time, weekdays]
+        if kind in {'monthly', 'interval'}:
+            intent.extend([day_of_month, interval_minutes, start_time, end_time])
+        digest = hashlib.sha256(json.dumps(intent, sort_keys=True).encode()).hexdigest()
         with self.lock:
             self._check()
             if receipt_key in self.data['receipts']:
@@ -367,13 +359,16 @@ class WorkQueue:
                     raise ValueError('같은 전송 식별자로 다른 예약을 보낼 수 없습니다.')
                 previous = next((row for row in self.data['schedules'] if row['id'] == receipt['id']), None)
                 return deepcopy(previous or {'id': receipt['id'], 'sessionId': sid, 'enabled': False})
-        rule = _rule(kind, run_at, time, weekdays, self.clock())
+        rule = _rule(kind, run_at, time, weekdays, self.clock(), day_of_month=day_of_month,
+                     interval_minutes=interval_minutes, start_time=start_time, end_time=end_time)
         with self.lock:
             self._check()
             # Recheck after validation in case a concurrent HTTP retry won.
             if receipt_key in self.data['receipts']:
                 return self.add_schedule(sid, text, attachments, kind=kind, run_at=run_at,
-                                         context=context, time=time, weekdays=weekdays, client_id=client_id)
+                                         context=context, time=time, weekdays=weekdays, client_id=client_id,
+                                         day_of_month=day_of_month, interval_minutes=interval_minutes,
+                                         start_time=start_time, end_time=end_time)
             if receipt_key is not None and len(self.data['receipts']) >= 10000:
                 raise ValueError('중복 전송 방지 기록의 보관 한도에 도달했습니다.')
             if len(self.data['schedules']) >= 100:
@@ -387,9 +382,11 @@ class WorkQueue:
             self._save()
             return deepcopy(row)
 
-    def update_schedule(self, sid, identifier, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, enabled=None):
+    def update_schedule(self, sid, identifier, text, attachments=None, *, kind, run_at, context=None, time=None, weekdays=None, enabled=None,
+                        day_of_month=None, interval_minutes=None, start_time=None, end_time=None):
         text, attachments = _prompt(text, [] if attachments is None else attachments)
-        rule = _rule(kind, run_at, time, weekdays, self.clock())
+        rule = _rule(kind, run_at, time, weekdays, self.clock(), day_of_month=day_of_month,
+                     interval_minutes=interval_minutes, start_time=start_time, end_time=end_time)
         context = _context(context) if context is not None else None
         if enabled is not None and type(enabled) is not bool:
             raise ValueError('예약 사용 여부를 확인해 주세요.')
