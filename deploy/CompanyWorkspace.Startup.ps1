@@ -1,8 +1,6 @@
-﻿# Workspace startup policy only. No credentials, settings, UAC, or permissions
-# are changed. The installer identity helper is read-only here; its allowance
-# of same-user elevation requires an explicit administrator execution mode.
-# UAC-disabled starts may use a separately restricted, verified normal token;
-# the source token and Windows policy are never changed.
+﻿# Startup checks are read-only. Every child inherits the verified current
+# Windows process token; the app does not elevate, lower or persist privileges.
+# Same interactive user/session/profile checks remain required in either role.
 function Get-WorkspaceStartupMessage {
     param([int] $Code)
     switch ($Code) {
@@ -10,16 +8,16 @@ function Get-WorkspaceStartupMessage {
         30 { return '현재 Windows 로그인 사용자를 확인하지 못했습니다. 본인 계정의 바탕화면에서 다시 실행해 주세요. 계속되면 담당자에게 알려 주세요. 설정은 변경하지 않았습니다.' }
         31 { return '로그인한 사용자와 실행 계정이 다르거나 서비스 환경에서 실행되었습니다. 본인 계정의 바탕화면에서 실행해 주세요. 다른 사용자의 설정은 사용하지 않았습니다.' }
         32 { return 'Windows 사용자 폴더와 실행 환경의 폴더가 일치하지 않습니다. 담당자에게 실행 환경 확인을 요청해 주세요. 기존 Claude 설정은 변경하지 않았습니다.' }
-        33 { return '선택한 실행 권한과 같은 계정의 실행 환경을 확인하지 못했습니다. 일반 권한 전환 또는 관리자 권한 토큰이 검증되지 않았습니다. Check-Workspace.cmd로 진단 결과를 확인해 주세요. PC 보안 설정과 개인 Claude 설정은 바꾸지 않았습니다.' }
+        33 { return '현재 Windows 실행 권한과 같은 계정의 실행 환경을 확인하지 못했습니다. 사용자·세션 또는 실제 실행 토큰이 검증되지 않았습니다. Check-Workspace.cmd로 진단 결과를 확인해 주세요. PC 보안 설정과 개인 Claude 설정은 바꾸지 않았습니다.' }
         34 { return '일반 권한으로 다시 실행한 뒤에도 관리자 권한으로 감지되어 중단했습니다. 재시도는 한 번만 수행하며 관리자 권한으로 AI를 실행하지 않습니다.' }
-        35 { return '선택한 권한의 실행 요청을 Windows가 처리하지 못했거나 권한 요청을 취소했습니다. 기존 앱이 열려 있으면 계속 사용할 수 있습니다. PC 보안 설정과 기존 Claude 설정은 변경하지 않았습니다.' }
+        35 { return '현재 Windows 권한으로 실행 요청을 처리하지 못했습니다. 기존 앱이 열려 있으면 계속 사용할 수 있습니다. PC 보안 설정과 기존 Claude 설정은 변경하지 않았습니다.' }
         36 { return '이 실행 환경에서 기존 Claude Code 명령을 찾거나 실행 경로를 확인하지 못했습니다. 평소 Claude가 동작하는 Windows PowerShell 환경인지 확인해 주세요. 로그인과 모델 설정은 변경하지 않았습니다.' }
         37 { return '이 실행 환경에서 설치된 Python을 찾지 못했습니다. 기존 Python 3.11 이상과 실행 경로를 확인해 주세요. Python을 포함하거나 자동으로 설치하지 않으며 PATH와 PC 설정은 변경하지 않았습니다.' }
         38 { return '설치된 Python을 찾았지만 앱 실행 조건을 확인하지 못했습니다. 아래 검사 경로와 원인을 확인해 주세요. EXE는 --python "기존 python.exe의 전체 경로"로 직접 지정할 수 있습니다. Python 재설치나 PATH 변경은 하지 않았습니다.' }
         39 { return 'Workspace 연결의 전환 또는 종료를 마치지 못했습니다. 종료 처리 중이라면 잠시 기다린 뒤 다시 실행해 주세요. 기존 창의 [설정 → 앱 종료]를 다시 눌러도 해결되지 않으면 Check-Workspace.cmd로 진단 결과를 확인해 주세요. 창의 X 버튼은 창만 닫고 연결은 유지합니다.' }
         40 { return 'Workspace 창을 여는 데 필요한 서버 준비를 확인하지 못했습니다. 창이 열렸는지 먼저 확인해 주세요. 담당자에게 실행 경로와 오류 코드를 전달해 주세요. 기존 Claude 설정은 변경하지 않았습니다.' }
         41 { return 'Workspace 실행 파일이 누락되었거나 읽을 수 없습니다. ZIP 전체를 새 폴더에 압축 해제한 뒤 실행해 주세요. 파일 한 개만 복사하면 실행할 수 없습니다.' }
-        42 { return '일반 권한 실행에 전달할 경로 또는 인수가 너무 길거나 유효하지 않습니다. 압축 해제한 Workspace 폴더와 지정한 경로를 확인해 주세요. 값을 잘라서 실행하지 않았습니다.' }
+        42 { return '실행기에 전달한 경로 또는 인수가 너무 길거나 유효하지 않습니다. 압축 해제한 Workspace 폴더와 지정한 경로를 확인해 주세요. 값을 잘라서 실행하지 않았습니다.' }
         46 { return '전용 앱 창에 필요한 Microsoft Edge WebView2 Runtime을 찾지 못했습니다. 회사에서 허용한 WebView2 Runtime이 설치되어 있는지 담당자에게 확인해 주세요. 브라우저 실행, 자동 설치 또는 PC 설정 변경은 하지 않았습니다.' }
         47 { return '전용 앱 창을 준비하지 못했습니다. 배포 파일이 모두 있는지, Microsoft Edge WebView2 Runtime 실행이 회사 정책에서 허용되는지 확인해 주세요. Python이나 Claude 인증 문제로 단정하지 않았습니다. 기존 설정은 변경하지 않았습니다.' }
         default { return 'Workspace 실행을 완료하지 못했습니다. ZIP 전체를 압축 해제했는지 확인하고, 담당자에게 아래 오류 코드를 전달해 주세요. 기존 로그인과 개인 설정은 변경하지 않았습니다.' }
@@ -253,18 +251,31 @@ function Get-WorkspaceVerifiedContext {
 }
 
 function Get-WorkspaceLaunchAction {
-    param([object] $Context, [bool] $Relaunched, [string] $ExecutionMode = 'normal')
+    param([object] $Context, [bool] $Relaunched, [string] $ExecutionMode = 'auto')
     if (-not $Context -or -not $Context.verified -or -not $Context.sid -or $Context.sessionId -le 0) {
         throw 'WORKSPACE_STARTUP:30'
     }
-    if ($ExecutionMode -notin @('normal', 'administrator')) { throw 'WORKSPACE_STARTUP:42' }
-    if ($ExecutionMode -eq 'administrator') {
-        if ($Context.isAdministrator) { return 'run' }
-        return 'elevate'
+    if ($ExecutionMode -notin @('auto', 'normal', 'administrator')) { throw 'WORKSPACE_STARTUP:42' }
+    # Explicit developer options assert the existing token, never switch it.
+    if (($ExecutionMode -eq 'administrator' -and -not $Context.isAdministrator) -or
+        ($ExecutionMode -eq 'normal' -and $Context.isAdministrator)) { throw 'WORKSPACE_STARTUP:33' }
+    return 'run'
+}
+
+function Get-WorkspaceExecutionMode {
+    param([object] $Context)
+    if (-not $Context -or -not $Context.verified -or -not $Context.sid -or $Context.sessionId -le 0) {
+        throw 'WORKSPACE_STARTUP:30'
     }
-    if (-not $Context.isAdministrator) { return 'run' }
-    if ($Relaunched) { throw 'WORKSPACE_STARTUP:34' }
-    return 'relaunch'
+    Initialize-WorkspaceNormalTokenApi
+    $snapshot = [CompanyAgent.WorkspaceNormalToken]::InspectCurrentToken()
+    if ([CompanyAgent.WorkspaceNormalToken]::ValidateAdministratorProcess($snapshot, $Context.sid, [int]$Context.sessionId)) {
+        return 'administrator'
+    }
+    if ([CompanyAgent.WorkspaceNormalToken]::ValidateNormalProcess($snapshot, $Context.sid, [int]$Context.sessionId)) {
+        return 'normal'
+    }
+    throw 'WORKSPACE_STARTUP:33'
 }
 
 function Initialize-WorkspaceNormalTokenApi {
@@ -292,43 +303,6 @@ function Assert-WorkspaceAdministratorProcess {
     if (-not [CompanyAgent.WorkspaceNormalToken]::ValidateAdministratorProcess($snapshot, $Context.sid, [int]$Context.sessionId)) {
         throw 'WORKSPACE_STARTUP:33'
     }
-}
-
-function Read-WorkspaceExecutionMode {
-    param([string] $StateRoot)
-    # A malformed or linked preference never enables administrator mode.
-    try {
-        $path = Join-Path ([IO.Path]::GetFullPath($StateRoot)) 'execution-mode.json'
-        $cursor = $path
-        while ($cursor) {
-            if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { return 'normal' }
-            $cursor = Split-Path $cursor -Parent
-        }
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -gt 4096) { return 'normal' }
-        $preference = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($preference -is [pscustomobject] -and $preference.schemaVersion -is [int] -and $preference.schemaVersion -eq 1 -and $preference.mode -is [string] -and $preference.mode -cin @('normal', 'administrator')) { return [string]$preference.mode }
-    } catch {}
-    return 'normal'
-}
-
-function Invoke-WorkspaceAdministratorRelaunch {
-    param([string] $ScriptPath, [string] $PythonCommand, [string] $StateRoot,
-          [string] $ExecutionRequestId, [bool] $Demo, [bool] $NoBrowser)
-    Initialize-WorkspaceNormalTokenApi
-    $arguments = '-NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + [CompanyAgent.WorkspaceNormalToken]::QuoteWindowsArgument($ScriptPath)
-    $arguments += ' -ExecutionMode administrator -PythonCommand ' + [CompanyAgent.WorkspaceNormalToken]::QuoteWindowsArgument($PythonCommand)
-    if ($StateRoot) { $arguments += ' -StateRoot ' + [CompanyAgent.WorkspaceNormalToken]::QuoteWindowsArgument($StateRoot) }
-    if ($ExecutionRequestId) { $arguments += ' -ExecutionRequestId ' + $ExecutionRequestId }
-    if ($Demo) { $arguments += ' -Demo' }
-    if ($NoBrowser) { $arguments += ' -NoBrowser' }
-    try {
-        # Start-Process -Wait includes descendants. The detached coordinator
-        # can wait for user work or launch the long-lived app; it must not keep
-        # this elevation request in "requesting" until that app exits.
-        $child = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru -ErrorAction Stop
-        $child.WaitForExit()
-        return $child.ExitCode
-    } catch { throw 'WORKSPACE_STARTUP:35' }
 }
 
 function Invoke-WorkspaceNormalTokenRelaunch {

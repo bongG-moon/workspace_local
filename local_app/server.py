@@ -125,9 +125,8 @@ class LocalApp:
         from .ui_health import UiHealthLog
         self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
         self.lock = threading.RLock()
-        from .execution_mode import checked_mode, ExecutionController
+        from .execution_mode import checked_mode
         self.execution_mode = checked_mode(execution_mode)
-        self.execution = ExecutionController(self)
         self._execution_peer = None
         self._lifecycle = threading.Condition()
         self._active_operations = 0
@@ -323,7 +322,7 @@ class LocalApp:
                     break
                 bridge = old.get('bridge')
                 if (old['id'] == sid or not old.get('_historySaved')
-                        or any(old.get(key) for key in ('_connecting', '_modelUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                        or any(old.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
                         or old.get('requests')
                         or old.get('state') in {'starting', 'running', 'question', 'approval'}
                         or bridge and (not bridge.closed or getattr(bridge, 'cleanup_complete', False) is not True)
@@ -391,6 +390,7 @@ class LocalApp:
             if not live:
                 capabilities['setModel'] = False
                 capabilities['setPermissionMode'] = False
+                capabilities['setPermissionModeWhileRunning'] = False
                 capabilities['setEffort'] = False
                 connection['modelOverride'] = None
                 connection['permissionModeOverride'] = None
@@ -426,7 +426,6 @@ class LocalApp:
                     "upgradeWarning": self.upgrade.warning,
                     "executionMode": self.execution_mode,
                     "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
-                    "execution": self.execution.snapshot(),
                     "appUpdate": self.app_updates.snapshot(),
                     "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
@@ -486,7 +485,7 @@ class LocalApp:
             pending = getattr(bridge, 'pending', None)
             if (item.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
                     or item.get('requests') or item.get('choice')
-                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_restarting',
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_restarting',
                                                      '_stopAdmission', '_dispatchClaim', '_choiceAnswerClaim'))
                     or getattr(bridge, 'busy', False) is True
                     or getattr(bridge, 'stopping', False) is True and self.stop_state(item) == 'stopping'
@@ -681,7 +680,7 @@ class LocalApp:
             if self.session_visibility.warning:
                 raise ValueError(self.session_visibility.warning)
             if (item.get('state') in {'starting', 'running', 'approval', 'question'}
-                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
                     or item.get('requests') or item.get('choice')
                     or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}
                     or sid in self.dispatch.steering):
@@ -827,7 +826,7 @@ class LocalApp:
             workspace_folder(item)
             if not item.get('trusted'):
                 raise ValueError('업무 폴더의 설정·후크·MCP 실행에 동의한 뒤 연결을 재시작해 주세요.')
-            if (any(item.get(key) for key in ('_restarting', '_connecting', '_modelUpdating',
+            if (any(item.get(key) for key in ('_restarting', '_connecting', '_modelUpdating', '_permissionUpdating',
                                              '_dispatchClaim', '_choiceAnswerClaim')) or sid in self.dispatch.steering):
                 raise BridgeError('restart_transition_busy', '연결이나 설정을 변경하고 있습니다. 끝난 뒤 다시 시작해 주세요.', '현재 변경이 끝난 뒤 재시작')
             old = item.get('bridge')
@@ -908,7 +907,7 @@ class LocalApp:
         with self.lock:
             item = self.get(sid)
             self._check_stopping(item)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -934,7 +933,7 @@ class LocalApp:
         with self.lock:
             item = self.get(sid)
             self._check_stopping(item)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
+            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
                 raise ValueError('현재 업무와 확인 요청이 끝난 뒤 추론 수준을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
@@ -966,16 +965,22 @@ class LocalApp:
             self._require_running()
             item = self.get(sid)
             self._check_stopping(item)
-            if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
-                raise ValueError('현재 업무와 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.')
+            if (item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting')
+                    or item.get('_restarting') or item.get('_dispatchClaim') or item.get('_choiceAnswerClaim')):
+                raise ValueError('현재 연결 준비나 설정 변경이 끝난 뒤 승인 모드를 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
                 raise ValueError('업무 연결이 준비된 뒤 승인 모드를 선택해 주세요.')
-            item['_modelUpdating'] = True
-            previous_state = item['state']
+            active = item['state'] in {'starting', 'running', 'question', 'approval'}
+            if active and not bridge.model_state().get('capabilities', {}).get('setPermissionModeWhileRunning'):
+                raise ValueError('현재 Claude 연결은 작업 중 승인 모드 변경을 제공하지 않습니다.')
+            bypass_enabled = bridge.model_state().get('bypassPermissions', {}).get('enabledForConnection') is True
+            if active and mode == 'bypassPermissions' and not bypass_enabled:
+                raise ValueError('Bypass를 처음 선택하려면 현재 작업을 마친 뒤 연결을 다시 준비해야 합니다. 진행 중인 작업은 유지했습니다.')
+            item['_permissionUpdating'] = True
             self._apply_control_baselines(item, bridge)
         try:
-            if mode == 'bypassPermissions' and not getattr(bridge, 'allow_bypass_permissions', False):
+            if mode == 'bypassPermissions' and not bypass_enabled:
                 if not bridge.model_state().get('bypassPermissions', {}).get('available'):
                     raise ValueError('현재 Claude 연결은 Bypass 선택을 지원하지 않습니다.')
                 with self.lock:
@@ -1014,9 +1019,7 @@ class LocalApp:
             raise
         finally:
             with self.lock:
-                item['_modelUpdating'] = False
-                if item['state'] not in {'error', 'running', 'question', 'approval'}:
-                    item['state'] = previous_state
+                item['_permissionUpdating'] = False
 
     def connection_capacity_available(self, item):
         """Call while holding self.lock; reservations and live bridges share slots."""
@@ -1044,7 +1047,7 @@ class LocalApp:
                 raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
             root = workspace_folder(item)
             if (item['state'] in {'starting', 'running', 'question', 'approval'}
-                    or item.get('_modelUpdating') or (item.get('_connecting') and _restart_claim is None)):
+                    or item.get('_modelUpdating') or item.get('_permissionUpdating') or (item.get('_connecting') and _restart_claim is None)):
                 raise ValueError('현재 업무와 연결 준비가 끝난 뒤 명령을 불러와 주세요.')
             if self.demo:
                 raise ValueError('화면 체험에서는 실제 Claude 명령을 불러오지 않습니다.')
@@ -1148,7 +1151,7 @@ class LocalApp:
             raise ValueError('확인할 현재 CLI 설정을 선택해 주세요.')
         with self.lock:
             item = self.get(sid)
-            if (item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating')
+            if (item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_permissionUpdating')
                     or item.get('_connecting') or item.get('_dispatchClaim')):
                 raise ValueError('현재 업무와 연결 준비가 끝난 뒤 설정을 확인해 주세요.')
             bridge = item.get('bridge')
@@ -1393,6 +1396,18 @@ class LocalApp:
             elif kind == 'permission_mode_changed':
                 item.setdefault('connection', {}).update(data)
                 item['permissionModeOverride'] = data.get('permissionModeOverride')
+                # A timed-out control can ACK later while the original work
+                # continues. Remember only confirmed choices, never an unknown
+                # timeout display or a mere unsolicited CLI status update.
+                if (data.get('permissionModeControlAcknowledged') is True
+                        and not data.get('permissionModeChangePending')
+                        and data.get('permissionMode')):
+                    self._remember_control(item, 'permissionMode',
+                        data.get('permissionMode') if data.get('permissionModeOverride') is not None else None)
+                    bridge = item.get('bridge')
+                    if bridge is not None:
+                        self._control_selected(item, bridge, 'permissionMode')
+                        data['controlRestore'] = item.get('_controlRestore')
             elif kind in {'effort_changed', 'control_restore_changed'}:
                 item.setdefault('connection', {}).update(data)
                 item['modelOverride'] = data.get('modelOverride')
@@ -1516,7 +1531,9 @@ class LocalApp:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
             workspace_folder(item)
             self._check_import_context(item)
-            if item["state"] in {"starting", "running", "question", "approval"} or item.get('_modelUpdating') or item.get('_connecting'):
+            if (item["state"] in {"starting", "running", "question", "approval"}
+                    or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting')
+                    or getattr(item.get('bridge'), '_control_active', False)):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
             if item.get('branch', {}).get('status') == 'pending':
                 self._resume_options(item)  # Recheck even after control-only preparation.
@@ -1817,7 +1834,8 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == '/api/app-update':
                 return self.reply(app.app_updates.check())
             if route.path == '/api/execution-mode':
-                return self.reply(app.execution.snapshot())
+                return self.reply({'current': app.execution_mode, 'supported': False,
+                                   'state': 'idle', 'phase': 'idle', 'target': None, 'error': None})
             if route.path == '/api/attention':
                 return self.reply(app.attention())
             if route.path == '/api/upgrade':
@@ -2091,9 +2109,7 @@ class Handler(BaseHTTPRequestHandler):
                 app.get(sid)
             return self.reply(app.attachment_store.prepare(data['name'], data['size']))
         if route == '/api/execution-mode':
-            if set(data) != {'mode'}:
-                raise ValueError('전환할 실행 권한을 확인해 주세요.')
-            return self.reply(app.execution.start(data['mode']))
+            raise ValueError('실행 권한은 Windows에서 선택합니다. 앱을 완전히 종료한 뒤 EXE를 일반 실행하거나 관리자 권한으로 실행해 주세요.')
         if route == '/api/app-update':
             action = data.get('action')
             if action == 'check' and set(data) == {'action'}:
@@ -2249,14 +2265,14 @@ def main():
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "CompanyAgent/local-ui")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument('--execution-mode', choices=['normal', 'administrator'], default='normal')
+    parser.add_argument('--execution-mode', choices=['auto', 'normal', 'administrator'], default='auto')
     parser.add_argument("--demo", action="store_true", help="Synthetic UI rehearsal; does not start Claude or read source documents")
     args = parser.parse_args()
     from .startup import verify_process
-    verify_process(execution_mode=args.execution_mode)
+    execution_mode = verify_process(execution_mode=args.execution_mode)
     if args.demo:
         args.state = args.state / "demo"
-    app = LocalApp(args.state, demo=args.demo, execution_mode=args.execution_mode)
+    app = LocalApp(args.state, demo=args.demo, execution_mode=execution_mode)
     app._upgrade_headless = args.no_browser
     server = Server(app, args.port)
     url = server.origin + "/#token=" + app.token
@@ -2297,11 +2313,6 @@ def main():
             reopen()
         # Publish readiness only after the desktop host passed initialization.
         runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
-        from .execution_mode import save_mode
-        try:
-            save_mode(app.state, app.execution_mode)
-        except (ValueError, OSError):
-            app.execution.error = '이번 실행 권한은 적용됐지만 다음 실행의 기본값을 저장하지 못했습니다.'
         from .update_install import confirm_running_update
         try:
             confirm_running_update(app.state, WORKSPACE_VERSION)

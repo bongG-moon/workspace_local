@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import sys
+import threading
+import time
 import uuid
 
 
@@ -27,11 +29,13 @@ rules = [{'toolName': 'Bash', 'ruleContent': 'fixture-read-one'},
 destination = os.environ.get('WORKSPACE_PERMISSION_DESTINATION', 'session')
 assert destination in ('session', 'localSettings', 'projectSettings', 'userSettings')
 update = {'type': 'addRules', 'rules': rules, 'behavior': 'allow', 'destination': destination}
+output_lock = threading.Lock()
 
 
 def emit(value):
-    sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False) + '\n').encode('utf-8'))
-    sys.stdout.buffer.flush()
+    with output_lock:
+        sys.stdout.buffer.write((json.dumps(value, ensure_ascii=False) + '\n').encode('utf-8'))
+        sys.stdout.buffer.flush()
 
 
 def result(text, error=False):
@@ -69,14 +73,28 @@ for line in sys.stdin.buffer:
                     mode = 'manual'
                 detail['mode'] = mode
                 emit({'type': 'system', 'subtype': 'status', 'status': None, 'permissionMode': mode})
-        emit({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': value['request_id'], 'response': detail}})
+        frame = {'type': 'control_response', 'response': {'subtype': 'success', 'request_id': value['request_id'], 'response': detail}}
+        if request['subtype'] == 'set_permission_mode' and behavior == 'late-ack':
+            def delayed_ack(frame=frame):
+                time.sleep(.15)
+                emit(frame)
+            threading.Thread(target=delayed_ack, daemon=True).start()
+        else:
+            emit(frame)
     elif value['type'] == 'user':
         turn += 1
         init = {'type': 'system', 'subtype': 'init', 'session_id': session, 'model': 'fixture-only'}
         if os.environ.get('WORKSPACE_PERMISSION_OMIT_INIT') != '1':
             init['permissionMode'] = 'manual' if os.environ.get('WORKSPACE_PERMISSION_FIXTURE') == 'runtime-stale-init' else mode
         emit(init)
-        if value['message']['content'] != 'permission' or allowed:
+        prompt = value['message']['content']
+        if prompt == 'hold':
+            continue
+        if prompt == 'question':
+            emit({'type': 'control_request', 'request_id': 'q' + str(turn), 'request': {
+                'subtype': 'can_use_tool', 'tool_name': 'AskUserQuestion',
+                'input': {'questions': [{'question': 'Fixture choice', 'options': [{'label': 'Keep waiting'}]}]}}})
+        elif prompt != 'permission' or allowed:
             result('기존 세션 허용 적용' if allowed else '연결 준비')
         else:
             emit({'type': 'control_request', 'request_id': 'p' + str(turn), 'request': {

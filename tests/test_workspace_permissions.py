@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 from pathlib import Path
 import sys
@@ -289,26 +290,35 @@ class PermissionTransportTests(unittest.TestCase):
             self.bridge.set_permission_mode(None)
         self.assertFalse(self.bridge.closed)
 
-    def test_mode_timeout_retires_uncertain_child_without_claiming_change(self):
+    def test_mode_timeout_keeps_child_and_reports_unknown_without_claiming_change(self):
         with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'timeout'}):
             self.finish()
         with patch('local_app.bridge.CONTROL_TIMEOUT', .05), self.assertRaises(BridgeError) as caught:
             self.bridge.set_permission_mode('auto')
         self.assertEqual('permission_mode_timeout', caught.exception.code)
-        self.assertTrue(self.bridge.closed)
-        self.assertEqual('manual', self.bridge.permission_mode)
+        self.assertFalse(self.bridge.closed)
+        self.assertEqual('', self.bridge.permission_mode)
         self.assertIsNone(self.bridge.permission_mode_override)
+        state = self.bridge.model_state()
+        self.assertEqual('unreported', state['permissionModeSource'])
+        self.assertEqual('unverified', state['permissionModeSupport'])
+        self.assertTrue(state['permissionModeChangePending'])
+        self.assertTrue(self.bridge._control_active)
+        self.assertEqual(1, len(self.bridge._control_waiters))
+        with self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('plan')
+        with self.assertRaises(ValueError):
+            self.bridge.send('cannot start under an unknown mode')
         self.assertFalse(any(kind == 'permission_mode_changed' for kind, _ in self.events))
 
-    def test_mode_change_excludes_prompt_other_control_pending_and_invalid_names(self):
+    def test_mode_change_excludes_prompt_other_control_and_invalid_names(self):
         self.finish()
         for invalid in ('unknownMode', 'dontAsk', 'bypassPermissions', 'plan\n', {}, 1):
             with self.subTest(invalid=invalid), self.assertRaises(BridgeError):
                 self.bridge.set_permission_mode(invalid)
         self.bridge.pending['waiting'] = {'tool_name': 'Bash', 'input': {}}
-        with self.assertRaises(BridgeError) as caught:
-            self.bridge.set_permission_mode('plan')
-        self.assertEqual('session_busy', caught.exception.code)
+        self.assertEqual('plan', self.bridge.set_permission_mode('plan')['permissionMode'])
+        self.assertIn('waiting', self.bridge.pending)
         self.bridge.pending.clear()
         with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'timeout'}):
             events = []
@@ -331,6 +341,225 @@ class PermissionTransportTests(unittest.TestCase):
         worker.join(3)
         self.assertFalse(worker.is_alive())
         self.assertEqual(['connection_closed'], errors)
+
+    def wire(self):
+        return [json.loads(line) for line in (Path(self.temp.name) / 'permission-wire.jsonl').read_text().splitlines()]
+
+    def test_mode_changes_in_active_run_keep_pid_turn_and_session_and_submit_no_prompt(self):
+        self.bridge.send('hold')
+        eventually(lambda: self.bridge.session_id is not None)
+        identity = (self.bridge.process.pid, self.bridge.session_id, self.bridge._turn_epoch)
+        self.assertTrue(self.bridge.capabilities['setPermissionModeWhileRunning'])
+        for mode in ('plan', 'acceptEdits', 'auto', None):
+            state = self.bridge.set_permission_mode(mode)
+            self.assertEqual('manual' if mode is None else mode, state['permissionMode'])
+            self.assertTrue(self.bridge.busy)
+            self.assertEqual(identity, (self.bridge.process.pid, self.bridge.session_id, self.bridge._turn_epoch))
+        self.assertEqual(1, sum(frame['type'] == 'user' for frame in self.wire()))
+        self.assertFalse(any(kind in {'result', 'request_closed'} for kind, _ in self.events))
+
+    def test_approval_and_question_waits_are_preserved_and_not_automatically_answered(self):
+        for prompt, tool in (('permission', 'Bash'), ('question', 'AskUserQuestion')):
+            with self.subTest(tool=tool):
+                events = []
+                bridge = self.make_bridge(events)
+                bridge.send(prompt)
+                eventually(lambda: bool(bridge.pending))
+                pending, choices = copy.deepcopy(bridge.pending), copy.deepcopy(bridge._permission_choices)
+                marker = len(self.wire())
+                state = bridge.set_permission_mode('auto')
+                self.assertEqual('auto', state['permissionMode'])
+                self.assertEqual(pending, bridge.pending)
+                self.assertEqual(choices, bridge._permission_choices)
+                self.assertTrue(bridge.busy)
+                frames = self.wire()[marker:]
+                self.assertTrue(all(frame['type'] == 'control_request' for frame in frames))
+                self.assertFalse(any(kind in {'result', 'request_closed'} for kind, _ in events))
+                bridge.respond(next(iter(pending)), False)
+                eventually(lambda: not bridge.busy)
+
+    def test_initialized_starting_turn_can_change_mode_before_prompt_submission(self):
+        self.bridge.prepare()
+        entered, release = threading.Event(), threading.Event()
+        original = self.bridge._send_when_ready
+        def delayed_send(prompt, epoch):
+            entered.set()
+            release.wait(3)
+            original(prompt, epoch)
+        with patch.object(self.bridge, '_send_when_ready', side_effect=delayed_send):
+            self.bridge.send('hold')
+            self.assertTrue(entered.wait(3))
+            try:
+                self.assertEqual('plan', self.bridge.set_permission_mode('plan')['permissionMode'])
+                self.assertTrue(self.bridge.busy)
+                self.assertFalse(any(frame['type'] == 'user' for frame in self.wire()))
+            finally:
+                release.set()
+            eventually(lambda: self.bridge._turn_submitted)
+        self.assertEqual('plan', self.bridge.permission_mode)
+        self.assertEqual(1, sum(frame['type'] == 'user' for frame in self.wire()))
+
+    def test_uninitialized_or_stopping_cli_never_receives_mode_control(self):
+        with self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('plan')
+        self.bridge.prepare()
+        before = self.wire()
+        with patch.object(self.bridge, 'stopping', True):
+            self.assertFalse(self.bridge.capabilities['setPermissionModeWhileRunning'])
+            with self.assertRaises(BridgeError):
+                self.bridge.set_permission_mode('plan')
+        self.assertEqual(before, self.wire())
+
+    def test_active_timeout_preserves_prompt_and_late_ack_resolves_without_duplicate_turn(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'late-ack'}):
+            self.bridge.send('permission')
+            eventually(lambda: bool(self.bridge.pending))
+        pending, epoch, pid = copy.deepcopy(self.bridge.pending), self.bridge._turn_epoch, self.bridge.process.pid
+        with patch('local_app.bridge.CONTROL_TIMEOUT', .03), self.assertRaises(BridgeError) as error:
+            self.bridge.set_permission_mode('auto')
+        self.assertEqual('permission_mode_timeout', error.exception.code)
+        self.assertTrue(self.bridge.busy)
+        self.assertEqual(pending, self.bridge.pending)
+        eventually(lambda: not self.bridge.model_state()['permissionModeChangePending'] and not self.bridge._control_active)
+        self.assertEqual(('auto', 'auto', 'confirmed'), (self.bridge.permission_mode,
+            self.bridge.permission_mode_override, self.bridge.model_state()['permissionModeSupport']))
+        self.assertFalse(self.bridge._control_active)
+        self.assertEqual({}, self.bridge._control_waiters)
+        self.assertTrue(self.bridge.busy)
+        self.assertEqual((pid, epoch, pending), (self.bridge.process.pid, self.bridge._turn_epoch, self.bridge.pending))
+        self.assertEqual(1, sum(frame['type'] == 'user' for frame in self.wire()))
+        self.assertEqual(1, sum(kind == 'permission_mode_changed' for kind, _ in self.events))
+        event = [data for kind, data in self.events if kind == 'permission_mode_changed'][-1]
+        self.assertTrue(event['permissionModeControlAcknowledged'])
+        self.bridge.handle({'type': 'system', 'subtype': 'status', 'status': None, 'permissionMode': 'plan'})
+        self.assertFalse(self.events[-1][1]['permissionModeControlAcknowledged'])
+
+    def test_timeout_does_not_block_existing_explicit_approval_answer(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'timeout'}):
+            request = self.request()
+        with patch('local_app.bridge.CONTROL_TIMEOUT', .03), self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('auto')
+        self.bridge.respond(request['id'], False)
+        eventually(lambda: not self.bridge.busy)
+        self.assertFalse(self.bridge.closed)
+        self.assertFalse(self.bridge.pending)
+        self.bridge.close()
+        self.assertFalse(self.bridge._permission_pending)
+        self.assertEqual({}, self.bridge._control_waiters)
+
+    def test_active_rejection_keeps_existing_approval_and_disables_unsupported_control(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'unsupported'}):
+            self.request()
+        pending = copy.deepcopy(self.bridge.pending)
+        with self.assertRaises(BridgeError) as error:
+            self.bridge.set_permission_mode('plan')
+        self.assertEqual('permission_mode_rejected', error.exception.code)
+        self.assertEqual(pending, self.bridge.pending)
+        self.assertTrue(self.bridge.busy)
+        self.assertFalse(self.bridge.closed)
+        self.assertFalse(self.bridge.capabilities['setPermissionModeWhileRunning'])
+        self.assertFalse(self.bridge.model_state()['permissionModeChangePending'])
+        self.assertEqual('manual', self.bridge.permission_mode)
+        self.assertIsNone(self.bridge.permission_mode_override)
+        self.assertFalse(any(kind in {'request_closed', 'error', 'result'} for kind, _ in self.events))
+
+    def test_timeout_status_readback_and_late_rejection_report_only_confirmed_actual_mode(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'timeout'}):
+            self.request()
+        self.bridge.set_permission_mode('plan')
+        pending_prompt = copy.deepcopy(self.bridge.pending)
+        with patch('local_app.bridge.CONTROL_TIMEOUT', .03), self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('auto')
+        rid = self.bridge._permission_pending['id']
+        self.bridge.handle({'type': 'system', 'subtype': 'status', 'status': None, 'permissionMode': 'manual'})
+        state = self.bridge.model_state()
+        self.assertEqual(('manual', 'cli-status', 'plan'), (state['permissionMode'], state['permissionModeSource'], state['permissionModeOverride']))
+        self.assertTrue(state['permissionModeChangePending'])
+        self.bridge.handle({'type': 'control_response', 'response': {'subtype': 'error', 'request_id': rid, 'error': 'Policy rejected change'}})
+        state = self.bridge.model_state()
+        self.assertEqual(('plan', 'plan'), (state['permissionMode'], state['permissionModeOverride']))
+        self.assertFalse(state['permissionModeChangePending'])
+        self.assertFalse(self.bridge._control_active)
+        self.assertEqual({}, self.bridge._control_waiters)
+        self.assertTrue(self.bridge.busy)
+        self.assertEqual(pending_prompt, self.bridge.pending)
+        self.assertFalse(self.bridge.closed)
+        self.assertFalse(any(kind in {'error', 'result', 'request_closed'} for kind, _ in self.events))
+
+    def test_late_ack_keeps_admission_reserved_until_mode_callback_persists_context(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'timeout'}):
+            self.finish()
+        with patch('local_app.bridge.CONTROL_TIMEOUT', .03), self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('auto')
+        rid = self.bridge._permission_pending['id']
+        callback_observations = []
+        original_emit = self.bridge.emit
+        def observe(kind, data):
+            if kind == 'permission_mode_changed':
+                callback_observations.append((self.bridge._control_active, data['permissionModeChangePending']))
+                with self.assertRaises(BridgeError):
+                    self.bridge.set_permission_mode('plan')
+                with self.assertRaises(ValueError):
+                    self.bridge.send('queue cannot consume stale settings')
+                # A callback can take the app lock while another thread reads
+                # bridge state: the reader must not retain bridge.lock here.
+                observed = []
+                def read_state():
+                    with self.bridge.lock:
+                        observed.append(self.bridge.model_state())
+                reader = threading.Thread(target=read_state)
+                reader.start(); reader.join(1)
+                self.assertFalse(reader.is_alive())
+                self.assertEqual('auto', observed[0]['permissionMode'])
+            original_emit(kind, data)
+        with patch.object(self.bridge, 'emit', side_effect=observe):
+            self.bridge.handle({'type': 'control_response', 'response': {
+                'subtype': 'success', 'request_id': rid, 'response': {'mode': 'auto'}}})
+        self.assertEqual([(True, False)], callback_observations)
+        self.assertFalse(self.bridge._control_active)
+        self.assertEqual('plan', self.bridge.set_permission_mode('plan')['permissionMode'])
+
+    def test_concurrent_mode_controls_are_serialized_and_completion_race_keeps_done_turn(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'late-ack'}):
+            self.bridge.send('hold')
+            eventually(lambda: self.bridge.session_id is not None)
+        errors = []
+        def change():
+            try:
+                self.bridge.set_permission_mode('auto')
+            except Exception as error:
+                errors.append(error)
+        worker = threading.Thread(target=change)
+        worker.start()
+        eventually(lambda: self.bridge._control_active)
+        with self.assertRaises(BridgeError):
+            self.bridge.set_permission_mode('plan')
+        self.bridge.handle({'type': 'result', 'session_id': self.bridge.session_id, 'result': 'fixture completion'})
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual([], errors)
+        self.assertFalse(self.bridge.busy)
+        self.assertEqual('auto', self.bridge.permission_mode)
+        self.assertEqual(1, sum(frame.get('request', {}).get('subtype') == 'set_permission_mode' for frame in self.wire()))
+
+    def test_close_during_mode_control_never_applies_late_response(self):
+        with patch.dict(os.environ, {'WORKSPACE_PERMISSION_FIXTURE': 'late-ack'}):
+            self.finish()
+        errors = []
+        def change():
+            try:
+                self.bridge.set_permission_mode('auto')
+            except BridgeError as error:
+                errors.append(error.code)
+        worker = threading.Thread(target=change)
+        worker.start()
+        eventually(lambda: self.bridge._control_active)
+        self.bridge.close()
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(['connection_closed'], errors)
+        self.assertEqual('manual', self.bridge.permission_mode)
+        self.assertFalse(any(kind == 'permission_mode_changed' for kind, _ in self.events))
 
     def test_explicit_session_choice_round_trip_avoids_repeat_only_in_this_child(self):
         request = self.request()

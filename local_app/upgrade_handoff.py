@@ -213,6 +213,8 @@ class UpgradeHandoff:
                 if mode is not None:
                     from .execution_mode import checked_mode
                     checked_mode(mode)
+                    if mode != self.app.execution_mode:
+                        raise ValueError('다른 실행 권한으로 변경하려면 앱을 완전 종료한 뒤 Windows에서 다시 실행해 주세요.')
                 if self.warning or self.restore:
                     raise ValueError(self.warning or '이전 창의 작성 내용을 먼저 복원해 주세요.')
                 if self.pending and self.pending['stage'] not in {'cancelled', 'expired', 'failed'}:

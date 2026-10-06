@@ -7,20 +7,22 @@ import subprocess
 from .windows_process import powershell_path
 
 
-def verify_process(*, execution_mode='normal', runner=subprocess.run):
-    from .execution_mode import checked_mode
-    checked_mode(execution_mode)
+def verify_process(*, execution_mode='auto', runner=subprocess.run):
+    from .execution_mode import checked_request
+    checked_request(execution_mode)
     if os.name != 'nt':
-        return
+        return 'normal' if execution_mode == 'auto' else execution_mode
     helper = Path(__file__).resolve().parents[1] / 'deploy' / 'CompanyWorkspace.Startup.ps1'
     if not helper.is_file():
         raise RuntimeError('실행 확인 파일이 없습니다. ZIP 전체를 다시 압축 해제해 주세요. (WS-41)')
     # The child inherits this token; no elevation, profile changes or policy writes.
     quoted = str(helper).replace("'", "''")
-    assertion = 'Assert-WorkspaceAdministratorProcess' if execution_mode == 'administrator' else 'Assert-WorkspaceNormalProcess'
     script = ("$ErrorActionPreference='Stop'; try { . '" + quoted +
               "'; $context=Get-WorkspaceVerifiedContext; "
-              + assertion + " -Context $context; exit 0 "
+              "$mode=Get-WorkspaceExecutionMode -Context $context; " +
+              ("" if execution_mode == 'auto' else
+               "if ($mode -ne '" + execution_mode + "') { throw 'WORKSPACE_STARTUP:33' }; ") +
+              "[Console]::Write($mode); exit 0 "
               "} catch { exit (Get-WorkspaceStartupCode -Message $_.Exception.Message) }")
     try:
         result = runner([powershell_path(), '-NoLogo', '-NoProfile', '-NonInteractive',
@@ -33,3 +35,10 @@ def verify_process(*, execution_mode='normal', runner=subprocess.run):
         code = result.returncode if result.returncode in range(30, 46) else 45
         raise RuntimeError('현재 실행 권한과 로그인 환경을 확인하지 못했습니다. '
                            f'Company-Workspace.vbs 실행기에서 다시 열어 주세요. (WS-{code})')
+    output = getattr(result, 'stdout', None)
+    if isinstance(output, bytes):
+        output = output.decode('ascii', errors='replace')
+    mode = output.strip() if isinstance(output, str) else None
+    if mode not in {'normal', 'administrator'} or execution_mode != 'auto' and mode != execution_mode:
+        raise RuntimeError('Windows 실행 권한을 확인하지 못했습니다. (WS-45)')
+    return mode

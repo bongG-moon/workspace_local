@@ -9,14 +9,15 @@ from local_app.startup import verify_process
 class DirectStartupTests(unittest.TestCase):
     @patch('local_app.startup.os.name', 'nt')
     def test_direct_start_uses_the_same_guard_without_environment_overrides(self):
-        runner = Mock(return_value=Mock(returncode=0))
+        runner = Mock(return_value=Mock(returncode=0, stdout=b'normal'))
         verify_process(runner=runner)
         args, kwargs = runner.call_args
         script = args[0][-1]
         self.assertTrue(Path(args[0][0]).is_absolute())
         self.assertEqual(Path(args[0][0]).name.lower(), 'powershell.exe')
         self.assertIn('Get-WorkspaceVerifiedContext', script)
-        self.assertIn('Assert-WorkspaceNormalProcess', script)
+        self.assertIn('Get-WorkspaceExecutionMode -Context $context', script)
+        self.assertNotIn('Get-WorkspaceLaunchAction', script)
         self.assertNotIn('env', kwargs)
         self.assertEqual('Bypass', args[0][args[0].index('-ExecutionPolicy') + 1])
         self.assertNotIn('Set-ExecutionPolicy', script)
@@ -44,12 +45,34 @@ class DirectStartupTests(unittest.TestCase):
 
     @patch('local_app.startup.os.name', 'nt')
     def test_administrator_mode_requires_real_admin_token_and_same_identity(self):
-        runner = Mock(return_value=Mock(returncode=0))
+        runner = Mock(return_value=Mock(returncode=0, stdout=b'normal'))
+        runner.return_value.stdout = b'administrator'
         verify_process(execution_mode='administrator', runner=runner)
         script = runner.call_args.args[0][-1]
-        self.assertIn('Assert-WorkspaceAdministratorProcess -Context $context', script)
+        self.assertIn("if ($mode -ne 'administrator')", script)
+        self.assertIn('Get-WorkspaceExecutionMode -Context $context', script)
         self.assertIn('Get-WorkspaceVerifiedContext', script)
         self.assertNotIn('RunAs', script)
         runner.return_value.returncode = 33
         with self.assertRaisesRegex(RuntimeError, 'WS-33'):
+            verify_process(execution_mode='administrator', runner=runner)
+
+    @patch('local_app.startup.os.name', 'nt')
+    def test_auto_returns_verified_actual_role_without_a_preference_or_relaunch(self):
+        for mode in ('normal', 'administrator'):
+            runner = Mock(return_value=Mock(returncode=0, stdout=mode.encode()))
+            self.assertEqual(mode, verify_process(runner=runner))
+            script = runner.call_args.args[0][-1]
+            self.assertNotIn('RunAs', script)
+            self.assertNotIn('execution-mode.json', script)
+            self.assertNotIn('Relaunch', script)
+
+    @patch('local_app.startup.os.name', 'nt')
+    def test_ambiguous_verified_response_cannot_enable_a_role(self):
+        for output in (b'', b'normal administrator', b'auto', b'private error', None):
+            runner = Mock(return_value=Mock(returncode=0, stdout=output))
+            with self.assertRaisesRegex(RuntimeError, 'WS-45'):
+                verify_process(runner=runner)
+        runner = Mock(return_value=Mock(returncode=0, stdout=b'normal'))
+        with self.assertRaisesRegex(RuntimeError, 'WS-45'):
             verify_process(execution_mode='administrator', runner=runner)

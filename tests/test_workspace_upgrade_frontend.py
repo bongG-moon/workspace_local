@@ -52,15 +52,16 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'보내지 않은 홈 요청');assert.equal(appClosed,false);
         })()""")
 
-    def test_reopened_settings_releases_permission_handoff_capture_without_sending_work(self):
+    def test_settings_keeps_its_draft_until_user_closes_it_for_version_capture(self):
         self.run_case("(async()=>{" + PRELUDE + """
           $('prompt').value='보내지 않은 요청';attachments=['C:/work/data.csv'];
           $('settings-dialog').open=true;
-          await WorkspaceUpgrade.observe({...captureState,executionMode:'administrator'},{});
+          WorkspaceExecutionMode.start('administrator');
+          await WorkspaceUpgrade.observe(captureState,{});
           assert.equal(calls.length,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'preserving_drafts'});
-          assert.equal($('settings-dialog').open,false);
-          await WorkspaceUpgrade.observe({...captureState,executionMode:'administrator'},{});
+          assert.equal($('settings-dialog').open,true);
+          $('settings-dialog').close();
+          await WorkspaceUpgrade.observe(captureState,{});
           assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/upgrade');
           assert.equal(calls[0].data.action,'capture');
           const draft=calls[0].data.snapshot.drafts.find(row=>row.id==='home');

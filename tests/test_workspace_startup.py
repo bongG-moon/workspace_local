@@ -31,7 +31,7 @@ class WorkspaceStartupTests(unittest.TestCase):
         return subprocess.run(["powershell.exe", "-NoLogo", "-NoProfile", "-Command", command],
                               capture_output=True, timeout=20, encoding="utf-8")
 
-    def test_policy_is_once_only_and_requires_verified_identity(self):
+    def test_launch_inherits_both_roles_and_requires_verified_identity(self):
         source = ". " + ps_quote(HELPER) + """
         $normal = [pscustomobject]@{verified=$true; sid='S-1-5-21-123'; sessionId=1; isAdministrator=$false}
         $admin = [pscustomobject]@{verified=$true; sid='S-1-5-21-123'; sessionId=1; isAdministrator=$true}
@@ -46,7 +46,7 @@ class WorkspaceStartupTests(unittest.TestCase):
         """
         result = self.powershell(source)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), ["run", "run", "relaunch", "WORKSPACE_STARTUP:34",
+        self.assertEqual(json.loads(result.stdout), ["run", "run", "run", "run",
                                                     "WORKSPACE_STARTUP:30", "WORKSPACE_STARTUP:30"])
 
     def test_errors_are_classified_without_inventing_python_failure(self):
@@ -112,6 +112,12 @@ function Show-WorkspaceStartupDialog {
   [IO.File]::AppendAllText(DIALOG, $Message + "`n", (New-Object Text.UTF8Encoding($false)))
 }
 function Assert-WorkspaceNormalProcess { param($Context) TOKEN_CHECK }
+function Assert-WorkspaceAdministratorProcess { param($Context) TOKEN_CHECK }
+function Get-WorkspaceExecutionMode {
+ param($Context)
+ if($Context.isAdministrator){ Assert-WorkspaceAdministratorProcess $Context; return 'administrator' }
+ Assert-WorkspaceNormalProcess $Context; return 'normal'
+}
 """.replace("CALLS", ps_quote(calls)).replace("DIALOG", ps_quote(dialog)).replace("CHILD_CODE", str(child_code)).replace(
                 "TOKEN_CHECK", "throw 'WORKSPACE_STARTUP:33'" if unsafe_token else "")
             (deploy / HELPER.name).write_text(HELPER.read_text(encoding="utf-8-sig") + overrides, encoding="utf-8-sig")
@@ -126,37 +132,36 @@ function Assert-WorkspaceNormalProcess { param($Context) TOKEN_CHECK }
             return result, calls.read_text(encoding="utf-8") if calls.exists() else "", \
                 dialog.read_text(encoding="utf-8") if dialog.exists() else "", state.exists()
 
-    def test_admin_relaunch_runs_once_before_python_or_state_creation(self):
+    def test_administrator_start_inherits_token_without_relaunching(self):
         result, calls, dialog, state_created = self.fixture_launch()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls.splitlines()), 1)
-        self.assertIn("missing-workspace-fixture-python|True|True|", calls)
-        self.assertIn("한글 &", calls)
-        self.assertEqual(dialog, "")
-        self.assertFalse(state_created)
+        self.assertEqual(result.returncode, 37, result.stderr)
+        self.assertIn('WS-37', result.stderr)
+        self.assertEqual(calls, '')
+        self.assertEqual(dialog, '')
+        self.assertTrue(state_created, "Python failure writes only app diagnostics after token verification")
 
-    def test_admin_child_is_rejected_without_loop_or_dialog(self):
+    def test_legacy_relaunch_flag_never_switches_token_or_loops(self):
         result, calls, dialog, state_created = self.fixture_launch(relaunched=True, no_browser=False)
-        self.assertEqual(result.returncode, 34, result.stderr)
-        self.assertIn("WS-34", result.stderr)
-        self.assertEqual(calls, "")
-        self.assertEqual(dialog, "")
-        self.assertFalse(state_created)
+        self.assertEqual(result.returncode, 37, result.stderr)
+        self.assertEqual(calls, '')
+        self.assertEqual(dialog, '')
+        self.assertTrue(state_created, "Python failure writes only app diagnostics after token verification")
 
-    def test_only_parent_shows_one_classified_korean_dialog(self):
-        result, calls, dialog, state_created = self.fixture_launch(child_code=37, no_browser=False)
+    def test_parent_shows_one_python_diagnostic_without_relaunch(self):
+        result, calls, dialog, state_created = self.fixture_launch(no_browser=False)
         self.assertEqual(result.returncode, 20, result.stderr)
-        self.assertEqual(dialog.count("WS-37"), 1)
-        self.assertIn("Python", dialog)
-        self.assertEqual(len(calls.splitlines()), 1)
-        self.assertFalse(state_created)
+        self.assertEqual(dialog.count('WS-37'), 1)
+        self.assertIn('Python', dialog)
+        self.assertEqual(calls, '')
+        self.assertTrue(state_created, "Python failure writes only app diagnostics after token verification")
 
-    def test_timeout_does_not_retry_or_claim_success(self):
-        result, calls, dialog, _ = self.fixture_launch(child_code=22)
-        self.assertEqual(result.returncode, 22, result.stderr)
-        self.assertIn("반복 실행하지 말고", result.stderr)
-        self.assertEqual(len(calls.splitlines()), 1)
-        self.assertEqual(dialog, "")
+    def test_unsafe_administrator_token_stops_before_python_and_state(self):
+        result, calls, dialog, state_created = self.fixture_launch(admin=True, unsafe_token=True)
+        self.assertEqual(result.returncode, 33, result.stderr)
+        self.assertIn('WS-33', result.stderr)
+        self.assertEqual(calls, '')
+        self.assertEqual(dialog, '')
+        self.assertFalse(state_created)
 
     def test_wrong_user_is_rejected_before_relaunch_or_state(self):
         result, calls, dialog, state_created = self.fixture_launch(identity_error="USER_CONTEXT_DIFFERENT_ACCOUNT")
@@ -224,8 +229,10 @@ class WorkspaceStartupContractTests(unittest.TestCase):
         self.assertNotIn('Set-ExecutionPolicy', vbs)
         source = LAUNCHER.read_text(encoding="utf-8-sig")
         self.assertLess(source.index("Get-WorkspaceVerifiedContext"), source.index("Threading.Mutex"))
-        self.assertLess(source.index("Invoke-WorkspaceNormalTokenRelaunch"), source.index("Threading.Mutex"))
-        self.assertLess(source.index("Assert-WorkspaceNormalProcess"), source.index("Threading.Mutex"))
+        self.assertNotIn("Invoke-WorkspaceNormalTokenRelaunch", source)
+        self.assertNotIn("Invoke-WorkspaceAdministratorRelaunch", source)
+        self.assertNotIn("Read-WorkspaceExecutionMode", source)
+        self.assertLess(source.index("Get-WorkspaceExecutionMode"), source.index("Threading.Mutex"))
         self.assertIn("if ($NoBrowser -or $NormalTokenRelaunch -or $ExecutionRequestId)", source)
         self.assertNotIn("-Verb RunAs", source)
         self.assertNotIn("-ExecutionPolicy Bypass", source)

@@ -752,6 +752,90 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.match($('composer-control-status').textContent,/요청이 끝나면/);assertDraft();
         })()""")
 
+    def test_live_permission_click_keeps_active_run_and_human_request_cards(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setPermissionModeWhileRunning=true;
+          for(const state of ['starting','running','approval','question']){
+            active.connection.permissionMode='default';active.connection.permissionModeOverride=null;
+            active.state=state;active.lastRunId='current-run';setStatus(state,'현재 파일을 확인하고 있어요','current-run');
+            const card=el('section','직접 확인할 승인 요청');$('requests').replaceChildren(card);
+            const messages=active.messages,run=active.lastRunId,choice={id:'human-choice'};active.pendingRequests=[choice];
+            let finish;const calls=[];api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>finish=resolve);};
+            assert.equal($('composer-model').disabled,true);assert.equal($('composer-effort').disabled,true);
+            assert.equal($('composer-permission').disabled,false);
+            await $('composer-permission').onclick();const option=choose('자동 판단');
+            assert.equal($('composer-controls-panel').hidden,false);const change=option.onclick();await option.onclick();
+            assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/permission-mode');
+            assert.equal(active.connection.permissionMode,'default');assert.equal(active.state,state);
+            assert.equal($('status-text').textContent,'현재 파일을 확인하고 있어요');
+            assert.equal($('requests').children[0],card);assert.equal(card.inert,false);assertDraft();
+            finish({permissionMode:'auto',permissionModeOverride:'auto',permissionModeChangePending:false});await change;
+            assert.equal(active.connection.permissionMode,'auto');assert.equal(active.state,state);
+            assert.equal(active.lastRunId,run);assert.equal(active.messages,messages);
+            assert.equal(active.pendingRequests[0],choice);assert.equal($('requests').children[0],card);
+            assert.equal($('status-text').textContent,'현재 파일을 확인하고 있어요');assertDraft();
+          }
+        })()""")
+
+    def test_shift_tab_live_permission_requires_capability_and_keeps_model_effort_idle_only(self):
+        self.run_case(r"""(async()=>{
+          active.connection.permissionModeCycle=['default','auto'];active.state='running';$('prompt').focus();
+          let finish;const calls=[];api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>finish=resolve);};
+          const key=()=>({key:'Tab',shiftKey:true,preventDefault(){this.prevented=true;}});
+          assert.equal(WorkspaceInlineControls.keydown(key()),false);assert.equal(calls.length,0);
+          active.connection.capabilities.setPermissionModeWhileRunning=true;setStatus('running');
+          assert.equal(WorkspaceInlineControls.keydown(key()),true);
+          WorkspaceInlineControls.keydown({...key(),repeat:true});WorkspaceInlineControls.keydown(key());
+          assert.equal(calls.length,1);assert.equal(calls[0].body.mode,'auto');assertDraft();
+          assert.equal(await setModel('company-next'),null);assert.equal(await setEffort('high'),null);
+          finish({permissionMode:'auto',permissionModeOverride:'auto'});for(let i=0;i<16;i++)await Promise.resolve();
+          assert.equal(active.state,'running');assert.equal(textFor('composer-permission'),'자동 판단');assertDraft();
+          active.connection.capabilities.setPermissionModeWhileRunning=false;setStatus('running');
+          assert.equal($('composer-permission').disabled,true);
+          await $('composer-permission').onclick();assert.equal($('composer-controls-panel').hidden,true);
+        })()""")
+
+    def test_uncertain_live_permission_ack_blocks_repeats_until_late_actual_event(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setPermissionModeWhileRunning=true;active.state='approval';
+          active.connection.permissionModeCycle=['default','auto'];setStatus('approval');
+          const card=el('section','승인 대기');$('requests').append(card);let calls=0;
+          api=async()=>{calls++;const failure=Error('변경 응답 대기 중');failure.connection={...connection(),
+            capabilities:{...connection().capabilities,setPermissionModeWhileRunning:true},
+            permissionMode:'',permissionModeSource:'unreported',permissionModeChangePending:true};throw failure;};
+          const result=await setPermissionMode('auto');assert.equal(result.ok,false);
+          assert.equal(active.connection.permissionMode,'');assert.equal(active.connection.permissionModeChangePending,true);
+          assert.equal($('composer-permission').disabled,true);assert.equal(await setPermissionMode('auto'),null);
+          $('prompt').focus();assert.equal(WorkspaceInlineControls.keydown({key:'Tab',shiftKey:true,preventDefault(){}}),false);
+          assert.equal(calls,1);assert.equal(active.state,'approval');assert.equal($('requests').children[0],card);assertDraft();
+          handleEvent({type:'permission_mode_changed',data:{permissionMode:'auto',permissionModeOverride:'auto',permissionModeChangePending:false}});
+          assert.equal($('composer-permission').disabled,false);assert.equal(textFor('composer-permission'),'자동 판단');
+          assert.equal(active.state,'approval');assert.equal($('requests').children[0],card);assertDraft();
+        })()""")
+
+    def test_live_permission_ack_does_not_restore_run_after_result_arrives(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setPermissionModeWhileRunning=true;active.state='running';active.lastRunId='run-a';setStatus('running');
+          let finish;api=()=>new Promise(resolve=>finish=resolve);const change=setPermissionMode('auto');
+          handleEvent({type:'result',data:{runId:'run-a'}});
+          assert.equal(active.state,'done');const resultText=$('status-text').textContent;
+          finish({permissionMode:'auto',permissionModeOverride:'auto',permissionModeChangePending:false});await change;
+          assert.equal(active.state,'done');assert.equal(active.lastRunId,'run-a');
+          assert.equal($('status-text').textContent,resultText);assert.equal($('status').classList.contains('busy'),false);
+          assertDraft();
+        })()""")
+
+    def test_reconnect_only_permission_reset_never_closes_active_question(self):
+        self.run_case(r"""(async()=>{
+          active.connection.capabilities.setPermissionModeWhileRunning=true;
+          active.connection.permissionModeOverride='auto';active.connection.permissionMode='auto';
+          active.connection.permissionModeResetRequiresReconnect=true;active.state='question';setStatus('question');
+          let calls=0;api=async()=>{calls++;};await $('composer-permission').onclick();
+          assert.equal(choose('기존 설정 사용').disabled,true);assert.equal($('permission-mode-reset').disabled,true);
+          const result=await setPermissionMode(null);assert.equal(result.ok,false);assert.match(result.error,/현재 요청이 끝난 뒤/);
+          assert.equal(calls,0);assert.equal(active.state,'question');assert.equal(active.connection.permissionMode,'auto');assertDraft();
+        })()""")
+
 
 if __name__ == '__main__':
     unittest.main()

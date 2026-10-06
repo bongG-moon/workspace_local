@@ -264,6 +264,8 @@ class ClaudeSession:
                                  self._model_control_supported and not self.closed),
                 "setPermissionMode": bool(self._initialized and self._permission_control_supported
                                           and self._permission_available_modes() and not self.closed),
+                "setPermissionModeWhileRunning": bool(self._initialized and self._permission_control_supported
+                                          and self._permission_available_modes() and not self.closed and not self.stopping),
                 "setEffort": bool(self._initialized and self._effort_control_supported
                                   and self._effort_available_levels() and not self.closed)}
 
@@ -430,6 +432,8 @@ class ClaudeSession:
                 "permissionModeLabel": mode_label(self.permission_mode),
                 "permissionModeSource": self._permission_source,
                 "permissionModeOverride": self.permission_mode_override,
+                "permissionModeChangePending": self._permission_pending is not None,
+                "permissionModeControlAcknowledged": False,
                 "bypassPermissions": self.bypass_state(),
                 "availablePermissionModes": mode_options(self._permission_available_modes(), include_bypass=True),
                 "permissionModeCycle": mode_cycle(self._permission_available_modes()),
@@ -564,16 +568,17 @@ class ClaudeSession:
         """Apply one live connection mode only after the CLI acknowledges it.
 
         Help proves that a mode name exists, not that policy will accept a live
-        change. Missing original state is unavailable, never an invented alias
-        or a reconnection that discards another selected setting.
+        change. Streaming controls do not submit another user turn, answer an
+        outstanding question, or restart the active CLI. One outstanding settings
+        control is retained on timeout so a late ACK cannot overtake a new one.
         """
         if mode is not None and mode_wire_value(mode, self._permission_available_modes()) is None:
             raise BridgeError("permission_mode_invalid", "현재 연결에서 선택할 수 있는 승인 모드를 확인해 주세요.", "승인 모드 확인")
         with self.lock:
             if mode is not None and mode_wire_value(mode, self._permission_available_modes()) is None:
                 raise BridgeError("permission_mode_invalid", "현재 연결에서 선택할 수 있는 승인 모드를 확인해 주세요.", "승인 모드 확인")
-            if self.busy or self.pending or self._control_active:
-                raise BridgeError("session_busy", "현재 작업과 확인 요청이 끝난 뒤 승인 모드를 변경해 주세요.", "작업 완료 기다리기")
+            if self.stopping or self._control_active:
+                raise BridgeError("session_busy", "현재 설정 변경이나 중지가 끝난 뒤 승인 모드를 변경해 주세요.", "설정 변경 완료 기다리기")
             if self.closed or not self._initialized or not self.process or self.process.poll() is not None:
                 raise BridgeError("permission_mode_unavailable", "업무 연결이 준비된 뒤 승인 모드를 변경할 수 있습니다.", "연결 상태 확인")
             if mode is not None and not self.capabilities["setPermissionMode"]:
@@ -585,58 +590,76 @@ class ClaudeSession:
             if selected == BYPASS_MODE and not self._bypass_enabled_for_connection():
                 raise BridgeError('bypass_opt_in_required', 'Bypass는 위험 확인 후 이 업무의 연결을 다시 준비해야 합니다. 현재 승인 모드는 유지했습니다.', 'Bypass 위험 확인')
             rid = "permission-mode-" + uuid.uuid4().hex
-            previous_override = self.permission_mode_override
             waiter = {"event": threading.Event(), "response": None}
             self._control_active = True
-            self._permission_pending = {'reported': None}
-            if selected is not None:
-                self._control_waiters[rid] = waiter
+            pending = self._permission_pending = {'id': rid, 'reported': None,
+                'selected': selected, 'override': mode, 'timedOut': False,
+                'previousMode': self.permission_mode, 'previousOverride': self.permission_mode_override,
+                'previousSource': self._permission_source, 'previousVerified': self._permission_control_verified}
+            self._control_waiters[rid] = waiter
+        retain_pending = False
         try:
             self._write({"type": "control_request", "request_id": rid,
                          "request": {"subtype": "set_permission_mode", "mode": selected}})
-            if not waiter["event"].wait(CONTROL_TIMEOUT):
-                self.close()
-                raise BridgeError("permission_mode_timeout", "승인 모드 변경 응답을 확인하지 못해 업무 연결을 종료했습니다. 다음 요청에서 기존 설정으로 다시 연결합니다.", "다음 요청으로 다시 연결")
-            response = waiter["response"]
-            if self.closed or response is None:
-                raise BridgeError("connection_closed", "승인 모드를 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
-            if response.get("subtype") != "success":
-                error = str(response.get("error", "")).casefold()
-                self._raise_control_auth_error(error)
-                with self.lock:
-                    self._permission_rejected_modes.add(selected)
-                    if any(word in error for word in ("unknown request", "unknown subtype", "unsupported control")):
-                        self._permission_control_supported = False
-                raise BridgeError("permission_mode_rejected", "현재 연결에서 승인 모드 변경이 거절되었습니다. 현재 모드를 유지하며 거절된 선택지는 숨겼습니다.", "회사 정책과 연결 상태 확인")
+            waiter["event"].wait(CONTROL_TIMEOUT)
             with self.lock:
                 if self.closed:
                     raise BridgeError("connection_closed", "승인 모드를 변경하기 전에 업무 연결이 종료되었습니다.", "다음 요청으로 다시 연결")
-                detail = response.get('response')
-                acknowledged = observed_mode(detail.get('mode')) if isinstance(detail, dict) else ''
-                reported = self._permission_pending['reported']
-                self._permission_pending = None
-                self.permission_mode, self.permission_mode_override = acknowledged or reported or selected, mode
-                bypass_declined = selected == BYPASS_MODE and self.permission_mode != BYPASS_MODE
-                if bypass_declined:
-                    # A successful control envelope can still report a policy-
-                    # clamped mode. Never retain/replay a bypass that did not apply.
-                    self._permission_rejected_modes.add(BYPASS_MODE)
-                    self.permission_mode_override = previous_override
-                self._permission_source = 'cli-control' if acknowledged or not reported else 'cli-status'
-                self._permission_control_verified = True
-                # A change before system/init means the original mode was never
-                # observed. A later init must not mistake our override for it.
-                self._permission_init_seen = True
-                state = self.model_state()
+                response = waiter['response']
+                if response is None:
+                    pending['timedOut'] = retain_pending = True
+                    # The last confirmed override remains replayable, but the
+                    # old displayed actual mode is no longer trustworthy.
+                    self.permission_mode = pending['reported'] or ''
+                    self._permission_source = 'cli-status' if pending['reported'] else 'unreported'
+                    self._permission_control_verified = False
+                    self._permission_init_seen = True
+                    raise BridgeError("permission_mode_timeout", "승인 모드 변경 응답을 아직 확인하지 못했습니다. 진행 중인 작업과 확인 요청은 유지합니다. 늦게 도착한 응답을 기다리거나 작업을 마친 뒤 연결을 다시 시작해 주세요.", "승인 모드 응답 기다리기")
+                state, error = self._complete_permission_mode(response, pending)
+            if error is not None:
+                self._raise_control_auth_error(str(response.get('error', '')))
+                raise error
             self.emit("permission_mode_changed", state)
-            if bypass_declined:
-                raise BridgeError('permission_mode_rejected', 'CLI가 Bypass 대신 다른 승인 모드를 보고했습니다. 실제 모드를 표시하며 Bypass 선택은 적용하지 않았습니다.', '회사 정책과 연결 상태 확인')
             return state
         finally:
             with self.lock:
-                self._control_waiters.pop(rid, None)
-                self._permission_pending = None
-                self._control_active = False
+                if not retain_pending and self._control_waiters.get(rid) is waiter:
+                    self._control_waiters.pop(rid, None)
+                    if self._permission_pending is pending:
+                        self._permission_pending = None
+                    self._control_active = False
+
+    def _complete_permission_mode(self, response, pending):
+        """Apply a matching ACK under self.lock, including delayed responses."""
+        selected = pending['selected']
+        self._permission_pending = None
+        error = None
+        if response.get('subtype') != 'success':
+            reason = str(response.get('error', '')).casefold()
+            self._permission_rejected_modes.add(selected)
+            if any(word in reason for word in ('unknown request', 'unknown subtype', 'unsupported control')):
+                self._permission_control_supported = False
+            self.permission_mode = pending['previousMode']
+            self.permission_mode_override = pending['previousOverride']
+            self._permission_source = pending['previousSource']
+            self._permission_control_verified = pending['previousVerified']
+            error = BridgeError('permission_mode_rejected', '현재 연결에서 승인 모드 변경이 거절되었습니다. 현재 모드를 유지하며 거절된 선택지는 숨겼습니다.', '회사 정책과 연결 상태 확인')
+        else:
+            detail = response.get('response')
+            acknowledged = observed_mode(detail.get('mode')) if isinstance(detail, dict) else ''
+            reported = pending['reported']
+            self.permission_mode, self.permission_mode_override = acknowledged or reported or selected, pending['override']
+            if selected == BYPASS_MODE and self.permission_mode != BYPASS_MODE:
+                self._permission_rejected_modes.add(BYPASS_MODE)
+                self.permission_mode_override = pending['previousOverride']
+                error = BridgeError('permission_mode_rejected', 'CLI가 Bypass 대신 다른 승인 모드를 보고했습니다. 실제 모드를 표시하며 Bypass 선택은 적용하지 않았습니다.', '회사 정책과 연결 상태 확인')
+            self._permission_source = 'cli-control' if acknowledged or not reported else 'cli-status'
+            self._permission_control_verified = True
+            # A later init cannot mistake our override for an unseen baseline.
+            self._permission_init_seen = True
+        state = self.model_state()
+        state['permissionModeControlAcknowledged'] = response.get('subtype') == 'success'
+        return state, error
 
     def _auth_error(self, text: str) -> bool:
         text = text.casefold()
@@ -1101,11 +1124,31 @@ class ClaudeSession:
                             self._permission_source = 'cli-initialize'
                 self.ready.set()
             else:
+                late_state = late_error = None
                 with self.lock:
                     waiter = self._control_waiters.get(response.get("request_id"))
                     if waiter is not None:
                         waiter["response"] = response
                         waiter["event"].set()
+                        pending = self._permission_pending
+                        if (not self.closed and pending is not None and pending['timedOut']
+                                and pending['id'] == response.get('request_id')):
+                            late_state, late_error = self._complete_permission_mode(response, pending)
+                            self._control_waiters.pop(pending['id'], None)
+                if late_state is not None:
+                    try:
+                        if self._auth_error(str(response.get('error', ''))):
+                            self._authentication_failed()
+                        else:
+                            # Keep admission reserved until the app has stored
+                            # the ACK and its queue context. Never hold bridge.lock
+                            # during callbacks that take the app's own lock.
+                            self.emit('permission_mode_changed', late_state)
+                            if late_error is not None:
+                                self.emit('notice', {'message': str(late_error), 'code': late_error.code})
+                    finally:
+                        with self.lock:
+                            self._control_active = False
         elif kind == "control_request":
             request, rid = data.get("request", {}), data.get("request_id")
             if not isinstance(rid, str) or not rid:
@@ -1202,6 +1245,10 @@ class ClaudeSession:
                     if reported_mode:
                         if self._permission_pending is not None:
                             self._permission_pending['reported'] = reported_mode
+                            if self._permission_pending['timedOut']:
+                                self.permission_mode = reported_mode
+                                self._permission_source = 'cli-status'
+                                state = self.model_state()
                         else:
                             self.permission_mode = reported_mode
                             self._permission_source = 'cli-status'
@@ -1404,6 +1451,9 @@ class ClaudeSession:
                 self._permission_choices.clear()
                 for waiter in self._control_waiters.values():
                     waiter["event"].set()
+                self._control_waiters.clear()
+                self._permission_pending = None
+                self._control_active = False
                 self._close_owner = current
                 process = self.process
                 owner = True

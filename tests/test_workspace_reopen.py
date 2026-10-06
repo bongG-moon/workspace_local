@@ -32,7 +32,7 @@ class WorkspaceReopenTests(unittest.TestCase):
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
                        probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False,
-                       shutdown_state=None, quit_result='closed', execution_protocol=2):
+                       shutdown_state=None, quit_result='closed', execution_protocol=3, running_mode='normal', inherited_mode='normal'):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -67,9 +67,10 @@ function Write-FixtureEvent($Kind, $Value) {
   [IO.File]::AppendAllText(EVENTS, $record + "`n", (New-Object Text.UTF8Encoding($false)))
 }
 function Get-WorkspaceVerifiedContext {
-  [pscustomobject]@{verified=$true; sid=SID; sessionId=1; isAdministrator=$false; localAppData=ROOT}
+  [pscustomobject]@{verified=$true; sid=SID; sessionId=1; isAdministrator=IS_ADMIN; localAppData=ROOT}
 }
 function Assert-WorkspaceNormalProcess { param($Context) }
+function Get-WorkspaceExecutionMode { param($Context) return INHERITED_MODE }
 function Invoke-RestMethod {
   param($Uri,$Headers,$TimeoutSec,$Method,$ContentType,$Body,$MaximumRedirection)
   if ($Headers.Authorization -ne ('Bearer ' + ('a' * 43))) {throw 'incorrect authentication'}
@@ -80,7 +81,7 @@ function Invoke-RestMethod {
   }
   if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap') {throw 'incorrect endpoint'}
   Write-FixtureEvent 'health' $Uri
-  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; executionMode='normal'; executionModeProtocol=EXECUTION_PROTOCOL; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
+  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; executionMode=LIVE_MODE; executionModeProtocol=EXECUTION_PROTOCOL; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
 }
 function Open-WorkspaceWindow {
   param([Uri]$Uri,[bool]$ReuseSupported)
@@ -101,6 +102,8 @@ function Wait-WorkspaceShutdown {
 function Start-Process { throw 'unexpected process launch' }
 """
             substitutions = {
+                "LIVE_MODE":ps_quote(running_mode), "INHERITED_MODE":ps_quote(inherited_mode),
+                "IS_ADMIN":'$true' if inherited_mode=='administrator' else '$false',
                 "EXECUTION_PROTOCOL": '$null' if execution_protocol is None else str(execution_protocol),
                 "REOPEN": "$true" if reopen_supported else "$false",
                 "EVENTS": ps_quote(events), "SID": ps_quote("fixture-" + directory.name),
@@ -165,6 +168,21 @@ function Start-Process {
             self.assertEqual(runtime.read_text(encoding="utf-8"), original, "Existing runtime must remain untouched")
             return result, records, url
 
+    def test_other_windows_role_fails_fast_without_reopen_quit_or_coordinator(self):
+        for running, inherited in (('normal','administrator'),('administrator','normal')):
+            with self.subTest(running=running,inherited=inherited):
+                result,events,_=self.fixture_launch(same_version=True,no_browser=True,
+                    running_mode=running,inherited_mode=inherited)
+                self.assertEqual(39,result.returncode,result.stderr)
+                self.assertIn('다른 실행 권한',result.stderr)
+                self.assertIn('완전 종료',result.stderr)
+                self.assertEqual(['health'],[event['kind'] for event in events])
+
+    def test_same_administrator_role_reopens_without_a_new_coordinator(self):
+        result,events,_=self.fixture_launch(same_version=True,running_mode='administrator',inherited_mode='administrator')
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertEqual(['health','open'],[event['kind'] for event in events])
+
     def test_previous_version_keeps_old_window_when_new_python_preflight_fails(self):
         result, events, url = self.fixture_launch()
         self.assertEqual(result.returncode, 20, result.stderr)
@@ -199,7 +217,7 @@ function Start-Process {
         self.assertEqual([item['kind'] for item in events], ['health', 'open', 'preflight', 'coordinator'])
 
     def test_future_policy_same_version_is_not_replaced_by_older_patch(self):
-        result, events, _ = self.fixture_launch(same_version=True, execution_protocol=3)
+        result, events, _ = self.fixture_launch(same_version=True, execution_protocol=4)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([item['kind'] for item in events], ['health', 'open'])
 

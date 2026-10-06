@@ -122,7 +122,7 @@ globalThis.WorkspaceShortcuts = (() => {
     if(alt&&["m","p"].includes(key(event))){
       consume(event);if(event.repeat)return true;
       if(!active)return toast("업무를 선택한 뒤 설정을 바꿀 수 있어요."),true;
-      if(busyStates.has(active.state))return toast("현재 요청이 끝난 뒤 설정을 바꿔 주세요."),true;
+      if(key(event)==="m"?permissionConnectionLocked():connectionLocked())return toast(key(event)==="m"?"현재 연결에서 승인 모드를 바꿀 수 없어요. 연결 또는 중지 상태를 확인해 주세요.":"현재 요청이 끝난 뒤 모델을 바꿔 주세요."),true;
       if(key(event)==="m")void globalThis.WorkspaceInlineControls?.cyclePermission();else void globalThis.WorkspaceInlineControls?.open("model");return true;
     }
     if(ctrl&&["r","s","o"].includes(key(event))){consume(event);if(!event.repeat)({r:search,s:stash,o:details})[key(event)]();return true;}

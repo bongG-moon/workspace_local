@@ -6,6 +6,7 @@ param([string]$PythonCommand = 'auto', [switch]$Demo, [switch]$NoBrowser, [strin
 $ErrorActionPreference = 'Stop'
 $workspaceMutex = $null
 $workspaceLockHeld = $false
+$workspaceRoleMismatch = $false
 $workspacePythonAttemptStarted = [DateTime]::UtcNow
 $appStateRoot = $null
 $script:WorkspacePythonChecks = @()
@@ -381,36 +382,12 @@ try {
     . $startupHelper
     $context = Get-WorkspaceVerifiedContext
     $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
-    $preferenceStateRoot = if ($Demo) { Join-Path $appStateRoot 'demo' } else { $appStateRoot }
-    if ($ExecutionMode -eq 'auto') { $ExecutionMode = Read-WorkspaceExecutionMode -StateRoot $preferenceStateRoot }
-    if ($NormalTokenRelaunch -and $ExecutionMode -ne 'normal') { throw 'WORKSPACE_STARTUP:42' }
-    $launchAction = Get-WorkspaceLaunchAction -Context $context -Relaunched ([bool]$NormalTokenRelaunch) -ExecutionMode $ExecutionMode
-    if ($launchAction -eq 'elevate') {
-        $childCode = Invoke-WorkspaceAdministratorRelaunch -ScriptPath $PSCommandPath -PythonCommand $PythonCommand -StateRoot $StateRoot -ExecutionRequestId $ExecutionRequestId -Demo ([bool]$Demo) -NoBrowser ([bool]$NoBrowser)
-        if ($childCode -eq 0 -or $childCode -eq 20) { return }
-        if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45,46,47)) { $childCode = 35 }
-        throw ('WORKSPACE_STARTUP:' + $childCode)
-    }
-    if ($launchAction -eq 'relaunch') {
-        # Reduce privileges BEFORE mutex/state/CLI/Python creation. The child
-        # rechecks identity and privileges; this flag never skips a check.
-        $previousAttempt = [Environment]::GetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', 'Process')
-        $previousExecutionRequest = [Environment]::GetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', 'Process')
-        try {
-            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $workspacePythonAttemptId, 'Process')
-            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', $ExecutionRequestId, 'Process')
-            $childCode = Invoke-WorkspaceNormalTokenRelaunch -Context $context -ScriptPath $PSCommandPath `
-                -PythonCommand $PythonCommand -Demo ([bool]$Demo) -NoBrowser ([bool]$NoBrowser) -StateRoot $StateRoot
-        } finally {
-            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $previousAttempt, 'Process')
-            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', $previousExecutionRequest, 'Process')
-        }
-        if ($childCode -eq 0) { return }
-        if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45,46,47)) { $childCode = 35 }
-        throw ('WORKSPACE_STARTUP:' + $childCode)
-    }
-    if ($ExecutionMode -eq 'administrator') { Assert-WorkspaceAdministratorProcess -Context $context }
-    else { Assert-WorkspaceNormalProcess -Context $context }
+    # The launcher, Python server, desktop host and Claude all inherit the
+    # Windows process token. Ignore prior app-owned privilege preferences.
+    Get-WorkspaceLaunchAction -Context $context -Relaunched ([bool]$NormalTokenRelaunch) -ExecutionMode $ExecutionMode | Out-Null
+    $actualExecutionMode = Get-WorkspaceExecutionMode -Context $context
+    if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
+    $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
     if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.20' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
@@ -443,6 +420,12 @@ try {
         } catch { # Stale runtime records never authorize process termination.
         }
     }
+    if ($liveWorkspaceUri -and $health.executionMode -in @('normal','administrator') -and $health.executionMode -ne $ExecutionMode) {
+        # Windows chooses the role before launch. Never reopen a window using
+        # another role or close it through a lower-privilege coordinator.
+        $workspaceRoleMismatch = $true
+        throw 'WORKSPACE_STARTUP:39'
+    }
     if ($liveWorkspaceUri -and $workspaceClosing) {
         if ($health.shutdownState -eq 'failed') {
             # The previous quit has already closed admission. Ask that exact
@@ -465,10 +448,8 @@ try {
         $targetVersion = [version]'0.23.20'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
-        $newerExecutionPolicy = $validExecutionPolicy -and $health.executionModeProtocol -gt 2
-        $modeChangeNeeded = $runningVersion -eq $targetVersion -and -not $newerExecutionPolicy -and $health.executionMode -in @('normal','administrator') -and $health.executionMode -ne $ExecutionMode
-        $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 2)
-        $upgradeNeeded = $runningVersion -lt $targetVersion -or $modeChangeNeeded -or $executionPolicyUpgrade
+        $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)
+        $upgradeNeeded = $runningVersion -lt $targetVersion -or $executionPolicyUpgrade
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
         if (-not $NoBrowser) {
@@ -615,6 +596,7 @@ try {
         $code = Get-WorkspaceStartupCode -Message $_.Exception.Message
         $message = Get-WorkspaceStartupMessage -Code $code
     }
+    if ($workspaceRoleMismatch) { $message = '다른 실행 권한의 Workspace가 이미 열려 있습니다. 기존 앱에서 [설정 → 앱 종료] 또는 트레이의 [완전 종료]를 선택한 뒤 원하는 Windows 권한으로 다시 실행해 주세요. 창의 X는 완전 종료가 아닙니다. 작업과 개인 설정은 변경하지 않았습니다.' }
     if ($code -in @(37, 38)) {
         # A restricted-token child writes only its own failed Python checks.
         # The parent may present that fresh report without launching Python again.

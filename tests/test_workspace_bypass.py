@@ -139,14 +139,15 @@ class BypassControlTests(unittest.TestCase):
         self.assertEqual('bypassPermissions', restored['permissionMode'])
         self.assertIsNone(restored['permissionModeOverride'])
 
-    def test_busy_or_pending_request_cannot_be_changed_even_with_opt_in(self):
+    def test_explicit_opt_in_connection_can_change_mode_without_consuming_active_work(self):
         bridge = self.bridge(allow=True)
         for attribute, value in (('busy', True), ('pending', {'permission': {}})):
             with patch.object(bridge, attribute, value):
-                with self.assertRaises(BridgeError) as error:
-                    bridge.set_permission_mode('bypassPermissions')
-                self.assertEqual('session_busy', error.exception.code)
-        self.assertFalse(any(row['request'].get('mode') == 'bypassPermissions' for row in self.controls()))
+                state = bridge.set_permission_mode('bypassPermissions')
+                self.assertEqual('bypassPermissions', state['permissionMode'])
+                self.assertEqual(value, getattr(bridge, attribute))
+        self.assertEqual(2, sum(row['request'].get('mode') == 'bypassPermissions' for row in self.controls()))
+        self.assertTrue(all(row['type'] == 'control_request' for row in self.controls()))
 
 
 if __name__ == '__main__':

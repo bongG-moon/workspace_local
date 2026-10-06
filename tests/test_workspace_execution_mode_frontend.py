@@ -2,78 +2,35 @@ import unittest
 from tests import test_workspace_productivity_frontend as frontend
 
 
-@unittest.skipUnless(frontend.NODE, 'Node.js is required for execution settings UI checks')
+@unittest.skipUnless(frontend.NODE, 'Node.js is required for execution privilege display checks')
 class ExecutionModeFrontendTests(unittest.TestCase):
     def run_case(self, script, modules=()):
         return frontend.WorkspaceProductivityFrontendTests.run_case(self, '(async()=>{' + script + '})()', modules)
-    def test_general_mode_has_no_restart_or_background_poll_without_settings(self):
-        self.run_case("""
-          const calls=[];
-          WorkspaceExecutionMode.attach({api:async(...args)=>{calls.push(args);return {current:'normal',supported:true,state:'idle'};},confirm:async()=>true});
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'idle'});
-          assert.equal($('execution-mode-select').value,'normal');
-          assert.equal($('execution-mode-apply').disabled,true);
-          assert.equal(calls.length,0);assert.equal(timers.size,0);
-        """,modules=('execution-mode',))
 
-    def test_admin_confirm_cancel_does_not_request_restart(self):
+    def test_privilege_label_reads_verified_bootstrap_without_polling_or_switch_handlers(self):
         self.run_case("""
-          const calls=[];
-          WorkspaceExecutionMode.attach({api:async(...args)=>calls.push(args),confirm:async()=>false});
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'idle'});
-          $('execution-mode-select').value='administrator';$('execution-mode-select').onchange();
-          await $('execution-mode-apply').onclick();
-          assert.equal(calls.length,0);assert.equal($('execution-mode-apply').disabled,false);
-          assert.match($('execution-mode-description').textContent,/Claude/);
-        """,modules=('execution-mode',))
-
-    def test_selection_restart_does_not_send_work_and_closes_settings_for_capture(self):
-        self.run_case("""
-          const calls=[];
-          WorkspaceExecutionMode.attach({api:async(...args)=>{calls.push(args);return {current:'normal',supported:true,state:'requesting',target:'administrator'};},confirm:async()=>true});
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'idle'});
-          $('settings-dialog').open=true;
-          $('execution-mode-select').value='administrator';$('execution-mode-select').onchange();
-          await $('execution-mode-apply').onclick();
-          assert.equal(calls.length,1);assert.equal(calls[0][0],'/api/execution-mode');
-          assert.equal(calls[0][1].mode,'administrator');assert.equal($('settings-dialog').open,false);
-          assert.equal($('execution-mode-select').disabled,true);assert.equal($('execution-mode-apply').disabled,true);
+          let calls=0;api=async()=>{calls++;};
+          WorkspaceExecutionMode.start('normal');
           assert.match($('execution-mode-current').textContent,/일반/);
-        """,modules=('execution-mode',))
+          assert.equal($('execution-mode-current').dataset.mode,'normal');
+          WorkspaceExecutionMode.start('administrator');
+          assert.match($('execution-mode-current').textContent,/관리자/);
+          assert.equal($('execution-mode-current').dataset.mode,'administrator');
+          openSettings();$('settings-dialog').close();openSettings();
+          assert.equal(calls,0);assert.equal(timers.size,0);
+          assert.equal(typeof WorkspaceExecutionMode.attach,'undefined');
+          assert.equal(typeof WorkspaceExecutionMode.settingsOpened,'undefined');
+        """, modules=('execution-mode',))
 
-    def test_normal_return_does_not_change_claude_approval_mode(self):
+    def test_unknown_privilege_never_claims_administrator_or_changes_any_task(self):
         self.run_case("""
-          const calls=[];let confirms=0;
-          WorkspaceExecutionMode.attach({api:async(...args)=>{calls.push(args);return {current:'administrator',supported:true,state:'requesting',target:'normal'};},confirm:async()=>{confirms++;return true;}});
-          WorkspaceExecutionMode.start({current:'administrator',supported:true,state:'idle'});
-          $('execution-mode-select').value='normal';$('execution-mode-select').onchange();
-          await $('execution-mode-apply').onclick();
-          assert.equal(confirms,0);assert.equal(calls[0][1].mode,'normal');
-          assert.equal(calls.length,1);
-        """,modules=('execution-mode',))
-
-    def test_settings_no_longer_blocks_draft_capture_when_user_reopens_it(self):
-        self.run_case("""
-          let calls=0;
-          WorkspaceExecutionMode.attach({api:async()=>{calls++;},confirm:async()=>true});
+          $('prompt').value='작성 중 요청';attachments=['C:/work/report.csv'];
           $('settings-dialog').open=true;
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'waiting_for_work'});
-          assert.equal($('settings-dialog').open,true);
-          assert.match($('execution-mode-apply-label').textContent,/작업 완료/);
-          assert.match($('execution-mode-message').textContent,/승인·답변/);
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'preserving_drafts'});
-          assert.equal($('settings-dialog').open,false);
-          assert.match($('execution-mode-apply-label').textContent,/작성 내용/);
-          assert.equal(calls,0);
-        """,modules=('execution-mode',))
-
-    def test_transition_failure_restores_controls_without_claiming_elevation(self):
-        self.run_case("""
-          WorkspaceExecutionMode.attach({api:async()=>{},confirm:async()=>true});
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'requesting'});
-          assert.match($('execution-mode-apply-label').textContent,/Windows 권한/);
-          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'idle',phase:'idle',target:null,error:'권한 전환 연결을 준비하지 못했습니다.'});
-          assert.equal($('execution-mode-select').disabled,false);
-          assert.match($('execution-mode-current').textContent,/일반/);
-          assert.match($('execution-mode-message').textContent,/준비하지 못/);
-        """,modules=('execution-mode',))
+          const before=JSON.stringify(active);
+          WorkspaceExecutionMode.start({current:'administrator',state:'requesting'});
+          assert.equal($('execution-mode-current').dataset.mode,'unknown');
+          assert.match($('execution-mode-current').textContent,/확인하지 못/);
+          assert.equal($('settings-dialog').open,true);assert.equal(JSON.stringify(active),before);
+          assert.equal($('prompt').value,'작성 중 요청');assert.equal(attachments[0],'C:/work/report.csv');
+          assert.equal(timers.size,0);
+        """, modules=('execution-mode',))

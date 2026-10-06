@@ -34,7 +34,7 @@ class ControlRoutesTests(unittest.TestCase):
         self.addCleanup(self.app.close)
         self.sid = self.app.create(str(work), True)['id']
         self.item = self.app.get(self.sid)
-        self.bridge = Mock(closed=False, _effort_baselines={})
+        self.bridge = Mock(closed=False, _effort_baselines={}, _control_active=False)
         self.bridge.ready.is_set.return_value = True
         self.item['bridge'] = self.bridge
         self.addCleanup(lambda: self.item.update(bridge=None))

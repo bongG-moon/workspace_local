@@ -60,12 +60,11 @@ class WorkspaceDiagnosticContractTests(unittest.TestCase):
     def test_diagnostic_native_calls_are_allowlisted_and_never_relaunch(self):
         script = SCRIPT.read_text(encoding="utf-8-sig")
         self.assertEqual(
-            {"InspectCurrentToken", "ValidateNormalProcess", "ValidateSourceToken", "ValidateNormalTokenCandidate",
-             "ValidateRestrictedSource", "ValidateAdministratorProcess", "IsUacDisabled"},
+            {"InspectCurrentToken", "ValidateNormalProcess", "ValidateAdministratorProcess"},
             set(re.findall(r"\[CompanyAgent\.WorkspaceNormalToken\]::(\w+)\s*\(", script)),
         )
         self.assertEqual(
-            {"GetCurrentProcess", "OpenProcessToken", "ReadLinkedToken", "ReadToken"},
+            set(),
             set(re.findall(r"\.GetMethod\('([^']+)'", script)),
         )
         self.assertNotRegex(
@@ -130,7 +129,7 @@ finally { $identity.Dispose() }
             "process64Bit", "stage", "reason", "nativeCode", "notTested",
             "executionPolicy", "scriptEvidence", "originalLaunchObserved", "nextStep",
         }, set(report))
-        self.assertEqual("ws33-56", report["diagnosticVersion"])
+        self.assertEqual("ws33-57", report["diagnosticVersion"])
         self.assertEqual("workspace-0.23.20", report["targetSource"])
         self.assertEqual(set(SOURCES), set(report["files"]))
         self.assertTrue(set(report["files"].values()) <= {"matched", "missing", "different_version"})

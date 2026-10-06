@@ -11,7 +11,7 @@ globalThis.WorkspaceInlineControls = (() => {
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
   const stopBlocked = () => !!globalThis.WorkspaceStop?.blocked();
-  const blocked = () => !active || stopBlocked() || busyStates.has(active.state) || sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed;
+  const blocked = (kind="model") => kind==="permission" ? permissionConnectionLocked() : connectionLocked();
   function close({focus=false} = {}) {
     const old = view; view = null; panel.hidden = true;
     Object.values(buttons).forEach(button => button.setAttribute("aria-expanded", "false"));
@@ -19,7 +19,7 @@ globalThis.WorkspaceInlineControls = (() => {
   }
   function status(text, isError=false, source=context()) {
     if (!same(source)) return;
-    notice = {...source,text,isError,restore:!!controlRestoreState()}; render();
+    notice = {...source,text,isError,restore:!!controlRestoreState(),pendingPermission:source.kind==="permission"&&active?.connection?.permissionModeChangePending===true}; render();
   }
   function selectedOption(kind,value) {
     const info=active?.connection||{};
@@ -36,15 +36,15 @@ globalThis.WorkspaceInlineControls = (() => {
     const info = active?.connection || {};
     const model = active?.modelOverride || info.modelOverride || info.model;
     const effort = info.effortOverride && info.effortSupport !== "confirmed" ? `요청 ${info.effortOverride}` : info.effort || (info.effortOverride ? `요청 ${info.effortOverride}` : active ? "미확인" : "기존 설정");
-    const permission = info.permissionModeLabel || named(permissionOptions(), permissionOptionValue(info.permissionMode || info.permissionModeOverride)) || "기존 설정";
+    const permission = info.permissionModeChangePending===true&&!info.permissionMode ? "변경 확인 중" : info.permissionModeLabel || named(permissionOptions(), permissionOptionValue(info.permissionMode || info.permissionModeOverride)) || "기존 설정";
     const values = {model:named(modelOptions(),model) || "기존 설정", effort, permission};
     for (const [kind,button] of Object.entries(buttons)) {
       button.querySelector("strong").textContent = values[kind]; button.title = titles[kind] + ": " + values[kind];
-      button.disabled = appClosed || pending || (active && blocked());
+      button.disabled = appClosed || pending || (active && blocked(kind));
       button.classList.toggle("bypass-active",kind==="permission"&&info.permissionMode==="bypassPermissions");
       button.setAttribute("aria-expanded", String(view?.kind === kind && !panel.hidden));
     }
-    if (view && (!same(view) || appClosed || stopBlocked() || (active && busyStates.has(active.state)))) close();
+    if (view && (!same(view) || appClosed || stopBlocked() || (active && busyStates.has(active.state) && (view.kind!=="permission" || !pending&&blocked("permission"))))) close();
     if(view&&!panel.hidden&&view.optionSignature&&view.optionSignature!==optionSignature()){
       const input=extra.querySelector("input"),inputText=input?.value,inputFocused=input===document.activeElement;
       const focused=[...options.children].find(button=>button===document.activeElement)?.dataset.runtimeValue;
@@ -62,11 +62,12 @@ globalThis.WorkspaceInlineControls = (() => {
       button.setAttribute("aria-pressed",String(selected));button.children[button.children.length-1].textContent=selected?"✓":"";
     }
     if(same(notice)&&notice.restore&&!controlRestoreState())notice=null;
+    if(same(notice)&&notice.pendingPermission&&info.permissionModeChangePending!==true)notice=null;
     const node = $("composer-control-status"), visibleNotice = same(notice) ? notice : null;
-    const changing = modelChanging || permissionChanging || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
+    const changing = modelChanging || permissionChanging || info.permissionModeChangePending===true || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
     const restoreText = restore ? (issue?.message || "이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.") : "";
     const text = stopBlocked() ? "중지 상태를 확인한 뒤 모델·Effort·승인 모드를 바꿀 수 있어요." : connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
-      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
+      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? info.capabilities?.setPermissionModeWhileRunning===true ? "작업 중에도 승인 모드는 바꿀 수 있어요. 모델·Effort는 요청이 끝난 뒤 변경할 수 있어요." : "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
     node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || visibleNotice?.isError) && !changing));
     if (restore && !changing && !connectionPreparing) {
       const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
@@ -84,7 +85,7 @@ globalThis.WorkspaceInlineControls = (() => {
     copy.append(el("strong", label)); if (description) copy.append(el("small", description));
     button.append(copy,el("span", selected ? "✓" : "")); button.setAttribute("aria-pressed", String(selected));
     button.dataset.runtimeValue=value===null?"":value;
-    button.disabled = !enabled || pending; button.onclick = () => apply(value); options.append(button);
+    button.disabled = !enabled || pending || blocked(view?.kind); button.onclick = () => apply(value); options.append(button);
   }
   function draw() {
     if (!view || !same(view)) return close();
@@ -115,7 +116,7 @@ globalThis.WorkspaceInlineControls = (() => {
     } else if (view.kind === "permission") {
       const can = info.capabilities?.setPermissionMode === true;
       message("선택한 방식은 이 업무에 적용해요. 기존 개인·회사 정책은 바꾸지 않습니다.");
-      option(null,"기존 설정 사용",info.permissionModeResetRequiresReconnect ? "다음 요청에서 기존 승인 설정을 다시 불러옵니다." : "원래 승인 방식을 사용합니다.",!info.permissionModeOverride,info.permissionModeResetAvailable !== false && (can || !!info.permissionModeOverride || hasControlRestoreIssue("permissionMode")));
+      option(null,"기존 설정 사용",info.permissionModeResetRequiresReconnect ? "다음 요청에서 기존 승인 설정을 다시 불러옵니다." : "원래 승인 방식을 사용합니다.",!info.permissionModeOverride,info.permissionModeResetAvailable !== false && !(busyStates.has(active.state)&&info.permissionModeResetRequiresReconnect===true) && (can || !!info.permissionModeOverride || hasControlRestoreIssue("permissionMode")));
       for (const row of permissionOptions()) option(row.value,(row.risk === 'high' ? '⚠ ' : '')+(row.displayName || row.value),row.description || row.value,
         permissionOptionValue(info.permissionMode || info.permissionModeOverride) === row.value,can);
       if (!can) message("현재 연결은 승인 모드 변경을 제공하지 않아요. 기존 승인 흐름을 유지합니다.");
@@ -164,7 +165,7 @@ globalThis.WorkspaceInlineControls = (() => {
   }
   async function open(kind, intent={}) {
     if (view?.kind === kind && !intent.commandDraft && !intent.cycle) return close({focus:true});
-    if (appClosed || pending || (active && blocked())) return;
+    if (appClosed || pending || (active && blocked(kind))) return;
     globalThis.WorkspaceComposer?.close(); view = {...context(),kind,...intent}; panel.hidden = false; notice = null; render();
     const opened = view;
     $("runtime-panel-title").textContent = titles[kind];
@@ -192,7 +193,7 @@ globalThis.WorkspaceInlineControls = (() => {
     }
   }
   async function apply(value, request=view) {
-    if (!request || !same(request) || blocked() || pending) return null;
+    if (!request || !same(request) || blocked(request.kind) || pending) return null;
     const source = {...request}; let result;
     pending = true; failure(""); render();
     for (const node of options.children) node.disabled = true;
@@ -242,7 +243,7 @@ globalThis.WorkspaceInlineControls = (() => {
     return true;
   }
   async function nextPermission(source) {
-    if (!same(source) || blocked() || pending) return;
+    if (!same(source) || blocked("permission") || pending) return;
     const info = active.connection || {}, supported = new Set(permissionOptions().map(row => row.value));
     const cycle = [...new Set((Array.isArray(info.permissionModeCycle) ? info.permissionModeCycle : []).map(mode=>permissionOptionValue(mode)))]
       .filter(mode => mode !== 'bypassPermissions' && supported.has(mode));
@@ -255,7 +256,7 @@ globalThis.WorkspaceInlineControls = (() => {
   }
   async function cyclePermission() {
     const source = {...context(),kind:"permission",cycle:true};
-    if (!active || blocked() || pending) return;
+    if (!active || blocked("permission") || pending) return;
     if (!active.trusted || active.connection?.connected !== true) {
       const opened = await open("permission",{cycle:true});
       if (!opened || view !== opened || !same(source) || active?.connection?.connected !== true || !active.trusted) return;
@@ -269,7 +270,7 @@ globalThis.WorkspaceInlineControls = (() => {
       event.preventDefault(); close(); return true;
     }
     if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.keyCode === 229
-        || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || appClosed || stopBlocked() || busyStates.has(active.state)) return false;
+        || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || blocked("permission")) return false;
     event.preventDefault();
     if (!event.repeat) void cyclePermission();
     return true;

@@ -71,6 +71,9 @@ internal sealed class DesktopWindow : Form
     private readonly bool background;
     private readonly bool adminApiBridge;
     private readonly SemaphoreSlim apiGate = new SemaphoreSlim(4, 4);
+    // Event long-polls can last 20 seconds, including requests from a view
+    // that was just switched. They must never occupy command/control slots.
+    private readonly SemaphoreSlim eventGate = new SemaphoreSlim(4, 4);
     private WebView2 view;
     private Panel recovery;
     private bool exiting, started, initializing, controlReaderStarted;
@@ -263,7 +266,9 @@ internal sealed class DesktopWindow : Form
             (headers.Contains("Sec-Fetch-Site") && headers.GetHeader("Sec-Fetch-Site") == "cross-site") ||
             (e.Request.Method != "GET" && e.Request.Method != "POST"))
         { e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", ""); return; }
-        await apiGate.WaitAsync();
+        var gate = e.Request.Method == "GET" && new Uri(e.Request.Uri).AbsolutePath == "/api/events"
+            ? eventGate : apiGate;
+        await gate.WaitAsync();
         MemoryStream content = null;
         Stream upload = null;
         int stage = 1;
@@ -358,7 +363,7 @@ internal sealed class DesktopWindow : Form
                 e.Response = environment.CreateWebResourceResponse(error, 502, "Gateway failure", "Content-Type: application/json; charset=utf-8\r\n");
             }
         }
-        finally { if (upload != null) upload.Dispose(); if (content != null) content.Dispose(); apiGate.Release(); }
+        finally { if (upload != null) upload.Dispose(); if (content != null) content.Dispose(); gate.Release(); }
     }
 
     private void Download(object sender, CoreWebView2DownloadStartingEventArgs e)

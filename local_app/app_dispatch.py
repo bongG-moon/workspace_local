@@ -159,7 +159,8 @@ class DispatchController:
             return '현재 업무의 승인 또는 답변을 기다립니다.'
         if (item.get('verification') or {}).get('state') == 'needs-review':
             return '현재 업무의 결과 확인을 기다립니다.'
-        if item.get('_connecting') or item.get('_modelUpdating'):
+        if (item.get('_connecting') or item.get('_modelUpdating') or item.get('_permissionUpdating')
+                or getattr(item.get('bridge'), '_control_active', False)):
             return '연결 또는 설정 변경이 끝나기를 기다립니다.'
         if item.get('state') in {'starting', 'running'}:
             return '현재 업무가 끝난 뒤 순서대로 실행합니다.'
@@ -215,6 +216,8 @@ class DispatchController:
                     if (item is None or item.get('_removingFromList') or
                             self.app.session_visibility.contains(sid)):
                         continue
+                    if item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False):
+                        continue  # Keep queued work unclaimed until a settings ACK resolves.
                     pending = self.steering.get(sid)
                     if pending:
                         bridge = item.get('bridge')
@@ -281,7 +284,7 @@ class DispatchController:
             if action in {'enqueue', 'steer'}:
                 if action == 'steer' and self.app.demo:
                     raise ValueError('체험 모드에서는 끝나고 이어서 보내기를 사용해 주세요.')
-                if item.get('_dispatchClaim') or item.get('_connecting') or item.get('_modelUpdating'):
+                if item.get('_dispatchClaim') or item.get('_connecting') or item.get('_modelUpdating') or item.get('_permissionUpdating'):
                     raise ValueError('연결을 준비하고 있습니다. 잠시 뒤 다시 보내 주세요.')
                 if action == 'steer' and sid in self.steering:
                     raise ValueError('앞서 보낸 요청으로 전환하고 있습니다. 잠시 기다려 주세요.')

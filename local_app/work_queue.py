@@ -477,7 +477,8 @@ class WorkQueue:
                     session_state.get('state') not in {'idle', 'done'} or session_state.get('trusted') is not True or
                     session_state.get('requests') or session_state.get('choice') or
                     (session_state.get('verification') or {}).get('state') == 'needs-review' or
-                    session_state.get('_connecting') or session_state.get('_modelUpdating')):
+                    session_state.get('_connecting') or session_state.get('_modelUpdating') or
+                    session_state.get('_permissionUpdating')):
                 return None
             if any(row['sessionId'] == sid and row['status'] in {'dispatching', 'submitted', 'needs_review'} for row in self.data['queue']):
                 return None

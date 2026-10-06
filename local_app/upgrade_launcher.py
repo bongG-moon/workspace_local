@@ -87,11 +87,11 @@ def checked_health(client, *, demo, target_version, execution_mode=None):
     if execution_mode is not None:
         from .execution_mode import checked_mode, EXECUTION_MODE_PROTOCOL
         checked_mode(execution_mode)
+    if execution_mode is not None and value.get('executionMode') in {'normal', 'administrator'} and value['executionMode'] != execution_mode:
+        raise HandoffError('다른 실행 권한의 앱이 열려 있습니다. 기존 앱에서 완전 종료한 뒤 원하는 Windows 권한으로 다시 실행해 주세요.')
     policy = value.get('executionModeProtocol')
-    newer_policy = (execution_mode is not None and type(policy) is int and policy > EXECUTION_MODE_PROTOCOL)
     mode_change = current == target and execution_mode is not None and (
-        type(policy) is not int or policy < EXECUTION_MODE_PROTOCOL or
-        not newer_policy and value.get('executionMode') in {'normal','administrator'} and value['executionMode'] != execution_mode)
+        type(policy) is not int or policy < EXECUTION_MODE_PROTOCOL)
     if current >= target and not mode_change:
         return value, False
     return value, True
@@ -333,8 +333,7 @@ def main():
     parser.add_argument('--request-id')
     parser.add_argument('--demo', action='store_true')
     parser.add_argument('--no-browser', action='store_true')
-    parser.add_argument('--execution-mode', choices=['normal', 'administrator'], default='normal')
-    parser.add_argument('--target-execution-mode', choices=['normal', 'administrator'])
+    parser.add_argument('--execution-mode', choices=['auto', 'normal', 'administrator'], default='auto')
     args = parser.parse_args()
     if args.preflight:
         try:
@@ -361,19 +360,19 @@ def main():
                 return 0
             report('accepted')
             from .startup import verify_process
-            verify_process(execution_mode=args.execution_mode)
+            execution_mode = verify_process(execution_mode=args.execution_mode)
             preflight(no_browser=args.no_browser)
             runtime = runtime_state / 'runtime.json'
             origin, token = endpoint(runtime)
             from .server import WORKSPACE_VERSION
             outcome = transfer(Client(origin, token), runtime, demo=args.demo, target_version=WORKSPACE_VERSION,
-                               execution_mode=args.target_execution_mode or args.execution_mode,
+                               execution_mode=execution_mode,
                                request_id=args.request_id, no_browser=args.no_browser,
                                legacy_confirm=lambda: run_helper('Confirm-WorkspaceLegacyUpgrade'),
                                on_wait=lambda: run_helper('Show-WorkspaceUpgradeWaiting'))
             report(outcome)
             if outcome == 'closed':
-                launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=args.target_execution_mode or args.execution_mode)
+                launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=execution_mode)
             elif outcome in {'failed', 'expired'} and not args.no_browser:
                 run_helper('Show-WorkspaceUpgradeFailure')
             return 0

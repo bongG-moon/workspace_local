@@ -51,6 +51,8 @@ function submit(){submitted++;return Promise.resolve();}
 function chooseFolder(){folderChoices++;}
 function refreshResults(){resultRefreshes++;}
 function controlRestoreState(){return false;}
+function connectionLocked(){return !active||busyStates.has(active.state)||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed;}
+function permissionConnectionLocked(){return !active||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||appClosed||active.connection?.permissionModeChangePending===true||(busyStates.has(active.state)&&(active.connection?.connected!==true||active.connection?.capabilities?.setPermissionModeWhileRunning!==true));}
 function setStatus(state){if(active)active.state=state;input.readOnly=sending||!!choiceSubmission||appClosed;}
 function error(message){}
 function refreshSessionMeta(){return Promise.resolve();}
@@ -80,7 +82,9 @@ const inline=read('inline-controls.js');start=inline.indexOf('  function keydown
 assert.ok(start>=0&&end>start,'Cannot locate shipped inline key handler');
 const inlineStopGate=inline.match(/^  const stopBlocked = .*;$/m)?.[0];
 assert.ok(inlineStopGate,'Cannot locate shipped inline stop gate');
-vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inlineStopGate}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
+const inlineControlGate=inline.match(/^  const blocked = .*;$/m)?.[0];
+assert.ok(inlineControlGate,'Cannot locate shipped inline control gate');
+vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inlineStopGate}${inlineControlGate}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
 vm.runInContext(read('input-keys.js'),ctx);
 vm.runInContext(read('chat-shortcuts.js'),ctx);
 const app=read('app.js');start=app.indexOf('$("composer").onsubmit=');end=app.indexOf('$("folder-form").onsubmit=',start);
@@ -146,6 +150,20 @@ class WorkspaceChatShortcutTests(unittest.TestCase):
           set('유지할 입력');press('Tab',{shiftKey:true});assert.equal(modeCycles,1);assert.equal(submitted,0);
           active.state='running';inlineOpen=true;press('Escape');assert.equal(inlineOpen,false);assert.equal(calls.length,0);
           assert.equal(input.value,'유지할 입력');
+        """)
+
+    def test_permission_shortcuts_work_during_active_work_but_model_shortcut_waits(self):
+        self.run_case(r"""
+          active.state='running';set('작성한 후속 요청');
+          press('m',{altKey:true});assert.equal(modeCycles,0);
+          active.connection={connected:true,capabilities:{setPermissionModeWhileRunning:true}};
+          press('m',{altKey:true});assert.equal(modeCycles,1);
+          press('Tab',{shiftKey:true});assert.equal(modeCycles,2);
+          press('p',{altKey:true});assert.equal(editorOpened.length,0);
+          active.connection.permissionModeChangePending=true;
+          press('m',{altKey:true});press('Tab',{shiftKey:true});assert.equal(modeCycles,2);
+          assert.equal(submitted,0);assert.equal(queued.length,0);assert.equal(calls.length,0);
+          assert.equal(input.value,'작성한 후속 요청');assert.equal(active.state,'running');
         """)
 
     def test_queue_chord_bypasses_completion_and_keeps_three_second_window(self):

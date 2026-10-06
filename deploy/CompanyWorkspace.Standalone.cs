@@ -74,7 +74,7 @@ namespace CompanyAgent {
                 else if (name == "--demo") value.Demo = true;
                 else if (name == "--verify-only") value.VerifyOnly = true;
                 else if (name == "--execution-mode") {
-                    if (++i >= args.Length || (args[i] != "normal" && args[i] != "administrator")) throw new StandaloneFailure(50);
+                    if (++i >= args.Length || (args[i] != "auto" && args[i] != "normal" && args[i] != "administrator")) throw new StandaloneFailure(50);
                     value.ExecutionMode = args[i];
                 }
                 else if (name == "--state" || name == "--cache-root" || name == "--python") {

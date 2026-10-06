@@ -121,7 +121,7 @@ namespace CompanyAgent
                 !token.IsAdministrator;
         }
 
-        // Explicit app-owned administrator mode still requires the same
+        // Inherited Windows administrator rights still require the same
         // interactive user/session. A flag never substitutes for a real token.
         public static bool ValidateAdministratorProcess(WorkspaceTokenSnapshot token,
             string expectedSid, int expectedSession)

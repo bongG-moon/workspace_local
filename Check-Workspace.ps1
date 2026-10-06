@@ -3,7 +3,7 @@ param()
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $report = [ordered]@{
-    diagnosticVersion = 'ws33-56'
+    diagnosticVersion = 'ws33-57'
     targetSource = 'workspace-0.23.20'
     status = 'checking'
     sourceMatches = $false
@@ -12,7 +12,7 @@ $report = [ordered]@{
     current = $null
     linked = $null
     predictedGuard = 'not_checked'
-    executionMode = 'normal'
+    executionMode = 'unverified'
     uacEnabled = $null
     process64Bit = [Environment]::Is64BitProcess
     stage = 'source_check'
@@ -25,9 +25,9 @@ $report = [ordered]@{
     notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = 'fbf665c84cadd7c48766acd840d303fcc0b0bf909ac27374cfa8187b000bad80'
-    'deploy/CompanyWorkspace.Startup.ps1' = '2da6e378d6b3ec66c14305a7fa7ed173e89097a4723da8d0ce3471747afd8930'
-    'deploy/CompanyWorkspace.NormalToken.cs' = 'd7a60f5533f4743647798feec9f40e50f50c064522d1688c7105a164b8c0e588'
+    'deploy/Start-CompanyWorkspace.ps1' = '724cc4a687d539327c31b13eea12e2df44f0d115bb07ecd893a3b5c12669d1dc'
+    'deploy/CompanyWorkspace.Startup.ps1' = '4a6326746a337c5cbff9904a8f52a85065f6022bac7fb82c17072510f50c3a10'
+    'deploy/CompanyWorkspace.NormalToken.cs' = 'e16198c7f9b4c62155e18810d8136f9331dbe54d3a82ab9d9301a3c2e332bb2c'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }
 function Safe-Snapshot($Snapshot, $Context) {
@@ -118,7 +118,7 @@ try {
         throw 'DIAGNOSTIC_ALREADY_LOADED_TYPE'
     }
 
-    # Only the exact reviewed release helpers are loaded. Never run the launcher.
+    # Only exact reviewed helpers are loaded. Inspect the inherited token only.
     . (Join-Path $PSScriptRoot 'deploy/CompanyWorkspace.Startup.ps1')
     $report.stage = 'identity_check'
     $context = Get-WorkspaceVerifiedContext
@@ -128,45 +128,9 @@ try {
     $current = [CompanyAgent.WorkspaceNormalToken]::InspectCurrentToken()
     $report.current = Safe-Snapshot $current $context
     $normal = [CompanyAgent.WorkspaceNormalToken]::ValidateNormalProcess($current, $context.sid, $context.sessionId)
-    $sourceAllowed = [CompanyAgent.WorkspaceNormalToken]::ValidateSourceToken($current, $context.sid, $context.sessionId)
-    $restrictedSource = [CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($current, $context.sid, $context.sessionId, [CompanyAgent.WorkspaceNormalToken]::IsUacDisabled())
-    $report.executionMode = Read-WorkspaceExecutionMode -StateRoot (Join-Path $context.localAppData 'CompanyAgent\local-ui')
-    if ($report.executionMode -eq 'administrator') {
-        $adminAccepted = [CompanyAgent.WorkspaceNormalToken]::ValidateAdministratorProcess($current, $context.sid, $context.sessionId)
-        $report.predictedGuard = $(if ($adminAccepted) { 'administrator_process_accepted' } elseif ($normal) { 'administrator_elevation_required_launch_not_tested' } else { 'WS33_current_token_rejected' })
-    } elseif (-not $context.isAdministrator) {
-        $report.predictedGuard = $(if ($normal) { 'normal_process_accepted' } else { 'WS33_current_token_rejected' })
-    } elseif ($restrictedSource) {
-        $report.predictedGuard = 'restricted_candidate_required_launch_not_tested'
-    } elseif (-not $sourceAllowed) {
-        $report.predictedGuard = 'WS33_source_not_same_user_split_token'
-    } else {
-        # Query current and linked tokens only. No primary-token creation,
-        # impersonation, privilege change, or process launch is performed.
-        $report.stage = 'linked_token'
-        $native = [CompanyAgent.WorkspaceNormalToken]
-        $flags = [Reflection.BindingFlags]'Static,NonPublic'
-        $currentHandle = $null
-        $linkedHandle = $null
-        try {
-            $pseudoHandle = $native.GetMethod('GetCurrentProcess', $flags).Invoke($null, $null)
-            $tokenArgs = [object[]]@($pseudoHandle, [uint32]10, $null)
-            $opened = $native.GetMethod('OpenProcessToken', $flags).Invoke($null, $tokenArgs)
-            $currentHandle = $tokenArgs[2]
-            if (-not $opened) {
-                $report.nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-                throw 'DIAGNOSTIC_TOKEN_OPEN_FAILED'
-            }
-            $linkedHandle = $native.GetMethod('ReadLinkedToken', $flags).Invoke($null, [object[]]@($currentHandle))
-            $linked = $native.GetMethod('ReadToken', $flags).Invoke($null, [object[]]@($linkedHandle))
-            $report.linked = Safe-Snapshot $linked $context
-            $linkedAccepted = [CompanyAgent.WorkspaceNormalToken]::ValidateNormalTokenCandidate($linked, $context.sid, $context.sessionId)
-            $report.predictedGuard = $(if ($linkedAccepted) { 'linked_candidate_accepted_launch_not_tested' } else { 'WS33_linked_token_not_normal' })
-        } finally {
-            if ($linkedHandle) { $linkedHandle.Dispose() }
-            if ($currentHandle) { $currentHandle.Dispose() }
-        }
-    }
+    $adminAccepted = [CompanyAgent.WorkspaceNormalToken]::ValidateAdministratorProcess($current, $context.sid, $context.sessionId)
+    $report.executionMode = Get-WorkspaceExecutionMode -Context $context
+    $report.predictedGuard = $(if ($report.executionMode -eq 'administrator' -and $adminAccepted) { 'administrator_process_accepted' } elseif ($report.executionMode -eq 'normal' -and $normal) { 'normal_process_accepted' } else { 'WS33_current_token_rejected' })
     $report.status = 'observed'
 } catch {
     $failure = $_.Exception
