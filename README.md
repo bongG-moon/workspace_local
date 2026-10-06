@@ -4,7 +4,7 @@
 
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-vbs.zip)**
 
-[0.23.20 최신 수정 안내](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md) · [응답성·승인 모드 검증](docs/VALIDATION_RESPONSIVENESS_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.20 최신 수정 안내](docs/VALIDATION_UI_POLISH_0.23.20.md) · [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
@@ -19,6 +19,9 @@
 
 ## 0.23.20 동일 버전 수정
 
+- 모델·Effort·승인 화살표를 중앙 정렬된 SVG 아이콘으로 바꾸었습니다. 선택창은 누른 버튼 바로 위에 열리고, 창 크기나 목록 높이가 바뀌면 화면 안으로 위치와 너비를 조정합니다.
+- 실행 중 입력창 하단의 구분선 여백과 두 안내 문장 사이 간격을 줄였습니다. 글자와 버튼 크기, 지금 반영·끝나고 이어서 동작은 유지합니다.
+- 작은 한글 알림 글꼴의 가장자리에 색 번짐이 생기던 렌더링 방식을 개선했습니다. 기존 글꼴·크기·색상과 Windows 알림 설정은 유지합니다. 100~200% 배율 렌더링은 확인했으며, 현재 PC에서 억제된 실제 배너 표시와 물리적 다중 모니터 이동은 미검증입니다.
 - 실행 권한은 **Windows에서 프로그램을 열 때의 권한을 그대로 상속**합니다. 관리자 실행은 EXE를 우클릭해 **관리자 권한으로 실행**하고, 일반 Windows 환경에서 더블클릭하면 일반 권한을 사용합니다. 관리자 터미널에서 열면 관리자 권한을 유지합니다.
 - 앱 설정의 일반·관리자 선택과 전환 버튼을 제거했습니다. 이전 선택 파일은 읽거나 다시 저장하지 않으며, 앱이 자동으로 승격·권한 축소를 시도하지 않습니다. [Windows 실행 권한 안내](docs/WORKSPACE_EXECUTION_MODE.md)
 - 앱과 Claude 및 그 도구는 같은 권한으로 실행하며 같은 사용자·로그인 세션과 실제 토큰을 확인합니다. 다른 권한으로 다시 열려면 기존 앱을 **완전 종료**하세요. 창의 X는 트레이에 남기므로 완전 종료가 아닙니다.
@@ -28,7 +31,7 @@
 - CLI 확인·실행·업데이트의 시간 초과와 취소 후 PowerShell이 남을 수 있는 경로를 정리했습니다. 앱이 생성한 프로세스만 관리하며, 종료 정리가 늦어지면 재시도할 수 있도록 창과 트레이를 유지합니다.
 - 예약 대기 중 과거 업무 전체를 반복 검사하던 계산을 줄였습니다. 실제 PowerShell 기반 연결·작업·중지·후속 요청·연결 종료를 8회 반복해 연결 종료 후 잔류 프로세스 0개를 확인했습니다.
 
-같은 버전 수정 파일은 위 링크에서 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다. **기존 앱을 트레이에서 완전 종료한 뒤 수정본을 실행하세요.** 실행 중인 동일 버전 프로세스는 자동 교체되지 않고 기존 창을 재사용합니다. [최초 검증](docs/VALIDATION_0.23.20.md)과 [이전 전환 대기 수정 기록](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md)은 당시 결과를 보존한 자료이며, 최신 파일의 검증과 해시는 [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md)을 기준으로 확인합니다.
+같은 버전 수정 파일은 위 링크에서 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다. **기존 앱을 트레이에서 완전 종료한 뒤 수정본을 실행하세요.** 실행 중인 동일 버전 프로세스는 자동 교체되지 않고 기존 창을 재사용합니다. 최신 화면 검증은 [입력 메뉴·알림·간격 검증](docs/VALIDATION_UI_POLISH_0.23.20.md), 최신 배포 파일의 해시는 [Release의 SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/SHA256SUMS.txt)를 기준으로 확인하세요. [최초 검증](docs/VALIDATION_0.23.20.md), [전환 대기 수정](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md), [반응성·승인 모드](docs/VALIDATION_RESPONSIVENESS_0.23.20.md), [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md)에 있는 당시 검증 결과와 해시는 기록으로 보존합니다.
 
 ## 0.23.19 변경
 

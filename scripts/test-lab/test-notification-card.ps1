@@ -10,6 +10,7 @@ $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $testExe = Join-Path $OutputDirectory 'TestNotificationCard.exe'
 $source = Join-Path $PSScriptRoot 'test-notification-card.cs'
 $arguments = @('/nologo','/target:exe','/platform:x64','/codepage:65001',('/out:' + $testExe),
+    ('/win32manifest:' + (Join-Path $repoRoot 'deploy\CompanyWorkspace.Standalone.manifest')),
     '/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll',
     '/reference:System.Windows.Forms.dll','/reference:Accessibility.dll',$source)
 $compileOutput = & $compiler @arguments 2>&1

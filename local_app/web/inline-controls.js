@@ -7,6 +7,63 @@ globalThis.WorkspaceInlineControls = (() => {
   const titles = {model:"모델 선택", effort:"Effort · 사고 수준", permission:"승인 모드"};
   const restoreKind = control => control === "permissionMode" ? "permission" : control;
   let view = null, pending = false, notice = null, trustReturn = null, preparation = null;
+  let positionFrame = null, positionObserver = null, watchingPosition = false;
+  function placePanel() {
+    if (!view || panel.hidden || !panel.offsetParent) return;
+    const anchor = buttons[view.kind], parent = panel.offsetParent;
+    const rect = anchor.getBoundingClientRect(), origin = parent.getBoundingClientRect();
+    const viewport = globalThis.visualViewport;
+    const viewportLeft = viewport?.offsetLeft || 0, viewportTop = viewport?.offsetTop || 0;
+    const viewportRight = viewportLeft + (viewport?.width || document.documentElement.clientWidth);
+    const viewportBottom = viewportTop + (viewport?.height || document.documentElement.clientHeight);
+    // main clips overflow: keep the menu inside both the viewport and the chat pane.
+    const clip = panel.closest("main")?.getBoundingClientRect();
+    const leftEdge = Math.max(viewportLeft, clip?.left ?? viewportLeft) + 10;
+    const rightEdge = Math.min(viewportRight, clip?.right ?? viewportRight) - 10;
+    const topEdge = Math.max(viewportTop, clip?.top ?? viewportTop) + 10;
+    const bottomEdge = Math.min(viewportBottom, clip?.bottom ?? viewportBottom) - 10;
+    if (rect.width <= 0 || rightEdge <= leftEdge || bottomEdge <= topEdge) return;
+    const gap = 8, width = Math.min(430, rightEdge - leftEdge);
+    const above = Math.max(0, rect.top - gap - topEdge), below = Math.max(0, bottomEdge - rect.bottom - gap);
+    const useBelow = above < 160 && below > above;
+    panel.style.width = `${width}px`;
+    panel.style.maxHeight = `${Math.min(430, useBelow ? below : above)}px`;
+    const height = panel.getBoundingClientRect().height;
+    const left = Math.max(leftEdge, Math.min(rect.left, rightEdge - width));
+    const top = Math.max(topEdge, Math.min(useBelow ? rect.bottom + gap : rect.top - gap - height, bottomEdge - height));
+    panel.style.left = `${left - origin.left - parent.clientLeft + parent.scrollLeft}px`;
+    panel.style.top = `${top - origin.top - parent.clientTop + parent.scrollTop}px`;
+  }
+  function schedulePosition() {
+    if (!view || panel.hidden || !panel.getBoundingClientRect || positionFrame !== null) return;
+    positionFrame = requestAnimationFrame(() => { positionFrame = null; placePanel(); });
+  }
+  function positionOnScroll(event) {
+    if (!panel.contains(event.target)) schedulePosition();
+  }
+  function watchPosition() {
+    if (watchingPosition) return schedulePosition();
+    watchingPosition = true;
+    globalThis.addEventListener?.("resize", schedulePosition);
+    globalThis.addEventListener?.("scroll", positionOnScroll, true);
+    globalThis.visualViewport?.addEventListener("resize", schedulePosition);
+    globalThis.visualViewport?.addEventListener("scroll", schedulePosition);
+    if (typeof ResizeObserver !== "undefined") {
+      positionObserver = new ResizeObserver(schedulePosition);
+      for (const node of [panel, $("composer"), panel.closest("main"), ...Object.values(buttons)]) {
+        if (node) positionObserver.observe(node);
+      }
+    }
+    schedulePosition();
+  }
+  function unwatchPosition() {
+    if (positionFrame !== null) cancelAnimationFrame(positionFrame);
+    positionFrame = null; positionObserver?.disconnect(); positionObserver = null; watchingPosition = false;
+    globalThis.removeEventListener?.("resize", schedulePosition);
+    globalThis.removeEventListener?.("scroll", positionOnScroll, true);
+    globalThis.visualViewport?.removeEventListener("resize", schedulePosition);
+    globalThis.visualViewport?.removeEventListener("scroll", schedulePosition);
+  }
   const context = () => ({id:active?.id || null, selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
@@ -14,6 +71,7 @@ globalThis.WorkspaceInlineControls = (() => {
   const blocked = (kind="model") => kind==="permission" ? permissionConnectionLocked() : connectionLocked();
   function close({focus=false} = {}) {
     const old = view; view = null; panel.hidden = true;
+    unwatchPosition();
     Object.values(buttons).forEach(button => button.setAttribute("aria-expanded", "false"));
     if (focus && old && same(old)) buttons[old.kind].focus();
   }
@@ -73,9 +131,10 @@ globalThis.WorkspaceInlineControls = (() => {
       const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
       button.disabled=blocked()||pending;button.onclick=()=>recover();node.append(button);
     }
+    if (view && !panel.hidden) watchPosition();
   }
-  function message(text) { $("runtime-panel-note").textContent = text; }
-  function failure(text) { $("runtime-panel-error").textContent = text; $("runtime-panel-error").hidden = !text; }
+  function message(text) { $("runtime-panel-note").textContent = text; schedulePosition(); }
+  function failure(text) { $("runtime-panel-error").textContent = text; $("runtime-panel-error").hidden = !text; schedulePosition(); }
   function action(label, handler) {
     const button = el("button", label, "quiet-button runtime-panel-action"); button.type = "button";
     button.onclick = handler; extra.append(button); return button;

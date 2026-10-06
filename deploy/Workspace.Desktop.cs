@@ -919,11 +919,21 @@ internal sealed class WorkspaceNotificationCard : Form
         }
     }
 
+    private static void PrepareText(Graphics graphics)
+    {
+        // The opaque card is painted through off-screen WinForms buffers. LCD
+        // subpixel (ClearType) masks acquire colored, broken-looking stems when
+        // that surface is composed or captured. Grayscale antialiasing keeps the
+        // private Korean outlines smooth at each monitor's actual pixel size.
+        // This is local to the card and never changes Windows font preferences.
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+    }
+
     private sealed class NotificationLabel : Label
     {
         protected override void OnPaint(PaintEventArgs e)
         {
-            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            PrepareText(e.Graphics);
             base.OnPaint(e);
         }
     }
@@ -983,7 +993,7 @@ internal sealed class WorkspaceNotificationCard : Form
                 }
                 return;
             }
-            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            PrepareText(e.Graphics);
             using (var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center,
                 Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             using (var brush = new SolidBrush(text))

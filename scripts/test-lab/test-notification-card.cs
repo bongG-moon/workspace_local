@@ -214,6 +214,35 @@ internal static class TestNotificationCard
         }
         Check(card.Region.IsVisible(card.Width / 2f, 1) && card.Region.IsVisible(1, card.Height / 2f), "Region clips straight borders");
     }
+    private static void GrayscaleText(Form card)
+    {
+        // Verify the production label painter, not a substitute text renderer.
+        // Coverage must blend foreground/background uniformly across channels;
+        // ClearType color masks fail this check on the previous implementation.
+        foreach (Control control in card.Controls)
+        {
+            var label = control as Label;
+            if (label == null || label.Text.Length == 0) continue;
+            using (var image = new Bitmap(label.Width, label.Height))
+            {
+                label.DrawToBitmap(image, label.ClientRectangle);
+                var paper = label.BackColor; var ink = label.ForeColor;
+                int antialiased = 0, chromatic = 0;
+                for (int y = 0; y < image.Height; y++)
+                    for (int x = 0; x < image.Width; x++)
+                    {
+                        var pixel = image.GetPixel(x, y);
+                        double coverage = (paper.R - pixel.R) / (double)(paper.R - ink.R);
+                        if (coverage > .02 && coverage < .98) antialiased++;
+                        double green = paper.G + (ink.G - paper.G) * coverage;
+                        double blue = paper.B + (ink.B - paper.B) * coverage;
+                        if (Math.Abs(pixel.G - green) > 2 || Math.Abs(pixel.B - blue) > 2) chromatic++;
+                    }
+                Check(antialiased > 20, "Korean text lacks smoothed edge coverage: " + label.Text);
+                Check(chromatic == 0, "Subpixel color fringes in buffered Korean text: " + label.Text);
+            }
+        }
+    }
     private static void Render(Form card, string target)
     {
         using (var image = new Bitmap(card.Width, card.Height))
@@ -264,10 +293,11 @@ internal static class TestNotificationCard
                     var parameters = (CreateParams)cardType.GetProperty("CreateParams", Private).GetValue(card, null);
                     Check((parameters.ExStyle & 0x08000080) == 0x08000080, "Missing non-activation/toolwindow styles");
                     Check((parameters.ClassStyle & 0x00020000) == 0, "Legacy class shadow adds a second outline");
-                    foreach (uint dpi in new uint[] { 96, 144, 192 })
+                    foreach (uint dpi in new uint[] { 96, 120, 144, 192 })
                     {
                         Arrange(card, new Rectangle(-1280, -160, 1280, 720), dpi);
                         CompactLayout(card, dpi);
+                        GrayscaleText(card);
                         NativeFrame(card);
                         Render(card, Path.Combine(output, kind + "-" + dpi + ".png"));
                     }
@@ -285,10 +315,11 @@ internal static class TestNotificationCard
                     var label = (Label)cardType.GetField("summaryLabel", Private).GetValue(preview);
                     Check(label.Text == (summary.Length > 0 ? summary : "승인 또는 답변 내용을 확인해 주세요"),
                         "Missing metadata must retain a safe action label");
-                    foreach (uint dpi in new uint[] { 96, 144, 192 })
+                    foreach (uint dpi in new uint[] { 96, 120, 144, 192 })
                     {
                         Arrange(preview, new Rectangle(0, 0, 1280, 720), dpi);
                         CompactLayout(preview, dpi);
+                        GrayscaleText(preview);
                         Render(preview, Path.Combine(output, (summary.Length == 0 ? "fallback" : summary.Length < 100 ? "approval" : "long-question") + "-" + dpi + ".png"));
                     }
                 }
@@ -331,9 +362,9 @@ internal static class TestNotificationCard
             GC.KeepAlive(ownProcess); ownProcess.Dispose();
             Check(gdiBefore > 0 && userBefore > 0 && gdiAfter > 0 && userAfter > 0, "Native handle measurements unavailable");
             Check(gdiAfter <= gdiBefore + 8 && userAfter <= userBefore + 3, "Native handles grew across dispose cycles");
-            Console.WriteLine("PASS: input validation; full Hangul private fonts (actual 400/600 weights and different rendered weight); 3 compact card kinds and request/fallback/long summaries x 3 DPIs; dark-gray bounded summary below title; negative/short work areas; uniform 10-DIP region without legacy shadow or native non-client frame; non-activation styles; accessible open/close exactly once; 64 dispose cycles.");
+            Console.WriteLine("PASS: input validation; full Hangul private fonts (actual 400/600 weights and different rendered weight); 3 compact card kinds and request/fallback/long summaries x 4 DPIs; grayscale antialiased text without colored fringes; dark-gray bounded summary below title; negative/short work areas; uniform 10-DIP region without legacy shadow or native non-client frame; non-activation styles; accessible open/close exactly once; 64 dispose cycles.");
             Console.WriteLine("GDI {0}->{1}; USER {2}->{3}. Rendered cards: {4}", gdiBefore, gdiAfter, userBefore, userAfter, output);
-            Console.WriteLine("Available DWM assertions (of 9 HWND/DPI samples): NC={0}; corners={1}; border={2}.", nativeNcChecks, nativeCornerChecks, nativeBorderChecks);
+            Console.WriteLine("Available DWM assertions (of 12 HWND/DPI samples): NC={0}; corners={1}; border={2}.", nativeNcChecks, nativeCornerChecks, nativeBorderChecks);
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

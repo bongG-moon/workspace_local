@@ -36,6 +36,29 @@ WorkspaceInlineControls.render();
 const textFor = id => $(id).querySelector('strong').textContent;
 const choose = label => [...$('runtime-panel-options').children].find(node=>flatText(node).includes(label));
 const assertDraft = () => {assert.equal($('prompt').value,'작성 중 요청');assert.equal(attachments[0],'C:/fixture/A/report.csv');};
+function positionFixture() {
+  const panel=$('composer-controls-panel'), composer=$('composer');
+  const pane={left:200,top:20,right:1000,bottom:800};
+  const origin={left:240,top:650};
+  const anchors={model:{left:300,top:730,width:100,bottom:764},effort:{left:500,top:730,width:100,bottom:764},permission:{left:700,top:730,width:150,bottom:764}};
+  const frames=new Map(),listeners=new Map(),observers=[];let sequence=0,contentHeight=200;
+  globalThis.requestAnimationFrame=fn=>{frames.set(++sequence,fn);return sequence;};
+  globalThis.cancelAnimationFrame=id=>frames.delete(id);
+  globalThis.addEventListener=(type,fn)=>listeners.set(type,fn);
+  globalThis.removeEventListener=(type,fn)=>{if(listeners.get(type)===fn)listeners.delete(type);};
+  globalThis.ResizeObserver=class {constructor(fn){this.callback=fn;this.nodes=[];observers.push(this);}observe(node){this.nodes.push(node);}disconnect(){this.nodes=[];this.disconnected=true;}};
+  document.documentElement={clientWidth:1200,clientHeight:800};
+  const main={getBoundingClientRect:()=>pane};
+  Object.assign(composer,{clientLeft:1,clientTop:2,scrollLeft:3,scrollTop:4,getBoundingClientRect:()=>origin});
+  Object.assign(panel,{style:{},offsetParent:composer,closest:()=>main,contains:node=>node===panel,
+    getBoundingClientRect:()=>({height:Math.min(contentHeight,parseFloat(panel.style.maxHeight)||contentHeight)})});
+  for(const [kind,rect] of Object.entries(anchors))$('composer-'+kind).getBoundingClientRect=()=>rect;
+  const flush=()=>{let count=0;while(frames.size){assert.ok(count++<10,'positioning must settle');const work=[...frames.values()];frames.clear();for(const fn of work)fn();}};
+  const bounds=()=>({left:parseFloat(panel.style.left)+origin.left+composer.clientLeft-composer.scrollLeft,
+    top:parseFloat(panel.style.top)+origin.top+composer.clientTop-composer.scrollTop,
+    width:parseFloat(panel.style.width),height:panel.getBoundingClientRect().height});
+  return {panel,pane,anchors,frames,listeners,observers,flush,bounds,setHeight:value=>contentHeight=value};
+}
 """
 
 
@@ -48,6 +71,48 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
             input=HARNESS, text=True, encoding='utf-8', capture_output=True, timeout=10,
         )
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
+
+    def test_menu_tracks_each_button_and_clamps_to_chat_pane(self):
+        self.run_case(r"""(async()=>{
+          const p=positionFixture();let calls=0;api=async()=>{calls++;};
+          for(const kind of ['model','effort','permission']){
+            await WorkspaceInlineControls.open(kind);p.flush();const b=p.bounds();
+            assert.equal(b.top+b.height,p.anchors[kind].top-8);
+            assert.equal(b.left,Math.min(p.anchors[kind].left,p.pane.right-10-b.width));
+            assert.ok(b.left>=p.pane.left+10);assert.ok(b.left+b.width<=p.pane.right-10);
+            assert.equal($('composer-'+kind).attributes['aria-expanded'],'true');
+          }
+          assert.equal(calls,0);assertDraft();
+        })()""")
+
+    def test_menu_resizes_and_falls_below_button_when_top_space_is_too_short(self):
+        self.run_case(r"""(async()=>{
+          const p=positionFixture();p.pane.left=600;p.pane.right=900;
+          p.anchors.permission.left=800;p.anchors.permission.top=50;p.anchors.permission.bottom=84;
+          await WorkspaceInlineControls.open('permission');p.flush();let b=p.bounds();
+          assert.equal(b.width,280);assert.equal(b.left,610);assert.equal(b.top,92);
+          p.anchors.permission.top=700;p.anchors.permission.bottom=734;p.setHeight(900);
+          p.listeners.get('resize')();p.flush();b=p.bounds();
+          assert.equal(b.height,430);assert.equal(b.top+b.height,692);
+          globalThis.visualViewport={offsetLeft:0,offsetTop:400,width:1200,height:350};
+          p.listeners.get('resize')();p.flush();b=p.bounds();
+          assert.equal(b.top,410);assert.equal(b.top+b.height,692);assert.ok(b.height<430);
+        })()""")
+
+    def test_open_menu_reflows_on_async_content_without_idle_observers(self):
+        self.run_case(r"""(async()=>{
+          const p=positionFixture();await WorkspaceInlineControls.open('model');p.flush();
+          assert.equal(p.observers.length,1);assert.ok(p.observers[0].nodes.includes(p.panel));
+          p.setHeight(320);p.anchors.model.left=350;p.observers[0].callback();p.observers[0].callback();
+          assert.equal(p.frames.size,1);p.flush();let b=p.bounds();
+          assert.equal(b.left,350);assert.equal(b.top+b.height,722);
+          p.listeners.get('scroll')({target:p.panel});assert.equal(p.frames.size,0);
+          p.listeners.get('resize')();assert.equal(p.frames.size,1);
+          WorkspaceInlineControls.close();assert.equal(p.frames.size,0);assert.equal(p.listeners.size,0);
+          assert.equal(p.observers[0].disconnected,true);p.observers[0].callback();assert.equal(p.frames.size,0);
+          await WorkspaceInlineControls.open('effort');p.flush();assert.equal(p.observers.length,2);
+          assert.equal(p.bounds().top+p.bounds().height,722);assertDraft();
+        })()""")
 
     def test_chips_show_connection_values_and_open_nonmodal_without_api_or_settings(self):
         self.run_case(r"""(async()=>{
