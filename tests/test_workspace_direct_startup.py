@@ -40,4 +40,16 @@ class DirectStartupTests(unittest.TestCase):
     def test_main_calls_guard_before_local_app(self):
         source = (Path(__file__).resolve().parents[1] / 'local_app/server.py').read_text(encoding='utf-8')
         main = source.split('def main():', 1)[1]
-        self.assertLess(main.index('verify_process()'), main.index('LocalApp('))
+        self.assertLess(main.index('verify_process(execution_mode=args.execution_mode)'), main.index('LocalApp('))
+
+    @patch('local_app.startup.os.name', 'nt')
+    def test_administrator_mode_requires_real_admin_token_and_same_identity(self):
+        runner = Mock(return_value=Mock(returncode=0))
+        verify_process(execution_mode='administrator', runner=runner)
+        script = runner.call_args.args[0][-1]
+        self.assertIn('Assert-WorkspaceAdministratorProcess -Context $context', script)
+        self.assertIn('Get-WorkspaceVerifiedContext', script)
+        self.assertNotIn('RunAs', script)
+        runner.return_value.returncode = 33
+        with self.assertRaisesRegex(RuntimeError, 'WS-33'):
+            verify_process(execution_mode='administrator', runner=runner)

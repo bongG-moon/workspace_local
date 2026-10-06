@@ -706,9 +706,9 @@ $("shortcuts-dialog").onclose=()=>{
   if(target?.isConnected&&!target.disabled&&!target.closest?.("[hidden],[inert]")&&(!owner||owner.open))target.focus();
   else if(!appClosed)$("shortcuts-open").focus();
 };
-function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
+function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();globalThis.WorkspaceExecutionMode?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
-$("settings-dialog").onclose=()=>globalThis.WorkspaceAppUpdates?.settingsClosed();
+$("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();globalThis.WorkspaceExecutionMode?.settingsClosed();};
 function restartConnectionLocked(){
   return !active||stopState()==="stopping"||stopRequests.has(active?.id)||boot.demo||appClosed||quitting||connectionRestarting()||connectionPreparing||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||nativeOpening||attachmentPicking||pendingRequestAnswers.has(active?.id)||!!pendingConfirmation||!!globalThis.WorkspaceAttachments?.isUploading()||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceComposer?.waitForPreparation?.()||!!globalThis.WorkspaceInlineControls?.waitForPreparation?.()||!!globalThis.WorkspaceCapabilities?.isPreparing?.(active?.id)||modalStack.some(dialog=>dialog.open&&dialog!==$("settings-dialog"));
 }
@@ -1026,8 +1026,9 @@ globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,
   legacy:(id,runId)=>active?.id===id?(active.toolActivity||[]).filter(row=>!runId||row.runId===runId):[]});
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
   canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
+globalThis.WorkspaceExecutionMode?.attach({api:(path,data)=>api(path,data),confirm:options=>confirmAction(options)});
 async function init(){try{
-  boot=await api("/api/bootstrap");const shutdown=bootstrapShutdownState(boot);
+  boot=await api("/api/bootstrap");globalThis.WorkspaceExecutionMode?.start(boot.execution);const shutdown=bootstrapShutdownState(boot);
   // Set the gate before rendering or starting any background integration.
   if(shutdown){appClosed=true;shutdownState=shutdown;}
   sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");

@@ -32,7 +32,7 @@ class WorkspaceReopenTests(unittest.TestCase):
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
                        probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False,
-                       shutdown_state=None, quit_result='closed'):
+                       shutdown_state=None, quit_result='closed', execution_protocol=1):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -80,7 +80,7 @@ function Invoke-RestMethod {
   }
   if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap') {throw 'incorrect endpoint'}
   Write-FixtureEvent 'health' $Uri
-  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
+  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; executionMode='normal'; executionModeProtocol=EXECUTION_PROTOCOL; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
 }
 function Open-WorkspaceWindow {
   param([Uri]$Uri,[bool]$ReuseSupported)
@@ -101,6 +101,7 @@ function Wait-WorkspaceShutdown {
 function Start-Process { throw 'unexpected process launch' }
 """
             substitutions = {
+                "EXECUTION_PROTOCOL": '$null' if execution_protocol is None else str(execution_protocol),
                 "REOPEN": "$true" if reopen_supported else "$false",
                 "EVENTS": ps_quote(events), "SID": ps_quote("fixture-" + directory.name),
                 "ROOT": ps_quote(directory), "VERSION": ps_quote(version_override or (version if same_version else "0.20.0")),
@@ -185,6 +186,12 @@ function Start-Process {
         result, events, _ = self.fixture_launch(same_version=True, same_root=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([item["kind"] for item in events], ["health", "open"])
+
+    def test_same_version_without_execution_policy_prepares_cooperative_replacement(self):
+        result, events, _ = self.fixture_launch(same_version=True, execution_protocol=None, upgrade_ready=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'open', 'preflight', 'coordinator'])
+        self.assertEqual(events[-1]['value'], 'Hidden')
 
     def test_no_browser_mismatch_retains_ws39_without_open_or_dialog(self):
         result, events, _ = self.fixture_launch(no_browser=True)

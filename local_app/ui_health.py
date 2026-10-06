@@ -20,7 +20,7 @@ REASONS = frozenset(('', 'resource-load', 'resource-error', 'runtime-error',
     'unhandled-rejection', 'missing-global', 'missing-handler', 'bootstrap-failed',
     'timeout', 'storage-unavailable', 'reload-requested', 'restore-failed'))
 NATIVE_EVENTS = frozenset(('ready', 'loaded', 'hidden', 'activated', 'close_requested',
-    'error', 'external_link_failed', 'manual_link_failed', 'process_failed', 'navigation_failed', 'exited'))
+    'error', 'external_link_failed', 'manual_link_failed', 'process_failed', 'navigation_failed', 'api_proxy_failed', 'exited'))
 MAX_EVENTS = 240
 
 
@@ -106,7 +106,7 @@ class UiHealthLog:
             return False
         row = {'event': value['type'], 'module': 'native', 'status':
                'failed' if value['type'] in {'error', 'external_link_failed', 'manual_link_failed',
-                                           'process_failed', 'navigation_failed'} else 'ready'}
+                                           'process_failed', 'navigation_failed', 'api_proxy_failed'} else 'ready'}
         for key, source in (('hostPid', 'pid'), ('hwnd', 'hwnd'), ('code', 'code')):
             val = value.get(source)
             if type(val) is int and 0 < val < 2**63:

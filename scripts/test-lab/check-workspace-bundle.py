@@ -46,6 +46,9 @@ expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','dep
                  'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})
 expected.add('docs/WORKSPACE_0.20.0_NOTIFICATIONS.md')
 expected.add('local_app/update_source.py')
+expected.update({'local_app/execution_mode.py', 'local_app/web/execution-mode.js'})
+expected.add('docs/WORKSPACE_EXECUTION_MODE.md')
+expected.add('local_app/windows_peer.py')
 expected.update({'local_app/file_preview.py','local_app/executions.py','local_app/web/rich-content.js','local_app/web/rich-content.css','local_app/web/execution-view.js','local_app/web/execution-view.css','docs/WORKSPACE_0.21.0_RICH_CHAT.md'})
 generated = {'desktop/' + name for name in ('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll',
              'Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')}

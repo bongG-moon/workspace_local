@@ -25,13 +25,14 @@ $files = @(
     'deploy\CompanyAgent.UserContext.ps1',
     'docs\WORKSPACE_0.16.0_PRODUCTIVITY.md', 'docs\WORKSPACE_0.17.0_RELIABILITY.md',
     'docs\LOCAL_WORKSPACE.md', 'docs\WORKSPACE_USER_GUIDE.html', 'docs\WORKSPACE_0.15.0_CLAUDE.md',
+    'docs\WORKSPACE_EXECUTION_MODE.md',
     'docs\WORKSPACE_0.13.0_DESKTOP.md', 'docs\WORKSPACE_0.14.0_CONTINUITY.md',
     'docs\WORKSPACE_STARTUP_DIAGNOSTIC.md',
     'docs\WORKSPACE_0.12.1_COMPATIBILITY.md', 'docs\WORKSPACE_0.12.2_INPUT.md', 'docs\WORKSPACE_0.12.3_AUTOCOMPLETE.md', 'docs\WORKSPACE_0.12.4_CONTROLS.md', 'docs\WORKSPACE_STANDALONE_EXE.md',
                         'local_app\__init__.py', 'local_app\bridge.py', 'local_app\server.py', 'local_app\demo.py',
     'local_app\claude_inventory.py', 'local_app\session_order.py', 'local_app\file_diff.py', 'local_app\conversation_fork.py', 'local_app\history.py', 'local_app\artifacts.py', 'local_app\capabilities.py', 'local_app\skill_inventory.py', 'local_app\html_preview.py',
         'local_app\Pick-Path.ps1', 'local_app\WorkspacePicker.cs', 'local_app\Invoke-TerminalClaude.ps1',
-    'local_app\startup.py', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
+    'local_app\startup.py', 'local_app\execution_mode.py', 'local_app\windows_peer.py', 'local_app\web\execution-mode.js', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
     'local_app\windows_process.py', 'local_app\windows_job.py', 'local_app\picker_channel.py',
     'local_app\choices.py', 'local_app\hook_status.py', 'local_app\permission_contract.py',
     'local_app\external_apps.py', 'local_app\completions.py', 'local_app\attention.py', 'local_app\app_window.py',
@@ -73,7 +74,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.19-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.20-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

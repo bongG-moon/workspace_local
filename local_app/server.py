@@ -40,7 +40,7 @@ from .progress_log import ProgressStore
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.19"
+WORKSPACE_VERSION = "0.23.20"
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -117,13 +117,17 @@ SHUTDOWN_DRAIN_TIMEOUT = 5.0
 
 
 class LocalApp:
-    def __init__(self, state: Path, command=None, info=None, demo=False, *, managed_workspace_root=None):
+    def __init__(self, state: Path, command=None, info=None, demo=False, *, managed_workspace_root=None, execution_mode='normal'):
         self.state = state
         self.state.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
         from .ui_health import UiHealthLog
         self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
         self.lock = threading.RLock()
+        from .execution_mode import checked_mode, ExecutionController
+        self.execution_mode = checked_mode(execution_mode)
+        self.execution = ExecutionController(self)
+        self._execution_peer = None
         self._lifecycle = threading.Condition()
         self._active_operations = 0
         self._shutdown_state = 'running'
@@ -419,6 +423,9 @@ class LocalApp:
                     "window": self.window_state(),
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
+                    "executionMode": self.execution_mode,
+                    "executionModeProtocol": 1,
+                    "execution": self.execution.snapshot(),
                     "appUpdate": self.app_updates.snapshot(),
                     "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
@@ -1774,6 +1781,22 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return not auth or hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + self.server.app.token)
 
+    def execution_access(self, *, identity_only=False):
+        app = self.server.app
+        if app.execution_mode != 'administrator':
+            return True
+        if os.name != 'nt':
+            return False
+        try:
+            with app.lock:
+                if app._execution_peer is None:
+                    from .windows_peer import WindowsPeer
+                    app._execution_peer = WindowsPeer()
+                peer = app._execution_peer
+            return peer.check(self.connection.getsockname(), self.client_address, identity_only=identity_only)
+        except (OSError, AttributeError, ValueError):
+            return False
+
     def do_GET(self):
         route = urlsplit(self.path)
         if not self.valid_request(auth=route.path.startswith("/api/")):
@@ -1782,10 +1805,18 @@ class Handler(BaseHTTPRequestHandler):
             app = self.server.app
             query = parse_qs(route.query)
             sid = query.get("id", [""])[0]
+            if route.path.startswith('/api/') and not self.execution_access():
+                if route.path == '/api/bootstrap':
+                    return self.reply({'application':'company-workspace','workspaceVersion':WORKSPACE_VERSION,
+                                       'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':1,
+                                       'upgradeProtocol':1,'window':app.window_state(), **app.shutdown_status()})
+                return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
             if route.path == "/api/bootstrap":
                 return self.reply(app.bootstrap())
             if route.path == '/api/app-update':
                 return self.reply(app.app_updates.check())
+            if route.path == '/api/execution-mode':
+                return self.reply(app.execution.snapshot())
             if route.path == '/api/attention':
                 return self.reply(app.attention())
             if route.path == '/api/upgrade':
@@ -1892,6 +1923,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),
+                      "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
                       "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
@@ -1916,6 +1948,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"error": str(exc)}, 400)
 
     def do_POST(self):
+        if self.valid_request() and not self.execution_access(identity_only=urlsplit(self.path).path == '/api/window/open'):
+            self.close_connection = True
+            try:
+                length=int(self.headers.get('Content-Length','0'))
+                if 0<length<=MAX_BODY:
+                    self.connection.settimeout(.5);self.rfile.read(length)
+            except (OSError,ValueError):pass
+            return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
         if urlsplit(self.path).path == '/api/attachments/upload':
             return self.upload_attachment()
         if not self.valid_request() or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -2049,6 +2089,10 @@ class Handler(BaseHTTPRequestHandler):
             with app.lock:
                 app.get(sid)
             return self.reply(app.attachment_store.prepare(data['name'], data['size']))
+        if route == '/api/execution-mode':
+            if set(data) != {'mode'}:
+                raise ValueError('전환할 실행 권한을 확인해 주세요.')
+            return self.reply(app.execution.start(data['mode']))
         if route == '/api/app-update':
             action = data.get('action')
             if action == 'check' and set(data) == {'action'}:
@@ -2204,13 +2248,14 @@ def main():
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "CompanyAgent/local-ui")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument('--execution-mode', choices=['normal', 'administrator'], default='normal')
     parser.add_argument("--demo", action="store_true", help="Synthetic UI rehearsal; does not start Claude or read source documents")
     args = parser.parse_args()
     from .startup import verify_process
-    verify_process()
+    verify_process(execution_mode=args.execution_mode)
     if args.demo:
         args.state = args.state / "demo"
-    app = LocalApp(args.state, demo=args.demo)
+    app = LocalApp(args.state, demo=args.demo, execution_mode=args.execution_mode)
     app._upgrade_headless = args.no_browser
     server = Server(app, args.port)
     url = server.origin + "/#token=" + app.token
@@ -2234,7 +2279,7 @@ def main():
         server.shutdown()
         return True
     window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray,
-                         on_event=app.ui_health.native)
+                         on_event=app.ui_health.native, admin_api_bridge=app.execution_mode == 'administrator')
     def reopen():
         app.app_updates.check(startup=True)
         result = window.open()
@@ -2251,6 +2296,11 @@ def main():
             reopen()
         # Publish readiness only after the desktop host passed initialization.
         runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
+        from .execution_mode import save_mode
+        try:
+            save_mode(app.state, app.execution_mode)
+        except (ValueError, OSError):
+            app.execution.error = '이번 실행 권한은 적용됐지만 다음 실행의 기본값을 저장하지 못했습니다.'
         from .update_install import confirm_running_update
         try:
             confirm_running_update(app.state, WORKSPACE_VERSION)

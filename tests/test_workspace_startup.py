@@ -226,7 +226,7 @@ class WorkspaceStartupContractTests(unittest.TestCase):
         self.assertLess(source.index("Get-WorkspaceVerifiedContext"), source.index("Threading.Mutex"))
         self.assertLess(source.index("Invoke-WorkspaceNormalTokenRelaunch"), source.index("Threading.Mutex"))
         self.assertLess(source.index("Assert-WorkspaceNormalProcess"), source.index("Threading.Mutex"))
-        self.assertIn("if ($NoBrowser -or $NormalTokenRelaunch)", source)
+        self.assertIn("if ($NoBrowser -or $NormalTokenRelaunch -or $ExecutionRequestId)", source)
         self.assertNotIn("-Verb RunAs", source)
         self.assertNotIn("-ExecutionPolicy Bypass", source)
         self.assertNotIn("Resolve-SetupUserContext -SkipAdminCheck", HELPER.read_text(encoding="utf-8-sig"))

@@ -1,21 +1,30 @@
-# Company Workspace 0.23.19
+# Company Workspace 0.23.20
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.19/Company-Workspace-0.23.19-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.19/Company-Workspace-0.23.19-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-vbs.zip)**
 
-[0.23.19 변경 안내](docs/VALIDATION_0.23.19.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.20 변경 안내](docs/VALIDATION_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.19.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.20.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+
+## 0.23.20 변경
+
+- **설정 → 앱과 Claude 실행 권한**에서 일반·관리자를 선택하고 재시작합니다. 기본값은 일반이며, 관리자는 앱 확인과 Windows 승인을 거칩니다.
+- 작업·승인·질문이 끝날 때까지 기다리고 초안·첨부를 보관합니다. 성공한 선택만 앱 자체 설정에 저장하며 기존 Claude 개인 설정과 Windows 정책을 유지합니다.
+- 관리자 연결은 실제 Windows 사용자·세션·권한을 확인하고 WebView2 샌드박스를 유지합니다. [실행 권한 선택 안내](docs/WORKSPACE_EXECUTION_MODE.md)
+- 입력창 위에 회전 스피너로 작업 진행을 표시합니다. 승인·답변 대기와 완료 시에는 멈추며 움직임 줄이기 설정을 지원합니다.
+- 실제 UAC 승인 후 관리자 앱·Claude 실행과 일반 권한 복귀의 전체 왕복은 아직 미검증입니다. 자동 검사와 일반 권한 실행 결과는 [0.23.20 검증 기록](docs/VALIDATION_0.23.20.md)에서 확인하세요.
+- 사내 Download ZIP과 배포 도구의 변경 안내도 0.23.20을 포함합니다. 사내 GitLab 게시 자체는 사내에서 별도로 진행합니다.
 
 ## 0.23.19 변경
 

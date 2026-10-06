@@ -7,7 +7,9 @@ import subprocess
 from .windows_process import powershell_path
 
 
-def verify_process(*, runner=subprocess.run):
+def verify_process(*, execution_mode='normal', runner=subprocess.run):
+    from .execution_mode import checked_mode
+    checked_mode(execution_mode)
     if os.name != 'nt':
         return
     helper = Path(__file__).resolve().parents[1] / 'deploy' / 'CompanyWorkspace.Startup.ps1'
@@ -15,9 +17,10 @@ def verify_process(*, runner=subprocess.run):
         raise RuntimeError('실행 확인 파일이 없습니다. ZIP 전체를 다시 압축 해제해 주세요. (WS-41)')
     # The child inherits this token; no elevation, profile changes or policy writes.
     quoted = str(helper).replace("'", "''")
+    assertion = 'Assert-WorkspaceAdministratorProcess' if execution_mode == 'administrator' else 'Assert-WorkspaceNormalProcess'
     script = ("$ErrorActionPreference='Stop'; try { . '" + quoted +
               "'; $context=Get-WorkspaceVerifiedContext; "
-              "Assert-WorkspaceNormalProcess -Context $context; exit 0 "
+              + assertion + " -Context $context; exit 0 "
               "} catch { exit (Get-WorkspaceStartupCode -Message $_.Exception.Message) }")
     try:
         result = runner([powershell_path(), '-NoLogo', '-NoProfile', '-NonInteractive',

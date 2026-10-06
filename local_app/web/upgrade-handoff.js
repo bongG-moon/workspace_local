@@ -33,12 +33,13 @@ globalThis.WorkspaceUpgrade = (() => {
     notice.hidden=!current&&!localError&&!recoveryNotice;
     $("upgrade-recovery-open").hidden=!recovery;
     const target=current?.targetVersion?` ${current.targetVersion}`:"";
+    const mode=current?.executionMode,modeLabel=mode==="administrator"?"관리자 권한":mode==="normal"?"일반 권한":"";
     $("upgrade-notice-text").textContent=localError||(!current&&recoveryNotice)||(current?.stage==="waiting"
-      ?`현재 작업과 응답을 마치면 새 버전${target}으로 자동 전환해요.`
+      ?modeLabel?`현재 작업과 응답을 마치면 ${modeLabel}으로 다시 시작해요.`:`현재 작업과 응답을 마치면 새 버전${target}으로 자동 전환해요.`
       :current?.stage==="failed"?(current.error||"버전 전환을 마치지 못했어요. 작성 중인 내용은 이 창에 유지하고 있습니다.")
-      :"작성 중인 내용과 첨부 자료를 보관한 뒤 새 버전으로 전환해요.");
+      :modeLabel?`작성 중인 내용과 첨부 자료를 보관한 뒤 ${modeLabel}으로 다시 시작해요.`:"작성 중인 내용과 첨부 자료를 보관한 뒤 새 버전으로 전환해요.");
     $("upgrade-notice-cancel").hidden=!current;$("upgrade-notice-cancel").disabled=cancelling||current?.stage==="committing";
-    $("upgrade-title").textContent=localError?"전환 상태를 확인하고 있어요":"새 버전으로 전환하고 있어요";
+    $("upgrade-title").textContent=localError?"전환 상태를 확인하고 있어요":modeLabel?`${modeLabel}으로 다시 시작하고 있어요`:"새 버전으로 전환하고 있어요";
     $("upgrade-detail").textContent=localError||"작성 중인 내용과 첨부 자료를 그대로 이어서 사용할 수 있도록 보관하고 있어요. 잠시만 기다려 주세요.";
     $("upgrade-cancel").disabled=cancelling||current?.stage==="committing";
     $("upgrade-cancel").textContent=cancelling?"취소 확인 중…":"전환 취소";

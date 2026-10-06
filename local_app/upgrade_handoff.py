@@ -188,6 +188,8 @@ class UpgradeHandoff:
             if request_id is not None and (not pending or nonce(request_id) != pending['requestId']):
                 raise ValueError('이 버전 전환 요청은 더 이상 유효하지 않습니다.')
             public = None if not pending else {key: pending[key] for key in ('requestId', 'targetVersion', 'stage', 'revision')}
+            if pending and pending.get('executionMode'):
+                public['executionMode'] = pending['executionMode']
             if pending and pending.get('error'):
                 public['error'] = pending['error']
             return {'upgrade': public, 'upgradeRestore': self.restore,
@@ -207,13 +209,17 @@ class UpgradeHandoff:
                 return {'ok': True, **self.status()}
             if action == 'prepare':
                 target = version(data.get('targetVersion'))
+                mode = data.get('executionMode')
+                if mode is not None:
+                    from .execution_mode import checked_mode
+                    checked_mode(mode)
                 if self.warning or self.restore:
                     raise ValueError(self.warning or '이전 창의 작성 내용을 먼저 복원해 주세요.')
                 if self.pending and self.pending['stage'] not in {'cancelled', 'expired', 'failed'}:
-                    if self.pending['requestId'] != request_id or self.pending['targetVersion'] != target:
+                    if self.pending['requestId'] != request_id or self.pending['targetVersion'] != target or self.pending.get('executionMode') != mode:
                         raise ValueError('다른 버전 전환을 준비하고 있습니다. 기존 요청을 먼저 마쳐 주세요.')
                 else:
-                    self.pending = {'requestId': request_id, 'targetVersion': target, 'stage': 'waiting',
+                    self.pending = {'requestId': request_id, 'targetVersion': target, 'stage': 'waiting', 'executionMode': mode,
                                     'revision': 1, 'deadline': self.clock() + LEASE_SECONDS, 'captureDeadline': None, 'snapshot': None}
                 return {'ok': True, **self.status()}
             pending = self.pending
@@ -257,6 +263,8 @@ class UpgradeHandoff:
                 raise ValueError('버전 전환 동작을 확인해 주세요.')
             if data.get('targetVersion', pending['targetVersion']) != pending['targetVersion']:
                 raise ValueError('실행할 앱 버전이 전환 요청과 다릅니다.')
+            if data.get('executionMode', pending.get('executionMode')) != pending.get('executionMode'):
+                raise ValueError('전환할 실행 권한이 기존 요청과 다릅니다.')
             if pending['stage'] == 'closed':
                 return {'ok': True, 'closed': True, **self.status()}
             # Capture and work completion can race a second launch. Admission

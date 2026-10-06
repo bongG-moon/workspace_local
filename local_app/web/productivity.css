@@ -33,3 +33,7 @@
 .request-editor-dialog #request-editor-context{font-size:12px;line-height:1.6;margin:8px 0 13px}.request-editor-dialog textarea{min-height:88px;height:100px}.request-editor-dialog #request-editor-files{font-size:10px;margin:7px 0 10px}
 
 .request-editor-dialog .dialog-actions{position:sticky;bottom:-1px;z-index:2;background:#f1f4f8;padding-top:14px;margin-bottom:0;box-shadow:0 -8px 14px -12px #cbd3e2}
+
+.execution-mode-section select{width:100%}
+.execution-mode-section #execution-mode-apply{display:inline-flex;align-items:center;justify-content:center;gap:8px;margin-top:2px}
+.execution-mode-section [data-mode=administrator]{color:#916326;font-weight:600}

@@ -1,10 +1,10 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $report = [ordered]@{
-    diagnosticVersion = 'ws33-53'
-    targetSource = 'workspace-0.23.19'
+    diagnosticVersion = 'ws33-55'
+    targetSource = 'workspace-0.23.20'
     status = 'checking'
     sourceMatches = $false
     files = [ordered]@{}
@@ -12,6 +12,7 @@ $report = [ordered]@{
     current = $null
     linked = $null
     predictedGuard = 'not_checked'
+    executionMode = 'normal'
     uacEnabled = $null
     process64Bit = [Environment]::Is64BitProcess
     stage = 'source_check'
@@ -24,9 +25,9 @@ $report = [ordered]@{
     notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = '567f9a2650077846038b2e3d6f6f9de24b7ccb668c89cbcd5c7bde679764b743'
-    'deploy/CompanyWorkspace.Startup.ps1' = '0c3939acaf56c96c7cb7ff1cb37fefca4be627fad4cfd94aaa0d553361e85e78'
-    'deploy/CompanyWorkspace.NormalToken.cs' = 'fa0798916b9e761b0f54633a2d13263f3a98824a0e10809c9de5c372ec12dae8'
+    'deploy/Start-CompanyWorkspace.ps1' = 'c38bac345275bb3278dbc80fb0336c69207ba9aee0c0ec882ae5632669aab059'
+    'deploy/CompanyWorkspace.Startup.ps1' = '3cf2c28ff1451268d7df269f6582dc0dcb9ae74c6211497f304457766e6408c5'
+    'deploy/CompanyWorkspace.NormalToken.cs' = 'd7a60f5533f4743647798feec9f40e50f50c064522d1688c7105a164b8c0e588'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }
 function Safe-Snapshot($Snapshot, $Context) {
@@ -129,7 +130,11 @@ try {
     $normal = [CompanyAgent.WorkspaceNormalToken]::ValidateNormalProcess($current, $context.sid, $context.sessionId)
     $sourceAllowed = [CompanyAgent.WorkspaceNormalToken]::ValidateSourceToken($current, $context.sid, $context.sessionId)
     $restrictedSource = [CompanyAgent.WorkspaceNormalToken]::ValidateRestrictedSource($current, $context.sid, $context.sessionId, [CompanyAgent.WorkspaceNormalToken]::IsUacDisabled())
-    if (-not $context.isAdministrator) {
+    $report.executionMode = Read-WorkspaceExecutionMode -StateRoot (Join-Path $context.localAppData 'CompanyAgent\local-ui')
+    if ($report.executionMode -eq 'administrator') {
+        $adminAccepted = [CompanyAgent.WorkspaceNormalToken]::ValidateAdministratorProcess($current, $context.sid, $context.sessionId)
+        $report.predictedGuard = $(if ($adminAccepted) { 'administrator_process_accepted' } elseif ($normal) { 'administrator_elevation_required_launch_not_tested' } else { 'WS33_current_token_rejected' })
+    } elseif (-not $context.isAdministrator) {
         $report.predictedGuard = $(if ($normal) { 'normal_process_accepted' } else { 'WS33_current_token_rejected' })
     } elseif ($restrictedSource) {
         $report.predictedGuard = 'restricted_candidate_required_launch_not_tested'

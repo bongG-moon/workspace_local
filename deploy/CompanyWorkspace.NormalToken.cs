@@ -121,6 +121,16 @@ namespace CompanyAgent
                 !token.IsAdministrator;
         }
 
+        // Explicit app-owned administrator mode still requires the same
+        // interactive user/session. A flag never substitutes for a real token.
+        public static bool ValidateAdministratorProcess(WorkspaceTokenSnapshot token,
+            string expectedSid, int expectedSession)
+        {
+            return MatchesIdentity(token, expectedSid, expectedSession) && token.IsPrimary &&
+                (token.ElevationType == 1 || token.ElevationType == 2) &&
+                token.IsElevated && token.IsAdministrator && token.IntegrityRid == 0x3000;
+        }
+
         private static bool MatchesIdentity(WorkspaceTokenSnapshot token,
             string expectedSid, int expectedSession)
         {
@@ -181,7 +191,7 @@ namespace CompanyAgent
             // Only this process tree; registry and Group Policy are unchanged.
             command.Append(" -NoLogo -ExecutionPolicy Bypass -WindowStyle Hidden -File ");
             command.Append(QuoteWindowsArgument(scriptPath));
-            command.Append(" -NormalTokenRelaunch -PythonCommand ");
+            command.Append(" -NormalTokenRelaunch -ExecutionMode normal -PythonCommand ");
             command.Append(QuoteWindowsArgument(pythonCommand));
             if (demo) command.Append(" -Demo");
             if (noBrowser) command.Append(" -NoBrowser");

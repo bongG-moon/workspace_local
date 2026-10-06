@@ -1,6 +1,8 @@
 ﻿[CmdletBinding()]
 param([string]$PythonCommand = 'auto', [switch]$Demo, [switch]$NoBrowser, [string]$StateRoot,
-      [switch]$NormalTokenRelaunch)
+      [switch]$NormalTokenRelaunch,
+      [ValidateSet('auto','normal','administrator')][string]$ExecutionMode = 'auto',
+      [ValidatePattern('^[a-f0-9]{32}$')][string]$ExecutionRequestId)
 $ErrorActionPreference = 'Stop'
 $workspaceMutex = $null
 $workspaceLockHeld = $false
@@ -13,6 +15,11 @@ if ($NormalTokenRelaunch -and $env:COMPANY_WORKSPACE_PYTHON_ATTEMPT -match '^[a-
     # Only the launcher handoff uses this marker; it is not passed to Python/Claude.
     Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_PYTHON_ATTEMPT
 }
+
+if ($NormalTokenRelaunch -and $env:COMPANY_WORKSPACE_EXECUTION_REQUEST -match '^[a-f0-9]{32}$') {
+    $ExecutionRequestId = $env:COMPANY_WORKSPACE_EXECUTION_REQUEST
+}
+Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_EXECUTION_REQUEST -ErrorAction SilentlyContinue
 
 function Invoke-WorkspacePythonQuery {
     param([string] $Executable, [string] $Arguments, [int] $TimeoutMilliseconds = 6000, [string] $WorkingDirectory)
@@ -277,7 +284,7 @@ print("WORKSPACE_PYTHON_V1:" + json.dumps(result, ensure_ascii=True, separators=
 }
 
 function Invoke-WorkspaceManagedUpdate {
-    param([string]$State, [string]$CurrentVersion, [string]$Python = 'auto', [bool]$IsDemo, [bool]$Headless)
+    param([string]$State, [string]$CurrentVersion, [string]$Python = 'auto', [bool]$IsDemo, [bool]$Headless, [string]$Mode = 'normal', [string]$ModeRequestId)
     # A successful newer install owns future opens from either the EXE or VBS.
     # Invalid/missing pointers fall back to this portable copy without mutation.
     try {
@@ -350,6 +357,8 @@ function Invoke-WorkspaceManagedUpdate {
         # The child inherits the already verified launcher's process policy.
         $arguments = '-NoLogo -WindowStyle Hidden -File ' + (Quote-UpdateArgument $launcher)
         $arguments += ' -StateRoot ' + (Quote-UpdateArgument $State) + ' -PythonCommand ' + (Quote-UpdateArgument $Python)
+        $arguments += ' -ExecutionMode ' + $Mode
+        if ($ModeRequestId) { $arguments += ' -ExecutionRequestId ' + $ModeRequestId }
         if ($IsDemo) { $arguments += ' -Demo' }
         if ($Headless) { $arguments += ' -NoBrowser' }
         $start = New-Object Diagnostics.ProcessStartInfo
@@ -371,23 +380,39 @@ try {
     if (-not (Test-Path -LiteralPath $startupHelper -PathType Leaf)) { throw 'WORKSPACE_STARTUP:41' }
     . $startupHelper
     $context = Get-WorkspaceVerifiedContext
-    if ((Get-WorkspaceLaunchAction -Context $context -Relaunched ([bool]$NormalTokenRelaunch)) -eq 'relaunch') {
+    $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
+    $preferenceStateRoot = if ($Demo) { Join-Path $appStateRoot 'demo' } else { $appStateRoot }
+    if ($ExecutionMode -eq 'auto') { $ExecutionMode = Read-WorkspaceExecutionMode -StateRoot $preferenceStateRoot }
+    if ($NormalTokenRelaunch -and $ExecutionMode -ne 'normal') { throw 'WORKSPACE_STARTUP:42' }
+    $launchAction = Get-WorkspaceLaunchAction -Context $context -Relaunched ([bool]$NormalTokenRelaunch) -ExecutionMode $ExecutionMode
+    if ($launchAction -eq 'elevate') {
+        $childCode = Invoke-WorkspaceAdministratorRelaunch -ScriptPath $PSCommandPath -PythonCommand $PythonCommand -StateRoot $StateRoot -ExecutionRequestId $ExecutionRequestId -Demo ([bool]$Demo) -NoBrowser ([bool]$NoBrowser)
+        if ($childCode -eq 0 -or $childCode -eq 20) { return }
+        if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45,46,47)) { $childCode = 35 }
+        throw ('WORKSPACE_STARTUP:' + $childCode)
+    }
+    if ($launchAction -eq 'relaunch') {
         # Reduce privileges BEFORE mutex/state/CLI/Python creation. The child
         # rechecks identity and privileges; this flag never skips a check.
         $previousAttempt = [Environment]::GetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', 'Process')
+        $previousExecutionRequest = [Environment]::GetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', 'Process')
         try {
             [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $workspacePythonAttemptId, 'Process')
+            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', $ExecutionRequestId, 'Process')
             $childCode = Invoke-WorkspaceNormalTokenRelaunch -Context $context -ScriptPath $PSCommandPath `
                 -PythonCommand $PythonCommand -Demo ([bool]$Demo) -NoBrowser ([bool]$NoBrowser) -StateRoot $StateRoot
-        } finally { [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $previousAttempt, 'Process') }
+        } finally {
+            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_PYTHON_ATTEMPT', $previousAttempt, 'Process')
+            [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_EXECUTION_REQUEST', $previousExecutionRequest, 'Process')
+        }
         if ($childCode -eq 0) { return }
         if ($childCode -notin @(22,30,31,32,33,34,35,36,37,38,39,40,41,42,45,46,47)) { $childCode = 35 }
         throw ('WORKSPACE_STARTUP:' + $childCode)
     }
-    Assert-WorkspaceNormalProcess -Context $context
-    $appStateRoot = if ($StateRoot) { [IO.Path]::GetFullPath($StateRoot) } else { Join-Path $context.localAppData 'CompanyAgent\local-ui' }
+    if ($ExecutionMode -eq 'administrator') { Assert-WorkspaceAdministratorProcess -Context $context }
+    else { Assert-WorkspaceNormalProcess -Context $context }
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.19' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser)) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.20' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -413,7 +438,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.19'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.20'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -437,9 +462,11 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.19'
+        $targetVersion = [version]'0.23.20'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
-        $upgradeNeeded = $runningVersion -lt $targetVersion
+        $modeChangeNeeded = $runningVersion -eq $targetVersion -and $health.executionMode -in @('normal','administrator') -and $health.executionMode -ne $ExecutionMode
+        $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and $health.executionModeProtocol -ne 1
+        $upgradeNeeded = $runningVersion -lt $targetVersion -or $modeChangeNeeded -or $executionPolicyUpgrade
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
         if (-not $NoBrowser) {
@@ -522,7 +549,7 @@ try {
         if ($NoBrowser) { $preflightArguments += ' --no-browser' }
         $preflight = Invoke-WorkspacePythonQuery -Executable $resolvedPython -Arguments $preflightArguments -WorkingDirectory $appRoot
         if (-not $preflight -or -not (($preflight | ConvertFrom-Json).ok -eq $true)) { throw 'WORKSPACE_STARTUP:47' }
-        $requestId = [Guid]::NewGuid().ToString('N')
+        $requestId = if ($ExecutionRequestId) { $ExecutionRequestId } else { [Guid]::NewGuid().ToString('N') }
         $coordinatorPython = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
         if (-not (Test-Path -LiteralPath $coordinatorPython -PathType Leaf)) { $coordinatorPython = $resolvedPython }
         if ($appStateRoot -match '["\r\n]' -or $resolvedPython -match '["\r\n]') { throw 'WORKSPACE_STARTUP:42' }
@@ -532,6 +559,7 @@ try {
                       '--python', ('"' + $resolvedPython + '"'), '--request-id', $requestId)
         if ($Demo) { $arguments += '--demo' }
         if ($NoBrowser) { $arguments += '--no-browser' }
+        $arguments += @('--execution-mode', $ExecutionMode)
         $coordinator = Start-Process -FilePath $coordinatorPython -ArgumentList $arguments -WorkingDirectory $appRoot -WindowStyle Hidden -PassThru
         $ackPath = Join-Path $runtimeStateRoot ('upgrade-launch-' + $requestId + '.json')
         $deadline = [DateTime]::UtcNow.AddSeconds(5)
@@ -553,6 +581,7 @@ try {
     $windowless = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
     if (Test-Path -LiteralPath $windowless) { $resolvedPython = $windowless }
     $arguments = @('-X', 'utf8', '-m', 'local_app.server')
+    $arguments += @('--execution-mode', $ExecutionMode)
     if ($Demo) { $arguments += '--demo' }
     if ($NoBrowser) { $arguments += '--no-browser' }
     if ($StateRoot) { $arguments += @('--state', ('"' + $appStateRoot + '"')) }
@@ -602,7 +631,7 @@ try {
     $message += [Environment]::NewLine + ('오류 코드: WS-' + $code)
     # One UI owner: a relaunched child returns a code without opening a modal.
     # Parent presents it once; VBS recognizes 20 as already explained.
-    if ($NoBrowser -or $NormalTokenRelaunch) {
+    if ($NoBrowser -or $NormalTokenRelaunch -or $ExecutionRequestId) {
         [Console]::Error.WriteLine($message)
         exit $code
     }

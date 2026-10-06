@@ -60,7 +60,7 @@ namespace CompanyAgent {
         }
 
         private sealed class Options {
-            internal string StateRoot, CacheRoot, PythonPath;
+            internal string StateRoot, CacheRoot, PythonPath, ExecutionMode;
             internal bool NoBrowser, Demo, VerifyOnly;
         }
 
@@ -73,6 +73,10 @@ namespace CompanyAgent {
                 if (name == "--no-browser") value.NoBrowser = true;
                 else if (name == "--demo") value.Demo = true;
                 else if (name == "--verify-only") value.VerifyOnly = true;
+                else if (name == "--execution-mode") {
+                    if (++i >= args.Length || (args[i] != "normal" && args[i] != "administrator")) throw new StandaloneFailure(50);
+                    value.ExecutionMode = args[i];
+                }
                 else if (name == "--state" || name == "--cache-root" || name == "--python") {
                     if (++i >= args.Length) throw new StandaloneFailure(50);
                     string path = AbsolutePath(args[i]);
@@ -274,6 +278,7 @@ namespace CompanyAgent {
             if (options.NoBrowser) command += " -NoBrowser";
             if (options.Demo) command += " -Demo";
             if (options.StateRoot != null) command += " -StateRoot " + Quote(options.StateRoot);
+            if (options.ExecutionMode != null) command += " -ExecutionMode " + options.ExecutionMode;
             ProcessStartInfo start = new ProcessStartInfo(powershell, command);
             start.UseShellExecute = false;
             start.CreateNoWindow = true;

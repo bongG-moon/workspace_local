@@ -34,12 +34,13 @@ def desktop_executable():
 
 class DesktopHost:
     def __init__(self, notifier, url, state, *, background=False, on_close=None, popen=subprocess.Popen,
-                 on_event=None):
+                 on_event=None, admin_api_bridge=False):
         self.notifier, self.url = notifier, url
         self.profile = str((Path(state).resolve() / 'webview2').resolve())
         self.background, self.on_close, self.popen = background, on_close, popen
         self.lock = threading.RLock()
         self.process = None
+        self.admin_api_bridge = admin_api_bridge
         self.reader = None
         self.responses = queue.Queue(maxsize=32)
         self.closed = False
@@ -261,7 +262,8 @@ class DesktopHost:
                 self.reader = threading.Thread(target=self._read, args=(self.process, self.responses),
                                                name='workspace-desktop-events', daemon=True)
                 self.reader.start()
-                self._write({'url': self.url, 'profile': self.profile, 'background': self.background})
+                self._write({'url': self.url, 'profile': self.profile, 'background': self.background,
+                             'adminApiBridge': self.admin_api_bridge})
                 ready = self.responses.get(timeout=30)
                 if ready.get('type') != 'ready' or ready.get('pid') != self.process.pid:
                     raise DesktopError(ready.get('code', 47))

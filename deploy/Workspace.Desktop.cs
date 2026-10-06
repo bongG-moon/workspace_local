@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -68,6 +69,8 @@ internal sealed class DesktopWindow : Form
     private readonly Uri home;
     private readonly string profile;
     private readonly bool background;
+    private readonly bool adminApiBridge;
+    private readonly SemaphoreSlim apiGate = new SemaphoreSlim(4, 4);
     private WebView2 view;
     private Panel recovery;
     private bool exiting, started, initializing, controlReaderStarted;
@@ -86,6 +89,7 @@ internal sealed class DesktopWindow : Form
         profile = (string)config["profile"];
         if (!Path.IsPathRooted(profile) || profile != Path.GetFullPath(profile)) throw new InvalidDataException();
         background = config.ContainsKey("background") && (bool)config["background"];
+        adminApiBridge = config.ContainsKey("adminApiBridge") && (bool)config["adminApiBridge"];
         Text = "Workspace";
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -208,13 +212,20 @@ internal sealed class DesktopWindow : Form
                 }
             };
             core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
-            core.WebResourceRequested += delegate(object sender, CoreWebView2WebResourceRequestedEventArgs e)
+            core.WebResourceRequested += async delegate(object sender, CoreWebView2WebResourceRequestedEventArgs e)
             {
                 var uri = e.Request.Uri;
                 if (!SameOrigin(uri) && !uri.StartsWith("data:", StringComparison.Ordinal) &&
                     !uri.StartsWith("blob:" + home.GetLeftPart(UriPartial.Authority) + "/", StringComparison.Ordinal) &&
                     uri != "about:blank" && uri != "about:srcdoc")
                     e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", "");
+                else if (adminApiBridge && SameOrigin(uri) && new Uri(uri).AbsolutePath.StartsWith("/api/", StringComparison.Ordinal))
+                {
+                    var deferral = e.GetDeferral();
+                    try { await ProxyApi(environment, e); }
+                    catch { /* Closing the owned view can invalidate its response. */ }
+                    finally { try { deferral.Complete(); } catch { } }
+                }
             };
             core.DownloadStarting += Download;
             core.ProcessFailed += delegate { DesktopProgram.Emit(new { type = "process_failed" }); ShowRecovery(); };
@@ -240,6 +251,114 @@ internal sealed class DesktopWindow : Form
         catch (Exception e)
         { DesktopProgram.Emit(new { type = "error", code = 47, hresult = e.HResult }); if (!started) Exit(); else ShowRecovery(); }
         finally { initializing = false; }
+    }
+
+    private async Task ProxyApi(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs e)
+    {
+        const int limit = 32 * 1024 * 1024;
+        string expected = "Bearer " + home.Fragment.Substring(7);
+        var headers = e.Request.Headers;
+        if (!headers.Contains("Authorization") || headers.GetHeader("Authorization") != expected ||
+            (headers.Contains("Origin") && headers.GetHeader("Origin") != home.GetLeftPart(UriPartial.Authority)) ||
+            (headers.Contains("Sec-Fetch-Site") && headers.GetHeader("Sec-Fetch-Site") == "cross-site") ||
+            (e.Request.Method != "GET" && e.Request.Method != "POST"))
+        { e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", ""); return; }
+        await apiGate.WaitAsync();
+        MemoryStream content = null;
+        Stream upload = null;
+        int stage = 1;
+        try
+        {
+            if (exiting) return;
+            var request = (HttpWebRequest)WebRequest.Create(e.Request.Uri);
+            request.Method = e.Request.Method;
+            request.Proxy = null;
+            request.AllowAutoRedirect = false;
+            request.AllowWriteStreamBuffering = false;
+            request.Timeout = request.ReadWriteTimeout = 30000;
+            request.ServicePoint.ConnectionLimit = 16;
+            request.ServicePoint.Expect100Continue = false;
+            request.Headers["Authorization"] = expected;
+            stage = 2;
+            foreach (var header in headers)
+                if (!WebHeaderCollection.IsRestricted(header.Key) && header.Key != "Authorization") request.Headers[header.Key] = header.Value;
+            if (headers.Contains("Content-Type")) request.ContentType = headers.GetHeader("Content-Type");
+            if (request.Method == "POST")
+            {
+                stage = 3;
+                var input = e.Request.Content;
+                long length;
+                if (headers.Contains("Content-Length") && Int64.TryParse(headers.GetHeader("Content-Length"), out length)) { }
+                else if (input != null && input.CanSeek) length = input.Length;
+                else
+                {
+                    // WebView may omit network-generated Content-Length and
+                    // expose a non-seekable body. Spool large explicit uploads
+                    // to an exclusive delete-on-close file instead of RAM.
+                    upload = new MemoryStream();
+                    var chunk = new byte[65536];
+                    int read;
+                    while (input != null && (read = await input.ReadAsync(chunk, 0, chunk.Length)) > 0)
+                    {
+                        if (upload.Length + read > 50L * 1024 * 1024) throw new InvalidDataException();
+                        if (upload is MemoryStream && upload.Length + read > 256 * 1024)
+                        {
+                            string directory = Path.Combine(profile, "proxy-upload");
+                            Directory.CreateDirectory(directory);
+                            var file = new FileStream(Path.Combine(directory, Guid.NewGuid().ToString("N")),
+                                FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536, FileOptions.DeleteOnClose);
+                            upload.Position = 0;upload.CopyTo(file);upload.Dispose();upload = file;
+                        }
+                        upload.Write(chunk, 0, read);
+                    }
+                    upload.Position = 0;length = upload.Length;input = upload;
+                }
+                if (length < 0 || length > 256L * 1024 * 1024) throw new InvalidDataException();
+                request.ContentLength = length;
+                stage = 4;
+                if (length > 0)
+                    using (var output = await request.GetRequestStreamAsync()) { await input.CopyToAsync(output, 65536); }
+            }
+            HttpWebResponse response;
+            stage = 5;
+            try { response = (HttpWebResponse)await request.GetResponseAsync(); }
+            catch (WebException error)
+            { response = error.Response as HttpWebResponse; if (response == null) throw; }
+            using (response)
+            using (var input = response.GetResponseStream())
+            {
+                stage = 6;
+                if (response.ContentLength > limit) throw new InvalidDataException();
+                content = new MemoryStream();
+                var buffer = new byte[32768];
+                int count;
+                while ((count = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (content.Length + count > limit) throw new InvalidDataException();
+                    content.Write(buffer, 0, count);
+                }
+                content.Position = 0;
+                var outputHeaders = new StringBuilder();
+                foreach (string name in response.Headers.AllKeys)
+                    if (!String.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase) &&
+                        !String.Equals(name, "Transfer-Encoding", StringComparison.OrdinalIgnoreCase) &&
+                        !String.Equals(name, "Connection", StringComparison.OrdinalIgnoreCase))
+                        outputHeaders.Append(name).Append(": ").Append(response.Headers[name]).Append("\r\n");
+                outputHeaders.Append("Content-Length: ").Append(content.Length).Append("\r\n");
+                e.Response = environment.CreateWebResourceResponse(content, (int)response.StatusCode, response.StatusDescription, outputHeaders.ToString());
+                content = null; // The WebView owns this finite response; no app cache retains it.
+            }
+        }
+        catch
+        {
+            DesktopProgram.Emit(new { type = "api_proxy_failed", code = stage });
+            if (!exiting)
+            {
+                var error = new MemoryStream(Encoding.UTF8.GetBytes("{\"error\":\"관리자 연결의 요청을 확인하지 못했습니다. 다시 연결해 주세요.\"}"));
+                e.Response = environment.CreateWebResourceResponse(error, 502, "Gateway failure", "Content-Type: application/json; charset=utf-8\r\n");
+            }
+        }
+        finally { if (upload != null) upload.Dispose(); if (content != null) content.Dispose(); apiGate.Release(); }
     }
 
     private void Download(object sender, CoreWebView2DownloadStartingEventArgs e)

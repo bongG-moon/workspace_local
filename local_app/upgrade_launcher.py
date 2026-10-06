@@ -78,12 +78,19 @@ class Client:
             return response.status, value
 
 
-def checked_health(client, *, demo, target_version):
+def checked_health(client, *, demo, target_version, execution_mode=None):
     code, value = client.request('/api/bootstrap')
     if (code != 200 or value.get('application') != 'company-workspace'
             or type(value.get('demo')) is not bool or value['demo'] != demo):
         raise HandoffError('실행 중인 앱 연결을 확인하지 못했습니다.')
-    if version(value.get('workspaceVersion')) >= version(target_version):
+    current, target = version(value.get('workspaceVersion')), version(target_version)
+    if execution_mode is not None:
+        from .execution_mode import checked_mode
+        checked_mode(execution_mode)
+    mode_change = current == target and execution_mode is not None and (
+        value.get('executionModeProtocol') != 1 or
+        value.get('executionMode') in {'normal','administrator'} and value['executionMode'] != execution_mode)
+    if current >= target and not mode_change:
         return value, False
     return value, True
 
@@ -219,8 +226,8 @@ def wait_shutdown(client, runtime_path, *, sleep=time.sleep, clock=time.monotoni
 
 
 def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_confirm,
-             no_browser=False, on_wait=lambda: None, sleep=time.sleep, clock=time.monotonic, timeout=7200):
-    health, needs_upgrade = checked_health(client, demo=demo, target_version=target_version)
+             no_browser=False, execution_mode=None, on_wait=lambda: None, sleep=time.sleep, clock=time.monotonic, timeout=7200):
+    health, needs_upgrade = checked_health(client, demo=demo, target_version=target_version, execution_mode=execution_mode)
     if not needs_upgrade:
         if not no_browser:
             client.request('/api/window/open', {})
@@ -229,6 +236,8 @@ def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_c
     if not protocol and no_browser:
         raise HandoffError('이전 버전은 화면에서 전환 확인이 필요합니다.')
     request = {'requestId': request_id, 'targetVersion': target_version}
+    if execution_mode is not None:
+        request['executionMode'] = execution_mode
     deadline = clock() + timeout
     if protocol:
         code, reply = client.request('/api/upgrade', {'action': 'prepare', **request})
@@ -283,13 +292,16 @@ def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_c
     return 'closed'
 
 
-def launch(state, python, *, demo=False, no_browser=False, popen=subprocess.Popen):
+def launch(state, python, *, demo=False, no_browser=False, execution_mode=None, popen=subprocess.Popen):
     executable = safe(Path(python))
     if not executable.is_absolute() or not executable.is_file() or executable.suffix.lower() != '.exe':
         raise HandoffError('확인한 Python 경로를 찾지 못했습니다.')
     arguments = [powershell_path(), '-NoLogo', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
                  '-File', str(safe(ROOT / 'deploy/Start-CompanyWorkspace.ps1')),
                  '-PythonCommand', str(executable), '-StateRoot', str(state)]
+    if execution_mode is not None:
+        from .execution_mode import checked_mode
+        arguments.extend(['-ExecutionMode', checked_mode(execution_mode)])
     if demo:
         arguments.append('-Demo')
     if no_browser:
@@ -319,6 +331,8 @@ def main():
     parser.add_argument('--request-id')
     parser.add_argument('--demo', action='store_true')
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--execution-mode', choices=['normal', 'administrator'], default='normal')
+    parser.add_argument('--target-execution-mode', choices=['normal', 'administrator'])
     args = parser.parse_args()
     if args.preflight:
         try:
@@ -345,18 +359,19 @@ def main():
                 return 0
             report('accepted')
             from .startup import verify_process
-            verify_process()
+            verify_process(execution_mode=args.execution_mode)
             preflight(no_browser=args.no_browser)
             runtime = runtime_state / 'runtime.json'
             origin, token = endpoint(runtime)
             from .server import WORKSPACE_VERSION
             outcome = transfer(Client(origin, token), runtime, demo=args.demo, target_version=WORKSPACE_VERSION,
+                               execution_mode=args.target_execution_mode or args.execution_mode,
                                request_id=args.request_id, no_browser=args.no_browser,
                                legacy_confirm=lambda: run_helper('Confirm-WorkspaceLegacyUpgrade'),
                                on_wait=lambda: run_helper('Show-WorkspaceUpgradeWaiting'))
             report(outcome)
             if outcome == 'closed':
-                launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser)
+                launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=args.target_execution_mode or args.execution_mode)
             elif outcome in {'failed', 'expired'} and not args.no_browser:
                 run_helper('Show-WorkspaceUpgradeFailure')
             return 0
