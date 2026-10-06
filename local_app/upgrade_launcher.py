@@ -85,11 +85,13 @@ def checked_health(client, *, demo, target_version, execution_mode=None):
         raise HandoffError('실행 중인 앱 연결을 확인하지 못했습니다.')
     current, target = version(value.get('workspaceVersion')), version(target_version)
     if execution_mode is not None:
-        from .execution_mode import checked_mode
+        from .execution_mode import checked_mode, EXECUTION_MODE_PROTOCOL
         checked_mode(execution_mode)
+    policy = value.get('executionModeProtocol')
+    newer_policy = (execution_mode is not None and type(policy) is int and policy > EXECUTION_MODE_PROTOCOL)
     mode_change = current == target and execution_mode is not None and (
-        value.get('executionModeProtocol') != 1 or
-        value.get('executionMode') in {'normal','administrator'} and value['executionMode'] != execution_mode)
+        type(policy) is not int or policy < EXECUTION_MODE_PROTOCOL or
+        not newer_policy and value.get('executionMode') in {'normal','administrator'} and value['executionMode'] != execution_mode)
     if current >= target and not mode_change:
         return value, False
     return value, True

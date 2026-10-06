@@ -464,8 +464,10 @@ try {
         $runningVersion = $null
         $targetVersion = [version]'0.23.20'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
-        $modeChangeNeeded = $runningVersion -eq $targetVersion -and $health.executionMode -in @('normal','administrator') -and $health.executionMode -ne $ExecutionMode
-        $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and $health.executionModeProtocol -ne 1
+        $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
+        $newerExecutionPolicy = $validExecutionPolicy -and $health.executionModeProtocol -gt 2
+        $modeChangeNeeded = $runningVersion -eq $targetVersion -and -not $newerExecutionPolicy -and $health.executionMode -in @('normal','administrator') -and $health.executionMode -ne $ExecutionMode
+        $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 2)
         $upgradeNeeded = $runningVersion -lt $targetVersion -or $modeChangeNeeded -or $executionPolicyUpgrade
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)

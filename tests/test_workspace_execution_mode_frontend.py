@@ -51,3 +51,29 @@ class ExecutionModeFrontendTests(unittest.TestCase):
           assert.equal(confirms,0);assert.equal(calls[0][1].mode,'normal');
           assert.equal(calls.length,1);
         """,modules=('execution-mode',))
+
+    def test_settings_no_longer_blocks_draft_capture_when_user_reopens_it(self):
+        self.run_case("""
+          let calls=0;
+          WorkspaceExecutionMode.attach({api:async()=>{calls++;},confirm:async()=>true});
+          $('settings-dialog').open=true;
+          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'waiting_for_work'});
+          assert.equal($('settings-dialog').open,true);
+          assert.match($('execution-mode-apply-label').textContent,/작업 완료/);
+          assert.match($('execution-mode-message').textContent,/승인·답변/);
+          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'preserving_drafts'});
+          assert.equal($('settings-dialog').open,false);
+          assert.match($('execution-mode-apply-label').textContent,/작성 내용/);
+          assert.equal(calls,0);
+        """,modules=('execution-mode',))
+
+    def test_transition_failure_restores_controls_without_claiming_elevation(self):
+        self.run_case("""
+          WorkspaceExecutionMode.attach({api:async()=>{},confirm:async()=>true});
+          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'requesting'});
+          assert.match($('execution-mode-apply-label').textContent,/Windows 권한/);
+          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'idle',phase:'idle',target:null,error:'권한 전환 연결을 준비하지 못했습니다.'});
+          assert.equal($('execution-mode-select').disabled,false);
+          assert.match($('execution-mode-current').textContent,/일반/);
+          assert.match($('execution-mode-message').textContent,/준비하지 못/);
+        """,modules=('execution-mode',))

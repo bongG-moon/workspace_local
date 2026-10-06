@@ -48,7 +48,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 
 `WS-37`·`WS-38`은 확인한 Python 후보와 실패 이유를 구분합니다. 기록 저장에 성공하면 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치를 안내합니다. 기록에는 로컬 설치 경로가 포함될 수 있지만 인증 값이나 표준 오류 원문은 저장하지 않습니다.
 
-시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.20 진단 표기는 **`ws33-55`**, 대상 소스는 **`workspace-0.23.20`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
+시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.20 진단 표기는 **`ws33-56`**, 대상 소스는 **`workspace-0.23.20`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
 
 진단과 실행은 Windows의 UAC·영구 실행 정책·기존 파일 ACL을 바꾸지 않습니다. PowerShell의 이번 실행에 적용한 옵션으로 모든 그룹 정책·AppLocker·WDAC·Script Host 제한을 해결할 수 있다고 보장하지 않습니다.
 

@@ -41,6 +41,7 @@ ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
 WORKSPACE_VERSION = "0.23.20"
+from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
@@ -424,7 +425,7 @@ class LocalApp:
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
                     "executionMode": self.execution_mode,
-                    "executionModeProtocol": 1,
+                    "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
                     "execution": self.execution.snapshot(),
                     "appUpdate": self.app_updates.snapshot(),
                     "appUpdateWarning": self.update_warning,
@@ -1808,7 +1809,7 @@ class Handler(BaseHTTPRequestHandler):
             if route.path.startswith('/api/') and not self.execution_access():
                 if route.path == '/api/bootstrap':
                     return self.reply({'application':'company-workspace','workspaceVersion':WORKSPACE_VERSION,
-                                       'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':1,
+                                       'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':EXECUTION_MODE_PROTOCOL,
                                        'upgradeProtocol':1,'window':app.window_state(), **app.shutdown_status()})
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
             if route.path == "/api/bootstrap":

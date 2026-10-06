@@ -32,7 +32,7 @@ class WorkspaceReopenTests(unittest.TestCase):
     def fixture_launch(self, *, same_version=False, same_root=True, no_browser=False,
                        relaunched=False, closing=False, wait_finished=False, open_failure=False,
                        probe_dialog_mutex=False, reopen_supported=True, version_override=None, upgrade_ready=False,
-                       shutdown_state=None, quit_result='closed', execution_protocol=1):
+                       shutdown_state=None, quit_result='closed', execution_protocol=2):
         # Execute the shipped launcher with only disposable helper overrides.
         # Unexpected Python/browser/CLI startup fails instead of touching the PC.
         with tempfile.TemporaryDirectory(prefix="workspace-reopen-한글 & ") as raw:
@@ -192,6 +192,16 @@ function Start-Process {
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([item['kind'] for item in events], ['health', 'open', 'preflight', 'coordinator'])
         self.assertEqual(events[-1]['value'], 'Hidden')
+
+    def test_original_same_version_is_replaced_by_corrected_protocol(self):
+        result, events, _ = self.fixture_launch(same_version=True, execution_protocol=1, upgrade_ready=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'open', 'preflight', 'coordinator'])
+
+    def test_future_policy_same_version_is_not_replaced_by_older_patch(self):
+        result, events, _ = self.fixture_launch(same_version=True, execution_protocol=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([item['kind'] for item in events], ['health', 'open'])
 
     def test_no_browser_mismatch_retains_ws39_without_open_or_dialog(self):
         result, events, _ = self.fixture_launch(no_browser=True)

@@ -1,9 +1,9 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param()
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 $report = [ordered]@{
-    diagnosticVersion = 'ws33-55'
+    diagnosticVersion = 'ws33-56'
     targetSource = 'workspace-0.23.20'
     status = 'checking'
     sourceMatches = $false
@@ -25,8 +25,8 @@ $report = [ordered]@{
     notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = 'c38bac345275bb3278dbc80fb0336c69207ba9aee0c0ec882ae5632669aab059'
-    'deploy/CompanyWorkspace.Startup.ps1' = '3cf2c28ff1451268d7df269f6582dc0dcb9ae74c6211497f304457766e6408c5'
+    'deploy/Start-CompanyWorkspace.ps1' = 'fbf665c84cadd7c48766acd840d303fcc0b0bf909ac27374cfa8187b000bad80'
+    'deploy/CompanyWorkspace.Startup.ps1' = '2da6e378d6b3ec66c14305a7fa7ed173e89097a4723da8d0ce3471747afd8930'
     'deploy/CompanyWorkspace.NormalToken.cs' = 'd7a60f5533f4743647798feec9f40e50f50c064522d1688c7105a164b8c0e588'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }

@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -9,7 +10,7 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from local_app.execution_mode import checked_mode, save_mode
+from local_app.execution_mode import checked_mode, save_mode, EXECUTION_MODE_PROTOCOL
 from local_app.server import LocalApp, Server, WORKSPACE_VERSION
 from local_app import upgrade_launcher as launcher
 from tests.test_workspace_upgrade_launcher import FakeClient, RID
@@ -77,6 +78,46 @@ class ExecutionModeTests(unittest.TestCase):
         self.assertFalse(self.app.shutdown_status()['closing'])
         self.assertEqual(preference, (self.app.state / 'execution-mode.json').read_bytes())
 
+    def test_coordinator_failure_is_observed_while_original_launcher_is_still_requesting(self):
+        sid = self.app.create(str(self.root), True)['id']
+        item = self.app.get(sid); item['state'] = 'running'
+        with patch.object(self.app.execution, 'thread_factory'):
+            self.app.execution.start('administrator')
+        request = self.app.execution.pending
+        self.app.upgrade.action({'action':'prepare', 'requestId':request['requestId'],
+                                'targetVersion':WORKSPACE_VERSION, 'executionMode':'administrator'})
+        (self.app.state/'upgrade-last-result.json').write_text(json.dumps({'requestId':request['requestId'], 'status':'failed'}))
+        result = self.app.execution.snapshot()
+        self.assertEqual('idle', result['state'])
+        self.assertEqual('cancelled', self.app.upgrade.pending['stage'])
+        self.assertIsNotNone(result['error'])
+        self.assertEqual('running', item['state'])
+        self.assertFalse(self.app.shutdown_status()['closing'])
+
+    def test_unrelated_result_cannot_cancel_current_permission_request(self):
+        with patch.object(self.app.execution, 'thread_factory'):
+            self.app.execution.start('administrator')
+        request = self.app.execution.pending
+        (self.app.state/'upgrade-last-result.json').write_text(json.dumps({'requestId':'0'*32, 'status':'failed'}))
+        self.assertEqual('requesting', self.app.execution.snapshot()['state'])
+        self.assertIs(request, self.app.execution.pending)
+        (self.app.state/'upgrade-last-result.json').write_text('[]')
+        self.assertEqual('requesting', self.app.execution.snapshot()['state'])
+
+    def test_permission_status_distinguishes_work_wait_from_draft_capture(self):
+        self.app._upgrade_headless = False
+        sid = self.app.create(str(self.root), True)['id']
+        item = self.app.get(sid); item['state'] = 'running'
+        with patch.object(self.app.execution, 'thread_factory'):
+            self.app.execution.start('administrator')
+        request = self.app.execution.pending
+        self.app.upgrade.action({'action':'prepare', 'requestId':request['requestId'],
+                                'targetVersion':WORKSPACE_VERSION, 'executionMode':'administrator'})
+        self.assertEqual('waiting_for_work', self.app.execution.snapshot()['phase'])
+        item['state'] = 'idle'
+        self.app.upgrade.status()
+        self.assertEqual('preserving_drafts', self.app.execution.snapshot()['phase'])
+
     def test_mode_change_waits_for_work_and_binds_target_until_drafts_saved(self):
         self.app._upgrade_headless = False  # This case owns a visible draft capture.
         sid = self.app.create(str(self.root), True)['id']
@@ -101,7 +142,7 @@ class ExecutionModeTests(unittest.TestCase):
     def test_same_version_mode_change_transfers_but_never_downgrades_newer_app(self):
         for current, mode, expected in (('0.21.5','normal','closed'),('0.21.5','administrator','reused'),('99.0.0','normal','reused')):
             client=FakeClient()
-            client.health.update(workspaceVersion=current,executionMode=mode,executionModeProtocol=1)
+            client.health.update(workspaceVersion=current,executionMode=mode,executionModeProtocol=EXECUTION_MODE_PROTOCOL)
             with patch.object(launcher,'wait_shutdown',return_value=True):
                 result=launcher.transfer(client,self.app.state/'runtime.json',demo=False,target_version='0.21.5',
                     request_id=RID,legacy_confirm=lambda:False,execution_mode='administrator',sleep=lambda _:None)
@@ -111,7 +152,7 @@ class ExecutionModeTests(unittest.TestCase):
                 self.assertEqual('administrator',prepare['executionMode'])
 
     def test_administrator_to_normal_uses_same_restart_protocol(self):
-        client=FakeClient(); client.health.update(workspaceVersion='0.21.5',executionMode='administrator',executionModeProtocol=1)
+        client=FakeClient(); client.health.update(workspaceVersion='0.21.5',executionMode='administrator',executionModeProtocol=EXECUTION_MODE_PROTOCOL)
         with patch.object(launcher,'wait_shutdown',return_value=True):
             result=launcher.transfer(client,self.app.state/'runtime.json',demo=False,target_version='0.21.5',
                 request_id=RID,legacy_confirm=lambda:False,execution_mode='normal',sleep=lambda _:None)
@@ -125,6 +166,14 @@ class ExecutionModeTests(unittest.TestCase):
             result=launcher.transfer(client,self.app.state/'runtime.json',demo=False,target_version='0.21.5',
                 request_id=RID,legacy_confirm=lambda:False,execution_mode='normal',sleep=lambda _:None)
         self.assertEqual('closed',result)
+
+    def test_old_patch_same_mode_is_replaced_and_future_patch_is_not_downgraded(self):
+        client=FakeClient();client.health.update(workspaceVersion='0.21.5',executionMode='normal',executionModeProtocol=1)
+        self.assertTrue(launcher.checked_health(client,demo=False,target_version='0.21.5',execution_mode='normal')[1])
+        client.health['executionModeProtocol']=EXECUTION_MODE_PROTOCOL
+        self.assertFalse(launcher.checked_health(client,demo=False,target_version='0.21.5',execution_mode='normal')[1])
+        client.health['executionModeProtocol']=EXECUTION_MODE_PROTOCOL+1
+        self.assertFalse(launcher.checked_health(client,demo=False,target_version='0.21.5',execution_mode='administrator')[1])
 
     def test_api_requires_auth_and_valid_mode_and_reading_never_restarts(self):
         server=Server(self.app); worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
@@ -181,6 +230,50 @@ class ExecutionModeTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name=='nt','Windows token validation')
 class NativeExecutionModeTests(unittest.TestCase):
+    def test_elevation_launcher_can_exit_while_its_successor_is_still_running(self):
+        # Replace only the UAC boundary. The real helper waits for a disposable
+        # normal launcher whose child stays alive; no administrator is started.
+        with tempfile.TemporaryDirectory(prefix='workspace elevation ack ') as raw:
+            root = Path(raw)
+            parent = root/'parent.py'; child = root/'child.py'
+            pid_path = root/'child-pid.txt'; release = root/'release.txt'
+            quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+            child.write_text("import time\nfrom pathlib import Path\ndeadline=time.monotonic()+45\nwhile not Path(" + repr(str(release)) + ").exists() and time.monotonic()<deadline: time.sleep(.1)\n", encoding='utf-8')
+            powershell = str(Path(os.environ['WINDIR'])/'System32/WindowsPowerShell/v1.0/powershell.exe')
+            parent.write_text("import subprocess,sys\nfrom pathlib import Path\np=subprocess.Popen([sys.executable," + repr(str(child)) + "],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True,creationflags=subprocess.CREATE_NO_WINDOW)\nPath(" + repr(str(pid_path)) + ").write_text(str(p.pid),encoding='ascii')\nsys.exit(17)\n", encoding='utf-8')
+            source = ". " + quote(ROOT/'deploy/CompanyWorkspace.Startup.ps1') + r"""
+function Start-Process {
+ param($FilePath,$ArgumentList,$Verb,$WindowStyle,[switch]$PassThru,[switch]$Wait,$ErrorAction)
+ if($Verb -ne 'RunAs' -or $WindowStyle -ne 'Hidden' -or -not $PassThru) { throw 'Incorrect elevation boundary' }
+ $parentArguments=@(('"'+PARENT+'"'))
+ if($Wait) { return Microsoft.PowerShell.Management\Start-Process -FilePath PYTHON -ArgumentList $parentArguments -WindowStyle Hidden -PassThru -Wait }
+ return Microsoft.PowerShell.Management\Start-Process -FilePath PYTHON -ArgumentList $parentArguments -WindowStyle Hidden -PassThru
+}
+$code=Invoke-WorkspaceAdministratorRelaunch -ScriptPath PARENT -PythonCommand 'fixture.exe' -StateRoot STATE -ExecutionRequestId '1234567890abcdef1234567890abcdef' -Demo $true -NoBrowser $true
+$childId=[int](Get-Content -LiteralPath CHILD_PID)
+@{code=$code;childAlive=$null -ne (Get-Process -Id $childId -ErrorAction SilentlyContinue)}|ConvertTo-Json -Compress
+"""
+            for marker, value in [('PARENT',parent),('PYTHON',sys.executable),('STATE',root),('CHILD_PID',pid_path)]:
+                source = source.replace(marker,quote(value))
+            try:
+                result = subprocess.run([powershell,'-NoLogo','-NoProfile','-NonInteractive','-Command',source],capture_output=True,text=True,encoding='utf-8',timeout=20)
+                self.assertEqual(0,result.returncode,result.stderr)
+                self.assertEqual({'code':17,'childAlive':True},json.loads(result.stdout))
+            finally:
+                release.touch()
+                if pid_path.exists():
+                    import ctypes
+                    from ctypes import wintypes
+                    kernel = ctypes.WinDLL('kernel32',use_last_error=True)
+                    kernel.OpenProcess.restype=wintypes.HANDLE
+                    kernel.OpenProcess.argtypes=[wintypes.DWORD,wintypes.BOOL,wintypes.DWORD]
+                    kernel.WaitForSingleObject.argtypes=[wintypes.HANDLE,wintypes.DWORD]
+                    kernel.CloseHandle.argtypes=[wintypes.HANDLE]
+                    handle=kernel.OpenProcess(0x100000,False,int(pid_path.read_text().strip()))
+                    if handle:
+                        try:kernel.WaitForSingleObject(handle,10000)
+                        finally:kernel.CloseHandle(handle)
+
     def test_real_tcp_owner_and_current_medium_token_are_read_without_elevation(self):
         import socket
         from local_app.windows_peer import WindowsPeer

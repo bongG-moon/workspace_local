@@ -1,6 +1,6 @@
 # Workspace 시작 오류 확인하기
 
-대상: **Workspace 0.23.20**. `Check-Workspace.cmd` 결과 파일의 `diagnosticVersion`은 `ws33-55`, `targetSource`는 `workspace-0.23.20`입니다. 오래된 진단 파일과 새 실행기를 섞지 마세요.
+대상: **Workspace 0.23.20**. `Check-Workspace.cmd` 결과 파일의 `diagnosticVersion`은 `ws33-56`, `targetSource`는 `workspace-0.23.20`입니다. 오래된 진단 파일과 새 실행기를 섞지 마세요.
 
 `WS-33`은 Windows 실행 권한 검사에서 중단됐다는 뜻입니다. 다운로드 폴더에서 실행했다는 이유만으로 표시되는 코드는 아니며, 이 번호만으로 회사 정책 문제라고 단정할 수 없습니다.
 
@@ -14,7 +14,7 @@ EXE와 VBS 실행은 모두 이미 설치된 Python 3.11 이상이 필요합니�
 
 `WS-37`·`WS-38`이 발생하면 실행기는 실제 후보 검사에서 확인한 상태를 오류 안내에 덧붙입니다. 기록 저장에 성공한 경우 기본 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics` 아래 `python-check-<시각>-<식별값>.json`이 생성되고 안내에 파일 위치가 표시됩니다. 별도 `StateRoot`를 지정했다면 그 상태 폴더의 `diagnostics` 아래에 저장됩니다. 저장 실패가 원래 시작 오류를 바꾸지는 않으며, 파일이 없다고 검사 성공으로 해석하지 않습니다.
 
-이 파일은 **`diagnosticVersion: python-1`인 실제 Python 시작 실패 기록**입니다. 아래의 `Check-Workspace.cmd`가 만드는 `ws33-55` 읽기 전용 Windows 진단과 목적이 다릅니다. 기존 파일을 덮어쓰거나 외부로 전송하지 않습니다.
+이 파일은 **`diagnosticVersion: python-1`인 실제 Python 시작 실패 기록**입니다. 아래의 `Check-Workspace.cmd`가 만드는 `ws33-56` 읽기 전용 Windows 진단과 목적이 다릅니다. 기존 파일을 덮어쓰거나 외부로 전송하지 않습니다.
 
 | 기록 | 의미 |
 | --- | --- |

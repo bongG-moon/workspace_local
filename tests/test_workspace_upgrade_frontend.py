@@ -28,11 +28,12 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
         ).replace(
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'upgrade-handoff.js'});\n"
+            "vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'execution-mode.js'});\n"
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
         )
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), javascript,
-             str(ROOT / "local_app/web/upgrade-handoff.js")],
+             str(ROOT / "local_app/web/upgrade-handoff.js"), str(ROOT / "local_app/web/execution-mode.js")],
             input=harness, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -49,6 +50,22 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.deepEqual(snapshot.drafts.find(row=>row.id==='home'),{id:'home',text:'보내지 않은 홈 요청',attachments:['D:/보고서 초안.docx']});
           assert.deepEqual(snapshot.drafts.find(row=>row.id==='other-task').attachments,['D:/자료/표.xlsx']);
           assert.equal($('prompt').value,'보내지 않은 홈 요청');assert.equal(appClosed,false);
+        })()""")
+
+    def test_reopened_settings_releases_permission_handoff_capture_without_sending_work(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='보내지 않은 요청';attachments=['C:/work/data.csv'];
+          $('settings-dialog').open=true;
+          await WorkspaceUpgrade.observe({...captureState,executionMode:'administrator'},{});
+          assert.equal(calls.length,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
+          WorkspaceExecutionMode.start({current:'normal',supported:true,state:'requesting',target:'administrator',phase:'preserving_drafts'});
+          assert.equal($('settings-dialog').open,false);
+          await WorkspaceUpgrade.observe({...captureState,executionMode:'administrator'},{});
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/upgrade');
+          assert.equal(calls[0].data.action,'capture');
+          const draft=calls[0].data.snapshot.drafts.find(row=>row.id==='home');
+          assert.equal(draft.text,'보내지 않은 요청');assert.deepEqual(draft.attachments,['C:/work/data.csv']);
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('prompt').value,'보내지 않은 요청');
         })()""")
 
     def test_human_answers_take_priority_and_waiting_is_nonmodal(self):

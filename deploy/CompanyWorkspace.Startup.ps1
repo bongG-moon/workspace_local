@@ -322,7 +322,11 @@ function Invoke-WorkspaceAdministratorRelaunch {
     if ($Demo) { $arguments += ' -Demo' }
     if ($NoBrowser) { $arguments += ' -NoBrowser' }
     try {
-        $child = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+        # Start-Process -Wait includes descendants. The detached coordinator
+        # can wait for user work or launch the long-lived app; it must not keep
+        # this elevation request in "requesting" until that app exits.
+        $child = Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -PassThru -ErrorAction Stop
+        $child.WaitForExit()
         return $child.ExitCode
     } catch { throw 'WORKSPACE_STARTUP:35' }
 }
