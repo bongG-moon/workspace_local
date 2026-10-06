@@ -64,7 +64,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_common_works_without_registration_and_never_executes_or_returns_bodies(self):
         before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in self.root.rglob('*') if path.is_file()}
-        with patch('local_app.harness_client.subprocess.run', side_effect=AssertionError('must not execute')):
+        with patch('local_app.harness_client.run_owned', side_effect=AssertionError('must not execute')):
             result = self.client.discovery_inventory()
         self.assertEqual({'user', 'plugin'}, {row['source'] for row in result['skills']})
         self.assertEqual('registration_missing', result['diagnostics']['code'])
@@ -80,7 +80,7 @@ class DiscoveryTests(unittest.TestCase):
         write(self.plugin / 'commands/skills.md', '---\ndescription: Plugin skills\n---\nPRIVATE BODY')
         write(self.plugin / 'extra/special.md', '---\ndescription: Extra plugin command\n---\nPRIVATE BODY')
         write(self.plugin / '.claude-plugin/plugin.json', {'name': 'fixture', 'commands': ['./extra/special.md']})
-        with patch('local_app.harness_client.subprocess.run', side_effect=AssertionError('must not execute')), \
+        with patch('local_app.harness_client.run_owned', side_effect=AssertionError('must not execute')), \
                 patch('subprocess.Popen', side_effect=AssertionError('must not launch')):
             common = self.client.completion_inventory()
             project = self.client.completion_inventory(self.project)
@@ -257,7 +257,7 @@ class DiscoveryTests(unittest.TestCase):
         key = str(self.project).casefold() if os.name == 'nt' else str(self.project)
         project_state = self.root / 'state/project-scopes' / hashlib.sha256(key.encode()).hexdigest()[:24]
         self.skill(project_state / 'personal-root/.claude/skills/local-reference/SKILL.md', 'local-reference')
-        with patch('local_app.harness_client.subprocess.run', side_effect=AssertionError('must not execute')):
+        with patch('local_app.harness_client.run_owned', side_effect=AssertionError('must not execute')):
             common = self.client.discovery_inventory()
             folder = self.client.discovery_inventory(self.project)
         self.assertEqual('ready', common['diagnostics']['code'])

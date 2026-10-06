@@ -33,7 +33,7 @@ $files = @(
     'local_app\claude_inventory.py', 'local_app\session_order.py', 'local_app\file_diff.py', 'local_app\conversation_fork.py', 'local_app\history.py', 'local_app\artifacts.py', 'local_app\capabilities.py', 'local_app\skill_inventory.py', 'local_app\html_preview.py',
         'local_app\Pick-Path.ps1', 'local_app\WorkspacePicker.cs', 'local_app\Invoke-TerminalClaude.ps1',
     'local_app\startup.py', 'local_app\execution_mode.py', 'local_app\windows_peer.py', 'local_app\web\execution-mode.js', 'local_app\picker_protocol.py', 'local_app\windows_paths.py',
-    'local_app\windows_process.py', 'local_app\windows_job.py', 'local_app\picker_channel.py',
+    'local_app\windows_process.py', 'local_app\windows_job.py', 'local_app\owned_process.py', 'local_app\picker_channel.py',
     'local_app\choices.py', 'local_app\hook_status.py', 'local_app\permission_contract.py',
     'local_app\external_apps.py', 'local_app\completions.py', 'local_app\attention.py', 'local_app\app_window.py',
     'local_app\session_import.py', 'local_app\desktop_notifications.py', 'local_app\window_theme.py', 'local_app\tray.py', 'local_app\attachments.py', 'local_app\work_queue.py', 'local_app\schedule_time.py', 'local_app\app_dispatch.py',

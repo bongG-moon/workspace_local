@@ -317,6 +317,61 @@ class StandaloneBootstrapTests(unittest.TestCase):
         self.assertEqual(20, result.returncode)
         self.assertEqual(b'', result.stdout + result.stderr)
 
+    def test_launcher_timeout_reaps_its_helper_but_preserves_detached_child(self):
+        # Exercise the compiled production timeout logic with our own two
+        # profile-free sleepers, not a real launcher/Claude or process scan.
+        child_id = self.case / 'fixture-child.pid'
+        script = self.case / 'sleeper.ps1'
+        script.write_text(
+            'param([string]$Record)\n'
+            '$child = Start-Process -FilePath (Get-Process -Id $PID).Path '
+            '-ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30") '
+            '-WindowStyle Hidden -PassThru\n'
+            '[IO.File]::WriteAllText($Record, [string]$child.Id)\n'
+            'Start-Sleep -Seconds 30\n', encoding='utf-8-sig')
+        harness = self.case / 'TimeoutProbe.cs'
+        harness.write_text(r'''
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+class TimeoutProbe {
+  static int Main(string[] args) {
+    Process parent = null, child = null;
+    try {
+      var start = new ProcessStartInfo(args[1], "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + args[2] + "\" -Record \"" + args[3] + "\"");
+      start.UseShellExecute = false; start.CreateNoWindow = true;
+      parent = Process.Start(start);
+      var deadline = DateTime.UtcNow.AddSeconds(15);
+      while (!File.Exists(args[3]) && DateTime.UtcNow < deadline) Thread.Sleep(25);
+      child = Process.GetProcessById(Int32.Parse(File.ReadAllText(args[3])));
+      // Retain the fixture's own handle before terminating its parent.
+      var retained = child.Handle;
+      var type = Assembly.LoadFrom(args[0]).GetType("CompanyAgent.WorkspaceStandalone");
+      var method = type.GetMethod("WaitForLauncher", BindingFlags.NonPublic | BindingFlags.Static);
+      bool exited = (bool)method.Invoke(null, new object[] { parent, 50 });
+      return !exited && parent.HasExited && !child.HasExited ? 0 : 1;
+    } finally {
+      foreach (var process in new[] { parent, child }) {
+        if (process == null) continue;
+        try { if (!process.HasExited) process.Kill(); process.WaitForExit(2000); }
+        catch (InvalidOperationException) { }
+        process.Dispose();
+      }
+    }
+  }
+}
+''', encoding='utf-8')
+        probe = self.case / 'TimeoutProbe.exe'
+        compiled = subprocess.run([str(CSC), '/nologo', '/out:' + str(probe), str(harness)],
+                                  capture_output=True, timeout=30, creationflags=HIDDEN)
+        self.assertEqual(0, compiled.returncode, compiled.stdout + compiled.stderr)
+        powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+        result = subprocess.run([str(probe), str(self.good_exe), str(powershell), str(script), str(child_id)],
+                                capture_output=True, timeout=25, creationflags=HIDDEN)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_no_browser_error_preserves_launcher_category_without_private_output(self):
         # Missing/unsupported installed Python remains the shared launcher's
         # precise prerequisite failure, rather than a generic extraction error.

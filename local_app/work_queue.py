@@ -230,6 +230,21 @@ class WorkQueue:
             return deepcopy({'revision': self.data['revision'], 'queue': rows, 'schedules': schedules,
                              'paused': bool(reason), 'reason': reason, 'warning': self.warning, 'policy': POLICY})
 
+    def dispatch_candidates(self):
+        """Read only task IDs that can have an unsent request claimed.
+
+        Do not copy prompt/attachment payloads or scan the application's whole
+        conversation history. Claim still rechecks all mutable admission state
+        under its lock immediately before a request is sent.
+        """
+        with self.lock:
+            self._check()
+            blocked = {row['sessionId'] for row in self.data['queue']
+                       if row['status'] in {'dispatching', 'submitted', 'needs_review'}}
+            return tuple(dict.fromkeys(row['sessionId'] for row in self.data['queue']
+                         if row['status'] == 'queued' and row['sessionId'] not in blocked
+                         and not self.data['holds'].get(row['sessionId'])))
+
     def _new_row(self, sid, text, attachments, context, *, schedule_id=None, due=None):
         active = [row for row in self.data['queue'] if row['status'] in ACTIVE]
         if len(active) >= 500 or sum(row['sessionId'] == sid for row in active) >= 64:

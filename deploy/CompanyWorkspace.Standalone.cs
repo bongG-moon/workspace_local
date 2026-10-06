@@ -297,7 +297,7 @@ namespace CompanyAgent {
                 catch (System.ComponentModel.Win32Exception) { throw new StandaloneFailure(56); }
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
-                if (!process.WaitForExit(90000)) throw new StandaloneFailure(57);
+                if (!WaitForLauncher(process, 90000)) throw new StandaloneFailure(57);
                 int code = process.ExitCode;
                 // 20 means the existing launcher already displayed its reason.
                 if (code == 0 || code == 20) return code;
@@ -307,6 +307,20 @@ namespace CompanyAgent {
                 }
                 throw new StandaloneFailure(58);
             }
+        }
+
+        private static bool WaitForLauncher(Process process, int timeoutMilliseconds) {
+            if (process.WaitForExit(timeoutMilliseconds)) return true;
+            // This retained handle belongs only to our startup PowerShell. A
+            // timed-out profile/launcher must not accumulate after each retry.
+            // Do not terminate a process tree: the app server and an upgrade
+            // coordinator deliberately outlive their short startup helper.
+            try {
+                if (!process.HasExited) process.Kill();
+                process.WaitForExit(2000);
+            } catch (InvalidOperationException) { }
+              catch (System.ComponentModel.Win32Exception) { }
+            return false;
         }
 
         private static int Report(int code) {

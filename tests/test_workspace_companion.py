@@ -367,7 +367,7 @@ class CompanionTests(unittest.TestCase):
     def tearDown(self):self.tmp.cleanup()
 
     def test_course_and_progress_do_not_execute_cli_or_store_prompts(self):
-        with patch('local_app.harness_client.subprocess.run',side_effect=AssertionError('must not call')):
+        with patch('local_app.harness_client.run_owned',side_effect=AssertionError('must not call')):
             self.assertEqual([x['id'] for x in course()['steps']],['read','report','revise','remember','reuse'])
             self.companion.action(self.item,{'action':'progress','step':'read','checked':True})
             snap=self.companion.snapshot(self.item)

@@ -4,7 +4,7 @@
 
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-vbs.zip)**
 
-[0.23.20 변경 안내](docs/VALIDATION_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[0.23.20 최신 수정 안내](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md) · [응답성·승인 모드 검증](docs/VALIDATION_RESPONSIVENESS_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
@@ -17,15 +17,18 @@
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
-## 0.23.20 로컬 보완
+## 0.23.20 동일 버전 수정
 
 - 실행 권한은 **Windows에서 프로그램을 열 때의 권한을 그대로 상속**합니다. 관리자 실행은 EXE를 우클릭해 **관리자 권한으로 실행**하고, 일반 Windows 환경에서 더블클릭하면 일반 권한을 사용합니다. 관리자 터미널에서 열면 관리자 권한을 유지합니다.
 - 앱 설정의 일반·관리자 선택과 전환 버튼을 제거했습니다. 이전 선택 파일은 읽거나 다시 저장하지 않으며, 앱이 자동으로 승격·권한 축소를 시도하지 않습니다. [Windows 실행 권한 안내](docs/WORKSPACE_EXECUTION_MODE.md)
 - 앱과 Claude 및 그 도구는 같은 권한으로 실행하며 같은 사용자·로그인 세션과 실제 토큰을 확인합니다. 다른 권한으로 다시 열려면 기존 앱을 **완전 종료**하세요. 창의 X는 트레이에 남기므로 완전 종료가 아닙니다.
 - 작업 중에도 승인 모드를 변경할 수 있습니다. CLI 응답을 확인한 다음 도구 호출부터 적용하며, 이미 나온 승인·질문은 직접 답해야 합니다. 지원 여부는 현재 Claude Code 연결을 따릅니다.
 - 입력창 위의 회전 스피너와 기존 Claude 개인 설정·Windows 정책을 유지합니다.
+- 연결 이벤트 뒤 작업 중 승인 모드와 Shift+Tab이 비활성화되던 문제를 수정했습니다. 느린 목록 조회와 버튼·제어 요청을 분리하고, 같은 상태 안내마다 업무 버튼을 다시 만들지 않도록 했습니다.
+- CLI 확인·실행·업데이트의 시간 초과와 취소 후 PowerShell이 남을 수 있는 경로를 정리했습니다. 앱이 생성한 프로세스만 관리하며, 종료 정리가 늦어지면 재시도할 수 있도록 창과 트레이를 유지합니다.
+- 예약 대기 중 과거 업무 전체를 반복 검사하던 계산을 줄였습니다. 실제 PowerShell 기반 연결·작업·중지·후속 요청·연결 종료를 8회 반복해 연결 종료 후 잔류 프로세스 0개를 확인했습니다.
 
-이 내용은 현재 소스와 로컬 수정본 기준입니다. 위 다운로드 링크와 [최초 0.23.20 검증 기록](docs/VALIDATION_0.23.20.md), [이전 전환 대기 수정 기록](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md)은 공개 배포 당시의 기록이며 이번 소스 변경의 배포 완료를 뜻하지 않습니다. 같은 버전 수정 파일은 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다.
+같은 버전 수정 파일은 위 링크에서 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다. **기존 앱을 트레이에서 완전 종료한 뒤 수정본을 실행하세요.** 실행 중인 동일 버전 프로세스는 자동 교체되지 않고 기존 창을 재사용합니다. [최초 검증](docs/VALIDATION_0.23.20.md)과 [이전 전환 대기 수정 기록](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md)은 당시 결과를 보존한 자료이며, 최신 파일의 검증과 해시는 [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md)을 기준으로 확인합니다.
 
 ## 0.23.19 변경
 

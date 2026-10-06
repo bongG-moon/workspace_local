@@ -50,6 +50,38 @@ class LivePermissionServerTests(unittest.TestCase):
         self.assertEqual(messages, self.item['messages'])
         self.assertEqual(1, sum(frame['type'] == 'user' for frame in self.frames()))
 
+    def test_system_init_event_keeps_live_controls_enabled_without_snapshot_refresh(self):
+        self.start()
+        event = next(row for row in reversed(self.item['events']) if row['type'] == 'connected')
+        # The browser replaces its connection with this exact event payload.
+        # A later GET/public snapshot must not be needed to enable live controls.
+        connection = event['data']
+        self.assertIs(connection.get('connected'), True)
+        self.assertIs(connection['capabilities']['setPermissionModeWhileRunning'], True)
+        self.app.set_permission_mode(self.sid, 'plan')
+        changed = next(row for row in reversed(self.item['events']) if row['type'] == 'permission_mode_changed')
+        self.assertIs(changed['data'].get('connected'), True)
+        self.assertEqual('running', self.item['state'])
+
+    def test_cold_send_publishes_live_connection_before_any_snapshot_refresh(self):
+        sid = self.app.create(str(self.root), True)['id']
+        item = self.app.get(sid)
+        self.app.send(sid, 'hold', [])
+        eventually(lambda: any(row['type'] == 'connected' for row in item['events']))
+        event = next(row for row in reversed(item['events']) if row['type'] == 'connected')
+        self.assertIs(event['data'].get('connected'), True)
+        self.assertIs(event['data']['capabilities']['setPermissionModeWhileRunning'], True)
+        result = self.app.set_permission_mode(sid, 'plan')
+        self.assertEqual('plan', result['permissionMode'])
+        self.assertEqual('running', item['state'])
+
+    def test_closed_connection_control_event_never_revives_live_marker(self):
+        self.bridge.close()
+        self.app.emit(self.sid, 'permission_mode_changed', self.bridge.model_state())
+        event = self.item['events'][-1]
+        self.assertEqual('permission_mode_changed', event['type'])
+        self.assertIs(event['data'].get('connected'), False)
+
     def test_pending_approval_or_question_is_not_answered_by_mode_change(self):
         for prompt in ('permission', 'question'):
             with self.subTest(prompt=prompt):

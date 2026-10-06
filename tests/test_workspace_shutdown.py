@@ -103,6 +103,23 @@ class ShutdownTests(unittest.TestCase):
         self.assertTrue(self.app.close())
         bridge.close.assert_called_once()
 
+    def test_quit_does_not_ack_unfinished_update_launcher_cleanup(self):
+        self.app.app_updates.close = Mock(side_effect=[False, False, True, True])
+        self.app.desktop = Mock()
+        self.app.notifier.close = Mock()
+        status, payload = self.request('/api/quit', {})
+        self.assertEqual(503, status)
+        self.assertFalse(payload['closed'])
+        self.assertIn({'code': 'update_launcher_pending'}, payload['shutdownIssues'])
+        self.assertTrue(self.thread.is_alive())
+        self.app.desktop.close.assert_not_called()
+        self.app.notifier.close.assert_not_called()
+        status, payload = self.request('/api/quit', {})
+        self.assertEqual(200, status)
+        self.assertTrue(payload['closed'])
+        self.app.desktop.close.assert_called_once()
+        self.app.notifier.close.assert_called_once()
+
     def test_failed_child_cleanup_keeps_server_readable_without_success(self):
         for outcome in (False, None, RuntimeError('cleanup failed')):
             with self.subTest(outcome=outcome):

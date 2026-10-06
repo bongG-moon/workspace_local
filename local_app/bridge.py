@@ -18,6 +18,7 @@ from collections import OrderedDict, deque
 
 from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
 from .windows_job import CREATE_SUSPENDED, WindowsJob
+from .owned_process import run_owned
 
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
@@ -103,7 +104,7 @@ def runtime_context(command: list[str]) -> dict:
 def probe_cli(command: list[str]) -> dict:
     info = {}
     for flag, key in [("--version", "version"), ("--help", "help")]:
-        result = subprocess.run(command + [flag], capture_output=True, encoding="utf-8",
+        result = run_owned(command + [flag], capture_output=True, encoding="utf-8",
                                 errors="replace", timeout=12, creationflags=HIDDEN)
         if result.returncode:
             raise ValueError("기존 터미널의 Claude 실행 환경을 연결하지 못했습니다. 앱 전용 로그인·재설치 대신 터미널의 실행 경로와 시작 설정을 확인해 주세요.")

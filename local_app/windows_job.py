@@ -187,3 +187,14 @@ class WindowsJob:
         if not self._api.CloseHandle(self._handle):
             raise _error()
         self._handle = None
+
+    def close_handle(self):
+        """Release this ownership handle, including a failed short-helper job.
+
+        KILL_ON_JOB_CLOSE terminates remaining descendants. Unlike release_empty,
+        this operation does not claim that their termination was verified.
+        """
+        if self._handle is not None:
+            if not self._api.CloseHandle(self._handle):
+                raise _error()
+            self._handle = None

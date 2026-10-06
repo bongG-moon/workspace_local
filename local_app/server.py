@@ -32,6 +32,7 @@ from .picker_protocol import read_result as read_picker_result
 from .picker_channel import private_picker_directory
 from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
 from .windows_process import powershell_path
+from .owned_process import run_owned, CancelledError
 from .attention import AttentionNotifier, snapshot as attention_snapshot
 from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_policy
 from .app_dispatch import DispatchController
@@ -164,6 +165,7 @@ class LocalApp:
         self._isolated_workspace_root = managed_workspace_root is not None or demo
         self.reconnect_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
+        self._picker_cancel = threading.Event()
         self.inventory_client = ClaudeInventory()
         self.completion_discovery = CompletionDiscovery(self.inventory_client)
         if command is None and not demo:
@@ -1306,7 +1308,13 @@ class LocalApp:
             if kind in {'request', 'choice'} or kind == 'status' and data.get('state') in {'starting', 'running'}:
                 self.upgrade.invalidate()
             if kind in {'connected', 'model_changed', 'effort_changed', 'permission_mode_changed', 'control_restore_changed'}:
-                data = dict(data, controlRestore=item.get('_controlRestore'))
+                # The event stream is also a connection snapshot: the browser
+                # replaces its connection on system/init. Preserve the same
+                # owned-child liveness marker as public(), without waiting for
+                # another GET before enabling live permission controls.
+                bridge = item.get('bridge')
+                data = dict(data, controlRestore=item.get('_controlRestore'),
+                            connected=bool(bridge and not bridge.closed))
             if kind in {'assistant', 'assistant_delta', 'queued_user'}:
                 data = dict(data, runId=item.get('lastRunId'))
             if kind == 'status' and data.get('state') in {'starting', 'running'} and item.get('lastRunId'):
@@ -1672,6 +1680,9 @@ class LocalApp:
         if not self.dialog_lock.acquire(blocking=False):
             raise ValueError("이미 열린 파일 선택 창을 먼저 닫아 주세요.")
         try:
+            with self.lock:
+                self._require_running()
+                self._picker_cancel.clear()
             owner = workspace_window_handle()
             with private_picker_directory() as directory:
                 result_path = Path(directory) / 'result.json'
@@ -1682,8 +1693,10 @@ class LocalApp:
                     args.extend(['-InitialDirectory', initial_directory])
                 try:
                     # Console streams are diagnostics, never part of the response.
-                    result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                            timeout=300, creationflags=HIDDEN)
+                    result = run_owned(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       timeout=300, creationflags=HIDDEN, cancel_event=self._picker_cancel)
+                except CancelledError as exc:
+                    raise ValueError("앱을 종료하면서 파일 선택 창을 닫았습니다.") from exc
                 except subprocess.TimeoutExpired as exc:
                     raise ValueError('선택 시간이 지나 창을 닫았습니다. 파일 선택 창을 다시 열어 주세요.') from exc
                 response = read_picker_result(result_path, kind)
@@ -1699,17 +1712,16 @@ class LocalApp:
             with self._lifecycle:
                 if self._shutdown_state in {'running', 'failed'}:
                     self._shutdown_state = 'closing'
+                self._picker_cancel.set()
         with self._close_lock:
             with self._lifecycle:
                 if self._shutdown_state == 'closed':
                     return True
+            updates_closed = True
             if hasattr(self, 'app_updates'):
-                self.app_updates.close()
+                updates_closed = self.app_updates.close()
             if hasattr(self, 'dispatch'):
                 self.dispatch.stop()
-            self.notifier.close()
-            if hasattr(self, 'desktop'):
-                self.desktop.close()
             issues = []
             cleaned = {}
             def close_bridges():
@@ -1740,6 +1752,14 @@ class LocalApp:
             # A previously admitted operation may publish its bridge while the
             # first snapshot is taken. Never miss that child on final cleanup.
             close_bridges()
+            if updates_closed is False and self.app_updates.close() is False:
+                issues.append({'code': 'update_launcher_pending'})
+            if not issues:
+                # Keep the recovery window/tray available if owned cleanup has
+                # not finished. A subsequent quit can retry the same handles.
+                self.notifier.close()
+                if hasattr(self, 'desktop'):
+                    self.desktop.close()
             with self._lifecycle:
                 self._shutdown_issues = issues
                 self._shutdown_state = 'closed' if not issues else 'failed'

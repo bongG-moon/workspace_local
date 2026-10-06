@@ -101,7 +101,7 @@ function setStatus(state,label,runId){
   $("send").hidden=busy;$("send").disabled=busy||stopFailed||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceAttachments?.isUploading()||sending||!!choiceSubmission||modelChanging||permissionChanging||active?.connection?.permissionModeChangePending===true||effortChanging||connectionPreparing||connectionRestarting()||!!boot.error||appClosed;$("stop").hidden=!busy;$("stop").disabled=stopping||connectionRestarting()||appClosed;for(const card of $("requests").children)card.inert=stopBlocked()||connectionRestarting()||appClosed;$("task-title").disabled=!active||busy||appClosed;$("task-pin").disabled=!active||appClosed;
   $("prompt").readOnly=sending||choosing||dispatching||appClosed;$("attach").disabled=sending||choosing||attachmentPicking||appClosed;$("attach-path").disabled=sending||choosing||appClosed;
   if(sending||choosing||appClosed)globalThis.WorkspaceComposer?.close();
-  if(running&&!started)started=Date.now();if(!running)started=null;if(active){const row=sessions.find(s=>s.id===active.id);if(row)row.state=state;renderSessions();}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
+  if(running&&!started)started=Date.now();if(!running)started=null;if(active){const row=sessions.find(s=>s.id===active.id);if(row&&row.state!==state){row.state=state;renderSessions();}}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
   updateRestartControls();renderStopFeedback();globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(()=>{$("elapsed").textContent=["question","approval"].includes(active?.state)?"응답 대기":started?`${Math.floor((Date.now()-started)/1000)}초`:"";},1000);
@@ -460,7 +460,11 @@ function handleEvent(event){
   if(event.type==="queued_user"&&!renderedQueuedRequests.has(d.requestId)){if(d.requestId)renderedQueuedRequests.add(d.requestId);const message={role:"user",text:d.text,files:d.files||[],requestId:d.requestId,runId:d.runId};active.messages=active.messages||[];active.messages.push(message);$("conversation").querySelector(".conversation-empty")?.remove();renderMessage(message);}
   if(["assistant","assistant_delta"].includes(event.type)){$("conversation").querySelector(".conversation-empty")?.remove();event.type==="assistant"?renderMessage({role:"assistant",...d}):renderDelta(d);}
   if(event.type==="status"){if(["stopped","error"].includes(d.state))globalThis.WorkspaceStream?.flush();if(d.state==="starting")active.verification=null;if(["stopped","error"].includes(d.state))active.choice=null;if(d.runId)active.lastRunId=d.runId;setStatus(d.state,d.label,d.runId);if(d.connection){active.connection=d.connection;if("modelOverride" in d.connection)active.modelOverride=d.connection.modelOverride;renderConnection(d.connection);}if(d.state==="stopped"){$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","중지 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshFiles();refreshResults(true);}}
-  if(event.type==="connected"){active.connection=d;active.modelOverride=d.modelOverride||null;active.sessionId=d.sessionId;renderConnection(d);globalThis.WorkspaceComposer?.connectionChanged();}
+  if(event.type==="connected"){
+    // A CLI initialized event is live even on older runtimes that omitted this
+    // field. An explicit false still wins during connection cleanup.
+    active.connection={connected:true,...d};active.modelOverride=d.modelOverride||null;active.sessionId=d.sessionId;renderConnection(active.connection);globalThis.WorkspaceComposer?.connectionChanged();
+  }
   if(["model_changed","permission_mode_changed","effort_changed","control_restore_changed"].includes(event.type)){applyConnectionState(d);renderConnection(active.connection);}
   if(event.type==="verification"){active.verification=d;renderVerification();}
   if(event.type==="choice"){if(!answeredChoices.has(`${active.id}:${d.id}`))active.choice=d;renderWorkspaceChoice();globalThis.WorkspaceToolActivity?.sync();}
@@ -917,6 +921,7 @@ function renderShutdown(){
 function enterShutdown(state,issues=[]){
   if(active||$("prompt").value||attachments.length)saveDraft();
   appClosed=true;shutdownState=state;shutdownIssues=Array.isArray(issues)?issues:[];
+  renderSessions();
   $("settings-dialog").close();
   globalThis.WorkspaceCapabilities?.close();
   globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();

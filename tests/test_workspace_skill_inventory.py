@@ -146,7 +146,7 @@ class HelperProcessTests(unittest.TestCase):
 
     def test_disabled_core_cannot_launch_discovery_or_fall_back(self):
         write(self.config / 'settings.json', {'enabledPlugins': {}})
-        with patch('local_app.harness_client.subprocess.run', side_effect=AssertionError('must not execute')):
+        with patch('local_app.harness_client.run_owned', side_effect=AssertionError('must not execute')):
             with self.assertRaises(ValueError):
                 self.client.skill_inventory(self.project)
 
@@ -160,15 +160,15 @@ class HelperProcessTests(unittest.TestCase):
         self.assertNotIn(str(self.root).encode(), result.stderr)
 
     def test_unsupported_core_timeout_and_oversized_results_are_generic_errors(self):
-        with patch('local_app.harness_client.subprocess.run',
+        with patch('local_app.harness_client.run_owned',
                    return_value=SimpleNamespace(returncode=1, stdout=b'', stderr=b'SECRET-TRACE')):
             with self.assertRaisesRegex(ValueError, '메타데이터') as caught:
                 self.client.skill_inventory(self.project)
             self.assertNotIn('SECRET', str(caught.exception))
-        with patch('local_app.harness_client.subprocess.run', side_effect=subprocess.TimeoutExpired('fixture', 20)):
+        with patch('local_app.harness_client.run_owned', side_effect=subprocess.TimeoutExpired('fixture', 20)):
             with self.assertRaises(ValueError):
                 self.client.skill_inventory(self.project)
-        with patch('local_app.harness_client.subprocess.run',
+        with patch('local_app.harness_client.run_owned',
                    return_value=SimpleNamespace(returncode=0, stdout=b' ' * (4 * 1024 * 1024 + 1))):
             with self.assertRaises(ValueError):
                 self.client.skill_inventory(self.project)

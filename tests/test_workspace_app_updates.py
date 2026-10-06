@@ -3,9 +3,11 @@ import copy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -669,6 +671,160 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual('error', result['status'])
         self.assertIn('시작을 확인하지 못했습니다', result['error'])
         self.assertTrue(result['canInstall'])
+
+    def test_unaccepted_live_launcher_is_closed_before_timeout_retry(self):
+        process, exit_code = Mock(), [None]
+        process.poll.side_effect = lambda: exit_code[0]
+        process.terminate.side_effect = lambda: exit_code.__setitem__(0, 1)
+        process.wait.return_value = 1
+        self.installer.return_value = {'status': 'launching', '_process': process}
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0):
+            manager.install(VERSION)
+            result = self.finish(manager)
+        self.assertEqual('error', result['status'])
+        self.assertTrue(result['canInstall'])
+        process.terminate.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=updates.LAUNCH_CLEANUP_TIMEOUT)
+        process.kill.assert_not_called()
+
+    def test_close_drains_only_unaccepted_launcher_before_returning(self):
+        seen, exit_code = threading.Event(), [None]
+        process = Mock()
+        def poll():
+            seen.set()
+            return exit_code[0]
+        process.poll.side_effect = poll
+        process.terminate.side_effect = lambda: exit_code.__setitem__(0, 1)
+        process.wait.return_value = 1
+        self.installer.return_value = {'status': 'launching', '_process': process}
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        manager.install(VERSION)
+        self.assertTrue(seen.wait(1))
+        self.assertTrue(manager.close())
+        self.assertEqual(1, exit_code[0])
+        process.terminate.assert_called_once_with()
+        self.assertTrue(manager._launch_done.is_set())
+        self.finish(manager)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows process handle regression')
+    def test_native_unaccepted_powershell_process_is_reaped_on_timeout(self):
+        from local_app.windows_process import powershell_path
+        process = subprocess.Popen([powershell_path(), '-NoLogo', '-NoProfile', '-NonInteractive',
+                                    '-Command', 'Start-Sleep -Seconds 30'],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+        def cleanup():
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3)
+        self.addCleanup(cleanup)
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0), self.assertRaises(updates.UpdateError) as raised:
+            manager._monitor_launch(VERSION, process, None)
+        self.assertEqual('launch_timeout', raised.exception.code)
+        self.assertIsNotNone(process.poll())
+        self.assertIsNone(manager._launcher_process)
+
+    def test_close_can_retry_retained_launcher_cleanup(self):
+        exit_code = [None]
+        process = Mock()
+        process.poll.side_effect = lambda: exit_code[0]
+        process.terminate.side_effect = OSError('fixture transient failure')
+        self.installer.return_value = {'status': 'launching', '_process': process}
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0):
+            manager.install(VERSION)
+            self.finish(manager)
+        self.assertFalse(manager.close())
+        self.assertIs(process, manager._launcher_process)
+        process.terminate.side_effect = lambda: exit_code.__setitem__(0, 1)
+        process.wait.return_value = 1
+        self.assertTrue(manager.close())
+        self.assertIsNone(manager._launcher_process)
+        self.assertFalse(manager._launcher_cleanup_failed)
+
+    def test_close_does_not_succeed_before_late_installer_returns_and_cleans_up(self):
+        entered, release_installer = threading.Event(), threading.Event()
+        exit_code, process = [None], Mock()
+        process.poll.side_effect = lambda: exit_code[0]
+        process.terminate.side_effect = lambda: exit_code.__setitem__(0, 1)
+        process.wait.return_value = 1
+        def installer(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release_installer.wait(3))
+            return {'status': 'launching', '_process': process}
+        manager = self.make(installer=installer, handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        manager.install(VERSION)
+        self.assertTrue(entered.wait(1))
+        try:
+            with patch.object(updates, 'LAUNCH_CLEANUP_TIMEOUT', .01):
+                self.assertFalse(manager.close())
+            process.terminate.assert_not_called()
+        finally:
+            release_installer.set()
+        self.finish(manager)
+        self.assertTrue(manager.close())
+        self.assertEqual(1, exit_code[0])
+        process.terminate.assert_called_once_with()
+
+    def test_accepted_launcher_is_not_terminated_on_close(self):
+        seen, calls = threading.Event(), [0]
+        process = Mock()
+        process.poll.return_value = None
+        self.installer.return_value = {'status': 'launching', '_process': process}
+        def status():
+            calls[0] += 1
+            if calls[0] == 1:
+                return {'upgrade': None}
+            seen.set()
+            return {'upgrade': {'requestId': 'fresh', 'targetVersion': VERSION, 'stage': 'waiting'}}
+        manager = self.make(handoff_status=status)
+        manager.check(manual=True)
+        self.finish(manager)
+        manager.install(VERSION)
+        self.assertTrue(seen.wait(1))
+        manager.close()
+        self.finish(manager)
+        process.terminate.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_handoff_arriving_at_cleanup_is_not_terminated(self):
+        process = Mock()
+        process.poll.return_value = None
+        manager = self.make(handoff_status=Mock(side_effect=[{'upgrade': None}, {'upgrade': {
+            'requestId': 'late-fresh', 'targetVersion': VERSION, 'stage': 'waiting'}}]))
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0), self.assertRaises(updates.UpdateError):
+            manager._monitor_launch(VERSION, process, None)
+        process.terminate.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_cleanup_failure_blocks_another_launcher_and_reports_failure(self):
+        process = Mock()
+        process.poll.return_value = None
+        process.terminate.side_effect = OSError('fixture access denied')
+        self.installer.return_value = {'status': 'launching', '_process': process}
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0):
+            manager.install(VERSION)
+            result = self.finish(manager)
+        self.assertEqual('error', result['status'])
+        self.assertIn('실행기의 종료를 확인하지 못해', result['error'])
+        self.assertFalse(result['canInstall'])
+        with self.assertRaises(ValueError):
+            manager.install(VERSION)
+        process.terminate.assert_called_once_with()
+        self.assertEqual(result, manager.check(manual=True))
 
     def test_cancelled_expired_and_failed_handoff_leave_retryable_status(self):
         for stage in ('cancelled', 'expired', 'failed'):

@@ -70,7 +70,11 @@ internal sealed class DesktopWindow : Form
     private readonly string profile;
     private readonly bool background;
     private readonly bool adminApiBridge;
+    // File/catalog reads and large uploads may take seconds. Keep a bounded
+    // lane for interactive POSTs so those reads cannot queue a clicked control.
     private readonly SemaphoreSlim apiGate = new SemaphoreSlim(4, 4);
+    private readonly SemaphoreSlim readGate = new SemaphoreSlim(4, 4);
+    private readonly SemaphoreSlim uploadGate = new SemaphoreSlim(1, 1);
     // Event long-polls can last 20 seconds, including requests from a view
     // that was just switched. They must never occupy command/control slots.
     private readonly SemaphoreSlim eventGate = new SemaphoreSlim(4, 4);
@@ -266,8 +270,9 @@ internal sealed class DesktopWindow : Form
             (headers.Contains("Sec-Fetch-Site") && headers.GetHeader("Sec-Fetch-Site") == "cross-site") ||
             (e.Request.Method != "GET" && e.Request.Method != "POST"))
         { e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", ""); return; }
-        var gate = e.Request.Method == "GET" && new Uri(e.Request.Uri).AbsolutePath == "/api/events"
-            ? eventGate : apiGate;
+        string path = new Uri(e.Request.Uri).AbsolutePath;
+        var gate = e.Request.Method == "GET" ? (path == "/api/events" ? eventGate : readGate)
+            : path == "/api/attachments/upload" ? uploadGate : apiGate;
         await gate.WaitAsync();
         MemoryStream content = null;
         Stream upload = null;
@@ -281,6 +286,8 @@ internal sealed class DesktopWindow : Form
             request.AllowAutoRedirect = false;
             request.AllowWriteStreamBuffering = false;
             request.Timeout = request.ReadWriteTimeout = 30000;
+            // All bounded lanes share this origin. Reserve enough actual HTTP
+            // connections as well, otherwise long reads still starve controls.
             request.ServicePoint.ConnectionLimit = 16;
             request.ServicePoint.Expect100Continue = false;
             request.Headers["Authorization"] = expected;

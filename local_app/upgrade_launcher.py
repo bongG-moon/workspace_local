@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -23,6 +24,7 @@ import uuid
 
 from .history import safe
 from .windows_process import powershell_path
+from .owned_process import run_owned
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_RESPONSE = 2 * 1024 * 1024
@@ -31,6 +33,22 @@ BUSY = {'starting', 'running', 'approval', 'question'}
 
 class HandoffError(ValueError):
     pass
+
+
+class LauncherCleanupPending(HandoffError):
+    """Keep exact ownership and the coordinator lock after failed cleanup."""
+    def __init__(self, process):
+        super().__init__('새 앱 실행기의 종료를 확인하지 못했습니다. 중복 실행을 막고 기존 실행기가 끝나기를 기다립니다.')
+        self.process = process
+
+    def wait_for_exit(self):
+        try:
+            self.process.wait()
+        except (OSError, subprocess.SubprocessError):
+            # An unusable wait handle cannot prove exit. Keep one dormant
+            # coordinator and its deduplication lock; never search by PID/name
+            # or repeatedly start more PowerShell helpers to recover it.
+            threading.Event().wait()
 
 
 def version(value):
@@ -118,7 +136,7 @@ def legacy_idle(client, health):
     return True
 
 
-def run_helper(function, *, runner=subprocess.run):
+def run_helper(function, *, runner=run_owned):
     helper = safe(ROOT / 'deploy/CompanyWorkspace.Startup.ps1')
     # Function comes only from this fixed internal allowlist. No URL, token or
     # untrusted server text becomes script source or a command-line argument.
@@ -132,7 +150,7 @@ def run_helper(function, *, runner=subprocess.run):
     return result.returncode == 0
 
 
-def native_runtime_probe(directory, *, runner=subprocess.run):
+def native_runtime_probe(directory, *, runner=run_owned):
     """Query through system PowerShell matching the bundled x64 desktop host.
 
     Python may legitimately be 32-bit. Loading the desktop's x64 native DLL
@@ -308,8 +326,25 @@ def launch(state, python, *, demo=False, no_browser=False, execution_mode=None, 
         arguments.append('-Demo')
     if no_browser:
         arguments.append('-NoBrowser')
-    return popen(arguments, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                 stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    process = popen(arguments, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        # Keep the coordinator's deduplication lock until its startup helper
+        # exits. The server is deliberately detached and has its own lifetime.
+        code = process.wait(timeout=90)
+    except subprocess.TimeoutExpired:
+        # Only this retained startup handle is ours to stop. Killing its tree
+        # would also stop a successfully detached app or upgrade coordinator.
+        try:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            raise LauncherCleanupPending(process) from None
+        raise HandoffError('새 앱 실행기 응답 시간이 초과되어 실행기만 정리했습니다.') from None
+    if code not in (0, 20):
+        raise HandoffError('새 앱 실행기를 완료하지 못했습니다.')
+    return process
 
 
 def prune_acknowledgements(state, *, now=time.time):
@@ -372,7 +407,20 @@ def main():
                                on_wait=lambda: run_helper('Show-WorkspaceUpgradeWaiting'))
             report(outcome)
             if outcome == 'closed':
-                launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=execution_mode)
+                try:
+                    launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=execution_mode)
+                except LauncherCleanupPending as exc:
+                    # Stay inside update_lock until this exact launcher exits.
+                    # A failed termination must not allow another replacement
+                    # PowerShell to be created by each repeated app launch.
+                    report('failed')
+                    if not args.no_browser:
+                        try:
+                            run_helper('Show-WorkspaceUpgradeFailure')
+                        except (OSError, subprocess.SubprocessError):
+                            pass
+                    exc.wait_for_exit()
+                    return 39
             elif outcome in {'failed', 'expired'} and not args.no_browser:
                 run_helper('Show-WorkspaceUpgradeFailure')
             return 0

@@ -42,6 +42,7 @@ INSTALL_DEADLINE = 240
 LAUNCH_TIMEOUT = 120
 HANDOFF_TIMEOUT = 2 * 60 * 60 + 180
 LAUNCH_POLL_INTERVAL = 1
+LAUNCH_CLEANUP_TIMEOUT = 2
 _VERSION = re.compile(r'(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\Z')
 _DIGEST = re.compile(r'[a-fA-F0-9]{64}\Z')
 _CDN_HOSTS = {'release-assets.githubusercontent.com', 'objects.githubusercontent.com'}
@@ -52,6 +53,7 @@ _MESSAGES = {
     'install': '새 버전을 실행하지 못했습니다. 기존 앱에서 다시 시도해 주세요.',
     'cancelled': '업데이트를 중지했습니다.',
     'launch_timeout': '새 버전의 시작을 확인하지 못했습니다. 기존 앱에서 업데이트를 다시 시도해 주세요.',
+    'launch_cleanup': '업데이트 실행기의 종료를 확인하지 못해 추가 실행을 멈췄습니다. 기존 앱은 계속 사용할 수 있습니다.',
     'handoff_cancelled': '버전 전환을 취소했습니다. 준비되면 업데이트를 다시 시도할 수 있습니다.',
     'handoff_expired': '버전 전환 대기 시간이 지났습니다. 기존 앱에서 업데이트를 다시 시도해 주세요.',
     'handoff_failed': '버전 전환을 마치지 못했습니다. 기존 앱에서 업데이트를 다시 시도해 주세요.',
@@ -396,7 +398,7 @@ class UpdateManager:
 
     transport(url, *, limit, deadline, cancel, progress=None) returns bytes.
     installer(version, package_bytes, sha256, *, cancel) returns a status dictionary.
-    close() signals cancellation without waiting on network or disk operations.
+    close() cancels downloads immediately and briefly drains a started launcher.
     """
     def __init__(self, state, current_version, *, demo=False, installer=None, transport=None,
                  clock=time.time, handoff_status=None, source=None):
@@ -412,6 +414,11 @@ class UpdateManager:
         self.handoff_status = handoff_status
         self._lock = threading.RLock()
         self._cancel = threading.Event()
+        self._launch_done = threading.Event()
+        self._launch_done.set()
+        self._launcher_cleanup_failed = False
+        self._launcher_process = None
+        self._launcher_context = None
         self._busy = False
         self._thread = None
         self._scheduler = None
@@ -487,6 +494,7 @@ class UpdateManager:
                 'lastChecked': self._last_checked, 'release': release, 'progress': self._progress,
                 'error': self._error, 'canInstall': bool(self._trusted and self._newer() and self.installer
                     and not self.demo and not self.source.error and not self._busy and not self._cancel.is_set()
+                    and not self._launcher_cleanup_failed
                     and self._status in ('available', 'error'))}
 
     def snapshot(self):
@@ -534,7 +542,8 @@ class UpdateManager:
             # request is recent. Ordinary polling and focus changes never do.
             if startup:
                 self._startup_sequence += 1
-            if self.demo or self.source.error or self._cancel.is_set() or self._busy or self._status in ('ready', 'launching'):
+            if (self.demo or self.source.error or self._cancel.is_set() or self._busy
+                    or self._launcher_cleanup_failed or self._status in ('ready', 'launching')):
                 return self._snapshot()
             if not manual and not self._auto:
                 return self._snapshot()
@@ -646,6 +655,9 @@ class UpdateManager:
                 if self._cancel.is_set():
                     return
                 self._status, self._progress = 'ready', 100
+                # Reserve launch cleanup atomically with cancellation admission.
+                # close() must not report completion before a late installer call.
+                self._launch_done.clear()
             installer_phase = True
             # The installer must honor this same cancellation event immediately
             # before launch; holding the UI lock over disk writes would stall quit.
@@ -662,9 +674,10 @@ class UpdateManager:
                 self._monitor_launch(version, process, baseline)
         except Exception as exc:
             with self._lock:
-                if not self._cancel.is_set():
+                if not self._cancel.is_set() or isinstance(exc, UpdateError) and exc.code == 'launch_cleanup':
                     self._failure(exc, install=installer_phase)
         finally:
+            self._launch_done.set()
             with self._lock:
                 self._busy = False
 
@@ -687,27 +700,80 @@ class UpdateManager:
         """
         started = time.monotonic()
         matched = None
-        while not self._cancel.is_set():
-            if process is not None:
-                code = process.poll()
-                if code is not None and code != 0:
-                    raise UpdateError('install')
-            pending = self._handoff()
-            if (pending and pending['targetVersion'] == version and pending['requestId'] != baseline
-                    and (matched is None or matched == pending['requestId'])):
-                matched = pending['requestId']
-                stage = pending.get('stage')
-                if stage in ('cancelled', 'expired', 'failed'):
-                    raise UpdateError('handoff_' + stage)
-                if stage == 'closed':
+        self._launcher_process = process
+        self._launcher_context = (version, baseline)
+        try:
+            while not self._cancel.is_set():
+                if process is not None:
+                    code = process.poll()
+                    if code is not None and code != 0:
+                        raise UpdateError('install')
+                pending = self._handoff()
+                if (pending and pending['targetVersion'] == version and pending['requestId'] != baseline
+                        and (matched is None or matched == pending['requestId'])):
+                    matched = pending['requestId']
+                    stage = pending.get('stage')
+                    if stage in ('cancelled', 'expired', 'failed'):
+                        raise UpdateError('handoff_' + stage)
+                    if stage == 'closed':
+                        return
+                elapsed = time.monotonic() - started
+                if matched is None and elapsed >= LAUNCH_TIMEOUT:
+                    raise UpdateError('launch_timeout')
+                if elapsed >= HANDOFF_TIMEOUT:
+                    raise UpdateError('handoff_expired')
+                if self._cancel.wait(LAUNCH_POLL_INTERVAL):
                     return
-            elapsed = time.monotonic() - started
-            if matched is None and elapsed >= LAUNCH_TIMEOUT:
-                raise UpdateError('launch_timeout')
-            if elapsed >= HANDOFF_TIMEOUT:
-                raise UpdateError('handoff_expired')
-            if self._cancel.wait(LAUNCH_POLL_INTERVAL):
+        finally:
+            if matched is None:
+                self._cleanup_unaccepted_launcher(process, version, baseline)
+            else:
+                self._launcher_process = self._launcher_context = None
+
+    def _cleanup_unaccepted_launcher(self, process, version, baseline):
+        if process is None:
+            self._launcher_process = self._launcher_context = None
+            return
+        finished = False
+        try:
+            if process.poll() is not None:
+                finished = True
                 return
+            # A handoff may have arrived concurrently with cancellation or the
+            # deadline. Never touch its coordinator or its detached new server.
+            pending = self._handoff()
+            if pending and pending['targetVersion'] == version and pending['requestId'] != baseline:
+                finished = True
+                return
+            # Popen retains the original process handle on Windows. Kill only
+            # this unaccepted launcher: never taskkill /T or search by PID/name.
+            process.terminate()
+            process.wait(timeout=LAUNCH_CLEANUP_TIMEOUT)
+            if process.poll() is None:
+                raise OSError('Launcher exit was not confirmed')
+            finished = True
+        except Exception:
+            self._launcher_cleanup_failed = True
+            raise UpdateError('launch_cleanup') from None
+        finally:
+            if finished:
+                self._launcher_cleanup_failed = False
+                if self._launcher_process is process:
+                    self._launcher_process = self._launcher_context = None
 
     def close(self):
-        self._cancel.set()
+        with self._lock:
+            self._cancel.set()
+            launch_pending = not self._launch_done.is_set()
+        # The installer/monitor is a daemon. Let its exact-process cleanup finish
+        # before the server exits, without waiting for a network download.
+        if launch_pending and self._thread is not threading.current_thread():
+            self._launch_done.wait(LAUNCH_CLEANUP_TIMEOUT + .25)
+        if not self._launch_done.is_set():
+            return False  # A late installer return still owns its cleanup turn.
+        if self._launcher_cleanup_failed and self._launcher_context is not None:
+            try:
+                self._cleanup_unaccepted_launcher(self._launcher_process, *self._launcher_context)
+            except UpdateError:
+                return False
+        return not self._launcher_cleanup_failed

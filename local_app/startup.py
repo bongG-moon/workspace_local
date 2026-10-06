@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 import subprocess
 from .windows_process import powershell_path
+from .owned_process import run_owned
 
 
-def verify_process(*, execution_mode='auto', runner=subprocess.run):
+def verify_process(*, execution_mode='auto', runner=run_owned):
     from .execution_mode import checked_request
     checked_request(execution_mode)
     if os.name != 'nt':

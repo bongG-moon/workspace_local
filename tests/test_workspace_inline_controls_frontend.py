@@ -752,6 +752,53 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.match($('composer-control-status').textContent,/요청이 끝나면/);assertDraft();
         })()""")
 
+    def test_real_connected_event_keeps_live_permission_click_and_shift_tab_enabled(self):
+        self.run_case(r"""(async()=>{
+          // CLI system/init originally omitted `connected`, unlike the manually
+          // prepared connection fixture. Exercise the actual event -> running
+          // path and the prompt handler, not just the inline handler in isolation.
+          for(const connectedFlag of [undefined,true]){
+            const initialized={...connection(),permissionModeCycle:['default','auto'],
+              capabilities:{...connection().capabilities,setPermissionModeWhileRunning:true}};
+            delete initialized.connected;
+            if(connectedFlag!==undefined)initialized.connected=connectedFlag;
+            handleEvent({type:'connected',data:initialized});
+            handleEvent({type:'status',data:{state:'running',runId:'wire-run'}});
+            assert.equal(active.connection.connected,true);
+            assert.equal($('composer-permission').disabled,false);
+            assert.equal($('composer-model').disabled,true);assert.equal($('composer-effort').disabled,true);
+            const calls=[];api=async(path,body)=>{
+              calls.push({path,body});
+              return {permissionMode:body.mode,permissionModeOverride:body.mode,permissionModeChangePending:false};
+            };
+            await $('composer-permission').onclick();
+            await choose('자동 판단').onclick();
+            assert.equal(active.connection.permissionMode,'auto');
+            $('prompt').focus();
+            const event={key:'Tab',shiftKey:true,preventDefault(){this.defaultPrevented=true;}};
+            $('prompt').onkeydown(event);
+            for(let i=0;i<16;i++)await Promise.resolve();
+            assert.equal(event.defaultPrevented,true);
+            assert.deepEqual(calls.map(call=>[call.path,call.body.mode]),
+              [['/api/permission-mode','auto'],['/api/permission-mode','default']]);
+            assert.equal(active.connection.permissionMode,'default');
+            assert.equal(active.state,'running');assert.equal(active.lastRunId,'wire-run');assertDraft();
+          }
+        })()""")
+
+    def test_connected_event_explicit_closed_marker_does_not_enable_live_permission(self):
+        self.run_case(r"""(async()=>{
+          handleEvent({type:'connected',data:{...connection(),connected:false,
+            capabilities:{...connection().capabilities,setPermissionModeWhileRunning:true}}});
+          handleEvent({type:'status',data:{state:'running'}});
+          assert.equal(active.connection.connected,false);assert.equal($('composer-permission').disabled,true);
+          let calls=0;api=async()=>{calls++;};
+          await $('composer-permission').onclick();
+          $('prompt').focus();const event={key:'Tab',shiftKey:true,preventDefault(){this.defaultPrevented=true;}};
+          $('prompt').onkeydown(event);
+          assert.equal(event.defaultPrevented,undefined);assert.equal(calls,0);assertDraft();
+        })()""")
+
     def test_live_permission_click_keeps_active_run_and_human_request_cards(self):
         self.run_case(r"""(async()=>{
           active.connection.capabilities.setPermissionModeWhileRunning=true;

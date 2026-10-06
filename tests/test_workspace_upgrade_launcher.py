@@ -1,6 +1,8 @@
 """Handoff only after authenticated idle/capture/cleanup evidence."""
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import threading
@@ -292,11 +294,85 @@ class UpgradeBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='update 한글 & ') as raw:
             python = Path(raw) / 'python.exe'; python.write_bytes(b'fixture')
             popen = Mock()
+            popen.return_value.wait.return_value = 0
             with patch.object(upgrade, 'powershell_path', return_value='C:/Windows/PowerShell.exe'):
                 upgrade.launch(Path(raw), str(python), demo=True, popen=popen)
             args, kwargs = popen.call_args
             self.assertIn(str(python), args[0]); self.assertIn(str(Path(raw)), args[0])
             self.assertNotIn('shell', kwargs); self.assertIn('-Demo', args[0])
+            popen.return_value.wait.assert_called_once_with(timeout=90)
+            popen.return_value.kill.assert_not_called()
+
+    def test_hung_replacement_launcher_is_stopped_and_reaped(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as raw:
+            python = Path(raw) / 'python.exe'; python.write_bytes(b'fixture')
+            process = Mock()
+            process.wait.side_effect = [subprocess.TimeoutExpired(['powershell'], 90), 1]
+            process.poll.return_value = None
+            with patch.object(upgrade, 'powershell_path', return_value='C:/Windows/PowerShell.exe'):
+                with self.assertRaises(upgrade.HandoffError):
+                    upgrade.launch(Path(raw), str(python), popen=Mock(return_value=process))
+            process.kill.assert_called_once_with()
+            self.assertEqual([90, 2], [call.kwargs['timeout'] for call in process.wait.call_args_list])
+
+    def test_replacement_launcher_error_is_not_reported_as_completed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            python = Path(raw) / 'python.exe'; python.write_bytes(b'fixture')
+            process = Mock()
+            process.wait.return_value = 40
+            with patch.object(upgrade, 'powershell_path', return_value='C:/Windows/PowerShell.exe'):
+                with self.assertRaises(upgrade.HandoffError):
+                    upgrade.launch(Path(raw), str(python), popen=Mock(return_value=process))
+            process.kill.assert_not_called()
+
+    def test_failed_launcher_termination_preserves_handle_and_reports_unconfirmed_cleanup(self):
+        with tempfile.TemporaryDirectory() as raw:
+            python = Path(raw) / 'python.exe'; python.write_bytes(b'fixture')
+            process = Mock()
+            process.wait.side_effect = subprocess.TimeoutExpired(['powershell'], 90)
+            process.poll.return_value = None
+            process.kill.side_effect = OSError('fixture termination denied')
+            with patch.object(upgrade, 'powershell_path', return_value='C:/Windows/PowerShell.exe'):
+                with self.assertRaises(upgrade.LauncherCleanupPending) as error:
+                    upgrade.launch(Path(raw), str(python), popen=Mock(return_value=process))
+            self.assertIs(error.exception.process, process)
+            self.assertIn('종료를 확인하지 못했습니다', str(error.exception))
+            self.assertNotIn('정리했습니다', str(error.exception))
+            process.kill.assert_called_once_with()
+
+    def test_coordinator_retains_deduplication_lock_until_exact_failed_launcher_exits(self):
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            process = Mock()
+            def confirm_lock_while_waiting():
+                with upgrade.update_lock(state) as acquired:
+                    self.assertFalse(acquired)
+                return 1
+            process.wait.side_effect = confirm_lock_while_waiting
+            arguments = ['upgrade', '--state', raw, '--python', sys.executable,
+                         '--request-id', RID, '--no-browser']
+            with patch.object(sys, 'argv', arguments), \
+                    patch('local_app.startup.verify_process', return_value='normal'), \
+                    patch.object(upgrade, 'preflight'), \
+                    patch.object(upgrade, 'endpoint', return_value=('http://127.0.0.1:12345', TOKEN)), \
+                    patch.object(upgrade, 'transfer', return_value='closed'), \
+                    patch.object(upgrade, 'launch', side_effect=upgrade.LauncherCleanupPending(process)) as launch:
+                self.assertEqual(upgrade.main(), 39)
+            process.wait.assert_called_once_with()
+            launch.assert_called_once()
+            self.assertEqual(json.loads((state / 'upgrade-last-result.json').read_text())['status'], 'failed')
+            with upgrade.update_lock(state) as acquired:
+                self.assertTrue(acquired)
+
+    def test_failed_wait_handle_keeps_one_dormant_owner_without_retry_loop(self):
+        process = Mock()
+        process.wait.side_effect = OSError('fixture invalid wait handle')
+        signal = Mock()
+        with patch.object(upgrade.threading, 'Event', return_value=signal):
+            upgrade.LauncherCleanupPending(process).wait_for_exit()
+        process.wait.assert_called_once_with()
+        signal.wait.assert_called_once_with()
 
     def test_real_http_client_authenticates_and_bounds_json(self):
         calls = []

@@ -204,7 +204,12 @@ class DispatchController:
             return
         self.queue.tick()
         with self.app.lock:
-            session_ids = list(self.app.sessions)
+            # Most remembered tasks have no queued work. Scanning all of them
+            # also repeats the connection-capacity scan for every task, making
+            # an idle half-second tick quadratic in the conversation history.
+            # Steering remains eligible while held so a completed interrupt
+            # can resume its explicitly requested next direction.
+            session_ids = tuple(dict.fromkeys((*self.queue.dispatch_candidates(), *self.steering)))
         for sid in session_ids:
             if self.stopped.is_set():
                 return

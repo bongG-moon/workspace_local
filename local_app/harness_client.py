@@ -12,6 +12,11 @@ from pathlib import Path
 import stat
 import subprocess
 
+if __package__:
+    from .owned_process import OutputLimitExceeded, run_owned
+else:
+    from owned_process import OutputLimitExceeded, run_owned
+
 HIDDEN = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 DIAGNOSTIC_MESSAGES = {
@@ -278,10 +283,12 @@ class HarnessClient:
                    '--workspace', str(project), '--plugin', str(plugin),
                    '--config', str(self.config), '--registrations', str(self.registrations)]
         try:
-            result = subprocess.run(command, capture_output=True, cwd=workspace,
-                                    timeout=20, creationflags=HIDDEN)
+            result = run_owned(command, capture_output=True, cwd=workspace,
+                               timeout=20, creationflags=HIDDEN, output_limit=4 * 1024 * 1024)
         except subprocess.TimeoutExpired as exc:
             raise ValueError('스킬 목록 확인 시간을 초과했습니다.') from exc
+        except OutputLimitExceeded as exc:
+            raise ValueError('설치된 스킬의 메타데이터를 확인하지 못했습니다.') from exc
         if result.returncode or len(result.stdout) > 4 * 1024 * 1024:
             raise ValueError('설치된 스킬의 메타데이터를 확인하지 못했습니다.')
         value = json.loads(result.stdout.decode('utf-8-sig'))
@@ -295,10 +302,12 @@ class HarnessClient:
         if len(payload) > 64 * 1024:
             raise ValueError('변경 내용이 너무 큽니다.')
         try:
-            result = subprocess.run(command, input=payload, capture_output=True, cwd=workspace,
-                                    timeout=20, creationflags=HIDDEN)
+            result = run_owned(command, input=payload, capture_output=True, cwd=workspace,
+                               timeout=20, creationflags=HIDDEN, output_limit=4 * 1024 * 1024)
         except subprocess.TimeoutExpired as exc:
             raise ValueError('관리 응답 시간을 초과했습니다. 변경 요청이었다면 새로고침해 실제 저장 여부를 먼저 확인하세요. 자동 재실행하지 않습니다.') from exc
+        except OutputLimitExceeded as exc:
+            raise ValueError('관리 결과의 표시 범위를 초과했습니다.') from exc
         if len(result.stdout) > 4 * 1024 * 1024:
             raise ValueError('관리 결과의 표시 범위를 초과했습니다.')
         if result.returncode:

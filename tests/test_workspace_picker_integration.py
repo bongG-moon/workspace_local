@@ -111,7 +111,7 @@ class PickerIntegrationTests(unittest.TestCase):
         work.mkdir()
         response = {'version': 1, 'status': 'success', 'paths': [str(work)]}
         with patch('local_app.server.workspace_window_handle', return_value=0x100000001), \
-                patch('local_app.server.subprocess.run', side_effect=self.responder(response)) as run:
+                patch('local_app.server.run_owned', side_effect=self.responder(response)) as run:
             self.assertEqual(response, self.app.pick('folder', str(work)))
         args = run.call_args.args[0]
         self.assertIn('-STA', args)
@@ -126,7 +126,7 @@ class PickerIntegrationTests(unittest.TestCase):
         for status, code in outcomes:
             with self.subTest(status=status), \
                     patch('local_app.server.workspace_window_handle', return_value=0), \
-                    patch('local_app.server.subprocess.run') as run:
+                    patch('local_app.server.run_owned') as run:
                 if status == 'timeout':
                     def timeout(args, **kwargs):
                         self.result_path = Path(args[args.index('-ResultPath') + 1])
@@ -151,7 +151,7 @@ class PickerIntegrationTests(unittest.TestCase):
                 self.assertFalse(self.result_path.parent.exists())
 
     def test_invalid_initial_directory_never_opens_picker(self):
-        with patch('local_app.server.subprocess.run') as run:
+        with patch('local_app.server.run_owned') as run:
             for initial in ['', 'relative', False, str(self.root / 'missing')]:
                 with self.subTest(initial=initial), self.assertRaises((ValueError, OSError)):
                     self.app.pick('folder', initial)
@@ -160,7 +160,7 @@ class PickerIntegrationTests(unittest.TestCase):
     def test_second_click_does_not_spawn_another_dialog(self):
         self.app.dialog_lock.acquire()
         try:
-            with patch('local_app.server.subprocess.run') as run, self.assertRaises(ValueError):
+            with patch('local_app.server.run_owned') as run, self.assertRaises(ValueError):
                 self.app.pick('folder')
             run.assert_not_called()
         finally:
