@@ -297,7 +297,13 @@ class DispatchController:
                 client_id = data.get('clientRequestId')
                 if client_id is not None and (not isinstance(client_id, str) or not client_id or len(client_id) > 150):
                     raise ValueError('요청 식별자를 확인해 주세요.')
-                row = self.queue.enqueue(sid, text, paths, context, client_id=action + ':' + client_id if client_id else None)
+                healthy = (item['state'] in {'idle', 'done', 'starting', 'running', 'approval', 'question'}
+                           and not item.get('_stopAdmission') and not item.get('_controlRestore')
+                           and (item.get('verification') or {}).get('state') != 'needs-review'
+                           and self.app.stop_state(item) not in {'stopping', 'failed', 'stopped'})
+                row = self.queue.enqueue(sid, text, paths, context,
+                    client_id=action + ':' + client_id if client_id else None,
+                    clear_inactive_hold=action == 'enqueue' and healthy)
                 # ACK retry must not interrupt the next task a second time.
                 existing = any(entry['id'] == row['id'] for entry in before['queue'])
                 if action == 'steer' and not existing and row['status'] == 'queued':

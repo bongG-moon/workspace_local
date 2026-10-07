@@ -4,7 +4,7 @@
 
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-vbs.zip)**
 
-[0.23.20 최신 수정 안내](docs/VALIDATION_UI_POLISH_0.23.20.md) · [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
@@ -18,6 +18,9 @@
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 ## 0.23.20 동일 버전 수정
+
+- 진행 중인 요청이 정상 완료되면 등록한 **이어 할 일**을 순서대로 자동 실행합니다. 이전 중지·오류의 빈 대기열에 남은 보류 표시가 새 후속 요청을 막던 경로를 수정했습니다. 실제 보류 항목, 오류·연결 종료, 사용자 일시 정지와 승인·질문 대기는 유지합니다.
+- 오른쪽 **자료와 결과** 상단의 새로고침으로 두 탭을 함께 갱신하며 작업 종료 시에도 자동 반영합니다. 삭제가 확인된 파일은 목록에서 숨기고 대화·결과 관찰·파일 변경 이력은 보존합니다. 접근 오류는 삭제로 처리하지 않으며 상시 폴더 감시는 추가하지 않습니다.
 
 - 모델·Effort·승인 화살표를 중앙 정렬된 SVG 아이콘으로 바꾸었습니다. 선택창은 누른 버튼 바로 위에 열리고, 창 크기나 목록 높이가 바뀌면 화면 안으로 위치와 너비를 조정합니다.
 - 실행 중 입력창 하단의 구분선 여백과 두 안내 문장 사이 간격을 줄였습니다. 글자와 버튼 크기, 지금 반영·끝나고 이어서 동작은 유지합니다.

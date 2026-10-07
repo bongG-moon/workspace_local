@@ -253,7 +253,7 @@ class WorkQueue:
                 'context': context, 'status': 'queued', 'createdAt': self.clock(), 'updatedAt': self.clock(),
                 'scheduleId': schedule_id, 'dueAt': due, 'runId': None, 'reason': None}
 
-    def enqueue(self, sid, text, attachments=None, context=None, *, client_id=None):
+    def enqueue(self, sid, text, attachments=None, context=None, *, client_id=None, clear_inactive_hold=False):
         sid = _sid(sid)
         text, attachments = _prompt(text, [] if attachments is None else attachments)
         context = _context(context)
@@ -272,6 +272,16 @@ class WorkQueue:
             if receipt_key is not None and len(self.data['receipts']) >= 10000:
                 raise ValueError('중복 전송 방지 기록의 보관 한도에 도달했습니다.')
             row = self._new_row(sid, text, attachments, context)
+            # A failed/stopped turn can leave a hold even when it had no queued
+            # work. An explicit new follow-up in a healthy conversation must not
+            # inherit that obsolete pause. Do not resume older pending work,
+            # schedules, uncertain deliveries, or user/settings confirmations.
+            # Run this only after the idempotency check: retrying an old enqueue
+            # must never undo a later stop.
+            if (clear_inactive_hold and self.data['holds'].get(sid) in {'error', 'stopped', 'restart', 'delivery_unknown'}
+                    and not any(item['sessionId'] == sid and item['status'] in ACTIVE for item in self.data['queue'])
+                    and not any(item['sessionId'] == sid and item['enabled'] for item in self.data['schedules'])):
+                self.data['holds'].pop(sid, None)
             if receipt_key is not None:
                 row['clientRequestId'] = client_id
                 self.data['receipts'][receipt_key] = {'id': row['id'], 'digest': digest}

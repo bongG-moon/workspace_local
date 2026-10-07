@@ -310,6 +310,81 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('conversation').children.filter(node=>node.classList.contains('user')).length,1);
         """)
 
+    def test_queued_confirmation_distinguishes_autorun_from_paused_and_uncertain_work(self):
+        self.run_case(r"""(async()=>{
+          let revision=0;
+          for(const [extra,expected] of [
+            [{},/정상 완료되면 순서대로 자동 실행/],
+            [{paused:true,reason:'stopped'},/일시 정지.*이어 실행/],
+            [{warning:'대기 상태 확인 필요'},/실행 상태.*안내/],
+            [{queue:[{id:'uncertain',text:'확인할 요청',state:'needs_review'}]},/전송 확인/]
+          ]) {
+            $('prompt').value='후속 요청';attachments=['C:/followup.csv'];
+            api=async()=>({revision:++revision,queue:[{id:'q1',text:'후속 요청',state:'queued'}],schedules:[],...extra});
+            await WorkspaceWorkflow.send('enqueue');
+            assert.match($('toast').textContent,expected);
+            if(Object.keys(extra).length)assert.doesNotMatch($('toast').textContent,/자동 실행/);
+            assert.equal($('prompt').value,'');assert.deepEqual(attachments,[]);
+          }
+        })()""", ("workflow",))
+
+    def test_queue_rows_explain_autorun_approval_wait_and_pause_without_resuming(self):
+        self.run_case(r"""(async()=>{
+          let revision=0,writes=0,paused=false;
+          api=async(path,body)=>{if(body)writes++;return {revision:++revision,paused,queue:[{id:'q1',text:'후속 요청',state:'queued'}],schedules:[]};};
+          await WorkspaceWorkflow.refresh();
+          assert.match(flatText($('queue-list')),/정상 완료 후 자동 실행/);
+          assert.equal($('workflow-resume').hidden,true);
+          assert.match($('workflow-policy').textContent,/오류·중지·연결 종료/);
+          for(const state of ['approval','question']) {
+            active.state=state;WorkspaceWorkflow.render();
+            assert.match(flatText($('queue-list')),/응답 대기/);
+            assert.equal($('workflow-resume').hidden,true);
+          }
+          active.state='done';paused=true;await WorkspaceWorkflow.refresh();
+          assert.match(flatText($('queue-list')),/일시 정지/);
+          assert.equal($('workflow-resume').hidden,false);assert.equal(writes,0);
+        })()""", ("workflow",))
+
+    def test_workflow_cannot_resume_or_submit_while_stop_is_unconfirmed(self):
+        self.run_case(r"""(async()=>{
+          active.state='stopping';let writes=0;
+          globalThis.WorkspaceStop={blocked:()=>true};
+          api=async(path,body)=>{if(body)writes++;return {revision:1,paused:true,queue:[{id:'q1',text:'남은 요청',state:'queued'}],schedules:[]};};
+          await WorkspaceWorkflow.refresh();
+          assert.equal($('workflow-resume').disabled,true);
+          assert.match(flatText($('queue-list')),/중지 확인 중/);
+          $('prompt').value='보관할 요청';attachments=['C:/keep.csv'];
+          await WorkspaceWorkflow.requestResume();await WorkspaceWorkflow.send('enqueue');
+          assert.equal(writes,0);assert.equal($('prompt').value,'보관할 요청');assert.deepEqual(attachments,['C:/keep.csv']);
+        })()""", ("workflow",))
+
+    def test_stop_requested_during_enqueue_does_not_promise_automatic_execution(self):
+        self.run_case(r"""(async()=>{
+          $('prompt').value='후속 요청';let reply,stopping=false;
+          globalThis.WorkspaceStop={blocked:()=>stopping};
+          api=()=>new Promise(resolve=>reply=resolve);
+          const operation=WorkspaceWorkflow.send('enqueue');
+          stopping=true;active.state='stopping';
+          reply({revision:1,paused:false,queue:[{id:'q1',text:'후속 요청',state:'queued'}],schedules:[]});
+          await operation;
+          assert.match($('toast').textContent,/중지 상태/);assert.doesNotMatch($('toast').textContent,/자동 실행/);
+          assert.match(flatText($('queue-list')),/중지 확인 중/);
+        })()""", ("workflow",))
+
+    def test_newer_pause_snapshot_overrides_stale_enqueue_confirmation(self):
+        self.run_case(r"""(async()=>{
+          $('prompt').value='후속 요청';let reply;
+          api=()=>new Promise(resolve=>reply=resolve);
+          const operation=WorkspaceWorkflow.send('enqueue');
+          const state={queue:[{id:'q1',text:'후속 요청',state:'queued'}],schedules:[]};
+          api=async()=>({...state,revision:3,paused:true,reason:'stopped'});
+          await WorkspaceWorkflow.refresh();
+          reply({...state,revision:2,paused:false});await operation;
+          assert.match($('toast').textContent,/일시 정지/);assert.doesNotMatch($('toast').textContent,/자동 실행/);
+          assert.match(flatText($('queue-list')),/일시 정지/);
+        })()""", ("workflow",))
+
     def test_reorder_only_sends_queued_rows_and_uncertain_delivery_requires_review(self):
         self.run_case(r"""(async()=>{
           active.state='done';const state={revision:1,paused:true,queue:[

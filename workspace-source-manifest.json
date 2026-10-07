@@ -32,8 +32,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "be14fc185536b58c03cb115e068c22ad25748d7f91c16e775f770523eb2a98f2",
-      "size": 29372
+      "sha256": "08cc4197de20312f207446ee8b85c235b0c5a90744ac325c7973116d71dcc474",
+      "size": 30073
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -132,8 +132,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "fb52499852b90c3620a2e97c329b310bd285d2e1dd7f44876d85060fecae80c5",
-      "size": 20397
+      "sha256": "7b6a93ef5c1bd5853893935557ac59525a5a8212fad4e4528783fc4ce43686c2",
+      "size": 22051
     },
     {
       "path": "docs/CLAUDE_CODE_BASICS.md",
@@ -162,8 +162,8 @@
     },
     {
       "path": "docs/LOCAL_WORKSPACE.md",
-      "sha256": "ccf44b3db73e8a5fc02875fc89a246d5879c93ce7b95e56dc454cfb8f630bd98",
-      "size": 40597
+      "sha256": "f1f18378bdaaf3cfc79fdde1527a7e418fea6355f073dcc50d85fa93087d6069",
+      "size": 41569
     },
     {
       "path": "docs/ONBOARDING_COURSE.md",
@@ -451,6 +451,16 @@
       "size": 3746
     },
     {
+      "path": "docs/VALIDATION_FILE_REFRESH_0.23.20.md",
+      "sha256": "6e6c7a10f05048fab6330f2def3d3e0956477cb6164ba57a4ed4361e860887bd",
+      "size": 3575
+    },
+    {
+      "path": "docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md",
+      "sha256": "ea470aec512a4e08e3102cf3020edeb3fdba430ad7b69a3bc9b89acd769c6dfb",
+      "size": 3032
+    },
+    {
       "path": "docs/VALIDATION_INHERITED_EXECUTION_LOCAL.md",
       "sha256": "e1aabedb2c5fae5f833ae8eb7a87fe448023d7b158a8121b42042c465231c25f",
       "size": 6007
@@ -642,8 +652,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "0e4f5b58c51a3d8a29cb5db2971c58cceaded45487f329c99a5844f1e768e31d",
-      "size": 42744
+      "sha256": "38dbdf3eb2e262b8ead8800b7fabac1cca6794dc95a886ddb5a777e6e6a0a1f8",
+      "size": 43491
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -672,8 +682,8 @@
     },
     {
       "path": "local_app/app_dispatch.py",
-      "sha256": "a3631f1442dbac02a555e4aa560999ebaac8aec7c1c724cbf748c3c62c0dadad",
-      "size": 23402
+      "sha256": "c40f995d1942fb5dc1a79cb3a4571278473fa7508315d69108e95ab4083b8867",
+      "size": 23895
     },
     {
       "path": "local_app/app_updates.py",
@@ -687,8 +697,8 @@
     },
     {
       "path": "local_app/artifacts.py",
-      "sha256": "d6f20b8d3bf7de9d9d427c14afb60fca0c7d325fd281e81a673dd350ce374999",
-      "size": 4657
+      "sha256": "b3e3d0131ae05683c77585143e9607ead8b2ba4cb2601dff9c55361b5ed605a1",
+      "size": 7381
     },
     {
       "path": "local_app/attachments.py",
@@ -832,8 +842,8 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "e15511f9a618b50b50177e2952b5c99c2de6383e286f634457024c0c4877476f",
-      "size": 142274
+      "sha256": "77e334d63ea77ad8f7206533fcd3b522ff626ef63568a5362148ed5dcee5b4d1",
+      "size": 142662
     },
     {
       "path": "local_app/session_import.py",
@@ -922,13 +932,13 @@
     },
     {
       "path": "local_app/web/app.css",
-      "sha256": "e4283ffa2999f64f2d3fbbc7d126ff4668d7711230e37fc6a5ff740fc14acc7c",
-      "size": 113100
+      "sha256": "883798e1702559a384979a792847b95e399eb5ab199c9f8c20eb8c39fd1c4119",
+      "size": 113288
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "acd4c00497849c3e0779f954a0ee0f4982416391717886c0534d222e67c87b21",
-      "size": 132198
+      "sha256": "3f35313c7dddac53e79384c812cbfc6ea2bd02eebf2814ae4e28990a637726f7",
+      "size": 134284
     },
     {
       "path": "local_app/web/attachments.js",
@@ -982,8 +992,8 @@
     },
     {
       "path": "local_app/web/execution-view.js",
-      "sha256": "eb2750c45e98ae2cb2864a69b9f97215678607c2568499c285ebf3ef08c3c26b",
-      "size": 5052
+      "sha256": "a2595cb204a2069641a8615758dfe585102413e8e2db69fe303f015d07b2991b",
+      "size": 5105
     },
     {
       "path": "local_app/web/fonts/NotoSansKR-Variable.woff",
@@ -1007,8 +1017,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "dc220807738a78d7860f690352c718320e22959d0618b3b854e3924011172bc1",
-      "size": 72208
+      "sha256": "8a2e5fcc9f5ba710c7b4a91abfcc591ced6d7a64511013c254153681403e2e45",
+      "size": 72318
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1117,8 +1127,8 @@
     },
     {
       "path": "local_app/web/workflow.js",
-      "sha256": "c66defa982f89366ae5d388111d6297698afe8dfd3a964025490e7c92b298a72",
-      "size": 27815
+      "sha256": "960720f88bd304bb5eb33de98e44f8ba41a6cf2add5a49da8fde72ba28a01648",
+      "size": 29507
     },
     {
       "path": "local_app/window_theme.py",
@@ -1147,8 +1157,8 @@
     },
     {
       "path": "local_app/work_queue.py",
-      "sha256": "f063c7bdb8796e46bfdf7e37a307643abc000213fdd498bfc31afd2cdafd537b",
-      "size": 31646
+      "sha256": "00df452fe04257c8add1df8ff51625a98f9466aa8baedc4af972a1b4435fa77e",
+      "size": 32521
     },
     {
       "path": "scripts/assets/manual-font/NotoSansKR-guide.woff",
@@ -1436,6 +1446,11 @@
       "size": 2973
     },
     {
+      "path": "tests/test_workspace_artifact_refresh.py",
+      "sha256": "cdf359879142571178a31cd72f98bc74e8890797366831a257bac055d65fde7c",
+      "size": 10186
+    },
+    {
       "path": "tests/test_workspace_attention.py",
       "sha256": "99e9e9ada81126c568f825a93cfc41887e6fd28731e1c7cf5fc3f5f2d9741808",
       "size": 15676
@@ -1467,8 +1482,8 @@
     },
     {
       "path": "tests/test_workspace_chat_shortcuts.py",
-      "sha256": "a497d58ffb2683ee7d9f97ef20c0511f95f2bdf6720001d04e6f097515936806",
-      "size": 33131
+      "sha256": "5b9db8ecba2cbd9252246fe8dc9221c5eb9968e4bc1a965e45cfe8fb036034df",
+      "size": 33134
     },
     {
       "path": "tests/test_workspace_choices_hooks.py",
@@ -1552,8 +1567,8 @@
     },
     {
       "path": "tests/test_workspace_dispatch_routes.py",
-      "sha256": "a9d595d6edf283ea8f43cb51751922ccb20a92739f9da0631eff61a0519ab6a2",
-      "size": 10851
+      "sha256": "3ebe2b7a897f0afacbcf55db59895e7575d734c33c25cc1a9a6964334fdc3e5c",
+      "size": 16087
     },
     {
       "path": "tests/test_workspace_drop_upload.py",
@@ -1582,8 +1597,8 @@
     },
     {
       "path": "tests/test_workspace_execution_view.py",
-      "sha256": "b610f365e5256eed8cff6c6963151239b3906e458c95b01cc0a38e548e57a43c",
-      "size": 9163
+      "sha256": "2df10546735c90bcf443555eb4fd67da39e99c7d5ca1d027c1176060fc0d4a0f",
+      "size": 10434
     },
     {
       "path": "tests/test_workspace_executions.py",
@@ -1609,6 +1624,11 @@
       "path": "tests/test_workspace_file_preview.py",
       "sha256": "ddac3689fe711e105962c672119df792d5753cfad3a496d734505ffb12108362",
       "size": 15801
+    },
+    {
+      "path": "tests/test_workspace_file_refresh_frontend.py",
+      "sha256": "ed718fbf37426d54532715094dafc9f5e866eeb342d9fadf5ccea00526f64e89",
+      "size": 8467
     },
     {
       "path": "tests/test_workspace_flow_routes.py",
@@ -1747,13 +1767,13 @@
     },
     {
       "path": "tests/test_workspace_product.py",
-      "sha256": "41145748a02c203bcf311db510f3b7c615c1b7cfd8598948d498476a833c986b",
-      "size": 22114
+      "sha256": "dc5e75b634714ba3be96748afb045046992a06b7ec5ba17ddb2658993c3e8494",
+      "size": 22137
     },
     {
       "path": "tests/test_workspace_productivity_frontend.py",
-      "sha256": "0858a2c4bd074da58c07097636dc89d19b2702a309b006bf6db7470228eabb76",
-      "size": 33439
+      "sha256": "f784fddb415c955894b3d78e5beea8a5cce4df80529d3b02c95b8f1a29225cbd",
+      "size": 38104
     },
     {
       "path": "tests/test_workspace_productivity_routes.py",
@@ -1982,8 +2002,8 @@
     },
     {
       "path": "tests/test_workspace_stop_resume.py",
-      "sha256": "72d27795bb12677428175dc80d896800c39407dd3554d3270c5a59e246c66c79",
-      "size": 14686
+      "sha256": "bf88699ef8c713d648ce74470e79c54620c86b2031f82b4673d121d0407fc3a3",
+      "size": 17065
     },
     {
       "path": "tests/test_workspace_tool_activity.py",
@@ -2062,8 +2082,8 @@
     },
     {
       "path": "tests/test_workspace_work_queue.py",
-      "sha256": "aa04fa14fc1e9479cbf24bf2ee9a7e2d5149645cbd3a26f71dc8220807bb1066",
-      "size": 18336
+      "sha256": "6b2ea178d31634024a4c4ef5001098f30adc517d860dbdd3d15e870cdd376301",
+      "size": 21928
     },
     {
       "path": "workspace_publisher/__init__.py",

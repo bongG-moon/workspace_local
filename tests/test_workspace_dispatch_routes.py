@@ -110,6 +110,103 @@ class DispatchRoutesTests(unittest.TestCase):
         self.app.dispatch.pump()
         self.assertEqual(['next'], self.bridge.sent)
 
+    def test_fresh_followups_after_old_stop_run_in_order_without_resume_or_opening_queue(self):
+        # Reproduce an old stop with no queued work, followed by an explicit
+        # new request. The old hold used to strand every later follow-up.
+        self.app.dispatch.manual_stop(self.sid)
+        self.bridge.finish = False
+        self.app.send(self.sid, 'current request', [])
+        self.enqueue('first follow-up')
+        self.enqueue('second follow-up')
+        self.assertFalse(self.app.dispatch.snapshot(self.sid)['paused'])
+        self.app.dispatch.pump()
+        self.assertEqual(['current request'], self.bridge.sent)
+        self.bridge.finish = True
+        self.app.dispatch.start()
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session',
+                                         'verification': {'state': 'unverified'}})
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline and self.app.dispatch.snapshot(self.sid)['queue']:
+            time.sleep(.02)
+        self.assertEqual(['current request', 'first follow-up', 'second follow-up'], self.bridge.sent)
+        self.assertEqual([], self.app.dispatch.snapshot(self.sid)['queue'])
+        self.assertIsNone(self.app.dispatch.error)
+        self.app.dispatch.pump()
+        self.assertEqual(3, len(self.bridge.sent))
+
+    def test_new_enqueue_during_error_keeps_hold_until_explicit_recovery(self):
+        self.app.emit(self.sid, 'error', {'code': 'cli_disconnected', 'message': 'connection ended'})
+        value = self.enqueue('do not start after disconnect')
+        self.assertTrue(value['paused'])
+        self.assertEqual('error', value['reason'])
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+
+    def test_new_enqueue_preserves_current_hook_error_even_if_request_is_done(self):
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session',
+                                         'verification': {'state': 'needs-review'}})
+        value = self.enqueue('wait for hook recovery')
+        self.assertEqual('done', self.app.get(self.sid)['state'])
+        self.assertTrue(value['paused'])
+        self.assertEqual('error', value['reason'])
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+
+    def test_late_result_after_stop_cannot_clear_hold_on_new_enqueue(self):
+        self.app.dispatch.manual_stop(self.sid)
+        self.bridge.stop_state = 'stopped'
+        self.app.emit(self.sid, 'status', {'state': 'stopped'})
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+        value = self.enqueue('wait for confirmed recovery')
+        self.assertTrue(value['paused'])
+        self.assertEqual('stopped', value['reason'])
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+
+    def test_unconfirmed_control_restore_does_not_clear_old_error_hold(self):
+        self.app.dispatch.queue.pause(self.sid, 'error')
+        self.app.get(self.sid)['_controlRestore'] = {'status': 'needs_input', 'canSend': False}
+        value = self.enqueue('wait for controls')
+        self.assertTrue(value['paused'])
+        self.assertEqual('error', value['reason'])
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+
+    def test_error_stop_and_disconnect_hold_followup_even_after_late_success(self):
+        for case in ('task_failed', 'cli_disconnected', 'stopped'):
+            with self.subTest(case=case):
+                self.sid = self.app.create(str(self.work), True)['id']
+                self.bridge = Bridge(self.app, self.sid, finish=False)
+                self.app.get(self.sid)['bridge'] = self.bridge
+                self.app.send(self.sid, 'original', [])
+                value = self.enqueue('keep queued')
+                identifier = value['queue'][0]['id']
+                if case == 'stopped':
+                    self.app.stop(self.sid)
+                else:
+                    self.app.emit(self.sid, 'error', {'code': case, 'message': 'incomplete'})
+                self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+                self.app.dispatch.pump()
+                self.assertEqual(['original'], self.bridge.sent)
+                state = self.app.dispatch.snapshot(self.sid)
+                self.assertTrue(state['paused'])
+                self.assertEqual(identifier, state['queue'][0]['id'])
+                self.assertEqual('queued', state['queue'][0]['state'])
+
+    def test_new_follow_up_does_not_resume_older_interrupted_queue(self):
+        self.bridge.finish = False
+        self.app.send(self.sid, 'previous request', [])
+        self.enqueue('older pending work')
+        self.app.dispatch.manual_stop(self.sid)
+        self.app.emit(self.sid, 'status', {'state': 'stopped'})
+        self.app.send(self.sid, 'explicit new request', [])
+        value = self.enqueue('new follow-up')
+        self.assertTrue(value['paused'])
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+        self.app.dispatch.pump()
+        self.assertEqual(['previous request', 'explicit new request'], self.bridge.sent)
+        self.assertEqual(2, len(self.app.dispatch.snapshot(self.sid)['queue']))
+
     def test_stop_between_claim_and_send_prevents_delivery(self):
         self.enqueue()
         original = self.app.send

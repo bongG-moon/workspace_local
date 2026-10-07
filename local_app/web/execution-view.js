@@ -55,7 +55,7 @@ globalThis.WorkspaceExecutionView = (() => {
     if(!current() || !runId)return;
     const items=(files||[]).filter(file=>file.runId===runId).slice(-12),signature=JSON.stringify(items.map(file=>[file.path,file.observedAt]));
     const old=galleries.get(runId);if(old?.signature===signature)return;
-    if(!items.length)return;
+    if(!items.length){if(old){old.card.remove();galleries.delete(runId);}return;}
     const card=old?.card||el("article",null,"message run-results");card.replaceChildren();card.dataset.runId=runId;
     card.append(el("div","이번 요청 중 바뀐 파일","run-results-label"));
     globalThis.WorkspaceRichContent?.files(card,items.map(file=>file.path),{sessionId,workspace:active.workspace});

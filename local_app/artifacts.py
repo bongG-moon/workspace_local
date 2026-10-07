@@ -109,3 +109,75 @@ def changes(root: Path, before: Snapshot, after: Snapshot, run_id: str, observed
                      'change': 'created' if previous is None else 'modified',
                      'runId': run_id, 'observedAt': observed_at, 'size': signature[1]})
     return rows
+
+
+def available_artifacts(root: Path, rows, *, seconds=.25):
+    """Filter a bounded display snapshot, without changing historical evidence.
+
+    Read metadata only. A missing path is hidden; permission/I/O errors and a
+    spent time budget remain unknown and keep the previous row. Check ancestry
+    before children so replaced directories cannot redirect the lookup.
+    """
+    rows = list(rows)
+    result = {'missing': 0, 'errors': 0, 'limited': False}
+    if not rows:
+        return rows, result
+    deadline = time.monotonic() + seconds
+    cache = {}
+
+    def kind(path):
+        if path in cache:
+            return cache[path]
+        if time.monotonic() >= deadline:
+            result['limited'] = True
+            return None
+        try:
+            info = path.lstat()
+            value = ('blocked' if redirects_path(info) else 'directory' if stat.S_ISDIR(info.st_mode)
+                     else 'file' if stat.S_ISREG(info.st_mode) else 'blocked')
+        except (FileNotFoundError, NotADirectoryError):
+            value = 'missing'
+        except OSError:
+            result['errors'] += 1
+            value = None
+        cache[path] = value
+        return value
+
+    # An unavailable workspace is not evidence that all its files were deleted.
+    # Preserve its rows for a later refresh instead of erasing the display.
+    if not root.is_absolute() or '..' in root.parts or '\x00' in str(root):
+        result['errors'] += 1
+        return rows, result
+    for parent in reversed((root, *root.parents)):
+        root_kind = kind(parent)
+        if root_kind != 'directory':
+            if root_kind is not None:
+                result['errors'] += 1
+            return rows, result
+
+    visible = []
+    for row in rows:
+        path = Path(row['path'])
+        if (not path.is_absolute() or not path.is_relative_to(root)
+                or '..' in path.parts or '\x00' in str(path)):
+            result['missing'] += 1
+            continue
+        relative = path.relative_to(root)
+        if not relative.parts or any(private_name(part) for part in relative.parts):
+            result['missing'] += 1
+            continue
+        current, available = root, True
+        for index, part in enumerate(relative.parts):
+            current = current / part
+            actual = kind(current)
+            if actual is None:
+                break  # Unknown: keep this row, not a confirmed deletion.
+            expected = 'file' if index == len(relative.parts) - 1 else 'directory'
+            if actual != expected:
+                available = False
+                break
+        if available:
+            visible.append(row)
+        else:
+            result['missing'] += 1
+    return visible, result

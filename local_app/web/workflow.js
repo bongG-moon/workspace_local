@@ -11,6 +11,8 @@ globalThis.WorkspaceWorkflow = (() => {
   const current = context => context?.id === active?.id && context.generation === selectionGeneration && !appClosed;
   const capture = () => ({id:active?.id,generation:selectionGeneration});
   const busy = () => busyStates.has(active?.state);
+  const stopBlocked = () => !!globalThis.WorkspaceStop?.blocked();
+  const queuePolicy = "대기 요청은 정상 완료 후 순서대로 자동 실행됩니다. 오류·중지·연결 종료 시에는 대기를 유지하고, 승인·질문은 응답을 기다립니다.";
   const pending = () => (snapshot?.queue || []).filter(item => ["queued","needs_review","dispatching"].includes(item.state));
   const locked = () => mutations.has(active?.id);
   const pausedByUser = item => typeof item?.pausedByUser === "boolean" ? item.pausedByUser
@@ -37,7 +39,7 @@ globalThis.WorkspaceWorkflow = (() => {
     snapshot = {...next,sessionId:context.id};render();
   }
   function render() {
-    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
+    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || stopBlocked() || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
     const queue = pending(), schedules = snapshot?.schedules || [];
     $("followup-actions").hidden = !active || !busy();
     $("followup-queue").disabled = blocked || !active?.trusted;
@@ -49,11 +51,11 @@ globalThis.WorkspaceWorkflow = (() => {
     $("schedule-open").disabled = !active || blocked;
     $("workflow-open").textContent = `이어 할 일${queue.length ? ` ${queue.length}` : ""}${schedules.length ? ` · 예약 ${schedules.length}` : ""}`;
     $("workflow-context").textContent = active ? `${active.title} · ${basename(active.workspace)}` : "업무를 선택해 주세요.";
-    $("workflow-policy").textContent = snapshot?.policy?.message || "예약은 앱이 켜져 있을 때 실행됩니다. 앱 종료·절전으로 놓친 실행은 다시 확인한 뒤 이어갑니다.";
+    $("workflow-policy").textContent = `${queuePolicy} ${snapshot?.policy?.message || "예약은 앱이 켜져 있을 때 실행됩니다. 앱 종료·절전으로 놓친 실행은 다시 확인한 뒤 이어갑니다."}`;
     const uncertain = queue.some(item=>item.state === "needs_review");
     $("workflow-paused").hidden = !snapshot?.paused && !uncertain;
     $("workflow-paused").textContent = uncertain ? "전송 여부를 확인할 요청이 있습니다. 대화에서 결과를 확인하고 해당 항목을 대기에서 제거한 뒤 이어 실행해 주세요. 확인 없이 자동 재전송하지 않습니다."
-      : snapshot?.pauseReason || "오류·중지 또는 앱 재시작으로 대기 요청을 멈췄습니다. 내용을 확인하고 이어 실행해 주세요.";
+      : snapshot?.pauseReason || "오류·중지·연결 종료 또는 앱 재시작으로 대기 요청을 멈췄습니다. 내용을 확인하고 이어 실행해 주세요.";
     $("workflow-resume").hidden = !(snapshot?.paused || uncertain);
     $("workflow-resume").disabled = blocked || busy() || uncertain;
     if(snapshot?.warning)$("workflow-message").textContent=snapshot.warning;
@@ -61,7 +63,9 @@ globalThis.WorkspaceWorkflow = (() => {
     const context = capture();
     queue.forEach((item,index) => {
       const row = el("article",null,"workflow-row");
-      row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 요청`,"workflow-state"),el("p",item.text,"workflow-request"));
+      const waitLabel = stopBlocked() ? "중지 확인 중" : snapshot?.paused ? "일시 정지" : snapshot?.warning || uncertain ? "실행 확인 필요"
+        : ["approval","question"].includes(active?.state) || active?.choice ? "응답 대기" : busy() ? "정상 완료 후 자동 실행" : "자동 실행 대기";
+      row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 · ${waitLabel}`,"workflow-state"),el("p",item.text,"workflow-request"));
       if (item.attachments?.length) row.append(el("small",`자료 ${item.attachments.length}개 · ${item.attachments.map(basename).join(", ")}`,"workflow-files"));
       const actions=el("div",null,"workflow-row-actions");
       function action(label,fn,disabled=false) {const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||item.state==="dispatching"||disabled;button.onclick=()=>{if(current(context))fn();};actions.append(button);}
@@ -180,7 +184,7 @@ globalThis.WorkspaceWorkflow = (() => {
     finally {if(mutations.get(context.id)===context)mutations.delete(context.id);render();setStatus(active?.state||"idle");}
   }
   async function requestResume(body={action:"resume"},context=capture()) {
-    if(!context.id||!current(context)||locked()||!["resume","schedule_resume"].includes(body.action))return null;
+    if(!context.id||!current(context)||locked()||stopBlocked()||!["resume","schedule_resume"].includes(body.action))return null;
     if(!active.trusted){
       trustReturn=null;chooseFolder(true);$("folder-form").dataset.afterTrust="workflow";
       trustReturn={...context,folderGeneration:folderChoiceGeneration,body:{...body}};
@@ -196,8 +200,17 @@ globalThis.WorkspaceWorkflow = (() => {
     return mutate(pending.body,pending);
   }
   function sameDraft(context,text,files) {return current(context)&&$("prompt").value===text&&JSON.stringify(attachments)===JSON.stringify(files);}
+  function queuedNotice(action,value) {
+    const returned=value.dispatch||value;
+    const state=snapshot?.sessionId===active?.id&&Number(snapshot.revision)>Number(returned.revision)?snapshot:returned;
+    if(state.queue?.some(item=>item.state==="needs_review"))return "요청을 대기에 추가했습니다. 전송 확인이 필요한 항목을 ‘이어 할 일’에서 먼저 확인해 주세요.";
+    if(state.warning)return "요청을 대기에 추가했습니다. 실행 상태는 ‘이어 할 일’의 안내를 확인해 주세요.";
+    if(stopBlocked())return "요청을 대기에 추가했습니다. 중지 상태가 확인되면 ‘이어 할 일’의 안내를 확인해 주세요.";
+    if(state.paused)return "요청을 대기에 추가했습니다. 일시 정지 상태이므로 확인 후 ‘이어 실행’을 눌러 주세요.";
+    return action==="steer"?"현재 요청을 중지하고 이어갈 요청을 등록했습니다.":busy()?"현재 요청이 정상 완료되면 순서대로 자동 실행합니다.":"요청을 대기에 추가했습니다. 순서대로 자동 실행합니다.";
+  }
   async function send(action) {
-    if (!active || locked() || sending || choiceSubmission || appClosed || globalThis.WorkspaceConnectionRestart?.isCurrent() || globalThis.WorkspaceAttachments?.isUploading()) return;
+    if (!active || locked() || sending || choiceSubmission || appClosed || stopBlocked() || globalThis.WorkspaceConnectionRestart?.isCurrent() || globalThis.WorkspaceAttachments?.isUploading()) return;
     if(!active.trusted)return chooseFolder(true);
     const text=$("prompt").value,files=[...attachments];if(!text.trim())return $("prompt").focus();
     if (/^\/effort(?:\s|$)/u.test(text.trim())) return toast("현재 요청이 끝난 뒤 Effort를 변경해 주세요. 입력은 그대로 유지합니다.");
@@ -207,7 +220,7 @@ globalThis.WorkspaceWorkflow = (() => {
     if (!result) return;
     if(sameDraft(context,text,files)){$("prompt").value="";attachments=[];renderAttachments();saveDraft();globalThis.WorkspaceInputKeys?.reset();globalThis.WorkspaceShortcuts?.afterSend(context.id);}
     else if(!current(context)){const draft=drafts.get(context.id);if(draft?.text===text&&JSON.stringify(draft.attachments)===JSON.stringify(files)){drafts.delete(context.id);globalThis.WorkspaceShortcuts?.afterSend(context.id);}}
-    if(current(context))toast(action==="steer"?"현재 요청을 중지하고 이어갈 요청을 등록했습니다.":"현재 요청이 끝나면 이어서 실행합니다.");
+    if(current(context))toast(queuedNotice(action,result));
   }
   async function reorder(from,to) {const items=pending().filter(item=>item.state==="queued");if(from<0||to<0||to>=items.length)return;[items[from],items[to]]=[items[to],items[from]];return mutate({action:"reorder",order:items.map(item=>item.id)});}
   function localDate(value) {const date=new Date(value*1000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}

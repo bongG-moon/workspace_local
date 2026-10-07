@@ -62,6 +62,69 @@ class WorkQueueTests(unittest.TestCase):
         self.queue.resume('task')
         self.assertIsNotNone(self.claim())
 
+    def test_new_follow_up_can_clear_obsolete_hold_without_pending_work(self):
+        for reason in ('stopped', 'error', 'restart'):
+            with self.subTest(reason=reason):
+                sid = 'empty-' + reason
+                self.queue.pause(sid, reason)
+                row = self.add(sid=sid, clear_inactive_hold=True)
+                self.assertFalse(self.queue.snapshot(sid)['paused'])
+                self.assertEqual(row['id'], self.claim(sid=sid)['id'])
+
+    def test_fresh_enqueue_preserves_pending_work_and_explicit_confirmation_holds(self):
+        for reason in ('user', 'settings_changed', 'control_restore_required'):
+            with self.subTest(reason=reason):
+                sid = 'explicit-' + reason
+                self.queue.pause(sid, reason)
+                self.add(sid=sid, clear_inactive_hold=True)
+                self.assertEqual(reason, self.queue.snapshot(sid)['reason'])
+                self.assertIsNone(self.claim(sid=sid))
+        for status in ('queued', 'dispatching', 'submitted', 'needs_review'):
+            with self.subTest(status=status):
+                sid = 'pending-' + status
+                old = self.add(sid=sid)
+                self.queue._row(sid, old['id'])['status'] = status
+                self.queue.pause(sid, 'stopped')
+                self.add('new follow-up', sid=sid, clear_inactive_hold=True)
+                self.assertEqual('stopped', self.queue.snapshot(sid)['reason'])
+                self.assertIsNone(self.claim(sid=sid))
+
+    def test_fresh_enqueue_does_not_resume_paused_schedule_or_duplicate_registration(self):
+        self.schedule('daily')
+        self.queue.pause('task', 'restart')
+        self.add(clear_inactive_hold=True)
+        self.assertEqual('restart', self.queue.snapshot('task')['reason'])
+        sent = self.add(sid='duplicate', client_id='same-click')
+        self.queue.cancel('duplicate', sent['id'])
+        self.queue.pause('duplicate', 'stopped')
+        duplicate = self.add(sid='duplicate', client_id='same-click', clear_inactive_hold=True)
+        self.assertEqual(sent['id'], duplicate['id'])
+        self.assertEqual('stopped', self.queue.snapshot('duplicate')['reason'])
+
+    def test_removed_uncertain_delivery_does_not_pause_new_work_or_replay_old_work(self):
+        uncertain = self.add('uncertain delivery')
+        self.claim()
+        self.queue.failed(uncertain['id'])
+        pending = self.add('new pending request', clear_inactive_hold=True)
+        self.assertEqual('delivery_unknown', self.queue.snapshot('task')['reason'])
+        self.assertIsNone(self.claim())
+        self.queue.cancel('task', uncertain['id'])
+        self.queue.cancel('task', pending['id'])
+        fresh = self.add('fresh request', clear_inactive_hold=True)
+        self.assertFalse(self.queue.snapshot('task')['paused'])
+        self.assertEqual([fresh['id']], [row['id'] for row in self.queue.snapshot('task')['queue']])
+        self.assertEqual(fresh['id'], self.claim()['id'])
+
+    def test_unverified_result_is_normal_completion_and_does_not_pause_follow_up(self):
+        first, second = self.add('first'), self.add('second')
+        self.claim()
+        self.queue.dispatched(first['id'], 'completed-run')
+        result = {'lastRunId': 'completed-run', 'verification': {'state': 'unverified'}}
+        self.queue.observe('task', 'result', result)
+        self.queue.observe('task', 'result', result)
+        self.assertFalse(self.queue.snapshot('task')['paused'])
+        self.assertEqual(second['id'], self.claim(state={**self.ready, 'verification': result['verification']})['id'])
+
     def test_hook_verification_issue_does_not_start_follow_up(self):
         self.add()
         self.queue.observe('task', 'result', {'verification': {'state': 'needs-review'}})

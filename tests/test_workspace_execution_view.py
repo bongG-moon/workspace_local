@@ -132,3 +132,21 @@ class ExecutionViewTests(unittest.TestCase):
           WorkspaceExecutionView.render({...record,state:'completed',output:'1'});
           assert.equal(card.querySelector('details').open,false);assert.equal(renders,2);
         ''')
+
+    def test_empty_result_snapshot_removes_only_matching_gallery_and_can_restore(self):
+        self.run_case(r'''
+          active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
+          globalThis.WorkspaceRichContent={files(){}};
+          const files=[{path:'C:/task/a.png',runId:'a',observedAt:1},{path:'C:/task/b.png',runId:'b',observedAt:1}];
+          const message=el('article','original reply','message assistant');message.dataset.runId='a';$('conversation').append(message);
+          WorkspaceExecutionView.results('a',files);WorkspaceExecutionView.results('b',files);
+          const deleted=$('conversation').children[1];
+          WorkspaceExecutionView.results('a',[]);
+          assert.equal($('conversation').children.length,2);assert.equal(deleted.isConnected,false);
+          assert.equal($('conversation').children[0],message);assert.equal(message.textContent,'original reply');
+          assert.equal($('conversation').children[1].dataset.runId,'b');
+          WorkspaceExecutionView.results('a',files);
+          assert.equal($('conversation').children.length,3);
+          assert.notEqual($('conversation').children[2],deleted);
+          assert.equal($('conversation').children[2].dataset.runId,'a');
+        ''')

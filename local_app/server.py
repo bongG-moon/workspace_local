@@ -23,7 +23,7 @@ from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
 from .session_order import SessionOrder
 from .session_visibility import SessionVisibility
-from .artifacts import changes, linked, snapshot, PREVIEW_TYPES
+from .artifacts import available_artifacts, changes, linked, snapshot, PREVIEW_TYPES
 from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .capabilities import catalog
@@ -746,8 +746,13 @@ class LocalApp:
     def results(self, sid):
         with self.lock:
             item = self.get(sid)
-            return {'artifacts': list(item.get('artifacts', [])), 'lastRunId': item.get('lastRunId'),
-                    'observation': item.get('artifactObservation'), 'workspace': item['workspace']}
+            result = {'artifacts': [dict(row) for row in item.get('artifacts', [])[-MAX_ARTIFACTS:]],
+                      'lastRunId': item.get('lastRunId'),
+                      'observation': item.get('artifactObservation'), 'workspace': item['workspace']}
+        # Files can disappear outside Claude too. Reconcile on this read path,
+        # without holding the app lock during disk access or changing history.
+        result['artifacts'], result['availability'] = available_artifacts(Path(result['workspace']), result['artifacts'])
+        return result
 
     def file_changes(self, sid, run_id=None, file_id=None):
         with self.lock:

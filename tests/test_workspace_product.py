@@ -179,7 +179,7 @@ class ProductTests(unittest.TestCase):
         self.sid = self.app.create(str(self.workspace), True)['id']
 
     def start_request(self, changes_during_send=None):
-        bridge = Mock(closed=False, session_id=None, _effort_baselines={})
+        bridge = Mock(closed=False, session_id=None, _effort_baselines={}, _control_active=False)
         bridge.model_state.return_value = {}
         bridge.ready = threading.Event()
         bridge.ready.set()

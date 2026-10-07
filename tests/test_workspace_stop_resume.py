@@ -133,6 +133,46 @@ class StopResumeTests(unittest.TestCase):
         self.assertIs(bridge, self.item['bridge'])
         self.assertEqual(2, sum(row['type'] == 'user' for row in self.frames()))
 
+    def test_fresh_queue_after_recovered_stop_autoruns_on_real_cli_success(self):
+        # Gate one synthetic CLI result so requests can be enqueued through the
+        # production controller while the transport is actually busy.
+        source = self.fixture.read_text(encoding='utf-8')
+        needle = "    if data['type'] == 'user':\n"
+        gate = """        if data['message']['content'] == 'wait for successful completion':
+            import time
+            deadline = time.monotonic() + 6
+            while not (root / 'release-completion').exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+"""
+        self.assertEqual(1, source.count(needle))
+        self.fixture.write_text(source.replace(needle, needle + gate), encoding='utf-8')
+        bridge = self.connect()
+        identity, pid = self.item['sessionId'], bridge.process.pid
+        self.app.send(self.sid, 'wait for cancellation', [])
+        self.wait_user_count(1)
+        self.app.stop(self.sid)
+        self.release_stop()
+        eventually(lambda: self.app.stop_state(self.item) == 'stopped')
+        self.assertTrue(self.app.dispatch.snapshot(self.sid)['paused'])
+        self.app.send(self.sid, 'wait for successful completion', [])
+        self.wait_user_count(2)
+        for text in ('automatic first', 'automatic second'):
+            self.app.dispatch.action(self.sid, {'action': 'enqueue', 'text': text, 'attachments': [],
+                                               'clientRequestId': text})
+        self.assertFalse(self.app.dispatch.snapshot(self.sid)['paused'])
+        self.app.dispatch.start()
+        self.app.dispatch.pump()
+        self.assertEqual(2, sum(row['type'] == 'user' for row in self.frames()))
+        (self.root / 'release-completion').touch()
+        eventually(lambda: not self.app.dispatch.snapshot(self.sid)['queue'])
+        self.assertEqual(['wait for cancellation', 'wait for successful completion',
+                          'automatic first', 'automatic second'],
+                         [row['message']['content'] for row in self.frames() if row['type'] == 'user'])
+        self.assertEqual('done', self.item['state'])
+        self.assertEqual('unverified', self.item['verification']['state'])
+        self.assertEqual((identity, pid), (self.item['sessionId'], bridge.process.pid))
+        self.assertIsNone(self.app.dispatch.error)
+
     def test_failed_cleanup_blocks_send_connect_and_queue_without_losing_pending_work(self):
         self.item['bridge'] = Mock(closed=True, stopping=True, stop_state='failed',
                                    cleanup_complete=False, cleanup_retryable=False)

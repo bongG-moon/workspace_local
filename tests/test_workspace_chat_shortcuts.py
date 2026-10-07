@@ -96,7 +96,7 @@ vm.runInContext(app.slice(sendStart,start).replace('async function submit(){','a
 // Exercise the shipped queue submission and its real mutation/ACK boundary.
 // Rendering is outside this check; draft ownership and recovery stay real.
 const workflow=read('workflow.js');
-const contextStart=workflow.indexOf('  let snapshot ='),contextEnd=workflow.indexOf('  const busy =',contextStart);
+const contextStart=workflow.indexOf('  let snapshot ='),contextEnd=workflow.indexOf('  const pending =',contextStart);
 const mutateStart=workflow.indexOf('  function requestId(body)'),mutateEnd=workflow.indexOf('  async function requestResume(',mutateStart);
 const workflowStart=workflow.indexOf('  function sameDraft('),workflowEnd=workflow.indexOf('  async function reorder(',workflowStart);
 assert.ok(contextStart>=0&&contextEnd>contextStart&&mutateStart>=0&&mutateEnd>mutateStart&&workflowStart>=0&&workflowEnd>workflowStart,'Cannot locate shipped queue submission boundary');
