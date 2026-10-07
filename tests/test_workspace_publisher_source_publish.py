@@ -48,6 +48,7 @@ class GitLabRepository:
         self.snapshots = {} if empty else {self.head: dict(files or {'README.md': b'Initial GitLab README\n'})}
         self.last = {name: self.head for name in (files or {})}
         self.fail_status, self.bad_archive, self.change_before_write = None, False, False
+        self.change_at_write = None
         self.head_reads = 0
 
     def response(self, data, status=200, headers=None):
@@ -98,9 +99,27 @@ class GitLabRepository:
             if self.fail_status:
                 return self.response(b'SECRET SERVER BODY ' + TOKEN.encode(), self.fail_status)
             assert payload['branch'] == self.branch and payload['force'] is False
-            assert payload.get('start_sha') == self.head
+            # GitLab's different_branch? rejects start_sha (or a different
+            # start_branch) with an existing branch and force=False.
+            if self.head and (payload.get('start_sha') or payload.get('start_branch', self.branch) != self.branch):
+                return self.response({'message': 'A branch with this name already exists'}, 400)
+            if self.change_at_write:
+                name, data = self.change_at_write
+                changed = dict(self.snapshots[self.head]) if self.head else {}
+                changed[name] = data
+                self.head = 'e' * 40
+                self.snapshots[self.head] = changed
+                self.last[name] = self.head
+                self.empty = False
             files = dict(self.snapshots[self.head]) if self.head else {}
             commit = hashlib.sha1(str(len(self.snapshots)).encode()).hexdigest()
+            # Validate every action before mutation: the Commits API is atomic.
+            for action in payload['actions']:
+                name = action['file_path']
+                if (action['action'] == 'create' and name in files
+                        or action['action'] == 'update' and (name not in files
+                            or action['last_commit_id'] != self.last.get(name, 'a' * 40))):
+                    return self.response({'message': 'File changed before commit'}, 400)
             for action in payload['actions']:
                 name = action['file_path']
                 assert action['action'] in {'create', 'update'} and action['encoding'] == 'base64'
@@ -144,7 +163,9 @@ class SourcePublishTests(unittest.TestCase):
         self.assertEqual(1, result['updated'])
         self.assertEqual(len(self.files)-1, result['created'])
         self.assertEqual(1, len(api.posts))
-        self.assertEqual('a' * 40, api.posts[0]['start_sha'])
+        self.assertNotIn('start_sha', api.posts[0])
+        self.assertNotIn('start_branch', api.posts[0])
+        self.assertFalse(api.posts[0]['force'])
         self.assertFalse(any('TOKEN' in str(event) or TOKEN in str(event) for event in self.events))
         self.assertEqual(1, sum('/repository/archive.zip?' in url for _, url, _ in api.calls))
         self.assertFalse(any('/raw?' in url for _, url, _ in api.calls))
@@ -156,6 +177,17 @@ class SourcePublishTests(unittest.TestCase):
                 result = self.publish(api)
                 self.assertEqual(api.branch, result['branch'])
                 self.assertEqual(self.files, api.snapshots[result['commit']])
+                self.assertNotIn('start_sha', api.posts[0])
+                self.assertNotIn('start_branch', api.posts[0])
+
+    def test_existing_branch_rejects_new_branch_start_parameters_without_force(self):
+        for key in ('start_sha', 'start_branch'):
+            api = GitLabRepository()
+            payload = {'branch': api.branch, 'force': False, 'actions': [], key: api.head if key == 'start_sha' else 'other-branch'}
+            response = api('POST', 'https://gitlab.corp:8443/company/api/v4/projects/42/repository/commits',
+                           headers={'PRIVATE-TOKEN': TOKEN}, data=json.dumps(payload).encode())
+            self.assertEqual(400, response.status)
+            self.assertEqual('a' * 40, api.head)
 
     def test_unchanged_source_is_verified_without_a_second_commit(self):
         api = GitLabRepository()
@@ -221,6 +253,33 @@ class SourcePublishTests(unittest.TestCase):
         api.bad_archive = True
         with self.assertRaisesRegex(PublisherError, 'SHA256'):
             self.publish(api)
+        self.assertEqual(1, len(api.posts))
+
+    def test_file_changed_after_head_check_is_not_overwritten_or_retried(self):
+        for name in ('README.md', 'local_app/server.py'):
+            with self.subTest(name=name):
+                api = GitLabRepository()
+                api.change_at_write = (name, b'Concurrent project edit')
+                with self.assertRaisesRegex(PublisherError, 'HTTP 400'):
+                    self.publish(api)
+                self.assertEqual(1, len(api.posts))
+                self.assertEqual({**{'README.md': b'Initial GitLab README\n'}, name: b'Concurrent project edit'},
+                                 api.snapshots[api.head])
+                self.assertNotIn(MANIFEST, api.snapshots[api.head])
+                self.assertFalse(api.posts[0]['force'])
+
+    def test_branch_changed_during_verification_is_reported(self):
+        api = GitLabRepository()
+
+        def transport(method, url, **kwargs):
+            response = api(method, url, **kwargs)
+            if '/repository/archive.zip?' in url:
+                api.snapshots['f' * 40] = dict(api.snapshots[api.head])
+                api.head = 'f' * 40
+            return response
+
+        with self.assertRaisesRegex(PublisherError, '검증 중 기본 브랜치'):
+            self.publish(transport)
         self.assertEqual(1, len(api.posts))
 
     def test_manifest_identity_cancellation_and_private_files_fail_before_network(self):

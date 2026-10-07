@@ -166,6 +166,8 @@ class WorkQueue:
         for row in value['queue']:
             if row['status'] not in ACTIVE | {'done', 'cancelled'}:
                 raise ValueError('Invalid queue status')
+            if type(row.get('editRevision', 0)) is not int or row.get('editRevision', 0) < 0:
+                raise ValueError('Invalid queue edit revision')
             for field in ('createdAt', 'updatedAt'):
                 _stamp(row[field])
             if row.get('runId') is not None and (not isinstance(row['runId'], str) or len(row['runId']) > 160):
@@ -251,7 +253,7 @@ class WorkQueue:
             raise ValueError('대기 요청이 많습니다. 기존 요청을 정리한 뒤 추가해 주세요.')
         return {'id': uuid.uuid4().hex, 'sessionId': sid, 'text': text, 'attachments': attachments,
                 'context': context, 'status': 'queued', 'createdAt': self.clock(), 'updatedAt': self.clock(),
-                'scheduleId': schedule_id, 'dueAt': due, 'runId': None, 'reason': None}
+                'scheduleId': schedule_id, 'dueAt': due, 'runId': None, 'reason': None, 'editRevision': 0}
 
     def enqueue(self, sid, text, attachments=None, context=None, *, client_id=None, clear_inactive_hold=False):
         sid = _sid(sid)
@@ -303,11 +305,51 @@ class WorkQueue:
             row = self._row(sid, identifier)
             if row['status'] != 'queued':
                 raise ValueError('전송 전 대기 요청만 수정할 수 있습니다.')
-            row.update(text=text, attachments=attachments, updatedAt=self.clock())
+            row.update(text=text, attachments=attachments, updatedAt=self.clock(),
+                       editRevision=row.get('editRevision', 0) + 1)
             if context is not None:
                 row['context'] = context
             self._save()
             return deepcopy(row)
+
+    def apply_now(self, sid, identifier, revision, client_id, *, commit=False):
+        """Prioritize the existing row, never copy it into another request.
+
+        The controller holds the app admission lock across preflight and commit.
+        A durable receipt makes retries harmless even after delivery/restart or
+        terminal-row pruning. A revision rejects an outdated editor/list click.
+        """
+        sid = _sid(sid)
+        if (not isinstance(identifier, str) or type(revision) is not int or revision < 0
+                or not isinstance(client_id, str) or not client_id or len(client_id) > 150):
+            raise ValueError('대기 요청과 전송 식별자를 확인해 주세요.')
+        key = hashlib.sha256((sid + '\0apply_now:' + client_id).encode()).hexdigest()
+        digest = hashlib.sha256(json.dumps([identifier, revision]).encode()).hexdigest()
+        with self.lock:
+            self._check()
+            receipt = self.data['receipts'].get(key)
+            if receipt is not None:
+                if receipt['digest'] != digest:
+                    raise ValueError('같은 전송 식별자로 다른 요청을 보낼 수 없습니다.')
+                return None, True
+            row = self._row(sid, identifier)
+            if row.get('editRevision', 0) != revision:
+                raise ValueError('대기 요청 내용이 바뀌었습니다. 목록을 다시 확인한 뒤 실행해 주세요.')
+            if row['status'] in {'dispatching', 'submitted', 'done'}:
+                return deepcopy(row), True  # Automatic dispatch won the race.
+            if row['status'] != 'queued':
+                raise ValueError('현재 대기 중인 요청만 바로 실행할 수 있습니다.')
+            if commit:
+                if len(self.data['receipts']) >= 10000:
+                    raise ValueError('중복 전송 방지 기록의 보관 한도에 도달했습니다.')
+                slots = [i for i, value in enumerate(self.data['queue'])
+                         if value['sessionId'] == sid and value['status'] == 'queued']
+                ordered = [row] + [self.data['queue'][i] for i in slots if self.data['queue'][i]['id'] != identifier]
+                for index, value in zip(slots, ordered):
+                    self.data['queue'][index] = value
+                self.data['receipts'][key] = {'id': identifier, 'digest': digest}
+                self._save()
+            return deepcopy(row), False
 
     def cancel(self, sid, identifier):
         with self.lock:
@@ -357,6 +399,8 @@ class WorkQueue:
             self._check()
             for row in self.data['queue']:
                 if row['sessionId'] == sid and row['status'] == 'queued':
+                    if row['context'] != context:
+                        row['editRevision'] = row.get('editRevision', 0) + 1
                     row['context'] = dict(context)
             for schedule in self.data['schedules']:
                 if schedule['sessionId'] == sid and schedule['enabled']:

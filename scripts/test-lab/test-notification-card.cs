@@ -202,8 +202,9 @@ internal static class TestNotificationCard
             Check(summary.Top > title.Bottom && summary.AutoEllipsis, "Request summary must be bounded below the task title");
             Check(summary.Height <= 36 * scale + 1 && Math.Abs(summary.Font.Size - 12 * scale) < .01f,
                 "Request summary must retain compact two-line sizing");
-            Check(SystemInformation.HighContrast || summary.ForeColor == Color.FromArgb(75, 81, 98),
-                "Request summary is not dark gray");
+            bool dark = (bool)cardType.GetField("darkAppearance", Private).GetValue(card);
+            Check(SystemInformation.HighContrast || summary.ForeColor == (dark ? Color.FromArgb(203, 208, 224) : Color.FromArgb(75, 81, 98)),
+                "Request summary does not follow the card palette");
         }
         Check(card.Region != null, "Missing uniform manual window region");
         float radius = 10 * scale;
@@ -323,6 +324,31 @@ internal static class TestNotificationCard
                         Render(preview, Path.Combine(output, (summary.Length == 0 ? "fallback" : summary.Length < 100 ? "approval" : "long-question") + "-" + dpi + ".png"));
                     }
                 }
+            foreach (string kind in new[] { "completed", "attention", "error" })
+                using (var card = (Form)Activator.CreateInstance(cardType, Private, null, new object[] {
+                    new String('b', 64), kind, "다크 모드 업무 알림", "작업을 확인해 주세요",
+                    kind == "attention" ? "자료 범위를 선택해 주세요" : "", completed, true }, null))
+                {
+                    Check(card.BackColor == (SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(37, 39, 53)),
+                        "Initial dark card surface does not respect appearance/high contrast");
+                    var change = cardType.GetMethod("SetAppearance", Private);
+                    foreach (uint dpi in new uint[] { 96, 120, 144, 192 })
+                    {
+                        Arrange(card, new Rectangle(0, 0, 1280, 720), dpi);
+                        CompactLayout(card, dpi); GrayscaleText(card);
+                        var fonts = cardType.GetField("ownedFonts", Private).GetValue(card);
+                        var timer = cardType.GetField("lifetime", Private).GetValue(card);
+                        for (int index = 0; index < 20; index++)
+                        { change.Invoke(card, new object[] { false }); change.Invoke(card, new object[] { true }); }
+                        Check(Object.ReferenceEquals(fonts, cardType.GetField("ownedFonts", Private).GetValue(card))
+                            && Object.ReferenceEquals(timer, cardType.GetField("lifetime", Private).GetValue(card)),
+                            "Theme changes rebuilt fonts or lifetime timers");
+                        Render(card, Path.Combine(output, "dark-" + kind + "-" + dpi + ".png"));
+                    }
+                    change.Invoke(card, new object[] { false });
+                    Check(card.BackColor == (SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(248, 249, 253)),
+                        "Switching to light failed to restore the original card palette");
+                }
             foreach (bool clickOpen in new[] { true, false })
             {
                 opened = dismissed = 0;
@@ -364,6 +390,7 @@ internal static class TestNotificationCard
             Check(gdiAfter <= gdiBefore + 8 && userAfter <= userBefore + 3, "Native handles grew across dispose cycles");
             Console.WriteLine("PASS: input validation; full Hangul private fonts (actual 400/600 weights and different rendered weight); 3 compact card kinds and request/fallback/long summaries x 4 DPIs; grayscale antialiased text without colored fringes; dark-gray bounded summary below title; negative/short work areas; uniform 10-DIP region without legacy shadow or native non-client frame; non-activation styles; accessible open/close exactly once; 64 dispose cycles.");
             Console.WriteLine("GDI {0}->{1}; USER {2}->{3}. Rendered cards: {4}", gdiBefore, gdiAfter, userBefore, userAfter, output);
+            Console.WriteLine("PASS: initial dark cards; 3 dark card kinds x 4 DPIs; palette round-trip without timer/font recreation; high-contrast precedence.");
             Console.WriteLine("Available DWM assertions (of 12 HWND/DPI samples): NC={0}; corners={1}; border={2}.", nativeNcChecks, nativeCornerChecks, nativeBorderChecks);
             return 0;
         }

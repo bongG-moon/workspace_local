@@ -243,7 +243,7 @@ def _clean_staging(directory):
 
 
 def stage_and_launch(state, current_version, version, package_bytes, sha256, demo=False, *,
-                     cancel=None, no_browser=False):
+                     cancel=None, no_browser=False, launcher_bytes=None):
     """Stage immutable app files and start their same-user verified launcher.
 
     ``state`` is the effective runtime directory (including ``demo`` in demo
@@ -291,6 +291,13 @@ def stage_and_launch(state, current_version, version, package_bytes, sha256, dem
                     _clean_staging(temporary)
         _verify_files(application, value['files'])
         _cancelled(cancel)
+        if launcher_bytes is not None:
+            from .managed_launcher import stage
+            from .update_source import load_source
+            staged_source = load_source(application)
+            if staged_source.error:
+                raise ValueError('실행기 업데이트의 배포 위치를 확인하지 못했습니다.')
+            stage(state, version, launcher_bytes, pending=True, cancel=cancel, source_identity=staged_source.identity)
         pending = root / 'pending.json'
         _atomic_manifest(pending, value)
         try:
@@ -319,7 +326,7 @@ def stage_and_launch(state, current_version, version, package_bytes, sha256, dem
     return {'status': 'launching', 'version': version, 'launched': True, '_process': process}
 
 
-def confirm_running_update(state, current_version, *, application_root=None):
+def confirm_running_update(state, current_version, *, application_root=None, demo=False):
     """Promote only a matching, reverified pending install after server readiness.
 
     Missing or other-version pending data returns False. An invalid pending
@@ -347,7 +354,9 @@ def confirm_running_update(state, current_version, *, application_root=None):
             if current.exists() and _version(_read_manifest(current)['version']) > _version(current_version):
                 return False
             _atomic_manifest(current, value)
+            from .managed_launcher import confirm_pending
+            confirm_pending(state, current_version, demo=demo)
             _discard_pending(pending, value)
             return True
-    except (OSError, ValueError, UnicodeError) as exc:
+    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError) as exc:
         raise ValueError('새 앱은 실행했지만 다음 실행에 사용할 업데이트 정보를 저장하지 못했습니다. 기존 실행 파일은 유지됩니다.') from exc

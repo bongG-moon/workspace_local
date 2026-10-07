@@ -330,7 +330,7 @@ class AttentionNotifier:
     def binding_title(self):
         return 'Workspace' if self._owned else self.window_title
 
-    def bind_owned(self, hwnd, pid):
+    def bind_owned(self, hwnd, pid, *, apply_theme=True):
         with self._lock:
             if self._closed or self._native is None:
                 return False
@@ -341,7 +341,8 @@ class AttentionNotifier:
                 if binding is None:
                     return False
                 self._binding, self._owned = binding, True
-                self.theme_state = self._native.theme(binding, self.binding_title)
+                self.theme_state = (self._native.theme(binding, self.binding_title) if apply_theme
+                                    else {'applied': False, 'reason': 'owned_host_theme'})
                 return True
             except (OSError, AttributeError, ValueError):
                 return False

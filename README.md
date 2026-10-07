@@ -1,8 +1,8 @@
-# Company Workspace 0.23.20
+# Company Workspace 0.23.21
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/Company-Workspace-0.23.20-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/Company-Workspace-0.23.21-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/Company-Workspace-0.23.21-vbs.zip)**
 
 [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -10,12 +10,21 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.20.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.21.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+
+## 0.23.21 변경
+
+- GitLab에 구성 파일을 함께 올릴 때 README가 있는 기존 브랜치로 게시하면 HTTP 400이 나던 커밋 요청을 수정했습니다. 동시 수정 감지와 게시 후 파일 검증은 유지합니다.
+- 구형 EXE로 시작한 경우 설정에서 실제 앱 버전과 실행기 버전을 구분합니다. **최신 실행기 바로가기 만들기**로 검증된 현재 버전 EXE를 준비할 수 있습니다. 이후 이 바로가기 또는 새 EXE를 우클릭해 관리자 권한으로 실행하세요. 원래 파일·Windows 보안 설정은 바꾸지 않습니다.
+- **이어 할 일**의 대기 항목에서 진행 중이면 **지금 반영**, 대기 상태면 **지금 실행**을 누를 수 있습니다. 현재 요청의 중지를 확인한 뒤 같은 대화에서 선택 항목을 실행하고 나머지 순서는 유지합니다.
+- 상단의 **해·달 아이콘**으로 밝은 모드와 어두운 모드를 바로 전환합니다. **설정 → 화면 모드**에서는 시스템 설정 따르기도 선택할 수 있습니다. 앱 화면, 제목 표시줄과 PC 알림에 적용하며 다음 실행에도 유지합니다. 밝은 모드의 기존 색상은 보존합니다.
+
+[0.23.21 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.21)에서 EXE·VBS ZIP과 실행 파일 없는 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/workspace-local-0.23.21-source.zip)을 받을 수 있습니다. 사내 GitLab 게시는 사내 PC에서 별도로 진행하세요. 같은 0.23.21 로컬 시험본이 실행 중이면 트레이에서 완전 종료한 뒤 이번 파일을 실행하세요. [0.23.21 구현·검증](docs/VALIDATION_0.23.21.md)
 
 ## 0.23.20 동일 버전 수정
 

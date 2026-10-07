@@ -48,6 +48,7 @@ class DispatchController:
             result['pauseReason'] = reasons.get(result.get('reason'), result.get('reason'))
             result['policy']['message'] = 'PC가 켜져 있고 앱이 실행 중일 때 동작합니다. 앱 재시작 후에는 내용을 확인하고 이어 실행해 주세요. 놓친 예약은 몰아서 실행하지 않습니다.'
             result['trusted'] = item.get('trusted') is True
+            result['applyingId'] = self.steering.get(sid, {}).get('requestId')
             return result
 
     def start(self):
@@ -231,8 +232,15 @@ class DispatchController:
                                     and not bridge.closed and not getattr(bridge, 'stopping', False))):
                             # Explicit "now" cancels the interrupted queued turn;
                             # it does not silently retry it alongside the new one.
-                            for row in self.queue.snapshot(sid)['queue']:
-                                if row['id'] in pending['interrupted'] and row['status'] == 'needs_review':
+                            queued = self.queue.snapshot(sid)['queue']
+                            if pending.get('requestId') and not any(row['id'] == pending['requestId']
+                                    and row['status'] == 'queued' for row in queued):
+                                self.steering.pop(sid, None)
+                                self.queue.pause(sid, 'stopped')
+                                continue
+                            for row in queued:
+                                if (row['id'] in pending['interrupted'] and row['status'] == 'needs_review'
+                                        and row.get('reason') == 'interrupted'):
                                     self.queue.cancel(sid, row['id'])
                             self.queue.resume(sid)
                             item['state'] = 'idle'
@@ -274,15 +282,77 @@ class DispatchController:
     def first_run(schedule, now=None):
         return scheduled_first_run(schedule, time.time() if now is None else now)
 
+    def _interrupt_for_followup(self, sid, item, before, request_id):
+        """Share the composer/list stop-confirm-resume path without resending."""
+        self.steering[sid] = {'created': time.monotonic(), 'requestId': request_id,
+            'interrupted': {entry['id'] for entry in before['queue']
+                            if entry['status'] in {'dispatching', 'submitted'}}}
+        bridge = item.get('bridge')
+        try:
+            if bridge is None or bridge.closed:
+                raise ValueError('현재 연결을 확인할 수 없습니다. 대기 요청은 보존했습니다.')
+            bridge.interrupt()
+        except (ValueError, OSError, RuntimeError):
+            self.steering.pop(sid, None)
+            self.queue.pause(sid, 'stopped')
+            raise
+
+    def _apply_queued_now(self, sid, item, data):
+        identifier, revision, client_id = data.get('requestId'), data.get('editRevision'), data.get('clientRequestId')
+        row, replayed = self.queue.apply_now(sid, identifier, revision, client_id)
+        if replayed:
+            return {'ok': True, 'alreadyApplied': True, **self.snapshot(sid)}
+        self.app._check_stopping(item)
+        if (item.get('_dispatchClaim') or item.get('_connecting') or item.get('_modelUpdating')
+                or item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False)):
+            raise ValueError('연결 또는 설정을 준비하고 있습니다. 잠시 뒤 다시 실행해 주세요.')
+        before = self.queue.snapshot(sid)
+        if self.error or before.get('warning'):
+            raise ValueError(self.error or before['warning'])
+        if any(entry['status'] == 'needs_review' for entry in before['queue']):
+            raise ValueError('전송 여부를 확인할 요청이 있습니다. 대화와 대기 목록을 먼저 확인해 주세요.')
+        if (item.get('_controlRestore') or (item.get('verification') or {}).get('state') == 'needs-review'
+                or before['reason'] in {'settings_changed', 'control_restore_required'}
+                or any(self.context(item).get(key) != value for key, value in row['context'].items())):
+            raise ValueError('업무의 결과와 실행 설정을 확인한 뒤 이어 실행해 주세요. 대기 요청은 보존했습니다.')
+        running = item['state'] in {'starting', 'running', 'approval', 'question'}
+        bridge = item.get('bridge')
+        if running:
+            if self.app.demo:
+                raise ValueError('체험 모드에서는 현재 요청이 끝난 뒤 실행해 주세요.')
+            if bridge is None or bridge.closed:
+                raise ValueError('현재 연결을 확인할 수 없습니다. 대기 요청은 보존했습니다.')
+        elif item['state'] in {'error', 'stopped'}:
+            soft_stopped = (bridge is not None and getattr(bridge, 'stop_state', None) == 'stopped'
+                            and not bridge.closed and not getattr(bridge, 'stopping', False))
+            if bridge and getattr(bridge, 'cleanup_complete', False) is not True and not soft_stopped:
+                raise ValueError('이전 연결의 종료를 확인한 뒤 실행해 주세요. 대기 요청은 보존했습니다.')
+        elif item['state'] not in {'idle', 'done'}:
+            raise ValueError('현재 작업 상태를 확인한 뒤 실행해 주세요.')
+        # Validate the saved files before interrupting useful work. The normal
+        # send path checks them again at delivery; a later removal cannot replay.
+        self.app.validate_attachments(row['attachments'])
+        self.queue.apply_now(sid, identifier, revision, client_id, commit=True)
+        if running:
+            self._interrupt_for_followup(sid, item, before, identifier)
+        else:
+            self.queue.resume(sid)
+            item['state'] = 'idle'
+        return {'ok': True, **self.snapshot(sid)}
+
     def action(self, sid, data):
         with self.app.lock:
             item = self.app.get(sid)
             if item.get('_restarting'):
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 대기·예약 내용을 변경해 주세요.')
             action, identifier = data.get('action'), data.get('requestId')
-            if action in {'enqueue', 'steer', 'update', 'schedule', 'schedule_update', 'resume', 'schedule_resume'}:
+            if action in {'enqueue', 'steer', 'apply_now', 'update', 'schedule', 'schedule_update', 'resume', 'schedule_resume'}:
                 if not item.get('trusted'):
                     raise ValueError('업무 폴더를 다시 확인한 뒤 대기·예약을 실행해 주세요.')
+            if action == 'apply_now':
+                return self._apply_queued_now(sid, item, data)
+            if sid in self.steering:
+                raise ValueError('선택한 대기 요청으로 전환하고 있습니다. 잠시 기다려 주세요.')
             if action in {'enqueue', 'steer', 'update', 'schedule', 'schedule_update'}:
                 paths = self.app.validate_attachments(data.get('attachments', []))
                 text, context = data.get('text'), self.context(item)
@@ -310,13 +380,7 @@ class DispatchController:
                     pending = [entry['id'] for entry in self.queue.snapshot(sid)['queue'] if entry['status'] == 'queued']
                     self.queue.reorder(sid, [row['id'], *(key for key in pending if key != row['id'])])
                     if item['state'] in {'starting', 'running', 'approval', 'question'}:
-                        self.steering[sid] = {'created': time.monotonic(), 'interrupted': {
-                            entry['id'] for entry in before['queue'] if entry['status'] in {'dispatching', 'submitted'}}}
-                        bridge = item.get('bridge')
-                        if bridge is None:
-                            self.steering.pop(sid, None)
-                            raise ValueError('현재 연결을 확인할 수 없습니다. 대기 요청은 보존했습니다.')
-                        bridge.interrupt()
+                        self._interrupt_for_followup(sid, item, before, row['id'])
             elif action == 'update':
                 self.queue.edit(sid, identifier, text, paths, context)
             elif action == 'cancel':

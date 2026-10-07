@@ -11,8 +11,8 @@
 .tool-activity-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}
 .tool-activity-row:last-child{border-bottom:0}
 .tool-activity-marker{display:grid;place-items:center;width:17px;min-height:17px;flex:none;border-radius:50%;background:var(--surface);color:var(--accent);font-size:12px;margin-top:1px}
-.tool-activity-row[data-state=completed] .tool-activity-marker{color:#638475}
-.tool-activity-row[data-state=error] .tool-activity-marker{color:#a16677}
+.tool-activity-row[data-state=completed] .tool-activity-marker{color:var(--theme-text-secondary, #638475)}
+.tool-activity-row[data-state=error] .tool-activity-marker{color:var(--theme-text-muted, #a16677)}
 .tool-activity-copy{flex:1;min-width:0}
 .tool-activity-action{display:flex;align-items:baseline;gap:7px;min-width:0}
 .tool-activity-action strong{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:550;color:var(--ink)}

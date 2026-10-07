@@ -1055,7 +1055,7 @@ globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
   canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
 async function init(){try{
-  boot=await api("/api/bootstrap");globalThis.WorkspaceExecutionMode?.start(boot.executionMode);const shutdown=bootstrapShutdownState(boot);
+  boot=await api("/api/bootstrap");globalThis.WorkspaceExecutionMode?.configure({api});globalThis.WorkspaceExecutionMode?.start(boot.executionMode,boot.launcher);globalThis.WorkspaceAppearance?.start(boot.appearance);const shutdown=bootstrapShutdownState(boot);
   // Set the gate before rendering or starting any background integration.
   if(shutdown){appClosed=true;shutdownState=shutdown;}
   sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");

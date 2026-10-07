@@ -54,7 +54,7 @@ namespace CompanyAgent {
                     } finally { if (held) mutex.ReleaseMutex(); }
                 }
                 if (options.VerifyOnly) return 0;
-                return Launch(Path.Combine(target, "Company-Workspace"), options);
+                return Launch(Path.Combine(target, "Company-Workspace"), options, version);
             } catch (StandaloneFailure error) { return Report(error.Code); }
             catch { return Report(59); }
         }
@@ -267,7 +267,7 @@ namespace CompanyAgent {
             return result.Append('"').ToString();
         }
 
-        private static int Launch(string appRoot, Options options) {
+        private static int Launch(string appRoot, Options options, string version) {
             string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
             if (!File.Exists(powershell)) throw new StandaloneFailure(56);
             // The shared launcher checks the user's existing Python. The EXE
@@ -284,6 +284,11 @@ namespace CompanyAgent {
             start.CreateNoWindow = true;
             start.WindowStyle = ProcessWindowStyle.Hidden;
             start.WorkingDirectory = appRoot;
+            // Read-only display evidence survives managed app-file forwarding.
+            // A new bootstrap always overwrites inherited hints. This is never
+            // used as authorization or as an executable path from the app.
+            start.EnvironmentVariables["COMPANY_WORKSPACE_ENTRY_VERSION"] = version;
+            start.EnvironmentVariables["COMPANY_WORKSPACE_ENTRY_PROTOCOL"] = "1";
             // Profiles may emit private diagnostics. Drain both streams without
             // forwarding, recording, or putting them in the UI. Environment is
             // inherited unchanged; notably no PATH/Python/config overrides.

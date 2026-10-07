@@ -125,7 +125,12 @@ class AppUpdateRoutesTests(unittest.TestCase):
             result = self.app._install_app_update('9.0.0', b'zip', 'a' * 64, cancel=cancelled)
         self.assertEqual(result['status'], 'launching')
         stage.assert_called_once_with(self.app.state, WORKSPACE_VERSION, '9.0.0', b'zip', 'a' * 64,
-                                      demo=True, no_browser=True, cancel=cancelled)
+                                      demo=True, no_browser=True, cancel=cancelled, launcher_bytes=None)
+
+    def test_install_callback_keeps_verified_launcher_bytes(self):
+        with patch('local_app.update_install.stage_and_launch', return_value={'status': 'launching'}) as stage:
+            self.app._install_app_update('9.0.0', b'zip', 'a' * 64, launcher_bytes=b'MZfixture')
+        self.assertEqual(b'MZfixture', stage.call_args.kwargs['launcher_bytes'])
 
 
 if __name__ == '__main__':

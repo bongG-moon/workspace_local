@@ -18,6 +18,8 @@ from local_app.ui_health import UiHealthLog
 FAKE = r'''
 import json, os, sys
 config = json.loads(sys.stdin.readline())
+with open(sys.argv[2] + '.config', 'w', encoding='utf-8') as record:
+ record.write(json.dumps(config))
 mode = sys.argv[1]
 if mode == 'missing':
  print(json.dumps({'type':'error','code':46}), flush=True); sys.exit(46)
@@ -31,6 +33,9 @@ for line in sys.stdin:
  if request['command']=='fixture_event':
   print(json.dumps({'type':request['eventType'],'notificationId':request['notificationId']}), flush=True)
  reply={'type':'ack','id':request['id'],'ok':True}
+ if request['command']=='theme':
+  if mode=='theme_reject': reply['ok']=False
+  if mode!='theme_missing': reply['theme']=request['theme']
  if request['command']=='confirm_shutdown':
   if mode=='exit_on_confirm': sys.exit(0)
   if mode!='confirm_missing':
@@ -77,7 +82,7 @@ class NativeWindowTests(unittest.TestCase):
         self.assertEqual(1, len(self.launches))
         self.assertEqual([str(self.binary)], self.launches[0][0])
         self.assertNotIn(self.url, repr(self.launches))
-        self.notifier.bind_owned.assert_called_once_with(123, self.processes[0].pid)
+        self.notifier.bind_owned.assert_called_once_with(123, self.processes[0].pid, apply_theme=False)
         self.host.close()
         self.assertEqual(0, self.processes[0].poll())
         with self.assertRaises(DesktopError): self.host.open()
@@ -97,6 +102,47 @@ class NativeWindowTests(unittest.TestCase):
         self.assertEqual('activated', self.host.open()['action'])
         self.wait_for(lambda: failed_callback.called)
         self.assertEqual(1, len(self.launches))
+
+    def test_appearance_is_sent_in_initial_config_and_never_starts_a_missing_host(self):
+        self.assertFalse(self.host.set_appearance('dark'))
+        self.assertEqual([], self.launches)
+        self.host.open()
+        config = json.loads(Path(str(self.requests) + '.config').read_text('utf-8'))
+        self.assertEqual('dark', config['theme'])
+        self.assertFalse(self.requests.exists())
+        self.host.close()
+        self.assertFalse(self.host.set_appearance('system'))
+        self.assertEqual(1, len(self.launches))
+
+    def test_appearance_change_uses_fixed_private_command_without_activation(self):
+        self.host.open()
+        for theme in ('dark', 'system', 'light'):
+            self.assertTrue(self.host.set_appearance(theme))
+        self.assertEqual(['theme'] * 3, [row['command'] for row in self.request_log()])
+        self.assertEqual(['dark', 'system', 'light'], [row['theme'] for row in self.request_log()])
+        self.assertTrue(all(set(row) == {'command', 'theme', 'id'} for row in self.request_log()))
+        self.assertEqual(1, len(self.launches))
+
+    def test_invalid_appearance_is_rejected_before_ipc_or_launch(self):
+        for theme in (None, {}, [], True, 'Dark', 'dark;close', 'system\n'):
+            with self.subTest(theme=theme), self.assertRaises(ValueError):
+                self.host.set_appearance(theme)
+            with self.subTest(constructor=theme), self.assertRaises(ValueError):
+                DesktopHost(self.notifier, self.url, self.root, appearance=theme)
+        self.assertEqual('light', self.host.appearance)
+        self.assertEqual([], self.launches)
+
+    def test_appearance_failure_retains_preference_for_next_host_without_duplicate(self):
+        for mode in ('theme_reject', 'theme_missing'):
+            with self.subTest(mode=mode):
+                self.mode = mode
+                self.host.open()
+                self.assertFalse(self.host.set_appearance('dark'))
+                self.assertEqual('dark', self.host.appearance)
+                self.assertIsNone(self.host.process.poll())
+                with self.host.lock:
+                    self.host._dispose()
+        self.assertEqual(2, len(self.launches))
 
     def test_blocked_diagnostic_storage_does_not_delay_ack_notifications_or_close(self):
         entered, release = threading.Event(), threading.Event()
@@ -474,6 +520,16 @@ class NativeWindowTests(unittest.TestCase):
 
 
 class NativeOwnershipTests(unittest.TestCase):
+    def test_owned_desktop_theme_does_not_receive_legacy_light_palette(self):
+        native = Mock()
+        native.owned.return_value = 'owned'
+        notifier = AttentionNotifier(native=native)
+        self.assertTrue(notifier.bind_owned(101, 20, apply_theme=False))
+        native.theme.assert_not_called()
+        self.assertEqual('owned_host_theme', notifier.theme_state['reason'])
+        self.assertTrue(notifier.bind_owned(101, 20))
+        native.theme.assert_called_once_with('owned', 'Workspace')
+
     def test_friendly_caption_alone_is_not_an_identity(self):
         native = object.__new__(WindowsAttention)
         binding = WindowBinding(101, 20, 300, 1, b'own', os.path.normcase(str(Path('owned.exe').resolve())))

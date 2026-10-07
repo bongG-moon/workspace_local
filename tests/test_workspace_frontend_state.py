@@ -32,6 +32,7 @@ class Element {
   replaceChildren(...nodes){for(const n of this.children)if(n&&typeof n==='object')n.parent=null;this.children=[];this.append(...nodes);}
   remove(){if(this.parent){this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;this.isConnected=false;}}
   setAttribute(name,value){this.attributes[name]=String(value);}
+  addEventListener(name,fn){this.listeners??={};(this.listeners[name]??=[]).push(fn);}
   querySelector(selector){const matches=n=>selector.startsWith('.')?n.classList?.contains(selector.slice(1)):n.tagName===selector.toUpperCase();for(const child of this.children){if(matches(child))return child;const nested=child.querySelector?.(selector);if(nested)return nested;}return null;}
   focus(){context.document.activeElement=this;} showModal(){this.open=true;} close(value=''){this.returnValue=value;this.open=false;this.onclose?.();}
   closest(selector){for(let n=this;n;n=n.parent)if(n.tagName===selector.toUpperCase())return n;return null;}

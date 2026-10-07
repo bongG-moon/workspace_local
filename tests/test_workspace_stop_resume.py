@@ -133,6 +133,46 @@ class StopResumeTests(unittest.TestCase):
         self.assertIs(bridge, self.item['bridge'])
         self.assertEqual(2, sum(row['type'] == 'user' for row in self.frames()))
 
+    def test_saved_queue_apply_interrupts_once_then_keeps_cli_pid_and_queue_identity(self):
+        for result_first in (False, True):
+            with self.subTest(result_first=result_first):
+                if self.item.get('bridge'):
+                    self.item['bridge'].close()
+                bridge = self.connect(stopResultFirst=result_first)
+                identity, pid = self.item['sessionId'], bridge.process.pid
+                self.app.set_permission_mode(self.sid, 'auto')
+                context = self.app.dispatch.context(self.item)
+                before = sum(row['type'] == 'user' for row in self.frames())
+                interrupted = self.app.dispatch.queue.enqueue(self.sid, 'wait for cancellation', context=context)
+                self.app.dispatch.pump(); self.wait_user_count(before + 1)
+                first = self.app.dispatch.queue.enqueue(self.sid, 'first remaining', context=context)
+                selected = self.app.dispatch.queue.enqueue(self.sid, 'selected now', context=context)
+                last = self.app.dispatch.queue.enqueue(self.sid, 'last remaining', context=context)
+                action = {'action': 'apply_now', 'requestId': selected['id'], 'editRevision': 0,
+                          'clientRequestId': selected['id']}
+                self.app.dispatch.action(self.sid, action)
+                self.assertTrue(self.app.dispatch.action(self.sid, action)['alreadyApplied'])
+                self.app.dispatch.pump()
+                self.assertEqual(before + 1, sum(row['type'] == 'user' for row in self.frames()))
+                self.release_stop()
+                eventually(lambda: self.app.stop_state(self.item) == 'stopped')
+                for expected in range(before + 2, before + 5):
+                    self.app.dispatch.pump()
+                    self.wait_user_count(expected)
+                    eventually(lambda: self.item['state'] == 'done')
+                self.assertEqual(['selected now', 'first remaining', 'last remaining'],
+                                 [row['message']['content'] for row in self.frames() if row['type'] == 'user'][-3:])
+                self.assertEqual([selected['id'], first['id'], last['id']],
+                                 [row.get('requestId') for row in self.item['messages'] if row['role'] == 'user'][-3:])
+                previous = next(row for row in self.app.dispatch.queue.data['queue'] if row['id'] == interrupted['id'])
+                self.assertEqual('cancelled', previous['status'])
+                self.assertEqual((identity, pid), (self.item['sessionId'], bridge.process.pid))
+                self.assertEqual('auto', self.app.public(self.item)['connection']['permissionMode'])
+                interrupts = [row for row in self.frames() if row.get('request', {}).get('subtype') == 'interrupt']
+                self.assertEqual(1 if not result_first else 2, len(interrupts))
+                self.assertTrue(self.app.dispatch.action(self.sid, action)['alreadyApplied'])
+                self.assertEqual([], self.app.dispatch.snapshot(self.sid)['queue'])
+
     def test_fresh_queue_after_recovered_stop_autoruns_on_real_cli_success(self):
         # Gate one synthetic CLI result so requests can be enqueued through the
         # production controller while the transport is actually busy.

@@ -41,6 +41,55 @@ class WorkQueueTests(unittest.TestCase):
         self.queue.observe('task', 'result', {'lastRunId': 'run1'})
         self.assertEqual(second['id'], self.claim()['id'])
 
+    def test_apply_now_preserves_ids_other_sessions_order_and_receipt_across_restart(self):
+        first = self.add('first'); other = self.add('other', 'another')
+        second = self.add('second'); selected = self.add('selected')
+        row, replayed = self.queue.apply_now('task', selected['id'], 0, 'once', commit=True)
+        self.assertFalse(replayed)
+        self.assertEqual(selected['id'], row['id'])
+        self.assertEqual([selected['id'], other['id'], first['id'], second['id']],
+                         [r['id'] for r in self.queue.data['queue']])
+        self.queue.pause('task', 'stopped')
+        reopened = WorkQueue(self.root, clock=lambda: self.now)
+        self.assertTrue(reopened.apply_now('task', selected['id'], 0, 'once', commit=True)[1])
+        self.assertEqual('restart', reopened.snapshot('task')['reason'])
+        self.assertEqual(4, len(reopened.data['queue']))
+        with self.assertRaises(ValueError):
+            reopened.apply_now('task', first['id'], 0, 'once', commit=True)
+
+    def test_apply_now_rejects_old_revision_even_when_clock_has_not_advanced(self):
+        row = self.add('original')
+        self.queue.edit('task', row['id'], 'changed', [], self.context)
+        self.queue.edit('task', row['id'], 'original', [], self.context)
+        with self.assertRaisesRegex(ValueError, '바뀌'):
+            self.queue.apply_now('task', row['id'], 0, 'once', commit=True)
+        current = self.queue.snapshot('task')['queue'][0]
+        self.assertEqual(2, current['editRevision'])
+        self.assertFalse(self.queue.apply_now('task', row['id'], 2, 'once', commit=True)[1])
+
+    def test_apply_now_concurrent_claim_never_duplicates_or_requeues_delivery(self):
+        for _ in range(8):
+            row = self.add()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                tasks = [pool.submit(self.claim), pool.submit(self.queue.apply_now, 'task', row['id'], 0, row['id'], commit=True)]
+                claim, _ = [task.result() for task in tasks]
+            self.assertEqual(row['id'], claim['id'])
+            self.assertIsNone(self.claim())
+            self.queue.dispatched(claim['id'], row['id'])
+            self.queue.observe('task', 'result', {'lastRunId': row['id']})
+            self.assertTrue(self.queue.apply_now('task', row['id'], 0, row['id'], commit=True)[1])
+            self.assertIsNone(self.claim())
+
+    def test_apply_now_stale_cancel_cross_session_and_missing_identifier_are_rejected(self):
+        row = self.add()
+        with self.assertRaises(ValueError):
+            self.queue.apply_now('another', row['id'], 0, 'once', commit=True)
+        self.queue.cancel('task', row['id'])
+        with self.assertRaises(ValueError):
+            self.queue.apply_now('task', row['id'], 0, 'once', commit=True)
+        with self.assertRaises(ValueError):
+            self.queue.apply_now('task', 'missing', 0, 'once', commit=True)
+
     def test_approval_question_and_choice_wait_without_forcing_manual_resume(self):
         item = self.add()
         for state in ('running', 'starting', 'approval', 'question', 'error', 'stopped'):

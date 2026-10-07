@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -64,6 +65,23 @@ internal static class DesktopProgram
     }
 }
 
+internal static class WorkspaceAppearance
+{
+    internal static bool Valid(string theme)
+    { return theme == "light" || theme == "dark" || theme == "system"; }
+    internal static bool IsDark(string theme)
+    {
+        if (theme != "system") return theme == "dark";
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", false))
+                return key != null && Convert.ToInt32(key.GetValue("AppsUseLightTheme", 1)) == 0;
+        }
+        catch { return false; }
+    }
+    internal static int ColorRef(Color color) { return color.R | color.G << 8 | color.B << 16; }
+}
+
 internal sealed class DesktopWindow : Form
 {
     private readonly Uri home;
@@ -83,9 +101,13 @@ internal sealed class DesktopWindow : Form
     private bool exiting, started, initializing, controlReaderStarted;
     private string runtimeVersion;
     private WorkspaceNotificationCard notificationCard;
+    private string appearance;
+    private bool darkAppearance, highContrastAppearance;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr window, int command);
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
     internal DesktopWindow(Dictionary<string, object> config)
     {
@@ -97,10 +119,13 @@ internal sealed class DesktopWindow : Form
         if (!Path.IsPathRooted(profile) || profile != Path.GetFullPath(profile)) throw new InvalidDataException();
         background = config.ContainsKey("background") && (bool)config["background"];
         adminApiBridge = config.ContainsKey("adminApiBridge") && (bool)config["adminApiBridge"];
+        object configuredTheme;
+        appearance = config.TryGetValue("theme", out configuredTheme) ? configuredTheme as string : "light";
+        if (!WorkspaceAppearance.Valid(appearance)) throw new InvalidDataException();
         Text = "Workspace";
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         AutoScaleMode = AutoScaleMode.Dpi;
-        BackColor = Color.FromArgb(240, 242, 248);
+        ApplyAppearance();
         Font = new Font("Segoe UI", 10);
         MinimumSize = new Size(720, 520);
         var area = Screen.PrimaryScreen.WorkingArea;
@@ -117,16 +142,93 @@ internal sealed class DesktopWindow : Form
         };
         FormClosed += delegate
         {
+            SystemEvents.UserPreferenceChanged -= UserPreferenceChanged;
             if (notificationCard != null) notificationCard.Finish(false);
             if (view != null) view.Dispose();
         };
         HandleCreated += delegate
         {
+            ApplyAppearance();
             if (controlReaderStarted) return;
             controlReaderStarted = true;
             var reader = new Thread(ReadCommands) { IsBackground = true, Name = "Workspace desktop control" };
             reader.Start();
         };
+        SystemEvents.UserPreferenceChanged += UserPreferenceChanged;
+    }
+
+    private void UserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+    {
+        // Event driven only. Explicit light/dark choices ignore system theme
+        // changes, while Windows high contrast always takes precedence.
+        if (exiting || IsDisposed || !IsHandleCreated) return;
+        if (appearance != "system" && highContrastAppearance == SystemInformation.HighContrast) return;
+        try { BeginInvoke((Action)delegate { if (!exiting && !IsDisposed) ApplyAppearance(); }); }
+        catch (InvalidOperationException) { }
+    }
+
+    private void ApplyAppearance()
+    {
+        highContrastAppearance = SystemInformation.HighContrast;
+        darkAppearance = !highContrastAppearance && WorkspaceAppearance.IsDark(appearance);
+        BackColor = highContrastAppearance ? SystemColors.Window : darkAppearance
+            ? Color.FromArgb(29, 31, 42) : Color.FromArgb(240, 242, 248);
+        ForeColor = highContrastAppearance ? SystemColors.WindowText : darkAppearance
+            ? Color.FromArgb(236, 237, 245) : Color.FromArgb(44, 49, 67);
+        if (view != null)
+        {
+            try
+            {
+                view.DefaultBackgroundColor = BackColor;
+                if (view.CoreWebView2 != null)
+                    view.CoreWebView2.Profile.PreferredColorScheme = highContrastAppearance || appearance == "system"
+                        ? CoreWebView2PreferredColorScheme.Auto : darkAppearance
+                        ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
+            }
+            catch { /* A recovering WebView must not break the native theme command. */ }
+        }
+        if (IsHandleCreated)
+        {
+            try
+            {
+                int dark = darkAppearance ? 1 : 0;
+                if (DwmSetWindowAttribute(Handle, 20, ref dark, 4) != 0)
+                    DwmSetWindowAttribute(Handle, 19, ref dark, 4);
+                int caption = highContrastAppearance ? -1 : WorkspaceAppearance.ColorRef(darkAppearance
+                    ? Color.FromArgb(36, 38, 51) : Color.FromArgb(233, 231, 246));
+                int text = highContrastAppearance ? -1 : WorkspaceAppearance.ColorRef(darkAppearance
+                    ? ForeColor : Color.FromArgb(57, 50, 92));
+                int border = highContrastAppearance ? -1 : WorkspaceAppearance.ColorRef(darkAppearance
+                    ? Color.FromArgb(59, 61, 80) : Color.FromArgb(220, 216, 238));
+                DwmSetWindowAttribute(Handle, 35, ref caption, 4);
+                DwmSetWindowAttribute(Handle, 36, ref text, 4);
+                DwmSetWindowAttribute(Handle, 34, ref border, 4);
+            }
+            catch { /* Windows 10 may not implement per-window caption colors. */ }
+        }
+        if (recovery != null)
+        {
+            recovery.BackColor = BackColor; recovery.ForeColor = ForeColor;
+            foreach (Control child in recovery.Controls)
+            {
+                child.BackColor = BackColor; child.ForeColor = ForeColor;
+                var button = child as Button;
+                if (button != null) { button.UseVisualStyleBackColor = false; button.FlatStyle = FlatStyle.Flat; }
+            }
+        }
+        if (notificationCard != null) notificationCard.SetAppearance(darkAppearance);
+    }
+
+    private void SetAppearance(Dictionary<string, object> input, int id)
+    {
+        object value;
+        input.TryGetValue("theme", out value);
+        string selected = value as string;
+        if (!WorkspaceAppearance.Valid(selected))
+        { DesktopProgram.Emit(new { type = "ack", id = id, ok = false }); return; }
+        appearance = selected;
+        ApplyAppearance();
+        DesktopProgram.Emit(new { type = "ack", id = id, ok = true, theme = appearance });
     }
 
     private bool SameOrigin(string value)
@@ -185,6 +287,7 @@ internal sealed class DesktopWindow : Form
             await view.EnsureCoreWebView2Async(environment);
             if (exiting) return;
             var core = view.CoreWebView2;
+            ApplyAppearance();
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.AreHostObjectsAllowed = false;
@@ -409,6 +512,7 @@ internal sealed class DesktopWindow : Form
         var retry = new Button { Dock = DockStyle.Top, Height = 48, Text = "화면 다시 열기" };
         retry.Click += async delegate { await InitializeView(); };
         recovery.Controls.Add(retry); recovery.Controls.Add(label);
+        ApplyAppearance();
         Controls.Add(recovery); recovery.BringToFront();
         DesktopProgram.Emit(new { type = "recovery" });
     }
@@ -445,7 +549,7 @@ internal sealed class DesktopWindow : Form
                         if (ReferenceEquals(notificationCard, finished)) notificationCard = null;
                         DesktopProgram.Emit(new { type = opened ? "notification_opened" : "notification_dismissed",
                             notificationId = finished.Receipt });
-                    });
+                    }, darkAppearance);
                 notificationCard = card;
                 card.Present(Handle);
             }
@@ -520,6 +624,7 @@ internal sealed class DesktopWindow : Form
                     if (command == "close") { Exit(); return; }
                     if (command == "notify") { Notify(input, id); return; }
                     if (command == "confirm_shutdown") { ConfirmShutdown(input, id); return; }
+                    if (command == "theme") { SetAppearance(input, id); return; }
                     if (command == "activate") ActivateWindow();
                     else if (command == "hide" && background) Hide();
                     else { DesktopProgram.Emit(new { type = "ack", id = id, ok = false }); return; }
@@ -531,6 +636,11 @@ internal sealed class DesktopWindow : Form
         try { BeginInvoke((Action)Exit); } catch { }
     }
     private void Exit() { exiting = true; Close(); }
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) SystemEvents.UserPreferenceChanged -= UserPreferenceChanged;
+        base.Dispose(disposing);
+    }
 }
 
 // Two embedded static font faces, loaded only when the first card is arranged.
@@ -647,8 +757,8 @@ internal sealed class WorkspaceNotificationCard : Form
     private double remaining = 12000;
     private float scale = 1;
     private bool finished, arranging;
-    private readonly bool highContrast;
-    private readonly Color surface, ink, muted, accent, border;
+    private bool highContrast, darkAppearance;
+    private Color surface, ink, muted, accent, border;
 
     [System.Runtime.InteropServices.DllImport("shell32.dll")]
     private static extern int SHQueryUserNotificationState(out int state);
@@ -685,18 +795,17 @@ internal sealed class WorkspaceNotificationCard : Form
 
     internal WorkspaceNotificationCard(string notificationId, string notificationKind,
         string title, string message, string summary, Action<WorkspaceNotificationCard, bool> onCompleted)
+        : this(notificationId, notificationKind, title, message, summary, onCompleted, false) { }
+
+    internal WorkspaceNotificationCard(string notificationId, string notificationKind,
+        string title, string message, string summary, Action<WorkspaceNotificationCard, bool> onCompleted, bool dark)
     {
         receipt = notificationId; kind = notificationKind; completed = onCompleted;
         // A legacy caller may omit the summary. Attention cards should still
         // explain the required action instead of showing only a task name.
         if (kind == "attention" && String.IsNullOrWhiteSpace(summary))
             summary = "승인 또는 답변 내용을 확인해 주세요";
-        highContrast = SystemInformation.HighContrast;
-        surface = highContrast ? SystemColors.Window : Color.FromArgb(248, 249, 253);
-        ink = highContrast ? SystemColors.WindowText : Color.FromArgb(44, 49, 67);
-        muted = highContrast ? SystemColors.GrayText : Color.FromArgb(111, 119, 141);
-        accent = highContrast ? SystemColors.Highlight : Color.FromArgb(113, 105, 211);
-        border = highContrast ? SystemColors.WindowText : Color.FromArgb(222, 225, 239);
+        SetPalette(dark);
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -712,13 +821,13 @@ internal sealed class WorkspaceNotificationCard : Form
         titleLabel = MakeLabel(title, ink);
         titleLabel.AutoEllipsis = true;
         titleLabel.AccessibleName = title;
-        summaryLabel = MakeLabel(summary, highContrast ? SystemColors.WindowText : Color.FromArgb(75, 81, 98));
+        summaryLabel = MakeLabel(summary, SummaryInk);
         summaryLabel.AutoEllipsis = true;
         summaryLabel.TextAlign = ContentAlignment.TopLeft;
         summaryLabel.Visible = summary.Length > 0;
         summaryLabel.AccessibleName = summary;
         openButton = new NotificationButton(kind == "completed" ? "결과" : "열기", accent,
-            highContrast ? SystemColors.HighlightText : Color.White, false);
+            ActionInk, false);
         closeButton = new NotificationButton("", surface, muted, true);
         openButton.AccessibleName = kind == "completed" ? "완료된 업무의 결과 보기" : "해당 업무 열기";
         closeButton.AccessibleName = "알림 닫기";
@@ -734,6 +843,34 @@ internal sealed class WorkspaceNotificationCard : Form
             if (remaining <= 0 || now >= 60000 || !NotificationsAllowed()) Finish(false);
         };
         FormClosed += delegate { Complete(false); };
+    }
+
+    private Color SummaryInk { get { return highContrast ? SystemColors.WindowText : darkAppearance
+        ? Color.FromArgb(203, 208, 224) : Color.FromArgb(75, 81, 98); } }
+    private Color ActionInk { get { return highContrast ? SystemColors.HighlightText : darkAppearance
+        ? Color.FromArgb(24, 25, 34) : Color.White; } }
+    private void SetPalette(bool dark)
+    {
+        highContrast = SystemInformation.HighContrast;
+        darkAppearance = dark && !highContrast;
+        surface = highContrast ? SystemColors.Window : darkAppearance ? Color.FromArgb(37, 39, 53) : Color.FromArgb(248, 249, 253);
+        ink = highContrast ? SystemColors.WindowText : darkAppearance ? Color.FromArgb(236, 237, 245) : Color.FromArgb(44, 49, 67);
+        muted = highContrast ? SystemColors.GrayText : darkAppearance ? Color.FromArgb(173, 178, 199) : Color.FromArgb(111, 119, 141);
+        accent = highContrast ? SystemColors.Highlight : darkAppearance ? Color.FromArgb(155, 146, 236) : Color.FromArgb(113, 105, 211);
+        border = highContrast ? SystemColors.WindowText : darkAppearance ? Color.FromArgb(68, 71, 94) : Color.FromArgb(222, 225, 239);
+    }
+    internal void SetAppearance(bool dark)
+    {
+        if (finished || IsDisposed) return;
+        bool contrastChanged = highContrast != SystemInformation.HighContrast;
+        SetPalette(dark);
+        BackColor = surface;
+        statusLabel.ForeColor = muted; titleLabel.ForeColor = ink; summaryLabel.ForeColor = SummaryInk;
+        statusLabel.BackColor = titleLabel.BackColor = summaryLabel.BackColor = surface;
+        openButton.SetColors(accent, ActionInk); closeButton.SetColors(surface, muted);
+        // Palette changes do not rebuild fonts, timers, windows or receipt state.
+        if (contrastChanged && IsHandleCreated) Arrange(Screen.FromHandle(Handle).WorkingArea, (uint)Math.Round(scale * 96));
+        Invalidate(true);
     }
 
     protected override bool ShowWithoutActivation { get { return true; } }
@@ -871,10 +1008,10 @@ internal sealed class WorkspaceNotificationCard : Form
         // Keep the stroke's arc centers identical to the single outer Region.
         using (var outline = Rounded(new RectangleF(inset, inset, Width - stroke, Height - stroke), highContrast ? 0 : Px(10) - inset))
         using (var pen = new Pen(border, stroke)) g.DrawPath(pen, outline);
-        Color tone = highContrast ? accent : kind == "completed" ? Color.FromArgb(87, 141, 121)
-            : kind == "error" ? Color.FromArgb(176, 116, 88) : accent;
+        Color tone = highContrast ? accent : kind == "completed" ? (darkAppearance ? Color.FromArgb(139, 202, 173) : Color.FromArgb(87, 141, 121))
+            : kind == "error" ? (darkAppearance ? Color.FromArgb(231, 175, 142) : Color.FromArgb(176, 116, 88)) : accent;
         using (var badge = Rounded(new RectangleF(Px(16), Px(32), Px(28), Px(28)), Px(8)))
-        using (var brush = new SolidBrush(highContrast ? SystemColors.Window : Color.FromArgb(238, 237, 248))) g.FillPath(brush, badge);
+        using (var brush = new SolidBrush(highContrast ? SystemColors.Window : darkAppearance ? Color.FromArgb(52, 50, 74) : Color.FromArgb(238, 237, 248))) g.FillPath(brush, badge);
         using (var pen = new Pen(tone, Math.Max(1, 1.8f * scale)))
         {
             pen.StartCap = pen.EndCap = System.Drawing.Drawing2D.LineCap.Round;
@@ -940,7 +1077,7 @@ internal sealed class WorkspaceNotificationCard : Form
 
     private sealed class NotificationButton : Button
     {
-        private readonly Color fill, text;
+        private Color fill, text;
         private readonly bool quiet;
         private bool hover, pressed;
         internal int CornerRadius = 10;
@@ -958,6 +1095,8 @@ internal sealed class WorkspaceNotificationCard : Form
             MouseDown += delegate { pressed = true; Invalidate(); };
             MouseUp += delegate { pressed = false; Invalidate(); };
         }
+        internal void SetColors(Color background, Color foreground)
+        { fill = background; text = foreground; Invalidate(); }
         protected override AccessibleObject CreateAccessibilityInstance()
         { return new NotificationButtonAccessibleObject(this); }
         private sealed class NotificationButtonAccessibleObject : Control.ControlAccessibleObject

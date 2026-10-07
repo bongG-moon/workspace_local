@@ -41,7 +41,7 @@ from .progress_log import ProgressStore
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.20"
+WORKSPACE_VERSION = "0.23.21"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 MANUAL_CSP = (
@@ -122,6 +122,10 @@ class LocalApp:
     def __init__(self, state: Path, command=None, info=None, demo=False, *, managed_workspace_root=None, execution_mode='normal'):
         self.state = state
         self.state.mkdir(parents=True, exist_ok=True)
+        from .appearance import Appearance
+        from .managed_launcher import entry_details
+        self.appearance = Appearance(state)
+        self.launcher_details = entry_details(WORKSPACE_VERSION)
         self.token = secrets.token_urlsafe(32)
         from .ui_health import UiHealthLog
         self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
@@ -192,14 +196,20 @@ class LocalApp:
             source=load_source(Path(__file__).resolve().parents[1]))
         self.update_warning = None
 
-    def _install_app_update(self, version, package_bytes, sha256, *, cancel=None):
+    def _install_app_update(self, version, package_bytes, sha256, *, cancel=None, launcher_bytes=None):
         from .update_install import stage_and_launch
         # Shutdown closes admission before an updater can launch a successor.
         # The new launcher uses the existing cooperative draft/work handoff.
         with self.operation(upgrade_change=True):
             return stage_and_launch(self.state, WORKSPACE_VERSION, version,
                 package_bytes, sha256, demo=self.demo,
-                no_browser=self._upgrade_headless, cancel=cancel)
+                no_browser=self._upgrade_headless, cancel=cancel, launcher_bytes=launcher_bytes)
+
+    def configure_appearance(self, theme):
+        result = self.appearance.configure(theme)
+        window = self._desktop_window
+        result["nativeApplied"] = window.set_appearance(result["theme"]) if window else True
+        return result
 
     def _notify_desktop(self, payload, on_click):
         if self._desktop_window is not None:
@@ -426,6 +436,8 @@ class LocalApp:
                     "window": self.window_state(),
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
+                    "appearance": self.appearance.snapshot(),
+                    "launcher": self.launcher_details,
                     "executionMode": self.execution_mode,
                     "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
                     "appUpdate": self.app_updates.snapshot(),
@@ -1854,6 +1866,8 @@ class Handler(BaseHTTPRequestHandler):
                                        'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':EXECUTION_MODE_PROTOCOL,
                                        'upgradeProtocol':1,'window':app.window_state(), **app.shutdown_status()})
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
+            if route.path == "/api/appearance":
+                return self.reply(app.appearance.snapshot())
             if route.path == "/api/bootstrap":
                 return self.reply(app.bootstrap())
             if route.path == '/api/app-update':
@@ -1967,6 +1981,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),
+                      "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
+                      "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
                       "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
                       "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
@@ -1986,7 +2002,12 @@ class Handler(BaseHTTPRequestHandler):
                       "/app-icon-512.png": ("app-icon-512.png", "image/png")}
             if route.path in assets:
                 name, mime = assets[route.path]
-                return self.reply((ASSETS / name).read_bytes(), content_type=mime)
+                payload = (ASSETS / name).read_bytes()
+                if name == "index.html":
+                    appearance = app.appearance.snapshot()
+                    root = '<html lang="ko" data-appearance="%s" data-theme="%s">' % (appearance["theme"], appearance["effective"])
+                    payload = payload.replace(b'<html lang="ko">', root.encode("utf-8"), 1)
+                return self.reply(payload, content_type=mime)
             return self.reply({"error": "없는 화면입니다."}, 404)
         except (ValueError, OSError, KeyError) as exc:
             return self.reply({"error": str(exc)}, 400)
@@ -2133,6 +2154,14 @@ class Handler(BaseHTTPRequestHandler):
             with app.lock:
                 app.get(sid)
             return self.reply(app.attachment_store.prepare(data['name'], data['size']))
+        if route == '/api/appearance':
+            if set(data) != {'theme'}:
+                raise ValueError('화면 모드를 다시 선택해 주세요.')
+            return self.reply(app.configure_appearance(data['theme']))
+        if route == '/api/launcher/prepare':
+            if data:
+                raise ValueError('실행기 준비 요청을 확인해 주세요.')
+            return self.reply(app.app_updates.prepare_launcher())
         if route == '/api/execution-mode':
             raise ValueError('실행 권한은 Windows에서 선택합니다. 앱을 완전히 종료한 뒤 EXE를 일반 실행하거나 관리자 권한으로 실행해 주세요.')
         if route == '/api/app-update':
@@ -2321,7 +2350,8 @@ def main():
         server.shutdown()
         return True
     window = DesktopHost(app.notifier, url, args.state, on_close=quit_from_tray,
-                         on_event=app.ui_health.native, admin_api_bridge=app.execution_mode == 'administrator')
+                         on_event=app.ui_health.native, admin_api_bridge=app.execution_mode == 'administrator',
+                         appearance=app.appearance.snapshot()['theme'])
     def reopen():
         app.app_updates.check(startup=True)
         result = window.open()
@@ -2340,7 +2370,7 @@ def main():
         runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
         from .update_install import confirm_running_update
         try:
-            confirm_running_update(app.state, WORKSPACE_VERSION)
+            confirm_running_update(app.state, WORKSPACE_VERSION, demo=args.demo)
         except (ValueError, OSError):
             app.update_warning = '업데이트 실행 위치를 저장하지 못했어요. 다음 실행 때 최신 버전 파일을 사용해 주세요.'
         app.dispatch.start()

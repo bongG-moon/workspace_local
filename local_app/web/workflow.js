@@ -39,7 +39,7 @@ globalThis.WorkspaceWorkflow = (() => {
     snapshot = {...next,sessionId:context.id};render();
   }
   function render() {
-    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || stopBlocked() || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
+    const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || stopBlocked() || !!snapshot?.applyingId || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
     const queue = pending(), schedules = snapshot?.schedules || [];
     $("followup-actions").hidden = !active || !busy();
     $("followup-queue").disabled = blocked || !active?.trusted;
@@ -68,7 +68,12 @@ globalThis.WorkspaceWorkflow = (() => {
       row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 · ${waitLabel}`,"workflow-state"),el("p",item.text,"workflow-request"));
       if (item.attachments?.length) row.append(el("small",`자료 ${item.attachments.length}개 · ${item.attachments.map(basename).join(", ")}`,"workflow-files"));
       const actions=el("div",null,"workflow-row-actions");
-      function action(label,fn,disabled=false) {const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||item.state==="dispatching"||disabled;button.onclick=()=>{if(current(context))fn();};actions.append(button);}
+      function action(label,fn,disabled=false) {const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||item.state==="dispatching"||disabled;button.onclick=()=>{if(current(context)&&!button.disabled)return fn();};actions.append(button);return button;}
+      const applying = snapshot?.applyingId === item.id;
+      const now = action(applying?"전환 중…":busy()?"지금 반영":"지금 실행",()=>applyQueuedNow(item,context),
+        item.state!=="queued" || !active?.trusted || uncertain || (busy()&&snapshot?.steer?.supported!==true));
+      now.className="quiet-button queue-apply-now";now.setAttribute("aria-busy",String(applying));
+      now.title=busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
       const reorderable=queue.filter(entry=>entry.state==="queued"),position=reorderable.findIndex(entry=>entry.id===item.id);
       action("위로",()=>reorder(position,position-1),position<=0);action("아래로",()=>reorder(position,position+1),position<0||position===reorderable.length-1);
       action("수정",()=>openEditor("queue",item),item.state!=="queued");action(item.state==="needs_review"?"대기에서 제거":"취소",()=>mutate({action:"cancel",requestId:item.id},context));
@@ -176,7 +181,7 @@ globalThis.WorkspaceWorkflow = (() => {
   }
   async function mutate(body,context=capture()) {
     if (!context.id || mutations.has(context.id) || appClosed || (current(context)&&globalThis.WorkspaceConnectionRestart?.isCurrent())) return null;
-    const creating=["enqueue","steer","schedule"].includes(body.action),payload={id:context.id,...body},attempt=creating?requestId(payload):null;
+    const creating=["enqueue","steer","apply_now","schedule"].includes(body.action),payload={id:context.id,...body},attempt=creating?requestId(payload):null;
     if(attempt)payload.clientRequestId=attempt.id;
     mutations.set(context.id,context);render();setStatus(active?.state||"idle");
     try {const value=await api("/api/dispatch",payload);if(attempt)attempts.delete(attempt.fingerprint);apply(value,context);return value;}
@@ -223,6 +228,16 @@ globalThis.WorkspaceWorkflow = (() => {
     if(current(context))toast(queuedNotice(action,result));
   }
   async function reorder(from,to) {const items=pending().filter(item=>item.state==="queued");if(from<0||to<0||to>=items.length)return;[items[from],items[to]]=[items[to],items[from]];return mutate({action:"reorder",order:items.map(item=>item.id)});}
+  async function applyQueuedNow(item,context=capture()) {
+    if(!current(context)||locked()||stopBlocked()||snapshot?.applyingId||item.state!=="queued"||!active?.trusted)return;
+    if(busy()&&snapshot?.steer?.supported!==true)return;
+    // Refer to saved content only. Never consume/replace the composer's draft or
+    // clone an existing queue row, including a retry after a lost HTTP reply.
+    const result=await mutate({action:"apply_now",requestId:item.id,editRevision:item.editRevision||0},context);
+    if(!result){if(current(context))await refresh();return;}
+    if(current(context))toast(result.alreadyApplied?"이미 접수한 요청입니다. 현재 대기·실행 상태를 확인해 주세요.":
+      result.applyingId?"현재 요청을 중지한 뒤 선택한 대기 요청을 실행합니다.":"선택한 대기 요청을 먼저 실행합니다.");
+  }
   function localDate(value) {const date=new Date(value*1000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}
   function timeMinutes(value) {
     if(!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))return null;

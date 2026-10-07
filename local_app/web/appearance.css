@@ -1,0 +1,81 @@
+/* Semantic dark palette; every component retains its exact original light fallback. */
+:root[data-theme="light"]{color-scheme:light}
+:root[data-theme="dark"]{color-scheme:dark;
+  --theme-accent:#b7b0ff;
+  --theme-danger:#eea3a7;
+  --theme-danger-tint:#422e36;
+  --theme-glow:#10131b;
+  --theme-glow-a107:rgba(52,59,78,0.42);
+  --theme-glow-a11:rgba(52,59,78,0.043);
+  --theme-glow-a112:rgba(52,59,78,0.439);
+  --theme-glow-a117:rgba(52,59,78,0.459);
+  --theme-glow-a16:rgba(52,59,78,0.063);
+  --theme-glow-a176:rgba(52,59,78,0.69);
+  --theme-glow-a184:rgba(52,59,78,0.722);
+  --theme-glow-a21:rgba(52,59,78,0.082);
+  --theme-glow-a36:rgba(52,59,78,0.141);
+  --theme-glow-a43:rgba(52,59,78,0.169);
+  --theme-glow-a46:rgba(52,59,78,0.18);
+  --theme-glow-a48:rgba(52,59,78,0.188);
+  --theme-glow-a74:rgba(52,59,78,0.29);
+  --theme-glow-a85:rgba(52,59,78,0.333);
+  --theme-line:#3a4358;
+  --theme-line-a136:rgba(58,67,88,0.533);
+  --theme-line-a170:rgba(58,67,88,0.667);
+  --theme-line-a184:rgba(58,67,88,0.722);
+  --theme-line-accent:#7168a8;
+  --theme-line-accent-a23:rgba(113,104,168,0.09);
+  --theme-primary:#7066c3;
+  --theme-primary-a51:rgba(112,102,195,0.2);
+  --theme-shadow-a13:rgba(10,13,21,0.051);
+  --theme-shadow-a26:rgba(10,13,21,0.102);
+  --theme-shadow-a36:rgba(10,13,21,0.141);
+  --theme-shadow-a38:rgba(10,13,21,0.149);
+  --theme-shadow-a41:rgba(10,13,21,0.161);
+  --theme-shadow-a42:rgba(10,13,21,0.165);
+  --theme-shadow-a43:rgba(10,13,21,0.169);
+  --theme-shadow-a46:rgba(10,13,21,0.18);
+  --theme-shadow-a48:rgba(10,13,21,0.188);
+  --theme-shadow-a5:rgba(10,13,21,0.02);
+  --theme-shadow-a53:rgba(10,13,21,0.208);
+  --theme-shadow-a54:rgba(10,13,21,0.212);
+  --theme-shadow-a64:rgba(10,13,21,0.251);
+  --theme-shadow-a7:rgba(10,13,21,0.027);
+  --theme-success:#98cfb6;
+  --theme-surface:#202430;
+  --theme-surface-a102:rgba(32,36,48,0.4);
+  --theme-surface-a112:rgba(32,36,48,0.439);
+  --theme-surface-a80:rgba(32,36,48,0.314);
+  --theme-surface-a96:rgba(32,36,48,0.376);
+  --theme-surface-hover:#333b4e;
+  --theme-surface-raised:#272c3b;
+  --theme-surface-raised-a136:rgba(39,44,59,0.533);
+  --theme-surface-sunken:#191d27;
+  --theme-surface-sunken-a43:rgba(25,29,39,0.169);
+  --theme-surface-sunken-a51:rgba(25,29,39,0.2);
+  --theme-surface-sunken-a72:rgba(25,29,39,0.282);
+  --theme-text:#e8ebf3;
+  --theme-text-muted:#a4afc3;
+  --theme-text-on-accent:#ffffff;
+  --theme-text-secondary:#c3cada;
+  --theme-tint:#302e49;
+  --theme-warning:#e4bf86;
+  --theme-warning-tint:#403729;
+  --accent:#7066c3;--accent-ink:#b7b0ff;--accent-tint:#302e49;--green:#98cfb6;
+}
+/* Strong action surfaces need a light label, not the normal body ink. */
+:root[data-theme="dark"] .new-chat,:root[data-theme="dark"] .send-button,
+:root[data-theme="dark"] .primary-button{color:#fff}
+:root[data-theme="dark"] .sidebar,:root[data-theme="dark"] .inspector{background:#191d27}
+:root[data-theme="dark"] .welcome h2 span{color:var(--accent-ink)}
+:root[data-theme="dark"] .task-card,:root[data-theme="dark"] .workspace-card{background:var(--theme-surface-raised)}
+:root[data-theme="dark"] .tool-activity-badge,:root[data-theme="dark"] .tool-activity-open,
+:root[data-theme="dark"] .tool-activity-details-open{color:var(--accent-ink)!important}
+:root[data-theme="dark"] .app-update-sidebar-button:hover::before{background:var(--accent)}
+/* Document previews retain their own canvas and authored colors. */
+:root[data-theme="dark"] .html-preview{background:#fff;color-scheme:light}
+.appearance-options{max-width:320px}
+.top-actions .appearance-toggle{border-color:var(--theme-line,#dce0ec);background:var(--theme-surface,#f2f3fa);color:var(--accent-ink);box-shadow:none}
+.top-actions .appearance-toggle>.icon{width:20px;height:20px}
+
+@media(forced-colors:active){:root[data-theme]{color-scheme:light dark;--accent:Highlight;--accent-ink:LinkText;--ink:CanvasText;--muted:CanvasText;--surface:Canvas;--surface-raised:Canvas;--line:ButtonBorder}}

@@ -251,6 +251,147 @@ class DispatchRoutesTests(unittest.TestCase):
         self.app.dispatch.pump()
         self.assertEqual(['new direction', 'later'], resumed.sent)
 
+    def apply_now(self, row, client='apply-once'):
+        return self.request({'action': 'apply_now', 'requestId': row['id'],
+                             'editRevision': row.get('editRevision', 0), 'clientRequestId': client})
+
+    def test_saved_now_reuses_row_files_and_session_then_preserves_remaining_order(self):
+        item = self.app.get(self.sid)
+        item.update(state='running', sessionId='fixture-session')
+        self.enqueue('first'); self.enqueue('third')
+        attachment = self.work / 'saved.csv'; attachment.write_text('value\n7\n')
+        code, value = self.request({'action': 'enqueue', 'text': 'selected saved request',
+                                   'attachments': [str(attachment)], 'clientRequestId': 'with-file'})
+        selected = value['queue'][-1]
+        self.assertEqual(200, code)
+        self.assertEqual(200, self.apply_now(selected)[0])
+        self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['applyingId'])
+        with patch.object(self.bridge, 'interrupt', side_effect=AssertionError('must not interrupt twice')):
+            self.assertTrue(self.apply_now(selected)[1]['alreadyApplied'])
+        resumed = Bridge(self.app, self.sid)
+        with patch('local_app.server.ClaudeSession', return_value=resumed):
+            self.app.dispatch.pump()
+        self.assertIn('selected saved request', resumed.sent[0])
+        self.assertIn('saved.csv', resumed.sent[0])
+        self.assertEqual(selected['id'], item['messages'][-1]['requestId'])
+        persisted = next(row for row in self.app.dispatch.queue.data['queue'] if row['id'] == selected['id'])
+        self.assertEqual([str(attachment.resolve())], persisted['attachments'])
+        self.app.dispatch.pump(); self.app.dispatch.pump()
+        self.assertEqual(['first', 'third'], resumed.sent[1:])
+        self.assertEqual(3, len(item['messages']))
+        self.assertTrue(self.apply_now(selected)[1]['alreadyApplied'])
+        self.app.dispatch.pump()
+        self.assertEqual(3, len(resumed.sent))
+
+    def test_saved_now_idle_prioritizes_without_interrupt_and_no_request_clone(self):
+        self.enqueue('first')
+        selected = self.enqueue('selected')['queue'][-1]
+        self.app.dispatch.queue.pause(self.sid, 'user')
+        with patch.object(self.bridge, 'interrupt', side_effect=AssertionError('idle must not interrupt')):
+            code, _ = self.apply_now(selected)
+        self.assertEqual(200, code)
+        self.app.dispatch.pump(); self.app.dispatch.pump()
+        self.assertEqual(['selected', 'first'], self.bridge.sent)
+        self.assertEqual(2, len(self.app.dispatch.queue.data['queue']))
+
+    def test_saved_now_stale_edit_cancel_and_missing_attachment_do_not_interrupt(self):
+        self.app.get(self.sid)['state'] = 'running'
+        selected = self.enqueue('original')['queue'][0]
+        self.app.dispatch.queue.edit(self.sid, selected['id'], 'changed', [], self.app.dispatch.context(self.app.get(self.sid)))
+        with patch.object(self.bridge, 'interrupt', side_effect=AssertionError('must not interrupt')):
+            self.assertEqual(400, self.apply_now(selected)[0])
+            selected = self.app.dispatch.snapshot(self.sid)['queue'][0]
+            missing = str(self.work / 'deleted.csv')
+            self.app.dispatch.queue.edit(self.sid, selected['id'], 'changed', [missing])
+            selected = self.app.dispatch.snapshot(self.sid)['queue'][0]
+            self.assertEqual(400, self.apply_now(selected)[0])
+            self.app.dispatch.queue.cancel(self.sid, selected['id'])
+            self.assertEqual(400, self.apply_now(selected)[0])
+        self.assertEqual([], self.bridge.sent)
+
+    def test_saved_now_when_auto_dispatch_wins_is_an_ack_not_an_interrupt(self):
+        self.bridge.finish = False
+        selected = self.enqueue('already sending')['queue'][0]
+        self.app.dispatch.pump()
+        with patch.object(self.bridge, 'interrupt', side_effect=AssertionError('already sending')):
+            code, result = self.apply_now(selected)
+        self.assertEqual(200, code)
+        self.assertTrue(result['alreadyApplied'])
+        self.assertEqual(['already sending'], self.bridge.sent)
+
+    def test_saved_now_current_completion_before_click_uses_idle_path(self):
+        self.app.get(self.sid)['state'] = 'running'
+        selected = self.enqueue('after completion')['queue'][0]
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+        with patch.object(self.bridge, 'interrupt', side_effect=AssertionError('already complete')):
+            self.assertEqual(200, self.apply_now(selected)[0])
+        self.app.dispatch.pump()
+        self.assertEqual(['after completion'], self.bridge.sent)
+
+    def test_saved_now_stop_exception_keeps_saved_request_and_never_auto_sends(self):
+        self.app.get(self.sid)['state'] = 'running'
+        selected = self.enqueue('preserved')['queue'][0]
+        with patch.object(self.bridge, 'interrupt', side_effect=OSError('cannot stop')):
+            self.assertEqual(400, self.apply_now(selected)[0])
+        self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+        snapshot = self.app.dispatch.snapshot(self.sid)
+        self.assertEqual('stopped', snapshot['reason'])
+        self.assertEqual('queued', snapshot['queue'][0]['state'])
+        self.assertEqual(selected['id'], snapshot['queue'][0]['id'])
+        self.assertTrue(self.apply_now(selected)[1]['alreadyApplied'])
+
+    def test_saved_now_waits_for_stop_ack_and_protects_target_from_mutations(self):
+        self.app.get(self.sid)['state'] = 'running'
+        selected = self.enqueue('selected')['queue'][0]
+        with patch.object(self.bridge, 'interrupt') as interrupt:
+            self.assertEqual(200, self.apply_now(selected)[0])
+            self.assertEqual(200, self.apply_now(selected)[0])
+            interrupt.assert_called_once()
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+        for action in ('cancel', 'update', 'reorder', 'resume'):
+            self.assertEqual(400, self.request({'action': action, 'requestId': selected['id'],
+                'text': 'stale change', 'attachments': [], 'order': [selected['id']]})[0])
+        self.app.dispatch.steering[self.sid]['created'] -= 31
+        self.app.dispatch.pump()
+        self.assertEqual('stopped', self.app.dispatch.snapshot(self.sid)['reason'])
+        self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['queue'][0]['id'])
+
+    def test_saved_now_disconnect_and_manual_stop_cancel_pending_transition_without_losing_row(self):
+        for kind in ('disconnect', 'manual'):
+            with self.subTest(kind=kind):
+                self.sid = self.app.create(str(self.work), True)['id']
+                self.bridge = Bridge(self.app, self.sid)
+                item = self.app.get(self.sid); item.update(bridge=self.bridge, state='running')
+                selected = self.enqueue(kind)['queue'][0]
+                with patch.object(self.bridge, 'interrupt'):
+                    self.assertEqual(200, self.apply_now(selected)[0])
+                if kind == 'disconnect':
+                    self.app.emit(self.sid, 'error', {'code': 'cli_disconnected', 'message': 'closed'})
+                else:
+                    self.app.dispatch.manual_stop(self.sid)
+                self.app.dispatch.pump()
+                self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+                self.app.dispatch.pump()
+                self.assertEqual([], self.bridge.sent)
+                self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['queue'][0]['id'])
+
+    def test_saved_now_does_not_bypass_uncertain_delivery_or_control_confirmation(self):
+        selected = self.enqueue('selected')['queue'][0]
+        item = self.app.get(self.sid)
+        for flag in ('_controlRestore', '_connecting', '_permissionUpdating', '_stopAdmission'):
+            item[flag] = True
+            self.assertEqual(400, self.apply_now(selected)[0], flag)
+            item.pop(flag)
+        item['_sessionControls'] = {'model': 'changed'}
+        self.assertEqual(400, self.apply_now(selected)[0])
+        item.pop('_sessionControls')
+        self.app.dispatch.queue.data['queue'].append({**selected, 'id': 'a' * 32, 'status': 'needs_review'})
+        self.assertEqual(400, self.apply_now(selected)[0])
+        self.assertEqual([], self.bridge.sent)
+
     def test_scheduled_once_dispatches_only_once_without_harness(self):
         now = time.time()
         code, value = self.request({'action': 'schedule', 'text': 'scheduled', 'attachments': [],

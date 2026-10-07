@@ -253,6 +253,63 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(calls[1].action,'enqueue');assert.equal($('prompt').value,'');assert.equal(attachments.length,0);
         })()""", ("workflow",))
 
+    def test_saved_queue_now_uses_saved_id_revision_without_consuming_composer(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'saved',text:'저장된 요청',attachments:['saved.csv'],state:'queued',editRevision:3};
+          const state={revision:1,queue:[row],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const button=$('queue-list').children[0].children.at(-1).children[0];
+          assert.equal(button.textContent,'지금 반영');assert.equal(button.disabled,false);
+          $('prompt').value='아직 작성 중';attachments=['draft.csv'];
+          let body;api=async(path,value)=>{body=value;return {...state,revision:2,applyingId:'saved'};};
+          await button.onclick();
+          assert.equal(body.action,'apply_now');assert.equal(body.requestId,'saved');assert.equal(body.editRevision,3);
+          assert.ok(body.clientRequestId);assert.equal(body.text,undefined);assert.equal(body.attachments,undefined);
+          assert.equal($('prompt').value,'아직 작성 중');assert.equal(attachments[0],'draft.csv');
+          const waiting=$('queue-list').children[0].children.at(-1).children[0];
+          assert.equal(waiting.textContent,'전환 중…');assert.equal(waiting.disabled,true);
+        })()""", ("workflow",))
+
+    def test_saved_queue_now_lost_reply_retry_reuses_receipt_and_ignores_double_click(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'saved',text:'요청',state:'queued',editRevision:0};
+          const state={revision:1,queue:[row],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const button=()=> $('queue-list').children[0].children.at(-1).children[0];
+          let calls=[],reject;api=async(path,body)=>{if(!body)return state;calls.push(body);return new Promise((yes,no)=>reject=no);};
+          const oldButton=button(),first=oldButton.onclick();await oldButton.onclick();assert.equal(calls.length,1);
+          reject(Error('reply lost'));await first;
+          api=async(path,body)=>{if(!body)return state;calls.push(body);return {...state,revision:2,alreadyApplied:true};};
+          await button().onclick();assert.equal(calls.length,2);assert.equal(calls[0].clientRequestId,calls[1].clientRequestId);
+          assert.match($('toast').textContent,/이미 접수/);
+        })()""", ("workflow",))
+
+    def test_saved_queue_now_idle_demo_and_uncertain_stop_capabilities(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'saved',text:'요청',state:'queued'};
+          let state={revision:1,queue:[row],schedules:[],steer:{supported:false}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const button=()=> $('queue-list').children[0].children.at(-1).children[0];
+          assert.equal(button().disabled,true);active.state='done';WorkspaceWorkflow.render();
+          assert.equal(button().textContent,'지금 실행');assert.equal(button().disabled,false);
+          state={...state,revision:2,queue:[row,{id:'unknown',text:'확인',state:'needs_review'}]};await WorkspaceWorkflow.refresh();
+          assert.equal(button().disabled,true);
+          state={...state,revision:3,queue:[row]};await WorkspaceWorkflow.refresh();
+          WorkspaceStop={blocked:()=>true};WorkspaceWorkflow.render();assert.equal(button().disabled,true);
+        })()""", ("workflow",))
+
+    def test_saved_queue_old_task_button_and_ack_cannot_change_new_task(self):
+        self.run_case(r"""(async()=>{
+          const state={revision:1,queue:[{id:'saved',text:'요청',state:'queued'}],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const button=$('queue-list').children[0].children.at(-1).children[0];
+          let calls=0,reply;api=async()=>{calls++;return new Promise(resolve=>reply=resolve);};
+          const pending=button.onclick();active={id:'B',title:'B',state:'idle',trusted:true};selectionGeneration++;
+          $('prompt').value='B 작성 중';await button.onclick();assert.equal(calls,1);
+          reply({...state,revision:2,applyingId:'saved'});await pending;
+          assert.equal($('prompt').value,'B 작성 중');assert.equal($('send').disabled,false);
+        })()""", ("workflow",))
+
     def test_duplicate_click_and_old_session_ack_cannot_clear_new_task(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='A 질문';attachments=['A.csv'];saveDraft();let reply,calls=0;
@@ -395,9 +452,9 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           api=async()=>state;await WorkspaceWorkflow.refresh();
           assert.equal($('workflow-resume').disabled,true);assert.match($('workflow-paused').textContent,/전송 여부/);
           const uncertain=$('queue-list').children[0].querySelector('.workflow-row-actions');
-          assert.equal(uncertain.children[2].disabled,true);assert.equal(uncertain.children[3].textContent,'대기에서 제거');
+          assert.equal(uncertain.children[3].disabled,true);assert.equal(uncertain.children[4].textContent,'대기에서 제거');
           let call;api=async(path,body)=>{call=body;return {...state,revision:2};};
-          $('queue-list').children[2].querySelector('.workflow-row-actions').children[1].onclick();await settle();
+          $('queue-list').children[2].querySelector('.workflow-row-actions').children[2].onclick();await settle();
           assert.equal(call.action,'reorder');assert.equal(JSON.stringify(call.order),'["q2","q1"]');
         })()""", ("workflow",))
 

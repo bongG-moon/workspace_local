@@ -396,9 +396,11 @@ def publish_source(root, config, token, *, token_kind='auto', expected_source_id
         raise PublisherError('게시 준비 중 기본 브랜치가 바뀌었습니다. 원격 내용을 덮어쓰지 않았습니다. 다시 시도해 주세요.')
     committed = head
     if actions:
+        # start_sha is a new-branch base, not a compare-and-swap guard for
+        # an existing one. GitLab rejects it here with force=False. Use
+        # branch's current tip; keep the checked branch head above,
+        # per-file last_commit_id guards, and pinned readback below instead.
         payload = {'branch': branch, 'commit_message': f'Publish Company Workspace source {version}', 'actions': actions, 'force': False}
-        if head is not None:
-            payload['start_sha'] = head
         body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         if len(body) > MAX_REQUEST:
             raise PublisherError('소스 커밋 요청이 한 번에 확인할 수 있는 크기를 넘었습니다.')

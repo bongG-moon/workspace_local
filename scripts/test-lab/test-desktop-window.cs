@@ -30,10 +30,17 @@ internal static class TestDesktopWindow
     private static void CheckWindow(Assembly assembly)
     {
         var type = assembly.GetType("DesktopWindow", true);
+        var appearanceType = assembly.GetType("WorkspaceAppearance", true);
+        var valid = appearanceType.GetMethod("Valid", BindingFlags.Static | BindingFlags.NonPublic);
+        foreach (string value in new[] { "light", "dark", "system" })
+            Check((bool)valid.Invoke(null, new object[] { value }), "Valid appearance rejected");
+        foreach (string value in new[] { "", "Dark", "system\n", "dark;close", null })
+            Check(!(bool)valid.Invoke(null, new object[] { value }), "Invalid appearance accepted");
         var config = new Dictionary<string, object> {
             { "url", "http://127.0.0.1:49152/#token=" + new String('a', 48) },
             { "profile", Path.GetFullPath(Path.Combine(Path.GetTempPath(), "workspace-window-unused-profile")) },
             { "background", true }
+            , { "theme", "dark" }
         };
         using (var window = (Form)Activator.CreateInstance(type, Private, null, new object[] { config }, null))
         {
@@ -41,6 +48,18 @@ internal static class TestDesktopWindow
             // production activation method run unchanged on this test desktop.
             type.GetField("controlReaderStarted", Private).SetValue(window, true);
             type.GetField("initializing", Private).SetValue(window, true);
+            Check(window.BackColor == (SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(29, 31, 42)),
+                "Initial dark background was not applied before WebView initialization");
+            var appearance = type.GetMethod("SetAppearance", Private);
+            foreach (string theme in new[] { "light", "dark", "system", "dark" })
+            {
+                appearance.Invoke(window, new object[] { new Dictionary<string, object> { { "theme", theme } }, 7 });
+                Check((string)type.GetField("appearance", Private).GetValue(window) == theme, "Appearance command not applied");
+                Check(type.GetField("view", Private).GetValue(window) == null && !window.Visible,
+                    "Appearance command initialized or activated the window");
+            }
+            appearance.Invoke(window, new object[] { new Dictionary<string, object> { { "theme", "dark;close" } }, 8 });
+            Check((string)type.GetField("appearance", Private).GetValue(window) == "dark", "Invalid command changed appearance");
             var activate = type.GetMethod("ActivateWindow", Private);
             Check(activate != null, "Production activation method missing");
             Check(window.WindowState == FormWindowState.Maximized, "Fresh form is not configured to maximize");
@@ -128,6 +147,7 @@ internal static class TestDesktopWindow
             Check(thread.Join(30000), "Native window checks timed out");
             if (failure != null) throw failure;
             Console.WriteLine("PASS: startup work-area maximize; same HWND activation; maximized/normal minimize restore; tray hide/reopen; hidden minimized restore.");
+            Console.WriteLine("PASS: initial dark background before WebView; fixed light/dark/system validation; theme update without window activation.");
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

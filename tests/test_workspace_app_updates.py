@@ -311,7 +311,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual([updates.API_URL], self.transport.calls)
         self.installer.assert_not_called()
         self.assertEqual({'currentVersion', 'status', 'autoCheck', 'lastChecked', 'release',
-                          'progress', 'error', 'canInstall', 'source', 'startupSequence'}, set(result))
+                          'progress', 'error', 'canInstall', 'source', 'startupSequence', 'launcher'}, set(result))
         self.assertEqual({'version', 'title', 'notes', 'publishedAt', 'url'}, set(result['release']))
         result['release']['version'] = '1.0.0'
         self.assertEqual(VERSION, self.manager.snapshot()['release']['version'])

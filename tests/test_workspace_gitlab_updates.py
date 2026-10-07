@@ -149,11 +149,12 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(self.source.asset_url(VERSION, f'Company-Workspace-{VERSION}-vbs.zip'),
                          result['assets'][0]['browser_download_url'])
 
-    def test_optional_exe_is_validated_and_does_not_change_the_common_install_package(self):
+    def test_optional_exe_is_retained_for_entrypoint_upgrade_alongside_common_app_package(self):
         self.manifest['files'].append({'name': f'Company-Workspace-{VERSION}-exe.zip', 'size': 5, 'sha256': 'a' * 64})
         parsed = updates.parse_manifest(self.manifest, self.source)
-        self.assertEqual(2, len(parsed['assets']))
+        self.assertEqual(3, len(parsed['assets']))
         self.assertTrue(parsed['assets'][0]['name'].endswith('-vbs.zip'))
+        self.assertTrue(parsed['assets'][2]['name'].endswith('-exe.zip'))
 
     def test_rejects_nonstable_versions_unknown_fields_sources_and_invalid_timestamps(self):
         mutations = [('schema', True), ('schema', 2), ('channel', 'beta'), ('version', 'v0.22.0'),

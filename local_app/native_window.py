@@ -34,13 +34,16 @@ def desktop_executable():
 
 class DesktopHost:
     def __init__(self, notifier, url, state, *, background=False, on_close=None, popen=subprocess.Popen,
-                 on_event=None, admin_api_bridge=False):
+                 on_event=None, admin_api_bridge=False, appearance='light'):
+        if not isinstance(appearance, str) or appearance not in {'light', 'dark', 'system'}:
+            raise ValueError('Invalid appearance')
         self.notifier, self.url = notifier, url
         self.profile = str((Path(state).resolve() / 'webview2').resolve())
         self.background, self.on_close, self.popen = background, on_close, popen
         self.lock = threading.RLock()
         self.process = None
         self.admin_api_bridge = admin_api_bridge
+        self.appearance = appearance
         self.reader = None
         self.responses = queue.Queue(maxsize=32)
         self.closed = False
@@ -199,6 +202,20 @@ class DesktopHost:
             except (OSError, ValueError, queue.Empty):
                 return False
 
+    def set_appearance(self, theme):
+        """Update the owned host only; an unopened/retired host is never started."""
+        if not isinstance(theme, str) or theme not in {'light', 'dark', 'system'}:
+            raise ValueError('Invalid appearance')
+        with self.lock:
+            self.appearance = theme
+            if (self.closed or self.process is None or self.process.poll() is not None
+                    or self.reader is None or not self.reader.is_alive()):
+                return False
+            try:
+                return self._command('theme', theme=theme).get('theme') == theme
+            except (OSError, ValueError, queue.Empty):
+                return False
+
     def notify(self, *, title, message, kind, notification_id, on_click, summary=''):
         """Offer a card: 'busy' is deferred; None alone permits tray fallback."""
         if (not isinstance(notification_id, str) or not re.fullmatch(r'[0-9a-f]{64}', notification_id)
@@ -263,14 +280,14 @@ class DesktopHost:
                                                name='workspace-desktop-events', daemon=True)
                 self.reader.start()
                 self._write({'url': self.url, 'profile': self.profile, 'background': self.background,
-                             'adminApiBridge': self.admin_api_bridge})
+                             'adminApiBridge': self.admin_api_bridge, 'theme': self.appearance})
                 ready = self.responses.get(timeout=30)
                 if ready.get('type') != 'ready' or ready.get('pid') != self.process.pid:
                     raise DesktopError(ready.get('code', 47))
                 hwnd = ready.get('hwnd')
                 if not isinstance(hwnd, int) or hwnd <= 0:
                     raise DesktopError()
-                if not self.notifier.bind_owned(hwnd, self.process.pid):
+                if not self.notifier.bind_owned(hwnd, self.process.pid, apply_theme=False):
                     raise DesktopError()
                 self.window_handle = hwnd
                 self.presentation['runtime'] = str(ready.get('runtime', ''))[:100]

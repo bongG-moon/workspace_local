@@ -208,6 +208,8 @@ def parse_release(payload):
     if not isinstance(assets, list) or len(assets) > 100:
         raise UpdateError()
     expected = {f'Company-Workspace-{version}-vbs.zip': MAX_ARCHIVE, 'SHA256SUMS.txt': MAX_CHECKSUMS}
+    optional = f'Company-Workspace-{version}-exe.zip'
+    limits = {**expected, optional: MAX_ARCHIVE}
     selected = {}
     for asset in assets:
         if not isinstance(asset, dict):
@@ -215,11 +217,11 @@ def parse_release(payload):
         name = asset.get('name')
         if not isinstance(name, str):
             raise UpdateError()
-        if name not in expected:
+        if name not in limits:
             continue
         size, digest = asset.get('size'), asset.get('digest')
         if (name in selected or asset.get('state') != 'uploaded'
-                or type(size) is not int or not 0 < size <= expected[name]):
+                or type(size) is not int or not 0 < size <= limits[name]):
             raise UpdateError()
         if digest is not None and (not isinstance(digest, str) or not digest.startswith('sha256:')
                                    or not _DIGEST.fullmatch(digest[7:])):
@@ -229,12 +231,12 @@ def parse_release(payload):
             raise UpdateError()
         selected[name] = {'name': name, 'browser_download_url': url, 'size': size,
                           'state': 'uploaded', 'digest': digest.lower() if digest else None}
-    if set(selected) != set(expected):
+    if not set(expected) <= set(selected):
         raise UpdateError()
     return {'tag_name': tag, 'draft': False, 'prerelease': False, 'html_url': page,
             'name': _plain(payload.get('name'), 300) or f'Company Workspace {version}',
             'body': _plain(payload.get('body'), MAX_NOTES), 'published_at': published,
-            'assets': [selected[name] for name in expected]}
+            'assets': [selected[name] for name in limits if name in selected]}
 
 
 def parse_manifest(payload, source):
@@ -277,7 +279,7 @@ def parse_manifest(payload, source):
     return {'tag_name': 'v' + version, 'draft': False, 'prerelease': False, 'html_url': '',
             'name': _plain(payload['title'], 300) or f'Company Workspace {version}',
             'body': _plain(payload['notes'], MAX_NOTES), 'published_at': published,
-            'assets': [selected[vbs], selected['SHA256SUMS.txt']]}
+            'assets': [selected[name] for name in (vbs, 'SHA256SUMS.txt', exe) if name in selected]}
 
 
 def _checksum(data, filename):
@@ -431,6 +433,7 @@ class UpdateManager:
         self._status = 'idle'
         self._error = None
         self._progress = None
+        self._launcher_result = None
         if not self.demo:
             self._load()
         else:
@@ -491,6 +494,7 @@ class UpdateManager:
         return {'currentVersion': self.current_version, 'status': self._status, 'autoCheck': self._auto,
                 'startupSequence': self._startup_sequence,
                 'source': self.source.public(),
+                'launcher': dict(self._launcher_result) if self._launcher_result is not None else None,
                 'lastChecked': self._last_checked, 'release': release, 'progress': self._progress,
                 'error': self._error, 'canInstall': bool(self._trusted and self._newer() and self.installer
                     and not self.demo and not self.source.error and not self._busy and not self._cancel.is_set()
@@ -500,6 +504,73 @@ class UpdateManager:
     def snapshot(self):
         with self._lock:
             return self._snapshot()
+
+    def prepare_launcher(self):
+        """Explicit repair for apps reached through an old EXE or VBS updater.
+
+        Reuse a reverified same-source local EXE or fetch the trusted source.
+        The exact running release is required; a newer release must use the
+        regular verified app update flow first.
+        """
+        with self._lock:
+            if self.demo or self.source.error or self._busy or self._cancel.is_set():
+                raise ValueError('다른 업데이트가 끝난 뒤 다시 시도해 주세요.')
+            self._busy = True
+            self._launcher_result = {'status': 'preparing'}
+            self._thread = threading.Thread(target=self._prepare_launcher,
+                name='workspace-launcher-prepare', daemon=True)
+            self._thread.start()
+            return self._snapshot()
+
+    def _prepare_launcher(self):
+        try:
+            from . import managed_launcher
+            deadline = time.monotonic() + INSTALL_DEADLINE
+            value = managed_launcher.current_record(self.path.parent, self.current_version, source_identity=self.source.identity)
+            data = None
+            if value is None:
+                metadata = self._parse(json.loads(self._fetch(self.source.latest_url, MAX_METADATA, deadline)))
+                if metadata['tag_name'] != 'v' + self.current_version:
+                    raise ValueError('현재 앱 버전의 실행기를 준비할 수 없습니다. 앱 업데이트를 먼저 확인해 주세요.')
+                data = self._launcher_asset(metadata, deadline)
+                if data is None:
+                    raise ValueError('배포 서버에 이 버전의 EXE ZIP이 없습니다. 배포 담당자에게 확인해 주세요.')
+            with self._lock:
+                _active(self._cancel, deadline)
+                self._launch_done.clear()
+            if value is None:
+                value = managed_launcher.stage(self.path.parent, self.current_version, data, cancel=self._cancel,
+                    source_identity=self.source.identity)
+            result = managed_launcher.activate(self.path.parent, value, create_shortcut=True,
+                demo=self.demo, cancel=self._cancel)
+            with self._lock:
+                self._launcher_result = {'status': 'ready', **result,
+                    'message': '바탕화면에 Company Workspace (최신) 바로가기를 만들었어요. 앱을 완전히 종료한 뒤 이 바로가기로 실행하세요. 관리자 권한은 우클릭 메뉴에서 선택할 수 있어요.'}
+        except Exception as exc:
+            with self._lock:
+                # Only our fixed ValueError messages are returned. Never expose
+                # network responses, process command lines, paths or credentials.
+                message = str(exc) if type(exc) is ValueError else '최신 실행기를 준비하지 못했습니다. 연결과 바탕화면 저장 권한을 확인하고 다시 시도해 주세요.'
+                self._launcher_result = {'status': 'error', 'message': message}
+        finally:
+            self._launch_done.set()
+            with self._lock:
+                self._busy, self._thread = False, None
+
+    def _launcher_asset(self, metadata, deadline, *, sums=None):
+        from .managed_launcher import unpack_archive
+        version = metadata['tag_name'][1:]
+        assets = {item['name']: item for item in metadata['assets']}
+        archive = assets.get(f'Company-Workspace-{version}-exe.zip')
+        if archive is None:
+            return None
+        if sums is None:
+            sums = self._asset(assets['SHA256SUMS.txt'], MAX_CHECKSUMS, deadline)
+        expected = _checksum(sums, archive['name'])
+        raw = self._asset(archive, MAX_ARCHIVE, deadline)
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raise UpdateError()
+        return unpack_archive(raw, version)
 
     def start(self):
         with self._lock:
@@ -639,13 +710,14 @@ class UpdateManager:
         try:
             deadline = time.monotonic() + INSTALL_DEADLINE
             version = metadata['tag_name'][1:]
-            archive, checksums = metadata['assets']
+            archive, checksums = metadata['assets'][:2]
             sums = self._asset(checksums, MAX_CHECKSUMS, deadline)
             expected = _checksum(sums, archive['name'])
             data = self._asset(archive, MAX_ARCHIVE, deadline, self._progressed)
             if hashlib.sha256(data).hexdigest() != expected:
                 raise UpdateError()
             package, digest = verify_archive(data, version, source=self.source)
+            launcher_bytes = self._launcher_asset(metadata, deadline, sums=sums)
             _active(self._cancel, deadline)
             # This callback acquires the application's session lock. It must
             # never run under our lock (bootstrap holds them in the other order).
@@ -661,10 +733,13 @@ class UpdateManager:
             installer_phase = True
             # The installer must honor this same cancellation event immediately
             # before launch; holding the UI lock over disk writes would stall quit.
-            result = self.installer(version, package, digest, cancel=self._cancel)
+            options = {'cancel': self._cancel}
+            if launcher_bytes is not None:
+                options['launcher_bytes'] = launcher_bytes
+            result = self.installer(version, package, digest, **options)
             # A busy task may postpone handoff for hours. Release the downloaded
             # archive before waiting; the installer already owns verified files.
-            del data, package, sums
+            del data, package, sums, launcher_bytes
             with self._lock:
                 if not self._cancel.is_set():
                     status = result.get('status', result.get('state')) if isinstance(result, dict) else None
