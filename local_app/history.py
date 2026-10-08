@@ -7,6 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
+import time
 import uuid
 
 from .executions import normalize_executions, safe_run_id
@@ -14,7 +15,10 @@ from .tool_activity import normalize_activities
 
 KEYS = ('id','title','workspace','created','updated','pinned','sessionId')
 MAX_SESSIONS = 500
+MAX_ARCHIVED_SESSIONS = 10000
+MAX_STORED_SESSIONS = MAX_SESSIONS + MAX_ARCHIVED_SESSIONS
 MAX_ARTIFACTS = 100
+INDEX_METADATA = ('lastRunId', 'branch', 'importedConfigRoot', 'choice', 'verification')
 
 
 def safe(path):
@@ -26,9 +30,16 @@ def safe(path):
 
 def read(path, limit):
     with safe(path).open('rb') as stream:
-        raw = stream.read(limit + 1)
-    if len(raw) > limit:
-        raise ValueError('기록의 확인 범위를 초과했습니다.')
+        before = os.fstat(stream.fileno())
+        if before.st_size < 0 or before.st_size > limit:
+            raise ValueError('기록의 확인 범위를 초과했습니다.')
+        # BufferedReader can allocate the whole requested bound up front. A
+        # tiny index must not reserve 16 MiB just because that is its limit.
+        raw = stream.read(min(before.st_size + 1, limit + 1))
+        after = os.fstat(stream.fileno())
+        if (len(raw) != before.st_size or after.st_size != before.st_size
+                or after.st_mtime_ns != before.st_mtime_ns):
+            raise ValueError('읽는 동안 기록이 변경되어 원본을 보존했습니다. 다시 시도해 주세요.')
     return json.loads(raw.decode('utf-8-sig'))
 
 
@@ -117,6 +128,7 @@ class HistoryStore:
         self.warning = None
         self.migrate = False
         self.index_bytes = None
+        self.index_entries = {}
 
     @staticmethod
     def compact(item):
@@ -137,6 +149,17 @@ class HistoryStore:
             value = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
             if value['id'] != sid:
                 raise ValueError('대화 파일과 목록이 다릅니다.')
+            if item.pop('_historyIndexOnly', False):
+                # Bodies are authoritative if a crash happened between the body
+                # and index atomic writes. Do not override live metadata on LRU
+                # reloads, which never carry this startup-only marker.
+                item.update({key: value[key] for key in KEYS})
+                for key in INDEX_METADATA:
+                    if key in value:
+                        item[key] = value[key]
+                    else:
+                        item.pop(key, None)
+            item.pop('_historyMetadataPending', None)
             item['messages'] = value['messages']
             item['artifacts'] = value['artifacts']
             item['executions'] = normalize_executions(value['executions'], interrupted=True)
@@ -153,22 +176,46 @@ class HistoryStore:
         try:
             if safe(index).exists():
                 obj = read(index, 16*1024*1024)
-                if not isinstance(obj, dict) or obj.get('schemaVersion') != 1 or not isinstance(obj.get('sessions'),list) or len(obj['sessions']) > MAX_SESSIONS:
+                if not isinstance(obj, dict) or obj.get('schemaVersion') not in (1, 2) or not isinstance(obj.get('sessions'),list) or len(obj['sessions']) > MAX_STORED_SESSIONS:
                     raise ValueError('기록 목록을 확인하지 못했습니다.')
                 seen = set()
+                cached_entries = {}
                 for entry in obj['sessions']:
                     sid = str(uuid.UUID(entry['id']))
                     if sid in seen or sid != entry['id']:
                         raise ValueError('중복된 대화 식별자입니다.')
                     seen.add(sid)
+                    if lazy:
+                        # Validate bounded navigation metadata, not whole bodies.
+                        # The original per-session file is validated on access.
+                        item = row(dict(entry, messages=[]))
+                        item['_artifactCount'] = entry.get('artifactCount', 0)
+                        if type(item['_artifactCount']) is not int or not 0 <= item['_artifactCount'] <= MAX_ARTIFACTS:
+                            raise ValueError('결과물 수를 확인하지 못했습니다.')
+                        if obj['schemaVersion'] == 1 or entry.get('metadataComplete') is not True:
+                            item['_historyMetadataPending'] = True
+                        item.pop('messages', None)
+                        item.pop('artifacts', None)
+                        item.pop('executions', None)
+                        item.pop('toolActivity', None)
+                        item['_historyUnloaded'] = item['_historySaved'] = True
+                        item['_historyIndexOnly'] = True
+                        cached_entries[sid] = {key: item[key] for key in (*KEYS, *INDEX_METADATA) if key in item} | {
+                            'artifactCount': item['_artifactCount'],
+                            'metadataComplete': not item.get('_historyMetadataPending', False)}
+                        result.append(item)
+                        continue
                     item = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
                     if item['id'] != sid:
                         raise ValueError('대화 파일과 목록이 다릅니다.')
                     item['executions'] = normalize_executions(item['executions'], interrupted=True)
                     item['toolActivity'] = normalize_activities(item['toolActivity'], interrupted=True)
-                    if lazy:
-                        item['_historySaved'] = True
-                    result.append(self.compact(item) if lazy else item)
+                    result.append(item)
+                if lazy and obj['schemaVersion'] == 2:
+                    self.index_entries = cached_entries
+                    # A loaded index does not need to be reserialized on the
+                    # first streamed body event unless metadata actually changed.
+                    self.index_bytes = b''
             elif safe(legacy).exists():
                 old = read(legacy, 80*1024*1024)
                 if not isinstance(old, list) or len(old) > MAX_SESSIONS:
@@ -192,8 +239,18 @@ class HistoryStore:
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
-            safe(target)
-            temp.replace(target)
+            # Windows scanners can briefly open a freshly written JSON file
+            # without delete sharing. Retry only the same atomic replacement,
+            # never the write or a user action. Normal saves do not wait.
+            for delay in (.01, .025, .05, None):
+                safe(target)
+                try:
+                    temp.replace(target)
+                    break
+                except OSError as exc:
+                    if delay is None or getattr(exc, 'winerror', None) not in {5, 32, 33}:
+                        raise
+                    time.sleep(delay)
         finally:
             temp.unlink(missing_ok=True)
 
@@ -201,8 +258,8 @@ class HistoryStore:
         if self.warning:
             return
         items = list(items)
-        if len(items) > MAX_SESSIONS:
-            raise ValueError('업무는 최대 500개까지 저장할 수 있습니다. 기존 업무를 이어서 사용해 주세요.')
+        if len(items) > MAX_STORED_SESSIONS:
+            raise ValueError('보관 기록의 안전한 처리 한도에 도달했습니다. 기존 기록은 삭제하지 않았습니다.')
         # Only the changed conversation is normalized/serialized on each event.
         for item in items:
             if item.get('_historyUnloaded'):
@@ -213,9 +270,25 @@ class HistoryStore:
                 value = row(item)
                 payload = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
                 self._write(self.root/'history-sessions'/(value['id']+'.json'), payload)
-        index = {'schemaVersion':1, 'sessions':[{key:item.get(key) for key in KEYS} for item in items]}
-        payload = json.dumps(index, ensure_ascii=False, allow_nan=False).encode('utf-8')
-        if payload != self.index_bytes:
-            self._write(self.root/'history-index.json', payload)
-            self.index_bytes = payload
+        entries = {}
+        for item in items:
+            if (changed_id is not None and item['id'] != changed_id
+                    and item['id'] in self.index_entries and not self.migrate):
+                entries[item['id']] = self.index_entries[item['id']]
+                continue
+            # row() strips runtime trust, credentials and live permission state.
+            summary = row(dict(item, messages=[], artifacts=[], executions=[], toolActivity=[]))
+            entry = {key: summary[key] for key in (*KEYS, *INDEX_METADATA) if key in summary}
+            entry['artifactCount'] = item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))
+            entry['metadataComplete'] = not item.get('_historyMetadataPending', False)
+            entries[item['id']] = entry
+        if entries != self.index_entries or self.index_bytes is None:
+            index = {'schemaVersion': 2, 'sessions': list(entries.values())}
+            payload = json.dumps(index, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            if len(payload) > 16 * 1024 * 1024:
+                raise ValueError('목록 정보의 안전한 보관 범위를 초과했습니다. 기존 목록은 보존했습니다.')
+            if payload != self.index_bytes:
+                self._write(self.root/'history-index.json', payload)
+                self.index_bytes = payload
+            self.index_entries = entries
         self.migrate = False

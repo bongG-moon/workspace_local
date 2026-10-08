@@ -76,9 +76,9 @@ globalThis.WorkspaceShortcuts = (() => {
     else if(owner!==id()&&!drafts.get(owner)?.text&&!drafts.get(owner)?.attachments?.length){stashes.delete(owner);drafts.set(owner,draft);}
   }
   const exportStashes=()=>[...stashes].map(([id,draft])=>({id,...draft}));
-  function restoreStashes(rows=[]){
+  function restoreStashes(rows=[],{includeArchived=false}={}){
     const conflicts=[];
-    for(const row of rows){const {id:owner,...draft}=row,previous=stashes.get(owner);if(owner!=="home"&&!sessions.some(item=>item.id===owner)||previous&&JSON.stringify(previous)!==JSON.stringify(draft))conflicts.push(owner);else stashes.set(owner,draft);}
+    for(const row of rows){const {id:owner,...draft}=row,previous=stashes.get(owner);if(!includeArchived&&(owner!=="home"&&!sessions.some(item=>item.id===owner)||globalThis.WorkspaceDraftPersistence?.allowStashRestore(owner)===false)||previous&&JSON.stringify(previous)!==JSON.stringify(draft))conflicts.push(owner);else {stashes.set(owner,draft);globalThis.WorkspaceDraftPersistence?.changed(owner);}}
     return conflicts;
   }
   function selectedHistory(){

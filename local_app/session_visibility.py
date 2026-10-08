@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import uuid
 
-from .history import HistoryStore, MAX_SESSIONS, read, safe
+from .history import HistoryStore, MAX_ARCHIVED_SESSIONS, read, safe
 
 
 class SessionVisibility:
@@ -13,10 +13,10 @@ class SessionVisibility:
         self.warning = None
         try:
             if safe(self.path).exists():
-                value = read(self.path, 64 * 1024)
+                value = read(self.path, 1024 * 1024)
                 ids = value.get('hiddenIds') if isinstance(value, dict) else None
                 if (not isinstance(value, dict) or value.get('schemaVersion') != 1
-                        or not isinstance(ids, list) or len(ids) > MAX_SESSIONS
+                        or not isinstance(ids, list) or len(ids) > MAX_ARCHIVED_SESSIONS
                         or any(not isinstance(sid, str) or str(uuid.UUID(sid)) != sid for sid in ids)
                         or len(set(ids)) != len(ids)):
                     raise ValueError('Invalid task visibility')
@@ -33,7 +33,7 @@ class SessionVisibility:
         if not isinstance(sid, str) or str(uuid.UUID(sid)) != sid or type(hidden) is not bool:
             raise ValueError('목록에서 변경할 업무를 확인해 주세요.')
         changed = self.hidden | {sid} if hidden else self.hidden - {sid}
-        if len(changed) > MAX_SESSIONS:
+        if len(changed) > MAX_ARCHIVED_SESSIONS:
             raise ValueError('업무 목록 표시 기록의 보관 한도에 도달했습니다.')
         if changed == self.hidden:
             return

@@ -31,6 +31,11 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/desktop.js", "local_app/web/session-import.js", "local_app/web/rendering.js", "local_app/web/attachments.js", "local_app/web/workflow.js", "local_app/web/productivity.js", "local_app/web/palette.js", "local_app/web/layout.js", "local_app/web/productivity.css", "local_app/web/review.css",
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
+expected.update({'local_app/drafts.py', 'local_app/idle_connections.py', 'local_app/web/drafts.js',
+                 'local_app/web/attachment-storage.js', 'local_app/web/attachment-storage.css',
+                 'local_app/web/archived-tasks.js', 'local_app/web/archived-tasks.css'})
+expected.update({'local_app/appearance.py', 'local_app/managed_launcher.py',
+                 'local_app/web/appearance.js', 'local_app/web/appearance.css'})
 seen = set()
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',

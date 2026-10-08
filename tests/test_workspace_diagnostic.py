@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import unittest
 
+from local_app.server import WORKSPACE_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "Check-Workspace.ps1"
@@ -42,7 +44,7 @@ class WorkspaceDiagnosticContractTests(unittest.TestCase):
         script = SCRIPT.read_text(encoding="utf-8-sig")
         expected = dict(re.findall(r"'(deploy/[^']+)'\s*=\s*'([a-f0-9]{64})'", script))
         self.assertEqual(set(SOURCES), set(expected))
-        self.assertRegex(script, r"targetSource\s*=\s*'workspace-0.23.20'")
+        self.assertRegex(script, r"targetSource\s*=\s*'workspace-" + re.escape(WORKSPACE_VERSION) + "'")
         for relative, digest in expected.items():
             with self.subTest(source=relative):
                 source = (ROOT / relative).read_text(encoding="utf-8-sig")
@@ -130,7 +132,7 @@ finally { $identity.Dispose() }
             "executionPolicy", "scriptEvidence", "originalLaunchObserved", "nextStep",
         }, set(report))
         self.assertEqual("ws33-57", report["diagnosticVersion"])
-        self.assertEqual("workspace-0.23.20", report["targetSource"])
+        self.assertEqual("workspace-" + WORKSPACE_VERSION, report["targetSource"])
         self.assertEqual(set(SOURCES), set(report["files"]))
         self.assertTrue(set(report["files"].values()) <= {"matched", "missing", "different_version"})
         self.assertEqual([

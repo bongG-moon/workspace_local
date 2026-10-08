@@ -7,7 +7,7 @@ from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from local_app.history import HistoryStore
+from local_app.history import HistoryStore, read
 
 
 class HistoryTests(unittest.TestCase):
@@ -90,6 +90,99 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNone(restored.warning)
         self.assertEqual(item['id'],loaded[0]['id'])
         self.assertLessEqual(sum(len(m['text'])+sum(len(p) for p in m.get('files',[])) for m in loaded[0]['messages']),500000)
+
+    def tracked_stream(self, path, after_read=None):
+        stream = path.open('rb')
+        calls = []
+        class Tracked:
+            def __enter__(self): return self
+            def __exit__(self, *args): return stream.__exit__(*args)
+            def fileno(self): return stream.fileno()
+            def read(self, count):
+                calls.append(count)
+                raw = stream.read(count)
+                if after_read is not None: after_read()
+                return raw
+        return Tracked(), calls
+
+    def test_small_file_read_allocation_tracks_actual_size_not_maximum_bound(self):
+        path = self.root/'small-index.json'
+        raw = b'{"sessions":[]}'
+        path.write_bytes(raw)
+        stream, calls = self.tracked_stream(path)
+        with patch.object(Path, 'open', return_value=stream):
+            self.assertEqual({'sessions': []}, read(path, 16*1024*1024))
+        self.assertEqual([len(raw)+1], calls)
+
+    def test_oversized_file_is_rejected_before_allocating_body_buffer(self):
+        path = self.root/'oversized.json'
+        path.write_bytes(b'{"too_large":true}')
+        stream, calls = self.tracked_stream(path)
+        with patch.object(Path, 'open', return_value=stream), self.assertRaisesRegex(ValueError, '범위'):
+            read(path, 4)
+        self.assertEqual([], calls)
+
+    def test_file_changed_during_read_is_rejected_without_overwriting_it(self):
+        path = self.root/'changing.json'
+        path.write_bytes(b'{"sessions":[]}')
+        original_open = Path.open
+        def append():
+            with original_open(path, 'ab') as writer:
+                writer.write(b' ')
+        stream, calls = self.tracked_stream(path, after_read=append)
+        with patch.object(Path, 'open', return_value=stream), self.assertRaisesRegex(ValueError, '변경'):
+            read(path, 16*1024*1024)
+        self.assertEqual(b'{"sessions":[]} ', path.read_bytes())
+
+    def test_transient_windows_replace_lock_retries_same_atomic_payload(self):
+        target = self.root/'atomic.json'
+        target.write_bytes(b'old')
+        error = PermissionError(13, 'temporary Windows scanner lock')
+        error.winerror = 5
+        original_replace = Path.replace
+        calls = []
+        def replace(path, destination):
+            calls.append((path, destination))
+            if len(calls) <= 2: raise error
+            return original_replace(path, destination)
+        with patch.object(Path, 'replace', autospec=True, side_effect=replace), patch('local_app.history.time.sleep') as sleep:
+            HistoryStore(self.root)._write(target, b'new')
+        self.assertEqual(b'new', target.read_bytes())
+        self.assertEqual(3, len(calls))
+        self.assertEqual(1, len({path for path, _ in calls}))
+        self.assertEqual([.01, .025], [call.args[0] for call in sleep.call_args_list])
+        self.assertFalse(list(self.root.glob('*.tmp')))
+
+    def test_permanent_windows_replace_denial_stays_bounded_and_preserves_original(self):
+        target = self.root/'atomic.json'
+        target.write_bytes(b'old')
+        error = PermissionError(13, 'permanent denied access')
+        error.winerror = 5
+        with patch.object(Path, 'replace', side_effect=error) as replace, patch('local_app.history.time.sleep') as sleep:
+            with self.assertRaises(PermissionError): HistoryStore(self.root)._write(target, b'new')
+        self.assertEqual(4, replace.call_count)
+        self.assertAlmostEqual(.085, sum(call.args[0] for call in sleep.call_args_list))
+        self.assertEqual(b'old', target.read_bytes())
+        self.assertFalse(list(self.root.glob('*.tmp')))
+
+    def test_replace_retry_revalidates_destination_path_before_next_attempt(self):
+        from local_app import history
+        target = self.root/'atomic.json'
+        target.write_bytes(b'old')
+        error = PermissionError(13, 'temporary lock')
+        error.winerror = 32
+        original_safe = history.safe
+        checked = []
+        def safe_path(path):
+            if path == target:
+                checked.append(path)
+                if len(checked) == 3: raise ValueError('fixture destination changed')
+            return original_safe(path)
+        with patch.object(history, 'safe', side_effect=safe_path), patch.object(Path, 'replace', side_effect=error) as replace, patch('local_app.history.time.sleep'):
+            with self.assertRaisesRegex(ValueError, 'destination changed'):
+                HistoryStore(self.root)._write(target, b'new')
+        self.assertEqual(1, replace.call_count)
+        self.assertEqual(b'old', target.read_bytes())
 
 
 if __name__=='__main__':unittest.main()

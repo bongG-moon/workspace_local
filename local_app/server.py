@@ -20,7 +20,7 @@ import webbrowser
 
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
-from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, safe
+from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, safe
 from .session_order import SessionOrder
 from .session_visibility import SessionVisibility
 from .artifacts import available_artifacts, changes, linked, snapshot, PREVIEW_TYPES
@@ -35,8 +35,10 @@ from .windows_process import powershell_path
 from .owned_process import run_owned, CancelledError
 from .attention import AttentionNotifier, snapshot as attention_snapshot
 from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_policy
+from .drafts import DraftStore, MAX_REQUEST as MAX_DRAFT_REQUEST
 from .app_dispatch import DispatchController
 from .progress_log import ProgressStore
+from .idle_connections import with_connection_slot, occupies_slot
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
@@ -150,6 +152,7 @@ class LocalApp:
         self._viewed_session = None
         self._viewed_until = 0
         self.attachment_store = AttachmentStore(state)
+        self.drafts = DraftStore(state)
         self.file_diffs = FileDiffStore(state / 'file-changes')
         self.progress_logs = ProgressStore(state / 'progress')
         self.error = None
@@ -263,12 +266,12 @@ class LocalApp:
                         raise ValueError('업무 목록을 정리하고 있습니다. 잠시 뒤 다시 불러와 주세요.')
                     restored = self.session_visibility.contains(item['id'])
                     if restored:
-                        self.session_visibility.set_hidden(item['id'], False)
+                        response = self.restore_session(item['id'])
+                        return response | {'existing': True}
                     return {'ok': True, 'existing': True, 'restored': restored, 'session': self.public(item)}
             if self.history.warning:
                 raise ValueError(self.history.warning)
-            if len(self.sessions) >= MAX_SESSIONS:
-                raise ValueError('업무는 최대 500개까지 저장할 수 있습니다.')
+            self._check_session_capacity()
             sid = record['id']
             if sid in self.sessions:
                 raise ValueError('같은 세션의 업무 기록이 이미 존재합니다. 기존 업무를 확인해 주세요.')
@@ -323,7 +326,7 @@ class LocalApp:
             if not _internal and item.get('_removingFromList'):
                 raise ValueError('업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.')
             if not _internal and self.session_visibility.contains(sid):
-                raise ValueError('업무 목록에서 삭제한 항목입니다. Claude 세션이 있는 업무는 새 업무의 기존 세션 활용하기에서 다시 불러올 수 있어요.')
+                raise ValueError('보관한 업무입니다. 설정의 보관한 업무에서 목록으로 복원할 수 있어요.')
             self.history.hydrate(item)
             self._history_access[sid] = time.monotonic()
             # Active CLI work is never evicted. Dormant UI mirrors use an LRU of
@@ -360,6 +363,8 @@ class LocalApp:
         return None
 
     def _check_stopping(self, item, *, allow_stop_admission=False):
+        if item.get('_idleReleasing') or (item.get('_capacityReservation') and item['_capacityReservation'] != threading.get_ident()):
+            raise ValueError('업무 연결을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.')
         state = self.stop_state(item)
         if state == 'failed':
             raise BridgeError('stop_cleanup_unverified',
@@ -408,7 +413,7 @@ class LocalApp:
                 connection['permissionModeOverride'] = None
                 connection['effortOverride'] = None
             connection.update(capabilities=capabilities, connected=live, controlRestore=item.get('_controlRestore'),
-                              restarting=bool(item.get('_restarting')))
+                              restarting=bool(item.get('_restarting')), idleReleased=bool(item.get('_idleReleased')) and not live)
         if not live:
             result['modelOverride'] = None
             result['permissionModeOverride'] = None
@@ -426,7 +431,8 @@ class LocalApp:
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
-                                 {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', []))} for item in sessions],
+                                 {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', [])),
+                                  "historyDetailsPending": bool(item.get('_historyMetadataPending'))} for item in sessions],
                     "sessionOrder": order,
                     "attachmentPolicy": attachment_policy(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
@@ -443,6 +449,28 @@ class LocalApp:
                     "appUpdate": self.app_updates.snapshot(),
                     "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
+
+    def attachment_references(self):
+        """Caller holds app.lock. Do not hydrate old conversation bodies."""
+        paths = self.drafts.reference_paths()
+        for item in self.sessions.values():
+            paths.update(item.get('attachments', []))
+            for message in item.get('messages', []):
+                paths.update(message.get('files', []))
+        with self.dispatch.queue.lock:
+            if self.dispatch.queue.warning:
+                raise ValueError('예약 기록을 확인하지 못해 첨부 정리를 보류했어요. 기존 파일은 유지됩니다.')
+            for kind in ('queue', 'schedules'):
+                for row in self.dispatch.queue.data[kind]:
+                    paths.update(row.get('attachments', []))
+        for state in (self.upgrade.restore, self.upgrade.pending):
+            if state:
+                for kind in ('drafts', 'stashes'):
+                    for row in (state.get('snapshot') or {}).get(kind, []):
+                        paths.update(row.get('attachments', []))
+        if self.upgrade.warning:
+            raise ValueError('이전 초안 보관을 확인하지 못해 첨부 정리를 보류했어요.')
+        return paths
 
     def window_state(self):
         available = self.tray is not None and self.tray.available is True
@@ -468,10 +496,12 @@ class LocalApp:
     def attention(self):
         with self.lock:
             from .desktop_notifications import notification_id
-            pending = attention_snapshot(self.visible_sessions())
+            visible = self.visible_sessions()
+            pending = attention_snapshot(visible)
             for item in pending['items']:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
+                    'pendingHistoryCount': sum(bool(item.get('_historyMetadataPending')) for item in visible),
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
                         'nativeAvailable': bool((self._desktop_window and self._desktop_window.notification_available)
@@ -613,8 +643,7 @@ class LocalApp:
             raise ValueError('새 업무를 만들 저장 폴더를 선택해 주세요.')
         title = self.clean_title(title) if title is not None else '새 업무'
         with self.lock:
-            if len(self.sessions) >= MAX_SESSIONS:
-                raise ValueError('업무는 최대 500개까지 저장할 수 있습니다. 기존 업무를 이어서 사용해 주세요.')
+            self._check_session_capacity()
             title = self.unique_title(title)
             sid = str(uuid.uuid4())
             if managed:
@@ -682,6 +711,50 @@ class LocalApp:
 
     def visible_sessions(self):
         return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id'])]
+
+    def _check_session_capacity(self, *, restoring=False):
+        """The 500-task limit applies to the working list, not preserved history."""
+        if self.history.warning or self.session_visibility.warning:
+            raise ValueError(self.history.warning or self.session_visibility.warning)
+        if sum(not self.session_visibility.contains(sid) for sid in self.sessions) >= MAX_SESSIONS:
+            raise ValueError('업무 목록이 500개입니다. 사용하지 않는 업무를 목록에서 보관한 뒤 다시 시도해 주세요. 대화와 파일은 유지됩니다.')
+        if not restoring and len(self.sessions) >= MAX_STORED_SESSIONS:
+            raise ValueError('보관 기록의 안전한 처리 한도에 도달했습니다. 기존 기록은 삭제하지 않았습니다.')
+
+    def archived_sessions(self, query='', offset=0, limit=50):
+        """Search only bounded index metadata; never open conversation bodies."""
+        if not isinstance(query, str) or len(query) > 200:
+            raise ValueError('검색어는 200자 이내로 입력해 주세요.')
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('보관 목록의 페이지 범위를 확인해 주세요.')
+        with self.lock:
+            if self.session_visibility.warning:
+                raise ValueError(self.session_visibility.warning)
+            needle = unicodedata.normalize('NFC', query.strip()).casefold()
+            rows = [item for sid, item in self.sessions.items() if self.session_visibility.contains(sid)
+                    and (not needle or needle in unicodedata.normalize('NFC',
+                         item['title'] + '\n' + item['workspace']).casefold())]
+            rows.sort(key=lambda item: (-item.get('updated', item['created']), item['id']))
+            return {'sessions': [{key: item.get(key) for key in ('id', 'title', 'workspace', 'created', 'updated')}
+                                 | {'hasClaudeSession': bool(item.get('sessionId'))} for item in rows[offset:offset+limit]],
+                    'total': len(rows), 'offset': offset, 'limit': limit,
+                    'activeCount': len(self.sessions) - sum(sid in self.sessions for sid in self.session_visibility.hidden),
+                    'activeLimit': MAX_SESSIONS, 'warning': self.history.warning}
+
+    def restore_session(self, sid):
+        """Restore the app list entry only; never trust a folder or resume work."""
+        with self.lock:
+            if sid not in self.sessions:
+                raise ValueError('복원할 업무를 찾지 못했습니다.')
+            if not self.session_visibility.contains(sid):
+                return {'ok': True, 'restored': False, 'session': self.public(self.sessions[sid])}
+            self._check_session_capacity(restoring=True)
+            item = self.get(sid, _internal=True)  # Validate before changing visibility.
+            if item.get('_removingFromList'):
+                raise ValueError('업무 목록을 정리하고 있습니다. 잠시 뒤 복원해 주세요.')
+            self.session_visibility.set_hidden(sid, False)
+            item['trusted'] = False
+            return {'ok': True, 'restored': True, 'session': self.public(item)}
 
     def hide_session(self, sid, confirmed=False):
         """Remove a list entry only after proving no work would be orphaned."""
@@ -783,8 +856,8 @@ class LocalApp:
                 raise ValueError('실제 Claude Code 대화를 연결한 뒤 분기할 수 있어요.')
             if self.history.warning:
                 raise ValueError(self.history.warning)
-            if len(self.sessions) >= MAX_SESSIONS and not preview:
-                raise ValueError('업무는 최대 500개까지 저장할 수 있습니다.')
+            if not preview:
+                self._check_session_capacity()
             parent = self.get(sid)
             workspace_folder(parent)
             root = runtime_context(self.command)['configRoot']
@@ -806,9 +879,12 @@ class LocalApp:
     def _resume_options(self, item):
         if 'branch' not in item:
             return {'resume': item.get('sessionId'),
-                    **({'require_resume_identity': True} if item.get('importedConfigRoot') else {})}
+                    **({'require_resume_identity': True} if item.get('importedConfigRoot') or item.get('_requireResumeIdentity') else {})}
         from .conversation_fork import branch_connection
-        return branch_connection(item, self.info, runtime_context(self.command)['configRoot'])
+        options = branch_connection(item, self.info, runtime_context(self.command)['configRoot'])
+        if item.get('_requireResumeIdentity') and options.get('resume') and not options.get('fork_session'):
+            options['require_resume_identity'] = True
+        return options
 
     def reconnect(self, sid=None):
         if sid is not None:
@@ -831,6 +907,7 @@ class LocalApp:
         finally:
             self.reconnect_lock.release()
 
+    @with_connection_slot
     def restart_connection(self, sid, *, stop_running=False):
         """Replace only this task's owned CLI, without sending a business turn."""
         if type(stop_running) is not bool:
@@ -1022,6 +1099,8 @@ class LocalApp:
                 bridge.prepare()
                 self._apply_control_baselines(item, bridge)
                 self._restore_controls(item, bridge)
+            if getattr(bridge, '_permission_pending', None) is None:
+                bridge._idle_permission_restore = False
             result = bridge.set_permission_mode(mode)
             with self.lock:
                 item.setdefault('connection', {}).update(result)
@@ -1044,13 +1123,17 @@ class LocalApp:
         """Call while holding self.lock; reservations and live bridges share slots."""
         if self.demo:
             return True
+        if item.get('_capacityReservation') == threading.get_ident():
+            # Its slot was reserved before cleanup. Another concurrently
+            # retiring bridge must not make this admitted request count twice.
+            return True
         bridge = item.get('bridge')
         if bridge is not None and not bridge.closed:
             return True
-        occupied = sum(1 for row in self.sessions.values() if row is not item and (
-            row.get('_dispatchClaim') or row.get('_restarting') or (row.get('bridge') and not row['bridge'].closed)))
+        occupied = sum(1 for row in self.sessions.values() if row is not item and occupies_slot(row))
         return occupied < 3
 
+    @with_connection_slot
     def connect(self, sid, *, _dispatch_claim=None, _restart_claim=None):
         """Explicitly prepare one trusted task's CLI; never send a prompt."""
         with self.lock:
@@ -1089,8 +1172,9 @@ class LocalApp:
                 item['modelOverride'] = None
                 item['permissionModeOverride'] = None
                 item.pop('connection', None)
-                item['_needsControlRestore'] = bool(item.get('_sessionControls'))
-                item['_pendingControlRestore'] = set(item.get('_sessionControls', {}))
+                remembered = {**item.get('_idleRestoreControls', {}), **item.get('_sessionControls', {})}
+                item['_needsControlRestore'] = bool(remembered)
+                item['_pendingControlRestore'] = set(remembered)
                 item['_controlRestoreIssues'] = {}
             item['_connecting'] = True
         try:
@@ -1109,6 +1193,8 @@ class LocalApp:
                     raise ValueError('명령 목록 준비가 중지되었습니다. 다시 연결해 주세요.')
                 # Re-read after acquiring the lock so a richer system/init
                 # received during prepare is never overwritten by an old copy.
+                item.pop('_idleReleased', None)
+                item.pop('_idleReleaseFailed', None)
                 self.emit(sid, 'connected', bridge.connection_state())
                 session = self.public(item)
                 return {'ok': True, 'connection': session['connection'], 'session': session}
@@ -1181,6 +1267,7 @@ class LocalApp:
         try:
             bridge.accept_current_control(control)
             with self.lock:
+                item.get('_idleRestoreControls', {}).pop(control, None)
                 # The user explicitly abandons this stale selection only. No
                 # inherited value or other control becomes a new override.
                 item.get('_sessionControls', {}).pop(control, None)
@@ -1212,7 +1299,7 @@ class LocalApp:
         with self.lock:
             if not item.get('_needsControlRestore'):
                 return
-            choices = dict(item.get('_sessionControls', {}))
+            choices = {**item.get('_idleRestoreControls', {}), **item.get('_sessionControls', {})}
             pending = item.setdefault('_pendingControlRestore', set(choices))
         actionable = {'model_invalid', 'model_rejected', 'model_unavailable',
                       'effort_invalid', 'effort_rejected', 'effort_reset_unavailable', 'effort_unavailable',
@@ -1225,6 +1312,11 @@ class LocalApp:
             if name == 'effort' and 'model' in pending:
                 continue
             try:
+                if name == 'permissionMode' and name not in item.get('_sessionControls', {}):
+                    # Reapply observed CLI state without turning an inherited
+                    # queue setting into a new user selection. A late ACK must
+                    # retain this distinction after a control timeout too.
+                    bridge._idle_permission_restore = True
                 apply(choices[name])
             except BridgeError as exc:
                 process = getattr(bridge, 'process', None)
@@ -1246,7 +1338,7 @@ class LocalApp:
         # connection for the same task.
         with self.lock:
             item = self.sessions.get(sid)
-            if item is None or item.get('bridge') is not bridge:
+            if item is None or item.get('bridge') is not bridge or item.get('_idleReleasing'):
                 return
             if (kind == 'status' and data.get('state') == 'stopped' and data.get('runId')
                     and data['runId'] != item.get('lastRunId')):
@@ -1427,9 +1519,12 @@ class LocalApp:
                 if (data.get('permissionModeControlAcknowledged') is True
                         and not data.get('permissionModeChangePending')
                         and data.get('permissionMode')):
-                    self._remember_control(item, 'permissionMode',
-                        data.get('permissionMode') if data.get('permissionModeOverride') is not None else None)
                     bridge = item.get('bridge')
+                    if not getattr(bridge, '_idle_permission_restore', False):
+                        self._remember_control(item, 'permissionMode',
+                            data.get('permissionMode') if data.get('permissionModeOverride') is not None else None)
+                    elif bridge is not None:
+                        bridge._idle_permission_restore = False
                     if bridge is not None:
                         self._control_selected(item, bridge, 'permissionMode')
                         data['controlRestore'] = item.get('_controlRestore')
@@ -1521,6 +1616,7 @@ class LocalApp:
             paths.append(str(path))
         return list(dict.fromkeys(paths))
 
+    @with_connection_slot
     def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None, _dispatch_claim=None):
         if not isinstance(text, str) or not text.strip() or len(text) > 32000:
             raise ValueError("요청은 1~32,000자로 입력해 주세요.")
@@ -1538,7 +1634,31 @@ class LocalApp:
             old_bridge = current.get('bridge')
             if current.get('_controlRestore') and old_bridge is not None and not old_bridge.closed:
                 raise ControlRestoreRequired(connection=self.public(current)['connection'])
-            restore = (not self.demo and bool(current.get('_sessionControls'))
+            if not current.get('trusted') and trusted is not True:
+                raise ValueError('다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.')
+            workspace_folder(current)
+            self._check_import_context(current)
+            if (current['state'] in {'starting', 'running', 'question', 'approval'}
+                    or current.get('_modelUpdating') or current.get('_permissionUpdating') or current.get('_connecting')
+                    or getattr(old_bridge, '_control_active', False)):
+                raise ValueError('현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.')
+            paths = self.validate_attachments(attachments)
+            if self.error:
+                raise ValueError(self.error)
+            if not self.demo:
+                if old_bridge is not None and old_bridge.closed and getattr(old_bridge, 'cleanup_complete', False) is not True:
+                    raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
+                if old_bridge is None or old_bridge.closed:
+                    if not self.connection_capacity_available(current):
+                        raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
+                    self._resume_options(current)
+                elif current.get('branch', {}).get('status') == 'pending':
+                    self._resume_options(current)
+            # Persist protection only for an admitted, validated request, before
+            # preparing a child or changing conversation/choice state. A failed
+            # manifest write must leave no empty CLI occupying a connection slot.
+            self.attachment_store.mark_used(paths)
+            restore = (not self.demo and bool(current.get('_sessionControls') or current.get('_idleRestoreControls') or current.get('_idleReleased'))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
         if restore:
             self.connect(sid, _dispatch_claim=_dispatch_claim)
@@ -1554,15 +1674,17 @@ class LocalApp:
             self._validate_choice_claim(item, _choice_claim)
             if not item.get("trusted") and trusted is not True:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
-            workspace_folder(item)
-            self._check_import_context(item)
+            if restore:
+                workspace_folder(item)
+                self._check_import_context(item)
             if (item["state"] in {"starting", "running", "question", "approval"}
                     or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting')
                     or getattr(item.get('bridge'), '_control_active', False)):
                 raise ValueError("현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.")
-            if item.get('branch', {}).get('status') == 'pending':
+            if restore and item.get('branch', {}).get('status') == 'pending':
                 self._resume_options(item)  # Recheck even after control-only preparation.
-            paths = self.validate_attachments(attachments)
+            if restore:
+                paths = self.validate_attachments(attachments)
             if self.error:
                 raise ValueError(self.error)
             if not self.demo:
@@ -1648,6 +1770,8 @@ class LocalApp:
                 # interrupt() acquiring its own lock outside the app lock.
                 item['_stopAdmission'] = marker
             if not bridge:
+                if item.get('_capacityReservation'):
+                    item['_capacityCancelled'] = True
                 self.emit(sid, "status", {"state": "stopped", "label": "중지했어요"})
         if bridge:
             # Capture the target before releasing admission. A concurrent
@@ -1866,6 +1990,18 @@ class Handler(BaseHTTPRequestHandler):
                                        'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':EXECUTION_MODE_PROTOCOL,
                                        'upgradeProtocol':1,'window':app.window_state(), **app.shutdown_status()})
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
+            if route.path == '/api/drafts':
+                return self.reply(app.drafts.snapshot())
+            if route.path == '/api/attachments/storage':
+                with app.lock:
+                    references = app.attachment_references()
+                # The explicit read-only refresh may stat many files. Only the
+                # reference snapshot needs the application state lock; cleanup
+                # takes a fresh snapshot while serializing mutations separately.
+                return self.reply(app.attachment_store.status(references, refresh=True))
+            if route.path == '/api/sessions/archived':
+                return self.reply(app.archived_sessions(query.get('q', [''])[0],
+                    int(query.get('offset', ['0'])[0]), int(query.get('limit', ['50'])[0])))
             if route.path == "/api/appearance":
                 return self.reply(app.appearance.snapshot())
             if route.path == "/api/bootstrap":
@@ -1987,6 +2123,11 @@ class Handler(BaseHTTPRequestHandler):
                       "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
                       "/attachments.js": ("attachments.js", "text/javascript; charset=utf-8"),
+                      "/drafts.js": ("drafts.js", "text/javascript; charset=utf-8"),
+                      "/attachment-storage.js": ("attachment-storage.js", "text/javascript; charset=utf-8"),
+                      "/attachment-storage.css": ("attachment-storage.css", "text/css; charset=utf-8"),
+                      "/archived-tasks.js": ("archived-tasks.js", "text/javascript; charset=utf-8"),
+                      "/archived-tasks.css": ("archived-tasks.css", "text/css; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
                       "/productivity.js": ("productivity.js", "text/javascript; charset=utf-8"),
@@ -2038,7 +2179,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"error": "허용되지 않은 요청입니다."}, 403)
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= MAX_BODY:
+            limit = MAX_DRAFT_REQUEST if urlsplit(self.path).path == "/api/drafts" else MAX_BODY
+            if not 0 < length <= limit:
                 return self.reply({"error": "요청 크기가 너무 큽니다."}, 413)
             data = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(data, dict):
@@ -2074,7 +2216,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Deliver completion only after cleanup, then stop accepting HTTP.
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
             read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind',
-                                  '/api/attachments/prepare'}
+                                  '/api/attachments/prepare', '/api/drafts'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
             with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
@@ -2148,6 +2290,18 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/drafts':
+            with app.lock:
+                return self.reply(app.drafts.update(data))
+        if route == '/api/attachments/cleanup':
+            if data:
+                raise ValueError('첨부 정리 요청을 확인해 주세요.')
+            with app.lock:
+                return self.reply(app.attachment_store.cleanup(app.attachment_references()))
+        if route == '/api/sessions/restore':
+            if set(data) != {'id'}:
+                raise ValueError('복원할 업무를 확인해 주세요.')
+            return self.reply(app.restore_session(sid))
         if route == '/api/attachments/prepare':
             if set(data) != {'id', 'name', 'size'}:
                 raise ValueError('첨부할 파일의 이름과 크기를 확인해 주세요.')
@@ -2337,6 +2491,14 @@ def main():
     serving = threading.Event()
     def quit_from_tray():
         if not serving.wait(35):
+            return False
+        # An open (even tray-hidden) editor must flush its last debounced draft
+        # before shutdown. The existing one-use screen confirmation owns exit.
+        if app._desktop_window is not None and app._shutdown_state == 'running':
+            identifier = app.begin_quit_confirmation()
+            if window.confirm_shutdown(identifier):
+                return None
+            app.discard_quit_confirmation(identifier)
             return False
         result = app.request_quit()
         if result.get('confirmationRequired'):

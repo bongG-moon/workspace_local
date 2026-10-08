@@ -197,6 +197,9 @@ class RestartConnectionTests(unittest.TestCase):
         for index in range(2):
             other = self.app.create(str(self.root), True)
             self.app.connect(other['id'])
+            # Completed idle connections are now reclaimable; busy connections
+            # still protect the admission limit while another task restarts.
+            self.app.get(other['id'])['state'] = 'running'
         fourth = self.app.create(str(self.root), True)
         entered, release = threading.Event(), threading.Event()
         old = self.item['bridge']; original = old.close; errors = []

@@ -33,7 +33,7 @@ const restartingConnections = new Map(), pendingRequestAnswers = new Map();
 function connectionRestarting(){return !!active&&(restartingConnections.has(active.id)||active.connection?.restarting===true);}
 globalThis.WorkspaceConnectionRestart={isCurrent:connectionRestarting,isAny:()=>restartingConnections.size>0,refreshControls:updateRestartControls};
 const answeredChoices = new Set(), renderedQueuedRequests = new Set();
-const drafts = new Map(), streaming = new Map();
+const drafts = globalThis.WorkspaceDraftPersistence?.createMap()||new Map(), streaming = new Map();
 const fileRefreshRequests = new Map();
 const hiddenSessionIds = new Set(), hidingSessionIds = new Set();
 const modalStack = [];
@@ -333,8 +333,8 @@ function renderConnection(info){
   const connected=info && info.connected!==false;
   const names=list=>(Array.isArray(list)?list:[]).map(x=>typeof x==="string"?x:x?.name||x?.id||"이름 미제공").join(", ");
   $("settings-runtime").textContent=boot.runtime?`실행 위치: ${boot.runtime.entry}\n설정 위치: ${boot.runtime.configRoot}`:"실행 위치를 아직 확인하지 않았어요.";
-  $("settings-status").textContent=boot.demo?"화면 체험 연결 · 실제 AI 호출 없음":boot.error?"기존 Claude 연결 확인이 필요해요":connected?"이 업무의 Claude 연결이 확인됐어요":info?"이전 연결이 종료됐어요. 다음 요청에서 다시 연결합니다":"실행 파일 확인 완료 · 실제 응답은 업무를 시작한 뒤 확인합니다";
-  $("connection-badge").textContent=boot.demo?"화면 체험":boot.error?"연결 확인 필요":connected?"업무 연결됨":info?"업무 연결 종료":"Claude 실행 준비됨";
+  $("settings-status").textContent=boot.demo?"화면 체험 연결 · 실제 AI 호출 없음":boot.error?"기존 Claude 연결 확인이 필요해요":connected?"이 업무의 Claude 연결이 확인됐어요":info?.idleReleased?"연결 대기 · 요청하면 같은 대화로 자동 연결해요":info?"이전 연결이 종료됐어요. 다음 요청에서 다시 연결합니다":"실행 파일 확인 완료 · 실제 응답은 업무를 시작한 뒤 확인합니다";
+  $("connection-badge").textContent=boot.demo?"화면 체험":boot.error?"연결 확인 필요":connected?"업무 연결됨":info?.idleReleased?"연결 대기":info?"업무 연결 종료":"Claude 실행 준비됨";
   $("connection-badge").title=boot.demo?"실제 Claude를 호출하지 않는 체험 화면입니다.":boot.error?"설정에서 Claude 실행 환경을 확인해 주세요.":connected?"선택한 업무의 Claude 연결이 활성화되어 있습니다.":info?"다음 요청을 보내면 이 업무에 다시 연결합니다.":"Claude 실행 파일을 확인했습니다. 업무를 시작하거나 스킬·기능의 ‘연결하고 목록 확인’을 누르면 해당 업무에 연결합니다.";
   $("diagnostics").textContent=info?`현재 모델: ${info.model||"미제공"}\n사용 가능한 스킬: ${names(info.skills)||"CLI 목록 미제공"}\n연결된 기능(MCP): ${(info.mcp||[]).map(x=>`${x.name}: ${x.status}`).join(", ")||"CLI 목록 미제공"}\n플러그인: ${names(info.plugins)||"CLI 목록 미제공"}`:"업무를 시작하면 현재 모델과 연결된 기능(MCP)을 표시해요.";renderConnectionOptions();updateModelControls();updatePermissionControls();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceSessionImport?.render();updateRestartControls();
 }
@@ -441,9 +441,9 @@ async function selectSession(id,{keepDraft=false}={}){
   globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();
   streaming.clear();active=item;applyStopState(item);globalThis.WorkspaceRichContent?.reset(id);globalThis.WorkspaceExecutionView?.reset(id);globalThis.WorkspaceToolActivity?.reset(id);globalThis.WorkspaceProgressView?.reset(id,item.progress,item.lastRunId);started=null;error("");
   $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();active.messages.forEach(message=>{renderMessage(message);if(message.requestId)renderedQueuedRequests.add(message.requestId);});globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length)$("conversation").append(el("p","업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
-  taskHeader();if(!keepDraft)restoreDraft(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
+  taskHeader();if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
-function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
+function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete("home");restoreDraft("home");globalThis.WorkspaceDraftPersistence?.changed("home");$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();}
 async function poll(id,after,signal){while(!appClosed&&!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(appClosed||signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
@@ -451,6 +451,9 @@ function handleEvent(event){
     // A result already on the wire cannot cancel an explicit stop intent.
     const staleTerminal=stopState()==="stopping"&&event.type!=="status"&&d.stopState==null;
     if(!staleTerminal){const changed=applyStopState(d)||(event.type==="status"&&d.state==="stopped"&&applyStopState({stopState:"stopped"}));if(changed&&!stopBlocked())renderConnection(active.connection);}
+  }
+  if(event.type==="connection_idle"){
+    active.connection=d.connection||null;renderConnection(active.connection);return;
   }
   if(event.type==="connection_restart_finished"){
     active.connection=d.connection||null;if(d.connection&&"modelOverride" in d.connection)active.modelOverride=d.connection.modelOverride;
@@ -950,6 +953,11 @@ function enterShutdown(state,issues=[]){
 async function requestShutdown(payload={}){
   if(quitting||checkingShutdown||shutdownState==="closed")return;
   const challenge=typeof payload.confirmationId==="string",dialog=$("action-dialog");
+  if(!appClosed){
+    quitting=true;saveDraft();
+    try{if(globalThis.WorkspaceDraftPersistence)await globalThis.WorkspaceDraftPersistence.flush();}
+    catch(e){quitting=false;toast("종료 전에 초안 저장을 확인하지 못했어요. 입력을 따로 보관한 뒤 다시 시도해 주세요. "+e.message);return;}
+  }
   let recoveryNotice="";quitting=true;
   if(challenge){
     // Keep the live screen intact until the server accepts the one-use choice.
@@ -984,7 +992,7 @@ function confirmShutdownChallenge(confirmationId){
   nativeQuitConfirmation=confirmationId;
   void (async()=>{
     try{
-      const accepted=await confirmAction({title:"작업 중인 내용이 있습니다. 그래도 종료하시겠습니까?",message:"이 앱의 진행 중인 작업과 승인·답변 대기를 모두 중지하고 종료합니다. 이미 저장된 대화와 파일은 유지되며, 앱이 꺼져 있는 동안 예약은 실행되지 않습니다.",confirmLabel:"종료",danger:true});
+      const accepted=await confirmAction({title:sessions.some(row=>busyStates.has(row.state)||row.state==="stopping")||busyStates.has(active?.state)||active?.choice?"작업 중인 내용이 있습니다. 그래도 종료하시겠습니까?":"앱을 완전히 종료할까요?",message:"이 앱의 진행 중인 작업과 승인·답변 대기를 모두 중지하고 종료합니다. 이미 저장된 대화와 파일은 유지되며, 앱이 꺼져 있는 동안 예약은 실행되지 않습니다.",confirmLabel:"종료",danger:true});
       if(accepted)await requestShutdown({confirmed:true,confirmationId});
       else await api("/api/quit",{confirmed:false,confirmationId});
     }catch(e){toast(e.code==="quit_confirmation_expired"?"종료 확인이 만료됐어요. 작업은 그대로입니다.":"종료 선택을 전달하지 못했어요. 앱 상태를 확인한 뒤 다시 시도해 주세요.");}
@@ -1011,7 +1019,7 @@ function captureScreenRecovery(){
   // Empty entries saved by an edit cancel older handoff drafts on retry. A
   // pristine blank input must not erase a saved draft that failed to display.
   if($("prompt").value||attachments.length)saveDraft();
-  const snapshot={sessionId:active?.id||null,drafts:[...drafts].map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
+  const snapshot={sessionId:active?.id||null,drafts:[...drafts].filter(([id,draft])=>globalThis.WorkspaceDraftPersistence?.keepForRecovery(id,draft)!==false).map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
   const stashes=globalThis.WorkspaceShortcuts?.exportStashes()||[];if(stashes.length)snapshot.stashes=stashes;
   return snapshot;
 }
@@ -1039,6 +1047,15 @@ async function restoreScreenRecovery(snapshot){
   if(id&&!liveDraftIds.has("home")){const previous=drafts.get(id);if(previous)drafts.set("home",{text:previous.text,attachments:[...previous.attachments]});}
   restoreDraft("home");return {missingSession:!!id&&!exists,conflicts:conflicts()};
 }
+globalThis.WorkspaceDraftPersistence?.attach({api,notify:toast,selected:()=>active?.id||"home",
+  stashes:()=>globalThis.WorkspaceShortcuts?.exportStashes()||[],
+  restoreStashes:rows=>globalThis.WorkspaceShortcuts?.restoreStashes(rows,{includeArchived:true})});
+globalThis.WorkspaceAttachmentStorage?.mount({api,toast,showDialog,isClosed:()=>appClosed});
+globalThis.WorkspaceArchivedTasks?.mount({api,toast,showDialog,isClosed:()=>appClosed,onRestore:async item=>{
+  const id=item.session?.id||item.id;
+  hiddenSessionIds.delete(id);boot=await api("/api/bootstrap");sessions=boot.sessions;renderSessions();
+  $("settings-dialog").close();await selectSession(id);
+}});
 globalThis.WorkspaceStartupHealth?.attach({
   report:record=>api("/api/ui-health",record),capture:captureScreenRecovery,restore:restoreScreenRecovery,
   canReload:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
@@ -1060,6 +1077,12 @@ async function init(){try{
   if(shutdown){appClosed=true;shutdownState=shutdown;}
   sessions=boot.sessions;$("demo-banner").hidden=!boot.demo;renderConnection(null);renderSessions();taskHeader();setPanel("sources");setStatus("idle");
   if(shutdown){enterShutdown(shutdown,boot.shutdownIssues);await globalThis.WorkspaceStartupHealth?.bootstrapReady();return;}
+  const recovered=await globalThis.WorkspaceDraftPersistence?.load();
+  if(recovered?.untouched&&!active&&!$("prompt").value&&!attachments.length){
+    if(recovered.selectedId!=="home"&&sessions.some(row=>row.id===recovered.selectedId)){
+      await selectSession(recovered.selectedId,{keepDraft:true});restoreDraft(recovered.selectedId);
+    }else restoreDraft("home");
+  }
   globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
 }catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));

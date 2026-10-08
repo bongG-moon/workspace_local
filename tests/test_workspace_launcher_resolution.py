@@ -39,6 +39,7 @@ function Get-WorkspaceVerifiedContext {
     [pscustomobject]@{verified=$true;sid='S-1-5-21-FIXTURE_SID';sessionId=1;isAdministrator=$false;localAppData=FIXTURE_ROOT;userProfile=FIXTURE_ROOT}
 }
 function Assert-WorkspaceNormalProcess { param($Context) }
+function Get-WorkspaceExecutionMode { param($Context); return 'normal' }
 function Show-WorkspaceStartupDialog { param($Message); throw 'A fixture must never show UI' }
 function Get-Command {
     param($Name, $CommandType, $ErrorAction, [switch]$All)

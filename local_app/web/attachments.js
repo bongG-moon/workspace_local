@@ -12,7 +12,7 @@ globalThis.WorkspaceAttachments = (() => {
   function renderNote() {
     note.hidden = !uploading && !attachments.some(path=>copies.has(pathKey(path)));
     note.textContent = uploading ? "앱 관리 공간에 파일 복사본을 저장하고 있습니다. 원본은 변경하지 않습니다."
-      : "끌어온 파일은 앱 관리 복사본입니다. 첨부를 취소해도 원본과 복사본은 삭제되지 않습니다.";
+      : "끌어온 파일은 앱 관리 복사본입니다. 원본은 유지되며, 미사용 복사본은 설정에서 정리할 수 있습니다.";
   }
   function attach(paths, context) {
     if (appClosed) return;

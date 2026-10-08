@@ -12,6 +12,9 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'local_app\web') -Force |
 New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
+    'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\web\drafts.js',
+    'local_app\web\attachment-storage.js', 'local_app\web\attachment-storage.css',
+    'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',
     'local_app\appearance.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',
     'local_app\session_visibility.py', 'local_app\path_browser.py', 'local_app\web\path-picker.js', 'local_app\web\path-picker.css',
     'local_app\native_window.py', 'local_app\ui_health.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',

@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import zipfile
 
@@ -242,6 +243,33 @@ def _clean_staging(directory):
     directory.rmdir()
 
 
+def _promote_staging(temporary, directory, *, cancel=None):
+    """Publish a fresh version directory; never replace an existing version.
+
+    Windows can briefly deny the rename while a scanner holds an extracted
+    file. Retrying the same directory promotion is safe and does not relaunch
+    the app. The caller verifies a competing install before using it.
+    """
+    for delay in (.01, .025, .05, None):
+        _cancelled(cancel)
+        _safe(temporary)
+        _safe(directory)
+        if directory.exists():
+            if directory.is_dir():
+                return False
+            raise ValueError('업데이트 버전 위치에 다른 파일이 있습니다. 기존 파일은 유지했습니다.')
+        try:
+            os.rename(temporary, directory)  # Windows rename refuses an existing target.
+            return True
+        except OSError as exc:
+            _safe(directory)
+            if directory.is_dir():
+                return False  # Another install won; never remove or replace it.
+            if delay is None or getattr(exc, 'winerror', None) not in {5, 32, 33}:
+                raise
+            time.sleep(delay)
+
+
 def stage_and_launch(state, current_version, version, package_bytes, sha256, demo=False, *,
                      cancel=None, no_browser=False, launcher_bytes=None):
     """Stage immutable app files and start their same-user verified launcher.
@@ -279,13 +307,7 @@ def stage_and_launch(state, current_version, version, package_bytes, sha256, dem
                     staged.parent.mkdir(parents=True, exist_ok=True)
                     _write_new(staged, raw)
                 _verify_files(temporary / 'Company-Workspace', value['files'])
-                _safe(directory)
-                try:
-                    os.rename(temporary, directory)
-                except OSError:
-                    if not directory.is_dir():
-                        raise
-                    # A competing verified install may have won; never replace it.
+                _promote_staging(temporary, directory, cancel=cancel)
             finally:
                 if temporary.exists():
                     _clean_staging(temporary)

@@ -1,8 +1,8 @@
-# Company Workspace 단일 EXE — 0.23.20
+# Company Workspace 단일 EXE — 0.23.21
 
-`Company-Workspace-0.23.20.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
+`Company-Workspace-0.23.21.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
 
-현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md), 일반 Claude Code 중심으로 정리한 범위는 [0.15.0 안내](WORKSPACE_0.15.0_CLAUDE.md)를 참고하세요. 이 문서는 사용법이며 0.23.20 빌드·현장 실행·공개 배포 완료를 증명하는 기록은 아닙니다.
+현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md), 일반 Claude Code 중심으로 정리한 범위는 [0.15.0 안내](WORKSPACE_0.15.0_CLAUDE.md)를 참고하세요. 이 문서는 0.23.21 소스 기준 사용법이며 빌드·현장 실행·공개 배포 완료를 증명하는 기록은 아닙니다.
 
 ## 필요한 환경과 실행 순서
 
@@ -32,6 +32,8 @@ Company Agent 전용 학습·기억 관리·설치 등록 기능은 이번 앱�
 
 새 버전은 기존 데이터를 자동으로 삭제·이동하거나 개인 Claude 설정을 다시 작성하지 않습니다. 파일 변경이나 누락을 발견하면 검증되지 않은 캐시를 그대로 실행하지 않고 안내합니다.
 
+밝게·어둡게 선택은 상태 폴더의 `appearance.json`에 저장하므로 새 EXE를 받아도 유지됩니다. Windows 실행 권한은 이 파일이나 캐시에 저장하지 않고 실행할 때 실제 권한을 확인합니다. 예전 `execution-mode.json`이 남아 있어도 현재 실행기는 읽거나 적용하지 않으므로 관리자 표시 때문에 캐시나 업무 데이터를 지울 필요는 없습니다.
+
 ## 화면과 종료
 
 Edge·Chrome 브라우저 창 대신 자체 Windows 창에 WebView2를 표시합니다. Runtime과 Python을 자동 설치하지 않습니다. [0.18.0 전용 창 안내](WORKSPACE_0.18.0_NATIVE_WINDOW.md)를 참고하세요.
@@ -48,7 +50,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 
 `WS-37`·`WS-38`은 확인한 Python 후보와 실패 이유를 구분합니다. 기록 저장에 성공하면 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치를 안내합니다. 기록에는 로컬 설치 경로가 포함될 수 있지만 인증 값이나 표준 오류 원문은 저장하지 않습니다.
 
-시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.20 진단 표기는 **`ws33-56`**, 대상 소스는 **`workspace-0.23.20`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
+시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.21 진단 표기는 **`ws33-57`**, 대상 소스는 **`workspace-0.23.21`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
 
 진단과 실행은 Windows의 UAC·영구 실행 정책·기존 파일 ACL을 바꾸지 않습니다. PowerShell의 이번 실행에 적용한 옵션으로 모든 그룹 정책·AppLocker·WDAC·Script Host 제한을 해결할 수 있다고 보장하지 않습니다.
 
@@ -59,7 +61,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 | 옵션 | 범위 |
 | --- | --- |
 | `--python <절대 경로>` | 이미 설치된 Python 실행 파일 지정 |
-| `--execution-mode normal` / `--execution-mode administrator` | 이번 실행의 앱·Claude 권한 지정. 관리자는 Windows 승인과 같은 계정 검증 필요 |
+| `--execution-mode normal` / `--execution-mode administrator` | 현재 Windows 권한이 지정 값과 일치하는지 검사. 승격·권한 변경·Windows 승인창 호출은 하지 않음 |
 | `--state <절대 경로>` | 별도 앱 상태 폴더 |
 | `--cache-root <절대 경로>` | 별도 앱 파일 캐시 폴더 |
 | `--no-browser` | 자동 화면 열기 없이 시작 |
@@ -69,4 +71,4 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 `--verify-only` 성공은 Python·Claude·회사 PC 실행 조건까지 검증했다는 뜻이 아닙니다. 빌드는 `deploy/New-WorkspaceStandalone.ps1`, 실행기 구조는 `deploy/CompanyWorkspace.Standalone.cs`에서 확인할 수 있습니다. 배포 파일 제작·공개 게시·직원 PC 적용은 별도 단계입니다.
 
 
-권한 선택 보완본은 설정에서 일반·관리자 실행을 선택합니다. 시작 진단의 `executionMode`와 `predictedGuard`를 함께 확인하세요. Windows 승인이나 권한 변경 실행을 진단 도구가 수행하는 것은 아닙니다. [실행 권한 안내](WORKSPACE_EXECUTION_MODE.md).
+현재 EXE는 `asInvoker` 방식으로 실행한 Windows 환경의 권한을 상속합니다. 설정에서는 실제 실행 권한을 확인할 수 있으며 앱 안에서 권한을 바꾸지는 않습니다. 관리자 터미널에서 열었거나 바로가기·EXE 호환성 속성에 관리자 실행이 지정되어 있으면 그 방식이 적용될 수 있습니다. UAC가 꺼져 있거나 회사 정책상 처음부터 관리자 토큰을 사용하는 PC에서는 더블클릭도 관리자 실행일 수 있습니다. 창의 X는 숨기기이므로 다른 권한으로 다시 열기 전에는 트레이의 **완전 종료**를 사용하세요. 현재 Windows 보안 설정은 유지하고 실행 경로와 표시된 권한을 먼저 확인하세요. [실행 권한 안내](WORKSPACE_EXECUTION_MODE.md).

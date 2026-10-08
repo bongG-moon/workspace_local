@@ -106,7 +106,9 @@ class StandaloneBootstrapTests(unittest.TestCase):
         return exe, digest, dict(listed)
 
     def setUp(self):
-        self.case = self.root / self.id().rsplit('.', 1)[-1]
+        # Long unittest names can exhaust .NET Framework's MAX_PATH before
+        # the payload behavior under test is reached. Keep Unicode root paths.
+        self.case = self.root / ('case-' + hashlib.sha256(self.id().encode()).hexdigest()[:12])
         self.case.mkdir()
         self.cache = self.case / '보관 자료'
 

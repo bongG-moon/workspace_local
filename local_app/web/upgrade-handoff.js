@@ -10,7 +10,7 @@ globalThis.WorkspaceUpgrade = (() => {
   const $=id=>document.getElementById(id);
   const dialog=()=>$("upgrade-dialog");
   const safeId=id=>typeof id==="string"&&/^[a-f0-9]{32}$/i.test(id);
-  const unattended=path=>/^\/api\/(?:events(?:\?|$)|attention(?:\/|\?|$)|ui-health(?:\?|$)|upgrade(?:\?|$)|window\/presence(?:\?|$))/.test(path);
+  const unattended=path=>/^\/api\/(?:events(?:\?|$)|attention(?:\/|\?|$)|ui-health(?:\?|$)|drafts(?:\?|$)|upgrade(?:\?|$)|window\/presence(?:\?|$))/.test(path);
   function begin(path,mutation){
     if(locked&&mutation&&!unattended(path))throw new Error("새 버전으로 전환하고 있어요. 잠시 기다리거나 전환을 취소해 주세요.");
     if(unattended(path))return ()=>{};
@@ -74,6 +74,7 @@ globalThis.WorkspaceUpgrade = (() => {
         localError="작성 중인 내용이 많아 자동 전환을 진행하지 않았어요. 내용을 보관한 뒤 다시 실행해 주세요.";
         const message=localError;freeze(false);render();if(await cancel())hooks.failed?.(message);return;
       }
+      await globalThis.WorkspaceDraftPersistence?.flush();
       const response=await hooks.api("/api/upgrade",payload);
       if(ticket!==serial||current?.requestId!==owner)return;
       if(Number.isInteger(response.upgrade?.revision)&&response.upgrade.revision<latestRevision)return;
@@ -125,6 +126,7 @@ globalThis.WorkspaceUpgrade = (() => {
         recoveryNotice="새 창의 입력 내용은 유지했어요. 덮어쓰지 않은 이전 초안도 별도로 보관했으니 확인해 주세요.";
         render();return;
       }
+      await globalThis.WorkspaceDraftPersistence?.flush();
       const response=await hooks.api("/api/upgrade",{action:"restored",requestId:restore.requestId});
       if(response.ok!==true)throw new Error("restore acknowledgement missing");
       restoredId=restore.requestId;recovery=null;recoveryNotice="";render();

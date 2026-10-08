@@ -9,6 +9,7 @@ import time
 from .work_queue import WorkQueue
 from .schedule_time import first_run as scheduled_first_run
 from .bridge import ControlRestoreRequired
+from .idle_connections import connection_slot, ConnectionCapacityUnavailable
 
 
 class DispatchController:
@@ -255,28 +256,31 @@ class DispatchController:
                     # by ordinary connect/send, so other tasks cannot take it.
                     if item.get('_stopAdmission') or self.app.stop_state(item) in {'stopping', 'failed'}:
                         continue  # Do not claim or consume work during an unconfirmed stop.
-                    if not self.app.connection_capacity_available(item):
-                        continue
-                    claim = self.queue.claim(sid, item, self.context(item))
-                    if claim is not None:
-                        # Reserve the normal-send admission while control
-                        # restoration waits without holding the app lock.
-                        item['_dispatchClaim'] = claim['id']
-                if claim is None:
-                    continue
                 try:
-                    self.app.send(sid, claim['text'], claim['attachments'], _dispatch_claim=claim['id'])
-                    with self.app.lock:
-                        self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
-                except ControlRestoreRequired:
-                    # This typed preflight error guarantees send() has not
-                    # appended or delivered any part of the queued request.
-                    self.queue.defer_unsubmitted(claim['id'])
-                except (ValueError, OSError, RuntimeError):
-                    self.queue.failed(claim['id'])
-                finally:
-                    with self.app.lock:
-                        self.app.get(sid).pop('_dispatchClaim', None)
+                    # Reclaim before the durable claim: a capacity race or a
+                    # failed cleanup must leave the request safely queued.
+                    with connection_slot(self.app, sid):
+                        with self.app.lock:
+                            if item.get('_idleReleasing') or item.get('_stopAdmission'):
+                                continue
+                            claim = self.queue.claim(sid, item, self.context(item))
+                            if claim is not None:
+                                item['_dispatchClaim'] = claim['id']
+                        if claim is None:
+                            continue
+                        try:
+                            self.app.send(sid, claim['text'], claim['attachments'], _dispatch_claim=claim['id'])
+                            with self.app.lock:
+                                self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
+                        except ControlRestoreRequired:
+                            self.queue.defer_unsubmitted(claim['id'])
+                        except (ValueError, OSError, RuntimeError):
+                            self.queue.failed(claim['id'])
+                        finally:
+                            with self.app.lock:
+                                self.app.get(sid).pop('_dispatchClaim', None)
+                except ConnectionCapacityUnavailable:
+                    continue
 
     @staticmethod
     def first_run(schedule, now=None):

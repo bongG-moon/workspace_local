@@ -342,7 +342,7 @@ class ContinuityRoutesTests(unittest.TestCase):
         self.assertEqual('acceptEdits', item['connection']['permissionMode'])
         self.assertEqual('acceptEdits', item['connection']['permissionModeOverride'])
         self.assertEqual(before, item['messages'])
-        self.assertFalse(item['_modelUpdating'])
+        self.assertFalse(item['_permissionUpdating'])
 
     def test_failed_close_preserves_old_connection_without_starting_opted_in_child(self):
         sid, item, old = self.controls()
@@ -354,7 +354,7 @@ class ContinuityRoutesTests(unittest.TestCase):
         self.assertIs(old, item['bridge'])
         self.assertEqual('acceptEdits', item['_sessionControls']['permissionMode'])
         self.assertFalse(item.get('_allowBypass', False))
-        self.assertFalse(item['_modelUpdating'])
+        self.assertFalse(item['_permissionUpdating'])
 
     def test_failed_control_restore_does_not_apply_bypass_or_erase_previous_choices(self):
         sid, item, old = self.controls()

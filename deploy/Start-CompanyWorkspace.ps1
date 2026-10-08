@@ -389,7 +389,7 @@ try {
     if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
     $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.20' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.21' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -415,7 +415,7 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.20'
+                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.21'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -445,7 +445,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.20'
+        $targetVersion = [version]'0.23.21'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)

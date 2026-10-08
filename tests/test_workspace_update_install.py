@@ -158,6 +158,91 @@ class UpdateInstallTests(unittest.TestCase):
         self.assertEqual(b'changed', path.read_bytes())
         self.popen.assert_not_called()
 
+    def test_transient_windows_promotion_lock_retries_same_stage_and_launches_once(self):
+        error = PermissionError(13, 'temporary Windows scanner lock')
+        error.winerror = 5
+        original = os.rename
+        calls = []
+        def rename(source, target):
+            calls.append((source, target))
+            if len(calls) <= 2: raise error
+            return original(source, target)
+        with patch.object(install.os, 'rename', side_effect=rename), patch.object(install.time, 'sleep') as sleep:
+            self.stage()
+        self.assertEqual(3, len(calls))
+        self.assertEqual(1, len(set(calls)))
+        self.assertEqual([.01, .025], [call.args[0] for call in sleep.call_args_list])
+        self.assertEqual(1, self.popen.call_count)
+        self.assertEqual('0.23.0', self.manifest()['version'])
+        self.assertFalse(list((self.state/'updates/versions').glob('.stage-*')))
+
+    def test_permanent_promotion_denial_preserves_current_install_and_never_launches(self):
+        self.stage()
+        self.assertTrue(self.confirm('0.23.0'))
+        pointer = self.state/'updates/current.json'
+        old_pointer = pointer.read_bytes()
+        old_body = self.state/'updates/versions/0.23.0/Company-Workspace/local_app/server.py'
+        original = old_body.read_bytes()
+        self.popen.reset_mock()
+        error = PermissionError(13, 'denied')
+        error.winerror = 32
+        with patch.object(install.os, 'rename', side_effect=error) as rename, patch.object(install.time, 'sleep') as sleep:
+            with self.assertRaises(PermissionError): self.stage('0.24.0')
+        self.assertEqual(4, rename.call_count)
+        self.assertAlmostEqual(.085, sum(call.args[0] for call in sleep.call_args_list))
+        self.assertEqual(old_pointer, pointer.read_bytes())
+        self.assertEqual(original, old_body.read_bytes())
+        self.assertFalse((self.state/'updates/pending.json').exists())
+        self.assertFalse((self.state/'updates/versions/0.24.0').exists())
+        self.assertFalse(list((self.state/'updates/versions').glob('.stage-*')))
+        self.popen.assert_not_called()
+
+    def test_competing_version_during_failed_rename_is_preserved_and_verified(self):
+        error = PermissionError(13, 'another install won')
+        error.winerror = 5
+        def compete(source, target):
+            target.mkdir()
+            (target/'untouched.txt').write_bytes(b'competing install')
+            raise error
+        with patch.object(install.os, 'rename', side_effect=compete) as rename, patch.object(install.time, 'sleep') as sleep:
+            with self.assertRaises((ValueError, OSError)): self.stage()
+        self.assertEqual(1, rename.call_count)
+        sleep.assert_not_called()
+        self.assertEqual(b'competing install', (self.state/'updates/versions/0.23.0/untouched.txt').read_bytes())
+        self.assertFalse((self.state/'updates/pending.json').exists())
+        self.popen.assert_not_called()
+
+    def test_promotion_retry_revalidates_path_and_honors_cancellation(self):
+        target = self.state/'updates/versions/0.23.0'
+        original_safe = install._safe
+        changed = False
+        error = PermissionError(13, 'temporary lock')
+        error.winerror = 33
+        def sleep(_):
+            nonlocal changed
+            changed = True
+        def safe(path):
+            if changed and Path(path) == target: raise ValueError('fixture changed destination')
+            return original_safe(path)
+        with patch.object(install.os, 'rename', side_effect=error) as rename, patch.object(install.time, 'sleep', side_effect=sleep), patch.object(install, '_safe', side_effect=safe):
+            with self.assertRaisesRegex(ValueError, 'changed destination'): self.stage()
+        self.assertEqual(1, rename.call_count)
+        self.assertFalse(target.exists())
+        self.assertFalse(list(target.parent.glob('.stage-*')))
+        cancel = threading.Event()
+        with patch.object(install.os, 'rename', side_effect=error) as rename, patch.object(install.time, 'sleep', side_effect=lambda _: cancel.set()):
+            with self.assertRaises(ValueError): self.stage(cancel=cancel)
+        self.assertEqual(1, rename.call_count)
+        self.assertFalse(target.exists())
+        self.popen.assert_not_called()
+
+    def test_non_windows_promotion_failure_has_no_retry_or_delay(self):
+        with patch.object(install.os, 'rename', side_effect=OSError('disk failure')) as rename, patch.object(install.time, 'sleep') as sleep:
+            with self.assertRaises(OSError): self.stage()
+        self.assertEqual(1, rename.call_count)
+        sleep.assert_not_called()
+        self.popen.assert_not_called()
+
     def test_confirm_wrong_version_hash_or_unlisted_file_keeps_old_pointer(self):
         self.stage()
         self.assertFalse(self.confirm('0.24.0'))
