@@ -46,6 +46,7 @@ MAX_BODY = 256 * 1024
 WORKSPACE_VERSION = "0.23.21"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
+STORY_FILENAME = "AX_WORKSPACE_STORY.html"
 MANUAL_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; font-src data:; "
     "img-src 'none'; connect-src 'none'; object-src 'none'; base-uri 'none'; "
@@ -92,7 +93,7 @@ def workspace_window_handle():
         title = ctypes.create_unicode_buffer(512)
         if not user32.GetWindowTextW(handle, title, len(title)):
             return 0
-        if not title.value.startswith("Company Workspace"):
+        if not title.value.startswith(("AX Workspace", "Company Workspace")):
             return 0
         return int(handle)
     except (OSError, AttributeError, ValueError):
@@ -2090,6 +2091,9 @@ class Handler(BaseHTTPRequestHandler):
             manual_path = unquote(route.path)
             if manual_path in {'/manual/guide', '/manual/' + MANUAL_FILENAME}:
                 return self.reply((ASSETS.parent.parent / 'docs' / MANUAL_FILENAME).read_bytes(),
+                                  content_type='text/html; charset=utf-8', csp=MANUAL_CSP)
+            if manual_path == '/manual/' + STORY_FILENAME:
+                return self.reply((ASSETS.parent.parent / 'docs' / STORY_FILENAME).read_bytes(),
                                   content_type='text/html; charset=utf-8', csp=MANUAL_CSP)
             if manual_path in MANUAL_ALIASES:
                 return self.reply({}, 302, location='/manual/guide' + MANUAL_ALIASES[manual_path])

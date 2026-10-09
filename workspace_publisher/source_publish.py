@@ -400,7 +400,7 @@ def publish_source(root, config, token, *, token_kind='auto', expected_source_id
         # an existing one. GitLab rejects it here with force=False. Use
         # branch's current tip; keep the checked branch head above,
         # per-file last_commit_id guards, and pinned readback below instead.
-        payload = {'branch': branch, 'commit_message': f'Publish Company Workspace source {version}', 'actions': actions, 'force': False}
+        payload = {'branch': branch, 'commit_message': f'Publish AX Workspace source {version}', 'actions': actions, 'force': False}
         body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         if len(body) > MAX_REQUEST:
             raise PublisherError('소스 커밋 요청이 한 번에 확인할 수 있는 크기를 넘었습니다.')

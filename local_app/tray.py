@@ -314,7 +314,7 @@ class _WindowsTray:
         data.size, data.window, data.id = ctypes.sizeof(data), self.hwnd, self.ICON_ID
         data.flags = 1 | 2 | 4 | 0x80  # MESSAGE | ICON | TIP | SHOWTIP with version 4
         data.callback, data.icon = self.CALLBACK, self.icon
-        data.tip = ('Company Workspace\n' + self.owner._text())[:127]
+        data.tip = ('AX Workspace\n' + self.owner._text())[:127]
         return data
 
     def _notify(self, action):
@@ -358,7 +358,7 @@ class _WindowsTray:
             self._registered = True
             # Hidden top-level window receives TaskbarCreated broadcasts.
             # A message-only HWND would silently miss Explorer restarts.
-            self.hwnd = self.user.CreateWindowExW(0, self.class_name, 'Company Workspace Tray',
+            self.hwnd = self.user.CreateWindowExW(0, self.class_name, 'AX Workspace Tray',
                                                  0, 0, 0, 0, 0, None, None, self.instance, None)
             if not self.hwnd:
                 raise OSError('Tray window unavailable.')

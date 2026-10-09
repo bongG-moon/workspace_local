@@ -122,7 +122,7 @@ internal sealed class DesktopWindow : Form
         object configuredTheme;
         appearance = config.TryGetValue("theme", out configuredTheme) ? configuredTheme as string : "light";
         if (!WorkspaceAppearance.Valid(appearance)) throw new InvalidDataException();
-        Text = "Workspace";
+        Text = "AX Workspace";
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         AutoScaleMode = AutoScaleMode.Dpi;
         ApplyAppearance();
@@ -264,7 +264,7 @@ internal sealed class DesktopWindow : Form
             {
                 DesktopProgram.Emit(new { type = "manual_link_failed" });
                 MessageBox.Show(this, "사용자 안내서를 열지 못했습니다. 기본 브라우저가 실행되는지 확인한 뒤 다시 눌러 주세요.",
-                    "Workspace 사용자 안내서", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "AX Workspace 사용자 안내서", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }));
     }
@@ -814,7 +814,7 @@ internal sealed class WorkspaceNotificationCard : Form
         BackColor = surface;
         Padding = Padding.Empty;
         DoubleBuffered = true;
-        Text = "Workspace 알림";
+        Text = "AX Workspace 알림";
         AccessibleName = kind == "completed" ? "작업 완료 알림" : kind == "attention" ? "응답 대기 알림" : "작업 확인 알림";
         AccessibleDescription = title + ". " + (summary.Length > 0 ? summary : message);
         statusLabel = MakeLabel(kind == "completed" ? "작업 완료" : kind == "attention" ? "응답 대기" : "확인 필요", muted);

@@ -25,7 +25,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     const source={provider,label:typeof value.source?.label==="string"?value.source.label.slice(0,120)
       :provider==="github"?"GitHub 공개 배포":provider==="gitlab"?"사내 배포 서버":"배포 서버"};
     const release=value.release&&newer(value.release.version,currentVersion)?{
-      version:value.release.version,title:String(value.release.title||`Company Workspace ${value.release.version}`),
+      version:value.release.version,title:String(value.release.title||`AX Workspace ${value.release.version}`),
       notes:typeof value.release.notes==="string"?value.release.notes:"업데이트 내용이 아직 제공되지 않았어요.",
       publishedAt:value.release.publishedAt,
       // Never use a URL supplied by release notes or remote metadata.

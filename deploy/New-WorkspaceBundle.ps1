@@ -21,14 +21,14 @@ $files = @(
     'deploy\New-WorkspaceDesktop.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
     'docs\WORKSPACE_0.18.0_NATIVE_WINDOW.md',
     'docs\WORKSPACE_0.20.0_NOTIFICATIONS.md',
-    'Company-Workspace.vbs',
+    'AX-Workspace.vbs', 'Company-Workspace.vbs',
     'Check-Workspace.cmd', 'Check-Workspace.ps1',
     'deploy\Start-CompanyWorkspace.ps1',
     'deploy\CompanyWorkspace.Startup.ps1',
     'deploy\CompanyWorkspace.NormalToken.cs',
     'deploy\CompanyAgent.UserContext.ps1',
     'docs\WORKSPACE_0.16.0_PRODUCTIVITY.md', 'docs\WORKSPACE_0.17.0_RELIABILITY.md',
-    'docs\LOCAL_WORKSPACE.md', 'docs\WORKSPACE_USER_GUIDE.html', 'docs\WORKSPACE_0.15.0_CLAUDE.md',
+    'docs\LOCAL_WORKSPACE.md', 'docs\WORKSPACE_USER_GUIDE.html', 'docs\AX_WORKSPACE_STORY.html', 'docs\WORKSPACE_0.15.0_CLAUDE.md',
     'docs\WORKSPACE_EXECUTION_MODE.md',
     'docs\WORKSPACE_0.13.0_DESKTOP.md', 'docs\WORKSPACE_0.14.0_CONTINUITY.md',
     'docs\WORKSPACE_STARTUP_DIAGNOSTIC.md',
@@ -78,7 +78,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('company-workspace-preview-0.23.21-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('ax-workspace-preview-0.23.21-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

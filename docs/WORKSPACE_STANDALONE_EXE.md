@@ -1,6 +1,6 @@
-# Company Workspace 단일 EXE — 0.23.21
+# AX Workspace 단일 EXE — 0.23.21
 
-`Company-Workspace-0.23.21.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
+`AX-Workspace-0.23.21.exe`는 앱 파일을 담은 Windows 실행기입니다. EXE ZIP을 받았다면 먼저 압축을 풀고 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 업무는 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
 
 현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md), 일반 Claude Code 중심으로 정리한 범위는 [0.15.0 안내](WORKSPACE_0.15.0_CLAUDE.md)를 참고하세요. 이 문서는 0.23.21 소스 기준 사용법이며 빌드·현장 실행·공개 배포 완료를 증명하는 기록은 아닙니다.
 
@@ -28,7 +28,7 @@ Company Agent 전용 학습·기억 관리·설치 등록 기능은 이번 앱�
 
 첫 실행은 내장 앱 파일을 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime` 아래 버전과 내용 해시별 폴더에 준비합니다. 추가 다운로드는 하지 않으며 캐시에도 Python은 넣지 않습니다. 같은 EXE를 다시 열면 검증된 같은 앱 파일을 재사용합니다.
 
-업무·대화·대기 요청·예약·알림은 기존 앱 상태 경로 `%LOCALAPPDATA%\CompanyAgent\local-ui`에서 이어집니다. 앱 파일 캐시와 업무 데이터는 별개입니다. **Company-Workspace** 실행 이름과 두 경로는 이전 업무 호환성을 위해 유지하며 Company Agent 설치가 필요하다는 뜻은 아닙니다.
+업무·대화·대기 요청·예약·알림은 기존 앱 상태 경로 `%LOCALAPPDATA%\CompanyAgent\local-ui`에서 이어집니다. 앱 파일 캐시와 업무 데이터는 별개입니다. 화면에는 **AX Workspace / 내 업무와 AI가 만나는 공간**이 표시됩니다. 새 EXE·ZIP 이름은 **AX-Workspace**이며, 기존 앱 업데이트를 위한 **Company-Workspace** 호환 ZIP과 내부 경로는 유지합니다. Company Agent 설치가 필요하다는 뜻은 아닙니다.
 
 새 버전은 기존 데이터를 자동으로 삭제·이동하거나 개인 Claude 설정을 다시 작성하지 않습니다. 파일 변경이나 누락을 발견하면 검증되지 않은 캐시를 그대로 실행하지 않고 안내합니다.
 

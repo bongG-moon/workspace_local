@@ -26,7 +26,7 @@ $report = [ordered]@{
 }
 $expected = [ordered]@{
     'deploy/Start-CompanyWorkspace.ps1' = 'd948f5d6e08dc35537f07874ab3a21a56776acf558593c3a36eeb537dcc82436'
-    'deploy/CompanyWorkspace.Startup.ps1' = 'a29ccca92d05b449c9a6d5a932b7eab8f559385da2053355cb975fa55324bd2c'
+    'deploy/CompanyWorkspace.Startup.ps1' = 'f78270e3632fc9e08a4802466dd7b31afb290eca7f6b6c455fa7382d30c5c3b1'
     'deploy/CompanyWorkspace.NormalToken.cs' = 'e16198c7f9b4c62155e18810d8136f9331dbe54d3a82ab9d9301a3c2e332bb2c'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'
 }

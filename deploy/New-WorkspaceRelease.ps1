@@ -4,14 +4,17 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
 if (-not $version) { throw 'Workspace version not found.' }
-if (-not $StandaloneExe) { $StandaloneExe = Join-Path $repoRoot ('dist\Company-Workspace-' + $version + '.exe') }
+if (-not $StandaloneExe) { $StandaloneExe = Join-Path $repoRoot ('dist\AX-Workspace-' + $version + '.exe') }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot ('dist\workspace-release-' + $version) }
 $StandaloneExe = (Resolve-Path -LiteralPath $StandaloneExe).Path
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
-$vbsZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-vbs.zip')
-$exeZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-exe.zip')
+$vbsZip = Join-Path $outputRoot ('AX-Workspace-' + $version + '-vbs.zip')
+$exeZip = Join-Path $outputRoot ('AX-Workspace-' + $version + '-exe.zip')
+# Legacy updater clients require both their historical asset and ZIP member names.
+$legacyVbsZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-vbs.zip')
+$legacyExeZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-exe.zip')
 $checksums = Join-Path $outputRoot 'SHA256SUMS.txt'
-foreach ($target in @($vbsZip, $exeZip, $checksums)) {
+foreach ($target in @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip, $checksums)) {
     if (Test-Path -LiteralPath $target) { throw ('Output already exists: ' + $target) }
 }
 if ([Reflection.AssemblyName]::GetAssemblyName($StandaloneExe).Version.ToString() -ne ($version + '.0')) {
@@ -58,13 +61,13 @@ try {
 } finally { $portable.Dispose(); $embedded.Dispose(); $stream.Dispose(); $sha.Dispose() }
 $exeStage = Join-Path $stage 'exe'
 New-Item -ItemType Directory -Path $exeStage -Force | Out-Null
-$exeName = 'Company-Workspace-' + $version + '.exe'
+$exeName = 'AX-Workspace-' + $version + '.exe'
 Copy-Item -LiteralPath $StandaloneExe -Destination (Join-Path $exeStage $exeName)
 $exeHash = (Get-FileHash -LiteralPath $StandaloneExe -Algorithm SHA256).Hash.ToLowerInvariant()
 $utf8 = New-Object Text.UTF8Encoding($false)
 $releaseGuide = if ($UpdateConfig) { 'Open Settings > App update inside the app for internal update notes and downloads.' } else { 'https://github.com/bongG-moon/workspace_local/releases/tag/v' + $version }
 $instructions = @"
-Company Workspace $version - single EXE edition
+AX Workspace $version - single EXE edition
 
 1. Extract this ZIP, then double-click $exeName.
 2. Existing Python 3.11 or newer is required. This EXE does not include,
@@ -94,13 +97,23 @@ $releaseGuide
 [IO.File]::WriteAllText((Join-Path $exeStage 'README.txt'), $instructions, $utf8)
 [IO.File]::WriteAllText((Join-Path $exeStage ($exeName + '.sha256')), ($exeHash + '  ' + $exeName + "`n"), $utf8)
 Copy-Item -LiteralPath $vbsSource[0].FullName -Destination $vbsZip
+Copy-Item -LiteralPath $vbsSource[0].FullName -Destination $legacyVbsZip
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $exeStage --output $exeZip --contents-only
 if ($LASTEXITCODE -ne 0) { throw 'EXE ZIP creation failed. Check the file and retry details above; release checksums were not published.' }
-$rows = @($vbsZip, $exeZip) | ForEach-Object {
+$legacyStage = Join-Path $stage 'legacy-exe'
+New-Item -ItemType Directory -Path $legacyStage -Force | Out-Null
+$legacyExeName = 'Company-Workspace-' + $version + '.exe'
+Copy-Item -LiteralPath $StandaloneExe -Destination (Join-Path $legacyStage $legacyExeName)
+[IO.File]::WriteAllText((Join-Path $legacyStage 'README.txt'), $instructions.Replace($exeName, $legacyExeName), $utf8)
+[IO.File]::WriteAllText((Join-Path $legacyStage ($legacyExeName + '.sha256')), ($exeHash + '  ' + $legacyExeName + "`n"), $utf8)
+& $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $legacyStage --output $legacyExeZip --contents-only
+if ($LASTEXITCODE -ne 0) { throw 'Legacy-compatible EXE ZIP creation failed; release checksums were not published.' }
+$rows = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip) | ForEach-Object {
     (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($_)
 }
 [IO.File]::WriteAllText($checksums, (($rows -join "`n") + "`n"), $utf8)
 $report = [ordered]@{version=$version; vbsZip=$vbsZip; exeZip=$exeZip; checksums=$checksums;
+    legacyVbsZip=$legacyVbsZip; legacyExeZip=$legacyExeZip;
     identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage}
 $json = $report | ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $repoRoot ('build\workspace-release-' + $version + '.json')), $json, $utf8)

@@ -103,6 +103,10 @@ finally { $identity.Dispose() }
             shutil.copyfile(ROOT / relative, self.directory / relative)
 
     def run_diagnostic(self, preamble=""):
+        # Each subtest invokes the diagnostic again in this owned temporary
+        # directory. Keep a prior timestamped result out of this run's check.
+        for previous in self.directory.glob("Workspace-Diagnostic-*.json"):
+            previous.unlink()
         completed = run_powershell(preamble + "\n& " + ps_literal(self.directory / SCRIPT.name))
         self.assertEqual(0, completed.returncode, "Diagnostic failed before producing a report")
         self.assertEqual("", completed.stderr)

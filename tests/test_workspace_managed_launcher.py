@@ -205,7 +205,7 @@ class ManagedLauncherTests(unittest.TestCase):
             destination, data = REAL_SHORTCUT_BYTES(target, ['--state', str(self.state), '--python', launcher.sys.executable])
         except launcher.subprocess.CalledProcessError as exc:
             self.fail((exc.stderr or '')[:1500])
-        self.assertEqual('Company Workspace (최신).lnk', destination.name)
+        self.assertEqual('AX Workspace (최신).lnk', destination.name)
         self.assertGreater(len(data), 76)
         self.assertEqual([], list(target.parent.glob('.workspace-*.lnk')))
 

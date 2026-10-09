@@ -73,7 +73,7 @@ globalThis.WorkspaceAttention = (() => {
       if ((snapshot.desktop?.nativeAvailable && snapshot.desktop?.preferences?.enabled && snapshot.desktop?.preferences?.attention) || !enabled || typeof globalThis.Notification !== "function" || Notification.permission !== "granted" || (visible() && active?.id === item.sessionId)) continue;
       try {
         const body=`${item.title || "업무"} · ${waitingLabel(item.kind)}${item.summary?`\n${item.summary}`:""}`;
-        const notice = new Notification("Company Workspace · 응답이 필요해요", {body, tag:item.id});
+        const notice = new Notification("AX Workspace · 응답이 필요해요", {body, tag:item.id});
         notifications.set(item.id, notice);
         notice.onclick = () => { if (items.some(row => row.id === item.id)) { globalThis.focus?.(); openTask(item.sessionId, item.id); } notice.close(); };
       } catch (_) { /* The badge remains available when browser delivery fails. */ }

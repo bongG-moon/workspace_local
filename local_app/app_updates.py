@@ -207,9 +207,10 @@ def parse_release(payload):
     assets = payload.get('assets')
     if not isinstance(assets, list) or len(assets) > 100:
         raise UpdateError()
-    expected = {f'Company-Workspace-{version}-vbs.zip': MAX_ARCHIVE, 'SHA256SUMS.txt': MAX_CHECKSUMS}
-    optional = f'Company-Workspace-{version}-exe.zip'
-    limits = {**expected, optional: MAX_ARCHIVE}
+    # Prefer the public brand, while still accepting historical releases.
+    limits = {f'{brand}-{version}-{edition}.zip': MAX_ARCHIVE
+              for brand in ('AX-Workspace', 'Company-Workspace') for edition in ('vbs', 'exe')}
+    limits['SHA256SUMS.txt'] = MAX_CHECKSUMS
     selected = {}
     for asset in assets:
         if not isinstance(asset, dict):
@@ -231,12 +232,27 @@ def parse_release(payload):
             raise UpdateError()
         selected[name] = {'name': name, 'browser_download_url': url, 'size': size,
                           'state': 'uploaded', 'digest': digest.lower() if digest else None}
-    if not set(expected) <= set(selected):
+    if ('SHA256SUMS.txt' not in selected or not any(
+            f'{brand}-{version}-vbs.zip' in selected for brand in ('AX-Workspace', 'Company-Workspace'))):
         raise UpdateError()
     return {'tag_name': tag, 'draft': False, 'prerelease': False, 'html_url': page,
-            'name': _plain(payload.get('name'), 300) or f'Company Workspace {version}',
+            'name': _plain(payload.get('name'), 300) or f'AX Workspace {version}',
             'body': _plain(payload.get('body'), MAX_NOTES), 'published_at': published,
-            'assets': [selected[name] for name in limits if name in selected]}
+            'assets': _ordered_assets(selected, version)}
+
+
+def _ordered_assets(selected, version):
+    """Keep the chosen VBS first and checksums second for the install flow."""
+    ordered = []
+    for edition in ('vbs', 'exe'):
+        for brand in ('AX-Workspace', 'Company-Workspace'):
+            name = f'{brand}-{version}-{edition}.zip'
+            if name in selected:
+                ordered.append(selected[name])
+                break
+        if edition == 'vbs':
+            ordered.append(selected['SHA256SUMS.txt'])
+    return ordered
 
 
 def parse_manifest(payload, source):
@@ -258,9 +274,9 @@ def parse_manifest(payload, source):
     except ValueError as exc:
         raise UpdateError() from exc
     files = payload['files']
-    vbs, exe = f'Company-Workspace-{version}-vbs.zip', f'Company-Workspace-{version}-exe.zip'
-    required = {vbs, 'SHA256SUMS.txt'}
-    limits = {vbs: MAX_ARCHIVE, exe: MAX_ARCHIVE, 'SHA256SUMS.txt': MAX_CHECKSUMS}
+    limits = {f'{brand}-{version}-{edition}.zip': MAX_ARCHIVE
+              for brand in ('AX-Workspace', 'Company-Workspace') for edition in ('vbs', 'exe')}
+    limits['SHA256SUMS.txt'] = MAX_CHECKSUMS
     if not isinstance(files, list) or not 2 <= len(files) <= 3:
         raise UpdateError()
     selected = {}
@@ -274,12 +290,13 @@ def parse_manifest(payload, source):
             raise UpdateError()
         selected[name] = {'name': name, 'size': size, 'digest': 'sha256:' + digest, 'state': 'uploaded',
                           'browser_download_url': source.asset_url(version, name)}
-    if not required <= set(selected):
+    if ('SHA256SUMS.txt' not in selected or not any(
+            f'{brand}-{version}-vbs.zip' in selected for brand in ('AX-Workspace', 'Company-Workspace'))):
         raise UpdateError()
     return {'tag_name': 'v' + version, 'draft': False, 'prerelease': False, 'html_url': '',
-            'name': _plain(payload['title'], 300) or f'Company Workspace {version}',
+            'name': _plain(payload['title'], 300) or f'AX Workspace {version}',
             'body': _plain(payload['notes'], MAX_NOTES), 'published_at': published,
-            'assets': [selected[name] for name in (vbs, 'SHA256SUMS.txt', exe) if name in selected]}
+            'assets': _ordered_assets(selected, version)}
 
 
 def _checksum(data, filename):
@@ -545,7 +562,7 @@ class UpdateManager:
                 demo=self.demo, cancel=self._cancel)
             with self._lock:
                 self._launcher_result = {'status': 'ready', **result,
-                    'message': '바탕화면에 Company Workspace (최신) 바로가기를 만들었어요. 앱을 완전히 종료한 뒤 이 바로가기로 실행하세요. 관리자 권한은 우클릭 메뉴에서 선택할 수 있어요.'}
+                    'message': '바탕화면에 AX Workspace (최신) 바로가기를 만들었어요. 앱을 완전히 종료한 뒤 이 바로가기로 실행하세요. 관리자 권한은 우클릭 메뉴에서 선택할 수 있어요.'}
         except Exception as exc:
             with self._lock:
                 # Only our fixed ValueError messages are returned. Never expose
@@ -561,7 +578,7 @@ class UpdateManager:
         from .managed_launcher import unpack_archive
         version = metadata['tag_name'][1:]
         assets = {item['name']: item for item in metadata['assets']}
-        archive = assets.get(f'Company-Workspace-{version}-exe.zip')
+        archive = assets.get(f'AX-Workspace-{version}-exe.zip') or assets.get(f'Company-Workspace-{version}-exe.zip')
         if archive is None:
             return None
         if sums is None:

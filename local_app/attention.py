@@ -247,7 +247,7 @@ class WindowsAttention:
 
     def owned(self, hwnd, pid):
         from .native_window import desktop_executable
-        binding = self._window(hwnd, 'Workspace', allow_hidden=True)
+        binding = self._window(hwnd, 'AX Workspace', allow_hidden=True)
         if (binding is not None and binding.pid == pid
                 and binding.image == os.path.normcase(str(desktop_executable()))):
             return binding
@@ -304,7 +304,7 @@ _AUTO = object()
 
 class AttentionNotifier:
     def __init__(self, *, enabled=True, native=_AUTO):
-        self.window_title = 'Company Workspace · ' + secrets.token_urlsafe(16)
+        self.window_title = 'AX Workspace · ' + secrets.token_urlsafe(16)
         self._lock = threading.RLock()
         self._binding = None
         self._owned = False
@@ -328,7 +328,7 @@ class AttentionNotifier:
 
     @property
     def binding_title(self):
-        return 'Workspace' if self._owned else self.window_title
+        return 'AX Workspace' if self._owned else self.window_title
 
     def bind_owned(self, hwnd, pid, *, apply_theme=True):
         with self._lock:

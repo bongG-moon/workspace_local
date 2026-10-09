@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from html.parser import HTMLParser
 import os
 from pathlib import Path
 import subprocess
@@ -12,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -307,6 +308,44 @@ class ServerTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as caught:
                 self.request('/manual/'+route,token=False)
             self.assertEqual(404,caught.exception.code)
+
+    def test_guide_story_round_trip_serves_only_allowlisted_documents(self):
+        class Links(HTMLParser):
+            def __init__(self, body):
+                super().__init__()
+                self.hrefs = []
+                self.feed(body)
+
+            def handle_starttag(self, tag, attrs):
+                if tag == 'a':
+                    self.hrefs.append(dict(attrs).get('href', ''))
+
+        guide_url = self.server.origin + '/manual/guide'
+        with self.request('/manual/guide', token=False) as response:
+            guide = response.read()
+            manual_policy = response.headers['Content-Security-Policy']
+        story_link, = [href for href in Links(guide.decode('utf-8')).hrefs
+                       if href.endswith('AX_WORKSPACE_STORY.html')]
+        story_url = urljoin(guide_url, story_link)
+        with self.request(urlsplit(story_url).path, token=False) as response:
+            story = response.read()
+            self.assertEqual((ROOT / 'docs/AX_WORKSPACE_STORY.html').read_bytes(), story)
+            self.assertEqual(manual_policy, response.headers['Content-Security-Policy'])
+            self.assertEqual('no-store', response.headers['Cache-Control'])
+            self.assertIn('text/html', response.headers['Content-Type'])
+        self.assertNotIn(self.app.token, story.decode('utf-8'))
+        self.assertNotIn('<script', story.decode('utf-8').lower())
+        guide_link, = [href for href in Links(story.decode('utf-8')).hrefs
+                       if href.endswith('WORKSPACE_USER_GUIDE.html')]
+        with self.request(urlsplit(urljoin(story_url, guide_link)).path, token=False) as response:
+            self.assertEqual(guide, response.read())
+        for route in ('/manual/LOCAL_WORKSPACE.md', '/manual/../README.md',
+                      '/manual/%2e%2e%2fREADME.md', '/manual/AX_WORKSPACE_STORY.html/../README.md',
+                      '/manual/arbitrary.html'):
+            with self.subTest(route=route), self.assertRaises(HTTPError) as caught:
+                self.request(route, token=False)
+            self.assertEqual(404, caught.exception.code)
+            caught.exception.close()
 
     def test_manual_csp_does_not_change_app_api_or_preview_policy(self):
         with self.request('/', token=False) as response:

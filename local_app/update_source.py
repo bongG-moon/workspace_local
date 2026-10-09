@@ -106,7 +106,9 @@ class UpdateSource:
     def asset_url(self, version, name):
         if not isinstance(version, str) or not re.fullmatch(_VERSION, version):
             raise ValueError(SOURCE_ERROR)
-        if name not in (f'Company-Workspace-{version}-vbs.zip', f'Company-Workspace-{version}-exe.zip', 'SHA256SUMS.txt'):
+        names = {f'{brand}-{version}-{edition}.zip'
+                 for brand in ('AX-Workspace', 'Company-Workspace') for edition in ('vbs', 'exe')}
+        if name not in names | {'SHA256SUMS.txt'}:
             raise ValueError(SOURCE_ERROR)
         return f'{self.registry_root}/company-workspace/{version}/{name}'
 

@@ -46,7 +46,7 @@ Initialize-WorkspaceStartupDisplay
     def test_warning_survives_missing_broken_and_failing_optional_scaling_helper(self):
         # Replace only the final UI call in a disposable copy. Run the shipped
         # warning function and its real initialization; no MessageBox is shown.
-        native_show = "[Windows.Forms.MessageBox]::Show($Message, 'Company Workspace', 'OK', 'Warning')"
+        native_show = "[Windows.Forms.MessageBox]::Show($Message, 'AX Workspace', 'OK', 'Warning')"
         original = HELPER.read_text(encoding="utf-8-sig")
         self.assertEqual(original.count(native_show), 1)
         instrumented = original.replace(native_show, "(Write-FixtureWarning $Message)")

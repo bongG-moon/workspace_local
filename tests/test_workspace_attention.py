@@ -178,7 +178,7 @@ class AttentionNotifierTests(unittest.TestCase):
 
     def test_native_absent_is_metadata_only_and_title_is_not_auth_token(self):
         notifier = AttentionNotifier(enabled=False, native=self.native)
-        self.assertTrue(notifier.window_title.startswith('Company Workspace · '))
+        self.assertTrue(notifier.window_title.startswith('AX Workspace · '))
         self.assertNotEqual(notifier.window_title, self.notifier.window_title)
         self.assertEqual({'supported': False, 'bound': False}, notifier.bind())
         self.assertEqual({'supported': False, 'bound': False}, notifier.update(self.pending()))
@@ -190,7 +190,7 @@ class FakeWindows:
     def __init__(self):
         self.hwnd = 0x100000002
         self.foreground = self.hwnd
-        self.title = 'Company Workspace · fixed-marker'
+        self.title = 'AX Workspace · fixed-marker'
         self.pid = 77
         self.visible = True
         self.exists = True
@@ -232,7 +232,7 @@ class WindowsAttentionContractTests(unittest.TestCase):
     def test_binding_requires_exact_title_user_session_binary_and_top_level(self):
         expected = WindowBinding(self.native.user.hwnd, 77, *self.identity)
         self.assertEqual(expected, self.native.bind(self.title))
-        self.assertIsNone(self.native.bind('Company Workspace'))
+        self.assertIsNone(self.native.bind('AX Workspace'))
         for identity in ((1234567, 3, b'current-user', 'verified-edge.exe'),
                          (1234567, 2, b'another-user', 'verified-edge.exe'),
                          (1234567, 2, b'current-user', 'another-edge.exe'), None):
@@ -261,7 +261,7 @@ class WindowsAttentionContractTests(unittest.TestCase):
         for field in ('pid', 'created', 'title'):
             original_pid, original_title, original_identity = self.native.user.pid, self.native.user.title, self.identity
             if field == 'pid': self.native.user.pid += 1
-            if field == 'title': self.native.user.title = 'Company Workspace · unrelated'
+            if field == 'title': self.native.user.title = 'AX Workspace · unrelated'
             if field == 'created': self.identity = (9999999, *self.identity[1:])
             self.assertEqual('invalid', self.native.flash(binding, self.title))
             self.native.user.pid, self.native.user.title, self.identity = original_pid, original_title, original_identity

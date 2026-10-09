@@ -12,7 +12,7 @@ parser.add_argument("bundle", type=Path)
 parser.add_argument("--update-config", type=Path, help="Expected non-secret GitLab settings injected during packaging")
 args = parser.parse_args()
 count = 0
-expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELIABILITY.md","Company-Workspace.vbs", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md", "docs/WORKSPACE_USER_GUIDE.html", "docs/WORKSPACE_0.15.0_CLAUDE.md",
+expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELIABILITY.md","AX-Workspace.vbs", "Company-Workspace.vbs", "docs/AX_WORKSPACE_STORY.html", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md", "docs/WORKSPACE_USER_GUIDE.html", "docs/WORKSPACE_0.15.0_CLAUDE.md",
             "docs/WORKSPACE_0.13.0_DESKTOP.md", "docs/WORKSPACE_0.14.0_CONTINUITY.md",
             "Check-Workspace.cmd", "Check-Workspace.ps1", "docs/WORKSPACE_STARTUP_DIAGNOSTIC.md",
             "docs/WORKSPACE_0.12.1_COMPATIBILITY.md", "docs/WORKSPACE_0.12.2_INPUT.md", "docs/WORKSPACE_0.12.3_AUTOCOMPLETE.md", "docs/WORKSPACE_0.12.4_CONTROLS.md", "docs/WORKSPACE_STANDALONE_EXE.md",
@@ -95,7 +95,7 @@ with zipfile.ZipFile(args.bundle) as bundle:
         count += 1
     assert seen == expected, expected - seen
     assert {name for name in seen if name.startswith("docs/") and name.endswith(".html")} == {
-        "docs/WORKSPACE_USER_GUIDE.html"}
+        "docs/WORKSPACE_USER_GUIDE.html", "docs/AX_WORKSPACE_STORY.html"}
     # Read-only diagnostics deliberately pin the reviewed startup helpers.
     # Keep the portable ZIP useful without executing the diagnostic or launcher.
     diagnostic = bundle.read("Company-Workspace/Check-Workspace.ps1").decode("utf-8-sig")

@@ -25,7 +25,7 @@ CONFIG = {'schema': 1, 'baseUrl': 'https://gitlab.corp:8443/company', 'projectId
           'allowedDownloadOrigins': [], 'tokenKind': 'deploy'}
 
 
-def release_files(directory, source=None):
+def release_files(directory, source=None, *, branded=False):
     directory.mkdir(parents=True, exist_ok=True)
     source = source or runtime_config(CONFIG)
     entries = {'Company-Workspace.vbs': b'fixture', 'deploy/Start-CompanyWorkspace.ps1': b'fixture',
@@ -45,8 +45,19 @@ def release_files(directory, source=None):
         archive.writestr(exe_name, executable)
         archive.writestr(exe_name + '.sha256', hashlib.sha256(executable).hexdigest() + '  ' + exe_name + '\n')
         archive.writestr('README.txt', b'fixture')
+    packages = [vbs, exe]
+    if branded:
+        ax_vbs = directory / f'AX-Workspace-{VERSION}-vbs.zip'
+        ax_vbs.write_bytes(vbs.read_bytes())
+        ax_exe = directory / f'AX-Workspace-{VERSION}-exe.zip'
+        ax_name = f'AX-Workspace-{VERSION}.exe'
+        with zipfile.ZipFile(ax_exe, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(ax_name, executable)
+            archive.writestr(ax_name + '.sha256', hashlib.sha256(executable).hexdigest() + '  ' + ax_name + '\n')
+            archive.writestr('README.txt', b'fixture')
+        packages += [ax_vbs, ax_exe]
     (directory / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n'
-                                                   for path in (vbs, exe)), encoding='utf-8')
+                                                   for path in packages), encoding='utf-8')
     files = verify_files(directory, VERSION, source)
     return {'version': VERSION, 'commit': 'a' * 40, 'directory': str(directory), 'files': files, 'runtimeConfig': source}
 
@@ -286,7 +297,7 @@ class GitAndBuildTests(unittest.TestCase):
         if 'New-WorkspaceStandalone.ps1' in args[args.index('-File') + 1] if '-File' in args else False:
             output = Path(args[args.index('-OutputDirectory') + 1])
             output.mkdir()
-            exe = output / f'Company-Workspace-{VERSION}.exe'
+            exe = output / f'AX-Workspace-{VERSION}.exe'
             exe.write_bytes(b'MZfixture')
             report = {'version': VERSION, 'embeddedPayloadVerified': True, 'pythonBundled': False,
                       'exe': str(exe), 'sha256': hashlib.sha256(exe.read_bytes()).hexdigest(), 'payloadFiles': 9}
@@ -294,10 +305,10 @@ class GitAndBuildTests(unittest.TestCase):
         elif '-File' in args:
             output = Path(args[args.index('-OutputDirectory') + 1])
             injected = json.loads(Path(args[args.index('-UpdateConfig') + 1]).read_text())
-            release_files(output, injected)
+            release_files(output, injected, branded=True)
             report = {'version': VERSION, 'pythonBundled': False, 'identicalSourceFiles': 9,
-                      'vbsZip': str(output / f'Company-Workspace-{VERSION}-vbs.zip'),
-                      'exeZip': str(output / f'Company-Workspace-{VERSION}-exe.zip')}
+                      'vbsZip': str(output / f'AX-Workspace-{VERSION}-vbs.zip'),
+                      'exeZip': str(output / f'AX-Workspace-{VERSION}-exe.zip')}
             (cwd / f'build/workspace-release-{VERSION}.json').write_text(json.dumps(report))
         return subprocess.CompletedProcess(args, 0)
 
@@ -316,7 +327,7 @@ class GitAndBuildTests(unittest.TestCase):
         self.assertEqual(before, self.run_git('rev-parse', 'HEAD'))
         self.assertFalse((self.repo / 'workspace-update-source.json').exists())
         self.assertNotEqual(self.repo, Path(result['sourceRoot']))
-        self.assertEqual(3, len(result['files']))
+        self.assertEqual(5, len(result['files']))
         self.assertEqual(3, len(self.calls))
         self.assertIn('-ConfigPython', self.calls[0])
         self.assertEqual(Path(result['directory']).parent / 'v',

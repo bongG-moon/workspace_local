@@ -280,7 +280,7 @@ class PublisherWindow:
         self.status = tk.StringVar(value="저장된 설정과 현재 소스를 확인하고 있어요.")
         self.source_label = tk.StringVar(value=str(self.repo_root))
         self.build_label = tk.StringVar(value="게시할 설치 파일이 없습니다. 먼저 빌드해 주세요.")
-        root.title("Company Workspace · 사내 배포")
+        root.title("AX Workspace · 사내 배포")
         root.geometry("900x760")
         root.minsize(720, 570)
         root.configure(background="#f2f4f8")

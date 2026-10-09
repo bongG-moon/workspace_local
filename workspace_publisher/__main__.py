@@ -9,7 +9,7 @@ from .config import PublisherError, normalize
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Company Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
+    parser = argparse.ArgumentParser(description='AX Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish', 'deploy', 'source-publish', 'notes',
                                           'sdk-status', 'sdk-import', 'sdk-download'))

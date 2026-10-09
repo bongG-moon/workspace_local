@@ -119,7 +119,7 @@ class ReleaseNotesTests(unittest.TestCase):
         extracted.mkdir()
         with patch('workspace_publisher.release_notes.subprocess.run', side_effect=AssertionError('No Git for ZIP')):
             result = load_notes(extracted, '0.23.2')
-        self.assertEqual({'version': '0.23.2', 'title': 'Company Workspace 0.23.2',
+        self.assertEqual({'version': '0.23.2', 'title': 'AX Workspace 0.23.2',
                           'notes': '', 'history': [], 'source': 'empty'}, result)
 
     def test_corrupt_bundle_never_falls_back_to_git(self):

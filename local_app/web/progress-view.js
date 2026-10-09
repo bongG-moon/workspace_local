@@ -170,7 +170,7 @@ globalThis.WorkspaceProgressView = (() => {
     const advanced=next.lastSeq>metadata.lastSeq||next.revision>metadata.revision;metadata=next;return advanced;
   }
   function changed(value){const advanced=acceptMetadata(value);updateSummary();renderState();if(advanced&&expanded)schedule();}
-  function activate(){if(globalThis.WorkspaceCapabilities?.isOpen()){close();return;}if(expanded||!sessionId)return;expanded=true;mount();void load("latest",true);}
+  function activate(){if(globalThis.WorkspaceCapabilities?.isOpen()){close();return;}if(expanded||!sessionId)return;globalThis.WorkspaceStream?.pause();expanded=true;mount();void load("latest",true);}
   function open(runId=null){
     if(!sessionId||!detail||globalThis.WorkspaceCapabilities?.isOpen())return false;const next=clean(runId,160)||null;
     if(filter!==next){close();filter=next;}detail.open=true;updateSummary();activate();summary.focus({preventScroll:true});revealWithinWorkArea();return true;

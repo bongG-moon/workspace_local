@@ -188,7 +188,7 @@ function Get-WorkspaceExecutionMode {
     def test_vbs_does_not_duplicate_a_reported_failure(self):
         original = (ROOT / "Company-Workspace.vbs").read_text(encoding="ascii")
         # Replace modal rendering in a fixture; preserve real VBS branching and decoding.
-        instrumented = re.sub(r'MsgBox (.*), vbExclamation, "Company Workspace"', r'WScript.StdOut.WriteLine \1', original)
+        instrumented = re.sub(r'MsgBox (.*), vbExclamation, "AX Workspace"', r'WScript.StdOut.WriteLine \1', original)
         with tempfile.TemporaryDirectory(prefix="workspace-vbs-") as raw:
             folder = Path(raw)
             probe = folder / "host-probe.vbs"

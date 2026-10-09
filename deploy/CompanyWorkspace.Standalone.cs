@@ -307,7 +307,7 @@ namespace CompanyAgent {
                 // 20 means the existing launcher already displayed its reason.
                 if (code == 0 || code == 20) return code;
                 if (options.NoBrowser && code >= 22 && code <= 47) {
-                    Console.Error.WriteLine("Company Workspace 실행 환경을 확인하지 못했습니다. 오류 코드: WS-" + code);
+                    Console.Error.WriteLine("AX Workspace 실행 환경을 확인하지 못했습니다. 오류 코드: WS-" + code);
                     return code;
                 }
                 throw new StandaloneFailure(58);
@@ -343,7 +343,7 @@ namespace CompanyAgent {
             }
             message += Environment.NewLine + "오류 코드: EXE-" + code;
             if (quiet) Console.Error.WriteLine(message);
-            else MessageBox.Show(message, "Company Workspace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            else MessageBox.Show(message, "AX Workspace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return code;
         }
     }

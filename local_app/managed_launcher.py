@@ -30,13 +30,14 @@ _LOCK = threading.RLock()
 def unpack_archive(raw, version):
     """Accept the release's three fixed EXE ZIP members and embedded checksum."""
     install._version(version)
-    exe = f'Company-Workspace-{version}.exe'
-    expected = {exe, exe + '.sha256', 'README.txt'}
     if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_EXE_BYTES:
         raise ValueError('실행기 압축 파일의 크기를 확인하지 못했습니다.')
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             items = archive.infolist()
+            exe = next((f'{brand}-{version}.exe' for brand in ('AX-Workspace', 'Company-Workspace')
+                        if f'{brand}-{version}.exe' in archive.namelist()), '')
+            expected = {exe, exe + '.sha256', 'README.txt'}
             if len(items) != 3 or {item.filename for item in items} != expected:
                 raise ValueError('실행기 압축 파일의 구성을 확인하지 못했습니다.')
             for item in items:
@@ -129,7 +130,7 @@ try {
  $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($temp)
  $link.TargetPath=$env:WORKSPACE_LINK_TARGET; $link.Arguments=$env:WORKSPACE_LINK_ARGUMENTS
  $link.WorkingDirectory=[IO.Path]::GetDirectoryName($env:WORKSPACE_LINK_TARGET)
- $link.IconLocation=$env:WORKSPACE_LINK_TARGET+',0'; $link.Description='Company Workspace managed launcher'; $link.Save()
+ $link.IconLocation=$env:WORKSPACE_LINK_TARGET+',0'; $link.Description='AX Workspace managed launcher'; $link.Save()
  $bytes=[IO.File]::ReadAllBytes($temp)
  [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false)
  @{desktop=$desktop;data=[Convert]::ToBase64String($bytes)} | ConvertTo-Json -Compress
@@ -148,7 +149,7 @@ try {
             install._safe(temporary).unlink()
     import base64
     value = json.loads(result.stdout)
-    destination = install._safe(Path(value['desktop']) / 'Company Workspace (최신).lnk')
+    destination = install._safe(Path(value['desktop']) / 'AX Workspace (최신).lnk')
     raw = base64.b64decode(value['data'], validate=True)
     if not 76 <= len(raw) <= 32 * 1024:
         raise ValueError('바로가기 파일을 만들지 못했습니다.')
@@ -180,7 +181,7 @@ def activate(state, value, *, create_shortcut=False, demo=False, cancel=None):
         if destination.exists():
             if (not isinstance(previous_record, dict) or previous_record.get('path') != str(destination)
                     or install._digest(destination) != previous_record.get('sha256')):
-                raise ValueError('같은 이름의 기존 바로가기가 있어 변경하지 않았습니다. 바탕화면의 Company Workspace (최신) 바로가기를 확인해 주세요.')
+                raise ValueError('같은 이름의 기존 바로가기가 있어 변경하지 않았습니다. 바탕화면의 AX Workspace (최신) 바로가기를 확인해 주세요.')
             before = destination.read_bytes()
         install._cancelled(cancel)
         temporary = install._safe(destination.parent / ('.workspace-' + uuid.uuid4().hex + '.lnk'))

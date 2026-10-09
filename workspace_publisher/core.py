@@ -306,7 +306,7 @@ class Publisher:
                      '-ConfigPython', sys.executable, '-OutputDirectory', str(output),
                      '-VerificationDirectory', str(stage / 'v')], cwd=source, cancel=cancel)
         active(cancel)
-        exe = output / f"Company-Workspace-{info['version']}.exe"
+        exe = output / f"AX-Workspace-{info['version']}.exe"
         self._info('EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceRelease.ps1'), '-UpdateConfig', str(config_path),
                      '-ConfigPython', sys.executable, '-StandaloneExe', str(exe), '-OutputDirectory', str(release)],
@@ -321,13 +321,13 @@ class Publisher:
                     or type(standalone['payloadFiles']) is not int or standalone['payloadFiles'] < 1
                     or released['version'] != info['version'] or released['pythonBundled'] is not False
                     or released['identicalSourceFiles'] != standalone['payloadFiles']
-                    or Path(released['vbsZip']) != release / f"Company-Workspace-{info['version']}-vbs.zip"
-                    or Path(released['exeZip']) != release / f"Company-Workspace-{info['version']}-exe.zip"):
+                    or Path(released['vbsZip']) != release / f"AX-Workspace-{info['version']}-vbs.zip"
+                    or Path(released['exeZip']) != release / f"AX-Workspace-{info['version']}-exe.zip"):
                 raise ValueError()
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise PublisherError('EXE 내장 파일과 VBS 공통 파일의 빌드 검증 결과가 일치하지 않습니다. 게시하지 않았습니다.') from exc
         self.runner([sys.executable, str(source / 'scripts/test-lab/check-workspace-bundle.py'),
-                     str(release / f"Company-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path)],
+                     str(release / f"AX-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path)],
                     cwd=source, cancel=cancel, timeout=120)
         files = publishing.verify_files(release, info['version'], injected)
         # Archive users have no Git status to expose edits made while the
@@ -341,7 +341,7 @@ class Publisher:
                   'sourceKind': info['sourceKind'], 'sourceId': info['sourceId']}
         atomic_json(stage / 'build-result.json', result)
         atomic_json(self.work_root / 'last-build.json', result)
-        self._info('소스를 바꾸지 않고 배포 파일 세 개를 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
+        self._info('배포 파일과 기존 앱 업데이트용 호환 파일을 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
         return result
 
     def _validated_build_metadata(self, build_result):
@@ -372,7 +372,7 @@ class Publisher:
             source = source_from_config(build_result['runtimeConfig'])
             if source.provider != 'gitlab' or source.config != build_result['runtimeConfig']:
                 raise ValueError()
-            if not isinstance(build_result['files'], list) or len(build_result['files']) != 3:
+            if not isinstance(build_result['files'], list) or len(build_result['files']) not in (3, 5):
                 raise ValueError()
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise PublisherError('이전 빌드 기록을 확인하지 못했습니다. 원래 빌드 폴더와 기록을 복원하거나 새 소스 폴더에서 진행해 주세요.') from exc

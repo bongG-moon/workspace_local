@@ -132,7 +132,7 @@ def load_notes(repo_root, version):
         except (OSError, UnicodeError, ValueError, TypeError, RecursionError) as exc:
             raise PublisherError('소스에 포함된 릴리스 기록을 읽지 못했거나 현재 앱 버전과 다릅니다. 해당 버전의 소스 ZIP을 다시 확인해 주세요.') from exc
         return {**entries[0], 'history': entries, 'source': 'bundled'}
-    title = f'Company Workspace {version}'
+    title = f'AX Workspace {version}'
     notes = _git_notes(repo_root)
     current = {'version': version, 'title': title, 'notes': notes}
     return {**current, 'history': [current] if notes else [], 'source': 'git' if notes else 'empty'}

@@ -9,7 +9,7 @@ $version = $versionMatch.Groups[1].Value
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'dist' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
-$exe = Join-Path $outputRoot ('Company-Workspace-' + $version + '.exe')
+$exe = Join-Path $outputRoot ('AX-Workspace-' + $version + '.exe')
 if (Test-Path -LiteralPath $exe) { throw 'Output EXE exists; choose another output directory instead of overwriting a running release.' }
 $stage = Join-Path $repoRoot ('build\standalone-build-' + [Guid]::NewGuid().ToString('N'))
 $bundleDirectory = Join-Path $stage 'bundle'
@@ -50,7 +50,7 @@ $payloadHash = (Get-FileHash -LiteralPath $payloadZip -Algorithm SHA256).Hash.To
 $buildInfo = Join-Path $stage 'WorkspaceBuild.txt'
 [IO.File]::WriteAllText($buildInfo, ($version + "`n" + $payloadHash + "`n"), $utf8)
 $assembly = Join-Path $stage 'WorkspaceAssembly.cs'
-[IO.File]::WriteAllText($assembly, ('using System.Reflection; [assembly: AssemblyTitle("Company Workspace")] [assembly: AssemblyProduct("Company Workspace")] [assembly: AssemblyVersion("' + $version + '.0")] [assembly: AssemblyFileVersion("' + $version + '.0")]'), $utf8)
+[IO.File]::WriteAllText($assembly, ('using System.Reflection; [assembly: AssemblyTitle("AX Workspace")] [assembly: AssemblyProduct("AX Workspace")] [assembly: AssemblyVersion("' + $version + '.0")] [assembly: AssemblyFileVersion("' + $version + '.0")]'), $utf8)
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework 4 x64 C# compiler is required to build the EXE.' }
 $stagedExe = Join-Path $stage ([IO.Path]::GetFileName($exe))

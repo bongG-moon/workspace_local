@@ -6,17 +6,36 @@ globalThis.WorkspaceStream = (() => {
   const pending = new Map();
   const TEXT_LIMIT = 100000, PENDING_LIMIT = 100000, PENDING_MESSAGES = 16;
   let timer = null, scrollFrame = null, epoch = 0, following = true, pendingCharacters = 0;
-  const nearBottom = () => area.scrollHeight - area.scrollTop - area.clientHeight < 100;
-  const visible = () => !!active && !globalThis.WorkspaceCapabilities?.isOpen();
+  let observer = null, observing = false, suspended = false, readingTop = 0;
+  let intentUntil = 0, direction = 0, dragging = false, touchY = null;
+  const atBottom = () => area.scrollHeight - area.scrollTop - area.clientHeight <= 4;
+  const visible = () => !!active && !suspended && !globalThis.WorkspaceCapabilities?.isOpen();
   function badge() { latest.hidden = !visible() || following; }
+  function cancelScroll() {
+    if (scrollFrame !== null) globalThis.cancelAnimationFrame?.(scrollFrame);
+    scrollFrame = null;
+  }
+  function clearIntent() { intentUntil = 0; direction = 0; dragging = false; touchY = null; }
+  function observeLayout() {
+    if (document.hidden || !visible()) {
+      observer?.disconnect(); observing = false; cancelScroll(); return;
+    }
+    if (observing || !globalThis.ResizeObserver) return;
+    // One observer for the current task and viewport, not one per message.
+    observer ||= new ResizeObserver(changed);
+    observer.observe(area);
+    const content = $("task-view"); if (content) observer.observe(content);
+    observing = true;
+  }
   function changed() {
     badge();
-    if (document.hidden || scrollFrame !== null) return;
+    observeLayout();
+    if (document.hidden || !visible() || !following || dragging || touchY !== null || scrollFrame !== null) return;
     const ticket = epoch, sid = active?.id;
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null;
-      if (ticket !== epoch || sid !== active?.id || !visible()) return;
-      if (following) area.scrollTop = area.scrollHeight;
+      if (ticket !== epoch || sid !== active?.id || document.hidden || !visible()) return;
+      if (following && !dragging && touchY === null) area.scrollTop = area.scrollHeight;
       badge();
     });
   }
@@ -60,19 +79,84 @@ globalThis.WorkspaceStream = (() => {
   }
   function reset() {
     epoch++; pending.clear(); pendingCharacters = 0; clearTimeout(timer); timer = null;
-    if (scrollFrame !== null) globalThis.cancelAnimationFrame?.(scrollFrame);
-    scrollFrame = null; following = true; latest.hidden = true;
+    cancelScroll(); observer?.disconnect(); observing = false; clearIntent();
+    suspended = false; readingTop = 0; following = true; latest.hidden = true;
   }
-  function jump() { following = true; area.scrollTop = area.scrollHeight; badge(); }
-  area.addEventListener?.("scroll", () => { following = nearBottom(); badge(); }, {passive:true});
-  // Cancel queued following as soon as the user starts reading upward.
-  area.addEventListener?.("wheel", event => { if (event.deltaY < 0) { following = false; badge(); } }, {passive:true});
-  area.addEventListener?.("keydown", event => { if (["ArrowUp","PageUp","Home"].includes(event.key)) { following = false; badge(); } });
+  function jump() {
+    clearIntent(); following = true;
+    if (visible() && !document.hidden) area.scrollTop = area.scrollHeight;
+    changed();
+  }
+  function pause() { clearIntent(); following = false; cancelScroll(); badge(); }
+  function suspend() {
+    if (!suspended) readingTop = area.scrollTop;
+    suspended = true; clearIntent(); observeLayout(); badge();
+  }
+  function resume() {
+    const wasSuspended = suspended; suspended = false;
+    if (wasSuspended && !following) area.scrollTop = readingTop;
+    changed();
+  }
+  function nestedInput(target) {
+    for (let node = target; node && node !== area; node = node.parentElement || node.parentNode) {
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName) || node.isContentEditable) return true;
+      if (node.nodeType !== 1 && !node.tagName) continue;
+      const style = globalThis.getComputedStyle?.(node);
+      if (style && /auto|scroll/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1) return true;
+    }
+    return false;
+  }
+  function intent(value) {
+    direction = value; intentUntil = Date.now() + 1000;
+    if (value < 0) { following = false; cancelScroll(); badge(); }
+  }
+  area.addEventListener?.("scroll", () => {
+    if (!visible() || document.hidden) return;
+    // Browser layout/focus/programmatic scrolls do not revoke follow intent.
+    if (dragging) following = atBottom();
+    else if (Date.now() < intentUntil && direction > 0 && atBottom()) following = true;
+    badge();
+  }, {passive:true});
+  area.addEventListener?.("wheel", event => {
+    if (!visible() || nestedInput(event.target) || !event.deltaY || event.ctrlKey) return;
+    intent(Math.sign(event.deltaY));
+  }, {passive:true});
+  area.addEventListener?.("keydown", event => {
+    if (!visible() || event.defaultPrevented || nestedInput(event.target) || event.altKey || event.metaKey) return;
+    if (["ArrowUp","PageUp","Home"].includes(event.key)) intent(-1);
+    else if (["ArrowDown","PageDown","End"].includes(event.key)) intent(1);
+    else if (event.key === " " && !/^(BUTTON|A|SUMMARY)$/.test(event.target?.tagName)) intent(event.shiftKey ? -1 : 1);
+  });
+  area.addEventListener?.("pointerdown", event => {
+    if (!visible() || event.button !== 0 || event.target !== area) return;
+    const rect = area.getBoundingClientRect?.(); if (!rect) return;
+    const edge = rect.left + (area.clientLeft || 0) + area.clientWidth;
+    if (event.clientX >= edge && event.clientX <= rect.right && area.scrollHeight > area.clientHeight) {
+      pause(); dragging = true;
+    }
+  }, {passive:true});
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false; following = atBottom(); clearIntent(); changed();
+  }
+  document.addEventListener?.("pointerup", endDrag, {passive:true});
+  document.addEventListener?.("pointercancel", endDrag, {passive:true});
+  area.addEventListener?.("touchstart", event => {
+    if (visible() && !nestedInput(event.target) && event.touches?.length === 1) touchY = event.touches[0].clientY;
+  }, {passive:true});
+  area.addEventListener?.("touchmove", event => {
+    if (touchY === null || event.touches?.length !== 1) return;
+    const next = event.touches[0].clientY, delta = touchY - next; touchY = next;
+    if (delta) intent(Math.sign(delta));
+  }, {passive:true});
+  function endTouch() { if (touchY !== null) { touchY = null; changed(); } }
+  area.addEventListener?.("touchend", endTouch, {passive:true});
+  area.addEventListener?.("touchcancel", endTouch, {passive:true});
+  globalThis.addEventListener?.("resize", changed, {passive:true});
   document.addEventListener?.("visibilitychange", () => {
-    if (scrollFrame !== null) globalThis.cancelAnimationFrame?.(scrollFrame);
-    scrollFrame = null;
+    cancelScroll(); clearIntent();
     if (pending.size) flush(); else changed();
   });
   latest.onclick = jump;
-  return {enqueue, flush, finish, reset, changed, jump, isFollowing:() => following};
+  return {enqueue, flush, finish, reset, changed, jump, pause, suspend, resume, isFollowing:() => following};
 })();

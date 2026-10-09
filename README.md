@@ -1,8 +1,12 @@
-# Company Workspace 0.23.21
+# AX Workspace 0.23.21
+
+**내 업무와 AI가 만나는 공간**
+
+[AX Workspace를 만든 이유](docs/AX_WORKSPACE_STORY.html)
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/Company-Workspace-0.23.21-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/Company-Workspace-0.23.21-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/AX-Workspace-0.23.21-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.21/AX-Workspace-0.23.21-vbs.zip)**
 
 [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -10,14 +14,17 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `Company-Workspace-0.23.21.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| VBS ZIP | 전체 압축을 풀고 `Company-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.21.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
 
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 ## 0.23.21 변경
+
+- **브랜드 변경:** 화면과 새 배포 파일명은 **AX Workspace**, 소개 문구는 **내 업무와 AI가 만나는 공간**입니다. 기존 업무·설정·업데이트 호환성을 위해 내부 저장 경로와 `Company-Workspace.vbs`, 이전 이름의 호환 패키지도 유지합니다. CLI나 AI 사용 입문자도 자신의 업무부터 편하게 시작할 수 있도록 만든 취지를 소개 HTML에 담았습니다.
+- 채팅은 최신 응답을 따라가고, 위로 올려 읽는 동안에는 위치를 유지합니다. 사용자 말풍선은 입력 길이에 맞추고 오른쪽으로 정렬합니다.
 
 - **10월 8일 수정본:** 보내지 않은 입력·첨부와 보관한 입력을 저장·복원하며, 설정에서 숨긴 업무와 미사용 첨부 복사본을 관리합니다. 새 연결이 필요하면 안전한 유휴 연결만 회수하고 초기 대화 본문 읽기를 줄였습니다. [추가 검증과 실행 안내](docs/VALIDATION_DURABILITY_0.23.21.md)
 - GitLab에 구성 파일을 함께 올릴 때 README가 있는 기존 브랜치로 게시하면 HTTP 400이 나던 커밋 요청을 수정했습니다. 동시 수정 감지와 게시 후 파일 검증은 유지합니다.

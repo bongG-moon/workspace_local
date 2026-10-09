@@ -155,7 +155,7 @@ function Initialize-WorkspaceStartupDisplay {
 function Show-WorkspaceStartupDialog {
     param([string] $Message)
     Initialize-WorkspaceStartupDisplay
-    [Windows.Forms.MessageBox]::Show($Message, 'Company Workspace', 'OK', 'Warning') | Out-Null
+    [Windows.Forms.MessageBox]::Show($Message, 'AX Workspace', 'OK', 'Warning') | Out-Null
 }
 
 function Confirm-WorkspaceLegacyUpgrade {
@@ -190,7 +190,7 @@ function Show-WorkspaceUpgradeWaiting {
 
 function Show-WorkspaceUpgradeFailure {
     Initialize-WorkspaceStartupDisplay
-    [Windows.Forms.MessageBox]::Show('새 버전으로 전환을 마치지 못했어요. 진행 중인 업무를 강제로 종료하지 않았습니다. 기존 앱의 작업 상태를 확인한 뒤 새 실행 파일을 다시 열어 주세요.', 'Company Workspace', 'OK', 'Information') | Out-Null
+    [Windows.Forms.MessageBox]::Show('새 버전으로 전환을 마치지 못했어요. 진행 중인 업무를 강제로 종료하지 않았습니다. 기존 앱의 작업 상태를 확인한 뒤 새 실행 파일을 다시 열어 주세요.', 'AX Workspace', 'OK', 'Information') | Out-Null
     return $true
 }
 

@@ -154,7 +154,11 @@ def verify_files(directory, version, expected_source):
     """Recheck exact filenames, checksums, VBS contents and EXE ZIP before PUT."""
     version = checked_version(version)
     directory = safe_path(Path(directory))
-    names = [f'Company-Workspace-{version}-vbs.zip', 'SHA256SUMS.txt', f'Company-Workspace-{version}-exe.zip']
+    legacy = [f'Company-Workspace-{version}-vbs.zip', 'SHA256SUMS.txt', f'Company-Workspace-{version}-exe.zip']
+    branded = [f'AX-Workspace-{version}-vbs.zip', f'AX-Workspace-{version}-exe.zip']
+    # Keep old saved build results publishable. New builds include aliases that
+    # older installed clients can understand without a state migration.
+    names = legacy + branded if any((directory / name).exists() for name in branded) else legacy
     content = {name: _file(directory / name) for name in names}
     if len(content['SHA256SUMS.txt']) > 65536:
         raise PublisherError('체크섬 파일이 너무 큽니다.')
@@ -168,7 +172,7 @@ def verify_files(directory, version, expected_source):
             if not match or match[2] in checksums:
                 raise ValueError()
             checksums[match[2]] = match[1].lower()
-        if set(checksums) != {names[0], names[2]}:
+        if set(checksums) != set(names) - {'SHA256SUMS.txt'}:
             raise ValueError()
         for name, digest in checksums.items():
             if hashlib.sha256(content[name]).hexdigest() != digest:
@@ -182,17 +186,16 @@ def verify_files(directory, version, expected_source):
             source = json.loads(archive.read(by_name['Company-Workspace/workspace-update-source.json']).decode('utf-8-sig'))
             if source != expected_source:
                 raise ValueError()
-        with zipfile.ZipFile(io.BytesIO(content[names[2]])) as archive:
-            exe = f'Company-Workspace-{version}.exe'
-            if set(archive.namelist()) != {exe, exe + '.sha256', 'README.txt'} or len(archive.infolist()) != 3:
+        from local_app.managed_launcher import unpack_archive
+        executable = unpack_archive(content[names[2]], version)
+        for brand in ('Company-Workspace', 'AX-Workspace') if len(names) == 5 else ('Company-Workspace',):
+            with zipfile.ZipFile(io.BytesIO(content[f'{brand}-{version}-exe.zip'])) as archive:
+                if f'{brand}-{version}.exe' not in archive.namelist():
+                    raise ValueError()
+        if len(names) == 5:
+            if content[branded[0]] != content[legacy[0]]:
                 raise ValueError()
-            if any(item.file_size > MAX_FILE or item.flag_bits & 1 for item in archive.infolist()):
-                raise ValueError()
-            executable = archive.read(exe)
-            if not executable.startswith(b'MZ'):
-                raise ValueError()
-            checksum = archive.read(exe + '.sha256').decode('utf-8-sig').strip()
-            if checksum != hashlib.sha256(executable).hexdigest() + '  ' + exe:
+            if unpack_archive(content[branded[1]], version) != executable:
                 raise ValueError()
     except (ValueError, KeyError, OSError, UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
         raise PublisherError('배포 파일의 버전·체크섬·구성 검사가 실패했습니다. 같은 설정으로 다시 빌드해 주세요.') from exc
@@ -254,8 +257,11 @@ def publish(config, result, token, *, token_kind='auto', transport=None, emit=la
     active(cancel)
     manifest = {'schema': 1, 'channel': 'stable', 'version': version,
                 'publishedAt': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                'title': config.get('title') or f'Company Workspace {version}', 'notes': config.get('notes', ''),
-                'files': [{key: file[key] for key in ('name', 'size', 'sha256')} for file in files]}
+                'title': config.get('title') or f'AX Workspace {version}', 'notes': config.get('notes', ''),
+                # Old channel validators require exactly the legacy trio. AX
+                # downloads are published alongside it, with identical code.
+                'files': [{key: file[key] for key in ('name', 'size', 'sha256')} for file in files
+                          if not file['name'].startswith('AX-Workspace-')]}
     try:
         parse_manifest(manifest, source_from_config(source))
     except ValueError as exc:

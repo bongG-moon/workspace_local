@@ -528,7 +528,7 @@ class NativeOwnershipTests(unittest.TestCase):
         native.theme.assert_not_called()
         self.assertEqual('owned_host_theme', notifier.theme_state['reason'])
         self.assertTrue(notifier.bind_owned(101, 20))
-        native.theme.assert_called_once_with('owned', 'Workspace')
+        native.theme.assert_called_once_with('owned', 'AX Workspace')
 
     def test_friendly_caption_alone_is_not_an_identity(self):
         native = object.__new__(WindowsAttention)
@@ -549,7 +549,7 @@ class NativeOwnershipTests(unittest.TestCase):
         notifier.bind()
         self.assertFalse(notifier.set_visible(True))
         native.find.assert_not_called(); native.bind.assert_not_called()
-        native.visibility.assert_called_once_with('owned', 'Workspace', show=True)
+        native.visibility.assert_called_once_with('owned', 'AX Workspace', show=True)
 
 
 if __name__ == '__main__': unittest.main()

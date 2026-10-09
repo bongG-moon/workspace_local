@@ -365,6 +365,7 @@ globalThis.WorkspaceCapabilities = (() => {
     }
   }
   function open() {
+    globalThis.WorkspaceStream?.suspend();
     opened = true; app().classList.add("catalog-open");globalThis.WorkspaceLayout?.refresh();
     // Stop only the hidden detail reader; the selected task and event poll continue.
     globalThis.WorkspaceProgressView?.close();
@@ -386,6 +387,7 @@ globalThis.WorkspaceCapabilities = (() => {
     $("capabilities-view").hidden = true;
     $("capabilities-open").setAttribute("aria-current", "false");
     taskHeader();
+    globalThis.WorkspaceStream?.resume();
   }
   async function prepareCatalog() {
     if(preparing||!runtimeSession()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
