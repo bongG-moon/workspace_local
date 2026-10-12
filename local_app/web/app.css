@@ -357,3 +357,23 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 
 /* Shutdown recovery stays outside task/catalog views and does not alter dialogs. */
 .shutdown-banner{display:flex;align-items:center;gap:16px;flex:none;padding:15px 24px;background:var(--theme-surface, #f8efe4);border-bottom:1px solid var(--theme-line, #e7d7c4);color:var(--theme-warning, #806144);font-size:12px;line-height:1.75}.shutdown-banner[hidden]{display:none}.shutdown-copy{flex:1;min-width:0}.shutdown-copy strong{font-size:13px;font-weight:650}.shutdown-copy p{margin:3px 0 0;overflow-wrap:anywhere}.shutdown-copy .shutdown-detail{font-size:11px;color:var(--theme-text-secondary, #8c745e)}.shutdown-banner .quiet-button{flex:none;white-space:nowrap;padding:8px 12px;min-height:36px;background:var(--theme-surface-raised, #fffcf7);border-color:var(--theme-line-accent, #dbc9b3);color:var(--theme-warning, #806144);box-shadow:none;font-size:12px}.shutdown-banner[data-state=closing],.shutdown-banner[data-state=requested]{background:var(--theme-surface, #eeedf9);border-color:var(--theme-line, #ddd9ef);color:var(--theme-text-secondary, #666081)}.shutdown-banner[data-state=closed]{background:var(--theme-surface, #eaf1ed);border-color:var(--theme-line, #d3e0d8);color:var(--theme-text-secondary, #52705e)}@media(max-width:700px){.shutdown-banner{align-items:flex-start;flex-wrap:wrap;gap:10px;padding:12px 14px}.shutdown-copy{flex-basis:100%}.shutdown-banner .quiet-button{margin-left:auto}}
+
+/* Only the body scrolls: headings and close controls stay reachable. */
+#settings-dialog,#help-dialog{padding:0;overflow:hidden}
+#settings-dialog[open],#help-dialog[open]{display:flex;flex-direction:column}
+#settings-dialog>.dialog-head,#help-dialog>.dialog-head{flex:none;margin:0;padding:22px 28px 18px;border-bottom:1px solid var(--theme-line,#dce2ed);background:var(--theme-surface,#f0f3f8)}
+#settings-dialog>.dialog-head .icon-button,#help-dialog>.dialog-head .icon-button{flex:none}
+.dialog-scroll-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:0 28px 24px;scrollbar-gutter:stable}
+.dialog-scroll-body>.settings-section:first-child{border-top:0}
+#help-dialog{width:min(720px,calc(100vw - 32px))}
+.help-resources{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:22px}
+.help-resource{display:flex;flex-direction:column;gap:9px;padding:19px;border:1px solid var(--theme-line,#dce2ed);border-radius:16px;background:var(--theme-surface-raised,#f9fbff);text-decoration:none;color:var(--ink);transition:border-color .15s}
+.help-resource:hover{border-color:var(--accent)}
+.help-resource:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.help-resource-label{display:flex;justify-content:space-between;gap:8px;font-size:10px;letter-spacing:.07em;color:var(--accent-ink);font-weight:650}
+.help-resource strong{font-size:15px;line-height:1.6}
+.help-resource>span:last-child{font-size:12px;line-height:1.75;color:var(--theme-text-secondary,#64748e)}
+.help-resource-story{background:var(--theme-surface,#f0f3f8)}
+.help-section-title{font-size:13px;margin:26px 0 0;color:var(--theme-text-secondary,#64748e)}
+#help-dialog .help-steps{margin-top:17px}
+@media(max-width:540px){.help-resources{grid-template-columns:1fr}#settings-dialog>.dialog-head,#help-dialog>.dialog-head{padding:16px 18px}.dialog-scroll-body{padding:0 18px 20px}#settings-dialog h2,#help-dialog h2{font-size:19px}}

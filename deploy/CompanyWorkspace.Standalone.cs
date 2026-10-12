@@ -22,9 +22,12 @@ namespace CompanyAgent {
     internal static class WorkspaceStandalone {
         private const string PayloadPrefix = "Company-Workspace/";
         private static bool quiet;
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
         [STAThread]
         private static int Main(string[] args) {
+            SetCurrentProcessExplicitAppUserModelID("AX.Workspace.Desktop");
             quiet = Array.IndexOf(args, "--no-browser") >= 0 || Array.IndexOf(args, "--verify-only") >= 0;
             try {
                 Options options = ParseOptions(args);
@@ -289,6 +292,18 @@ namespace CompanyAgent {
             // used as authorization or as an executable path from the app.
             start.EnvironmentVariables["COMPANY_WORKSPACE_ENTRY_VERSION"] = version;
             start.EnvironmentVariables["COMPANY_WORKSPACE_ENTRY_PROTOCOL"] = "1";
+            // Pin the real entry EXE, never the private WebView host or its URL.
+            // Reconstruct only parsed launch options; no session/auth command line.
+            string entry = Assembly.GetExecutingAssembly().Location;
+            string relaunch = Quote(entry);
+            if (options.StateRoot != null) relaunch += " --state " + Quote(options.StateRoot);
+            if (options.CacheRoot != null) relaunch += " --cache-root " + Quote(options.CacheRoot);
+            if (options.PythonPath != null) relaunch += " --python " + Quote(options.PythonPath);
+            if (options.Demo) relaunch += " --demo";
+            // Privilege is selected by Windows on each launch, not stored in a pin.
+            start.EnvironmentVariables["COMPANY_WORKSPACE_RELAUNCH_COMMAND"] = relaunch;
+            start.EnvironmentVariables["COMPANY_WORKSPACE_RELAUNCH_ICON"] = entry;
+
             // Profiles may emit private diagnostics. Drain both streams without
             // forwarding, recording, or putting them in the UI. Environment is
             // inherited unchanged; notably no PATH/Python/config overrides.

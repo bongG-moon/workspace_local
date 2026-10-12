@@ -48,6 +48,7 @@ internal static class DesktopProgram
             // calling SetConsoleCP, which fails for redirected GUI processes.
             Console.SetIn(new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false)));
             Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+            WorkspaceTaskbar.SetProcessIdentity();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             var input = ReadLine();
@@ -62,6 +63,88 @@ internal static class DesktopProgram
             Emit(new { type = "error", code = 47, hresult = e.HResult });
             return 47;
         }
+    }
+}
+
+
+// One stable, version-independent identity for the entry EXE and visible host.
+// Shell properties are written once per handle, with no process polling.
+internal static class WorkspaceTaskbar
+{
+    internal const string AppId = "AX.Workspace.Desktop";
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string value);
+    [System.Runtime.InteropServices.DllImport("shell32.dll")]
+    private static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid,
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Interface)] out IPropertyStore store);
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct PropertyKey
+    {
+        internal Guid format;
+        internal uint id;
+        internal PropertyKey(uint value) { format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"); id = value; }
+    }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit, Size = 24)]
+    private struct PropVariant
+    {
+        [System.Runtime.InteropServices.FieldOffset(0)] internal ushort type;
+        [System.Runtime.InteropServices.FieldOffset(8)] internal IntPtr pointer;
+        [System.Runtime.InteropServices.FieldOffset(8)] internal short boolean;
+    }
+    [System.Runtime.InteropServices.ComImport,
+     System.Runtime.InteropServices.Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"),
+     System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPropertyStore
+    {
+        void GetCount(out uint count);
+        void GetAt(uint index, out PropertyKey key);
+        void GetValue(ref PropertyKey key, out PropVariant value);
+        void SetValue(ref PropertyKey key, ref PropVariant value);
+        void Commit();
+    }
+    internal static void SetProcessIdentity()
+    { SetCurrentProcessExplicitAppUserModelID(AppId); }
+    private static void Set(IPropertyStore store, uint id, string text)
+    {
+        var key = new PropertyKey(id);
+        var value = new PropVariant { type = 31, pointer = System.Runtime.InteropServices.Marshal.StringToCoTaskMemUni(text) };
+        try { store.SetValue(ref key, ref value); }
+        finally { System.Runtime.InteropServices.Marshal.FreeCoTaskMem(value.pointer); }
+    }
+    internal static void Apply(IntPtr hwnd)
+    {
+        IPropertyStore store = null;
+        try
+        {
+            Guid iid = typeof(IPropertyStore).GUID;
+            System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(SHGetPropertyStoreForWindow(hwnd, ref iid, out store));
+            string command = Environment.GetEnvironmentVariable("COMPANY_WORKSPACE_RELAUNCH_COMMAND");
+            string icon = Environment.GetEnvironmentVariable("COMPANY_WORKSPACE_RELAUNCH_ICON");
+            bool valid = !String.IsNullOrEmpty(icon) && Path.IsPathRooted(icon) && File.Exists(icon) &&
+                String.Equals(Path.GetExtension(icon), ".exe", StringComparison.OrdinalIgnoreCase) &&
+                !String.IsNullOrEmpty(command) && command.Length < 8192 &&
+                command.StartsWith("\"" + icon + "\"", StringComparison.Ordinal) &&
+                command.IndexOfAny(new char[] {'\r', '\n', '\0'}) < 0;
+            if (valid)
+            {
+                Set(store, 2, command);
+                Set(store, 3, "\"" + icon + "\",0");
+                Set(store, 4, "AX Workspace");
+            }
+            else
+            {
+                // Direct development/VBS hosts need a parent pipe and cannot
+                // relaunch standalone. Never create an unusable host-only pin.
+                var key = new PropertyKey(9);
+                var value = new PropVariant { type = 11, boolean = -1 };
+                store.SetValue(ref key, ref value);
+            }
+            // Set ID after relaunch metadata, as required by the Shell contract.
+            Set(store, 5, AppId);
+            store.Commit();
+        }
+        catch (Exception) { /* Shell integration must never prevent opening work. */ }
+        finally { if (store != null) System.Runtime.InteropServices.Marshal.ReleaseComObject(store); }
     }
 }
 
@@ -149,6 +232,7 @@ internal sealed class DesktopWindow : Form
         HandleCreated += delegate
         {
             ApplyAppearance();
+            WorkspaceTaskbar.Apply(Handle);
             if (controlReaderStarted) return;
             controlReaderStarted = true;
             var reader = new Thread(ReadCommands) { IsBackground = true, Name = "Workspace desktop control" };
@@ -243,12 +327,17 @@ internal sealed class DesktopWindow : Form
         target = null;
         if (!userInitiated || home == null || !home.IsAbsoluteUri ||
             home.Scheme != "http" || home.Host != "127.0.0.1" || home.IsDefaultPort || home.UserInfo != "") return false;
-        // This single bundled, public document is the only loopback exception.
-        // Reconstruct it without the app's authentication fragment. Exact text
-        // matching also rejects queries, fragments and URI-normalized traversal.
-        string canonical = home.GetLeftPart(UriPartial.Authority) + "/manual/guide";
-        if (!String.Equals(value, canonical, StringComparison.Ordinal)) return false;
-        target = new Uri(canonical, UriKind.Absolute);
+        // Only the two bundled public documents, with safe guide anchors.
+        // Match raw text before parsing to reject queries/normalized traversal.
+        string origin = home.GetLeftPart(UriPartial.Authority);
+        string guide = origin + "/manual/guide";
+        string story = origin + "/manual/AX_WORKSPACE_STORY.html";
+        bool allowed = String.Equals(value, guide, StringComparison.Ordinal) ||
+            String.Equals(value, story, StringComparison.Ordinal);
+        if (!allowed && value != null && value.StartsWith(guide + "#", StringComparison.Ordinal))
+            allowed = Regex.IsMatch(value.Substring(guide.Length + 1), "^[a-z][a-z0-9-]{0,63}$");
+        if (!allowed) return false;
+        target = new Uri(value, UriKind.Absolute);
         return true;
     }
 
@@ -263,8 +352,8 @@ internal sealed class DesktopWindow : Form
             catch
             {
                 DesktopProgram.Emit(new { type = "manual_link_failed" });
-                MessageBox.Show(this, "사용자 안내서를 열지 못했습니다. 기본 브라우저가 실행되는지 확인한 뒤 다시 눌러 주세요.",
-                    "AX Workspace 사용자 안내서", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "도움말 자료를 열지 못했습니다. 기본 브라우저가 실행되는지 확인한 뒤 다시 눌러 주세요.",
+                    "AX Workspace 도움말", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }));
     }

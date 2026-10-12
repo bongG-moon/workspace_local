@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "8247e1765ff0b599f65763008d6d17b534ee067f13902e2a9e141a68630fb815",
-      "size": 34476
+      "sha256": "037d3a82559aa0b4548a971543064b58ce1b54f9af6310626b8cfb0b9c927f37",
+      "size": 35435
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -62,8 +62,8 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Standalone.cs",
-      "sha256": "2449154b7510dc0ef6639a26221b6eaf3a1a8b20bd6bbdabc75d7408c36db11e",
-      "size": 20971
+      "sha256": "86b1e3c6ab17976938253f930c656f1482e19c811876507ecf0cb48cc008fad8",
+      "size": 22145
     },
     {
       "path": "deploy/CompanyWorkspace.Standalone.manifest",
@@ -107,8 +107,8 @@
     },
     {
       "path": "deploy/Workspace.Desktop.cs",
-      "sha256": "c1f3212fc2bd25a837ca7ab5c01f538a1e08ce878b19167076cb8405e5f4a834",
-      "size": 58897
+      "sha256": "510776d4df002b80cc4ca4e97018f780ec7b8ee1854755e3ef999e620d69a8c1",
+      "size": 63614
     },
     {
       "path": "deploy/fonts/NotoSansKR-Regular.ttf.gz",
@@ -137,8 +137,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "0231b36ff5aa8a5526ee7a9f4601c189d7efa3ed6c2fbb7d301e328c3c7092ff",
-      "size": 32130
+      "sha256": "db28efbf98e731439f40c28b82492256311ca981c5b1ce80fa3dfbbe1d56dada",
+      "size": 34275
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -607,8 +607,8 @@
     },
     {
       "path": "docs/WORKSPACE_EXECUTION_MODE.md",
-      "sha256": "df96b7841449939de462089f8554315000ba0ea6a575328809b91d8c4a0fbca6",
-      "size": 8193
+      "sha256": "a684c0d2d8f7cfd6c335a50fc2d5e4cd403bf9b2ae238fa42937ccbf07f4bd89",
+      "size": 8109
     },
     {
       "path": "docs/WORKSPACE_GITLAB_PUBLISHER.md",
@@ -681,6 +681,11 @@
       "size": 3944
     },
     {
+      "path": "docs/WORKSPACE_SHELL_HELP_0.23.22.md",
+      "sha256": "ebf2774e376f5dd7189eb48c9ae115d737dd45e3f71acd561a8e1eed24a1ebaf",
+      "size": 4742
+    },
+    {
       "path": "docs/WORKSPACE_STANDALONE_EXE.md",
       "sha256": "a5edcf5bf1bc8e38cde1b0e820fd8e141b1f0fc14e01c8ead20259a1e9bce92f",
       "size": 9649
@@ -697,8 +702,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "433e4c9796b78094313284912a230a13492a62bbbd5d844ca22a969aba4099d3",
-      "size": 55929
+      "sha256": "1c04fc7059175245fe74de9cb23f08941c997f938b282c32d555f4a24587c26d",
+      "size": 55749
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -997,8 +1002,8 @@
     },
     {
       "path": "local_app/web/app.css",
-      "sha256": "8c09956b35d6f5dc55075c0db8fd6c751f9a96ebf075a883848db1dc6b5be922",
-      "size": 129437
+      "sha256": "5aed10aa7a0b1cc76b200666398e243e7e8a113c3e719bc77eb7a16b1def1742",
+      "size": 131385
     },
     {
       "path": "local_app/web/app.js",
@@ -1082,8 +1087,8 @@
     },
     {
       "path": "local_app/web/execution-mode.js",
-      "sha256": "faff3476a38833a4b29406ad1a44ef10077f42e9d8c034d69007eddcbac476ab",
-      "size": 3170
+      "sha256": "3cbc2ffdbd212fad3157c91c484fac8726630d6fb6f77aa2883f1965006b1b99",
+      "size": 1521
     },
     {
       "path": "local_app/web/execution-view.css",
@@ -1117,8 +1122,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "05defbd453cb3f4d68c22b2e40b0b2a42484582d40143e119797cb1387957f4a",
-      "size": 76168
+      "sha256": "33a2736fdd6946d082341799e4b0b349d4ad24bbde0a246dd4abe04f27186345",
+      "size": 76656
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1742,8 +1747,8 @@
     },
     {
       "path": "tests/test_workspace_execution_mode_frontend.py",
-      "sha256": "0eeb9d6e017210ff20f43c76fba7c35fe13f03237dceecbe0977c42044e36261",
-      "size": 5085
+      "sha256": "a6f04871161b3d7c417c644994521583f4b72e603b67975df9fca3dfc549817a",
+      "size": 3716
     },
     {
       "path": "tests/test_workspace_execution_policy.py",
@@ -1862,8 +1867,8 @@
     },
     {
       "path": "tests/test_workspace_manual_routing.py",
-      "sha256": "d346610692e1a58066c9e12cbc6ec737301c049eb934af6f0c8997ccf6445e4b",
-      "size": 1820
+      "sha256": "45739cae43fbc93092ada845415ebe229e6c203a6be419e87a818a9571355005",
+      "size": 1854
     },
     {
       "path": "tests/test_workspace_native_handoff_frontend.py",
@@ -2179,6 +2184,11 @@
       "path": "tests/test_workspace_stop_resume.py",
       "sha256": "95e2c257633a827217a4540285e7f526652b3eb2f85e56093281d1ae1281efdd",
       "size": 20142
+    },
+    {
+      "path": "tests/test_workspace_taskbar_identity.py",
+      "sha256": "4b3849d426dd0505de2b48b3fc6ed9d30d4cb8624f7ef5a7c97491fcb7b5f49f",
+      "size": 5443
     },
     {
       "path": "tests/test_workspace_tool_activity.py",

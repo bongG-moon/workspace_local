@@ -36,7 +36,7 @@ class ManualRoutingTests(unittest.TestCase):
             with self.subTest(dialog=dialog):
                 # Help also links directly to guide sections; all links retain
                 # the same fixed, token-free route and safe external target.
-                self.assertEqual('/manual/guide', values['href'].split('#', 1)[0])
+                self.assertIn(values['href'].split('#', 1)[0], {'/manual/guide', '/manual/AX_WORKSPACE_STORY.html'})
                 self.assertEqual('_blank', values['target'])
                 self.assertTrue({'noopener', 'noreferrer'}.issubset(values['rel'].split()))
 
