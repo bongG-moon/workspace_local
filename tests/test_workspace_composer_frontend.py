@@ -56,6 +56,34 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'! echo untouched');assert.equal(calls.length,1);
         })()""")
 
+    def test_nested_skill_typing_replaces_full_token_and_preserves_arguments_without_send(self):
+        self.run_case(r"""(async()=>{
+          let sends=0;submit=async()=>sends++;const calls=[];
+          api=async(path,body)=>{calls.push({path,body});return {items:[
+            {id:'nested',label:'/apps/web:deploy',invocation:'/apps/web:deploy',supported:true,source:'runtime'}]};};
+          const prefix='\uc774\uc5b4\uc11c /apps/web:dep';type(prefix+'loy \uc6d4\uac04 \uc790\ub8cc',prefix.length);
+          await WorkspaceComposer.refresh();assert.equal(calls[0].body.query,'apps/web:dep');
+          const event=enter();$('prompt').onkeydown(event);
+          assert.equal(event.prevented,true);assert.equal(sends,0);
+          assert.equal($('prompt').value,'\uc774\uc5b4\uc11c /apps/web:deploy \uc6d4\uac04 \uc790\ub8cc');
+          assert.equal($('prompt').selectionStart,'\uc774\uc5b4\uc11c /apps/web:deploy'.length);
+          assert.equal(drafts.get('A').text,$('prompt').value);
+          assert.deepEqual(calls.map(call=>call.path),['/api/completions']);
+        })()""")
+
+    def test_nested_skill_accept_adds_one_space_and_embedded_paths_do_not_trigger(self):
+        self.run_case(r"""(async()=>{
+          let calls=0,sends=0;submit=async()=>sends++;
+          api=async()=>{calls++;return {items:[{id:'nested',invocation:'/apps/web:deploy',supported:true}]};};
+          for(const text of ['https://example.com/apps/web','C:/apps/web','word/apps/web']){
+            type(text);await WorkspaceComposer.refresh();assert.equal(calls,0);
+          }
+          type('/apps/we');await WorkspaceComposer.refresh();$('prompt').onkeydown(enter());
+          assert.equal($('prompt').value,'/apps/web:deploy ');assert.equal(sends,0);
+          assert.equal($('prompt').selectionStart,$('prompt').value.length);
+          $('prompt').onkeydown(enter());assert.equal(sends,1);
+        })()""")
+
     def test_file_selection_attaches_once_preserving_surrounding_text(self):
         self.run_case(r"""(async()=>{
           let request;api=async(path,body)=>{request=body;return {items:[{id:'file',label:'월간 실적.xlsx',path:'C:/자료/월간 실적.xlsx',supported:true}]};};
@@ -293,7 +321,7 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           assert.equal($('composer-suggestions').hidden,false);assert.equal($('composer-suggestion-list').children.length,1);
           assert.match(flatText($('composer-suggestion-list')),/사용 가능한 스킬 목록/);
           assert.match($('composer-suggestion-context').textContent,/공통 스킬/);
-          assert.match($('composer-suggestion-note').textContent,/설치 정보/);
+          assert.match($('composer-suggestion-note').textContent,/설치 스킬/);
           const event={key:'Tab',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(event);
           assert.equal(event.prevented,true);assert.equal($('prompt').value,'/company-agent:skills ');
           assert.equal(drafts.get('home').text,$('prompt').value);assert.equal(active,null);assert.equal(sessions.length,0);
@@ -388,7 +416,25 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           active=task;active.connection={connected:true};selectionGeneration++;type('/does-not-exist');
           await WorkspaceComposer.refresh();assert.equal($('composer-suggestions').hidden,false);
           assert.match($('composer-suggestion-note').textContent,/일치하는 빠른 요청이 없어요/);
+          assert.match($('composer-suggestion-note').textContent,/현재 업무 폴더나 공통 스킬 위치/);
           assert.equal($('composer-suggestion-list').children.length,0);assert.equal($('composer-connect').hidden,true);
+        })()""")
+
+    def test_live_connection_can_select_new_installed_skill_without_reconnect_or_send(self):
+        self.run_case(r"""(async()=>{
+          active.connection={connected:true};let sends=0;const calls=[];submit=async()=>sends++;
+          api=async(path,body)=>{calls.push({path,body});return {discovery:true,items:[
+            {id:'new-skill',label:'/new-local-skill',invocation:'/new-local-skill',
+             description:'새로 추가한 스킬',source:'installed',scope:'folder',availability:'discovered',supported:true}]};};
+          type('/new');await WorkspaceComposer.refresh();
+          const option=$('composer-suggestion-list').children[0];
+          assert.match(flatText(option),/폴더 스킬/);assert.match(option.title,/선택하면 이름만 입력/);
+          assert.match($('composer-suggestion-note').textContent,/실행 가능 여부는 전송 시/);
+          assert.equal($('composer-connect').hidden,true);
+          $('prompt').onkeydown(enter());
+          assert.equal($('prompt').value,'/new-local-skill ');assert.equal(sends,0);
+          assert.deepEqual(calls.map(call=>call.path),['/api/completions']);
+          assert.equal(active.connection.connected,true);
         })()""")
 
     def test_late_connected_event_refreshes_instead_of_dismissing_typed_completion(self):

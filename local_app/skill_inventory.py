@@ -19,6 +19,8 @@ MAX_ITEMS = 1000
 MAX_HEADER_BYTES = 16 * 1024
 MAX_SKILL_BYTES = 256 * 1024
 SOURCES = {'user', 'project', 'personal', 'company', 'plugin', 'corporate'}
+MAX_NATIVE_SKILL_LINKS = 8
+_DIRECTORY_LINK_TAGS = {0xA000000C, 0xA0000003}  # symlink, directory junction
 
 
 def _metadata_path(path):
@@ -35,6 +37,81 @@ def _metadata_path(path):
         if stat.S_ISLNK(info.st_mode) or (getattr(info, 'st_file_attributes', 0) & 0x400 and not cloud):
             raise ValueError('Linked metadata path')
     return path
+
+
+def _local_skill_directory(path):
+    """Validate a native link destination without widening other metadata scopes."""
+    path = Path(path)
+    text = str(path)
+    if (not path.is_absolute() or '..' in path.parts or len(text) > 2048
+            or text.startswith(('\\\\', '//', '\\??\\')) or path == Path(path.anchor)):
+        raise ValueError('Invalid native skill directory')
+    home = Path.home().absolute()
+    # Compare normalised names so Windows case differences cannot evade the
+    # sibling-profile boundary. A different drive's Users directory is not ours.
+    parts = path.parts
+    profile_parent = os.path.normcase(str(home.parent)).rstrip('\\/') + os.sep
+    inside_profiles = (home.parent.name.casefold() in {'users', 'documents and settings'}
+                       and os.path.normcase(str(path)).startswith(profile_parent))
+    if inside_profiles or (len(parts) > 1 and parts[1].casefold() in {'users', 'documents and settings'}):
+        relative = os.path.normcase(str(path))
+        current = os.path.normcase(str(home)).rstrip('\\/')
+        if relative != current and not relative.startswith(current + os.sep):
+            raise ValueError('Another user profile is outside metadata scope')
+    return path
+
+
+def _native_skill_directory(path):
+    """Resolve only an explicitly scanned native skill directory, at most 8 hops.
+
+    Claude supports linked native skills. Settings, plugins, references, command
+    trees and SKILL.md leaves still use the strict no-link metadata validator.
+    No resolver walks a target's children or launches a shell to inspect links.
+    """
+    path = _local_skill_directory(path)
+    visited = set()
+    for _ in range(MAX_NATIVE_SKILL_LINKS + 1):
+        _metadata_path(path.parent)
+        key = os.path.normcase(str(path))
+        if key in visited:
+            raise ValueError('Native skill directory link loop')
+        visited.add(key)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if len(visited) == 1:
+                return path  # A missing ordinary skills root is normal.
+            raise ValueError('Dangling native skill directory link')
+        tag = getattr(info, 'st_reparse_tag', 0)
+        linked = stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & 0x400)
+        cloud = tag in {0x9000001A | (index << 12) for index in range(16)}
+        if not linked or cloud:
+            # The parent chain was already checked above; lstat plus this type
+            # check validates the leaf without repeating every ancestor lookup.
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError('Native skill target is not a directory')
+            return path
+        if tag not in _DIRECTORY_LINK_TAGS and not (os.name != 'nt' and stat.S_ISLNK(info.st_mode) and not tag):
+            raise ValueError('Unsupported native skill directory link')
+        if len(visited) > MAX_NATIVE_SKILL_LINKS:
+            raise ValueError('Native skill directory link limit exceeded')
+        target = os.readlink(path)
+        # Windows readlink returns the substitute name for a junction. Accept
+        # only the drive-qualified form, never UNC, volume or device targets.
+        if target.startswith(('\\\\?\\', '\\??\\')):
+            match = re.fullmatch(r'(?:\\\\\?\\|\\\?\?\\)([A-Za-z]:\\.+)', target)
+            if match is None:
+                raise ValueError('Unsupported native skill directory target')
+            target = match.group(1)
+        if target.startswith(('\\\\', '//', '\\??\\')):
+            raise ValueError('Network native skill directory target')
+        candidate = Path(target)
+        if not candidate.is_absolute():
+            if candidate.drive or candidate.root:
+                raise ValueError('Incomplete native skill directory target')
+            candidate = path.parent / candidate
+        path = _local_skill_directory(Path(os.path.abspath(candidate)))
+    raise ValueError('Native skill directory link limit exceeded')
 
 
 def _json_metadata(path):
@@ -94,22 +171,41 @@ def project_lineage(workspace, config):
     return lineage[:1]
 
 
-def effective_plugins(config, workspace=None):
+def _effective_customizations(config, workspace=None, *, visibility=False):
     """Exact user -> ancestor project -> local overlays; unreadable is unknown."""
     lineage = project_lineage(workspace, config)
     settings = [config / 'settings.json']
     for directory in reversed(lineage):
         settings.extend((directory / '.claude/settings.json', directory / '.claude/settings.local.json'))
-    enabled = {}
+    enabled, overrides, strict = {}, {}, False
     for path in settings:
-        value = _json_metadata(path).get('enabledPlugins', {})
+        metadata = _json_metadata(path)
+        value = metadata.get('enabledPlugins', {})
         if not isinstance(value, dict) or len(value) > MAX_ITEMS:
             raise ValueError('Invalid enabled plugin settings')
         for name, flag in value.items():
             if not isinstance(name, str) or len(name) > 256 or type(flag) is not bool:
                 raise ValueError('Invalid enabled plugin setting')
             enabled[name] = flag
-    return enabled
+        if visibility:
+            value = metadata.get('skillOverrides', {})
+            if not isinstance(value, dict) or len(value) > MAX_ITEMS:
+                raise ValueError('Invalid skill visibility settings')
+            for name, mode in value.items():
+                if (not isinstance(name, str) or not name or len(name) > 256
+                        or not isinstance(mode, str)
+                        or mode not in {'on', 'off', 'name-only', 'user-invocable-only'}):
+                    raise ValueError('Invalid skill visibility setting')
+                overrides[name] = mode
+            if 'strictPluginOnlyCustomization' in metadata:
+                if type(metadata['strictPluginOnlyCustomization']) is not bool:
+                    raise ValueError('Invalid plugin-only setting')
+                strict = metadata['strictPluginOnlyCustomization']
+    return enabled, overrides, strict
+
+
+def effective_plugins(config, workspace=None):
+    return _effective_customizations(config, workspace)[0]
 
 
 def same_profile_path(path):
@@ -194,6 +290,7 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
     """
     config = Path(config)
     rows, seen, failures, limited = [], set(), [], False
+    native_targets = {}
     command_entries = 0
     def fail(code):
         if len(failures) < MAX_ITEMS:
@@ -210,23 +307,44 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
     except (ValueError, OSError):
         lineage = []
         fail('scope_unreadable')
+    try:
+        enabled, overrides, strict_plugins = _effective_customizations(config, workspace, visibility=True)
+        visibility_known = True
+    except (ValueError, OSError, UnicodeError, TypeError):
+        # A broken settings file may contain a hidden skill or disabled plugin.
+        # Do not turn it back into an insertion candidate through discovery.
+        enabled, overrides, strict_plugins, visibility_known = {}, {}, True, False
+        fail('customization_settings_invalid')
 
-    def add(file, source, scope, namespace, installation, label, scope_label='', command=False, command_root=None):
+    def add(file, source, scope, namespace, installation, label, scope_label='', command=False, command_root=None,
+            logical_name=None, native_priority=None):
         nonlocal limited
         if len(rows) >= MAX_ITEMS:
             limited = True
             return
         key = (os.path.normcase(str(file)), source, scope, installation)
-        if key in seen:
+        if key in seen and native_priority is None:
             return
         seen.add(key)
         try:
             if not file.exists():
                 return
             fields = _skill_header(file, command=command)
-            name = file.stem if command else fields.get('name') or file.parent.name
+            name = file.stem if command else fields.get('name') or logical_name or file.parent.name
             if not name or len(name) > 100 or re.search(r'[\s/:\\\x00-\x1f]', name):
                 raise ValueError('Invalid skill name')
+            target_key = os.path.normcase(str(file))
+            if native_priority is not None:
+                previous = native_targets.get(target_key)
+                if previous is not None:
+                    if previous[0] >= native_priority:
+                        return
+                    if previous[1] is not None:
+                        rows.remove(previous[1])
+                # Deduplicate the physical source before invocation visibility,
+                # including aliases with no frontmatter name. Native personal
+                # scope wins over project, then the nearest project directory.
+                native_targets[target_key] = (native_priority, None)
             command_name = name
             if command and command_root is not None:
                 segments = file.relative_to(command_root).with_suffix('').parts
@@ -234,17 +352,27 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
                     raise ValueError('Invalid command namespace')
                 command_name = ':'.join(segments)
             invocation = namespace + ':' + command_name if namespace else command_name if source in {'user', 'project'} else ''
+            # Settings match the exact native name, not an invented alias or a
+            # plugin namespace. Plugins have their own enabledPlugins setting.
+            # https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings
+            override = overrides.get(command_name) if source in {'user', 'project'} else None
+            if override == 'off':
+                return
             visible = fields.get('user-invocable', 'true').casefold() == 'true'
             digest = hashlib.sha256('\0'.join(key).encode('utf-8')).hexdigest()[:24]
-            rows.append({'candidateId': source + ':' + digest, 'name': name,
+            row = {'candidateId': source + ':' + digest, 'name': name,
                          'description': _text(fields.get('description', ''), 800),
                          'source': source, 'storageScope': scope, 'invocation': invocation,
-                         'explicitOnly': fields.get('disable-model-invocation', 'false').casefold() == 'true',
+                         'explicitOnly': (fields.get('disable-model-invocation', 'false').casefold() == 'true'
+                                          or override == 'user-invocable-only'),
                          'userInvocable': visible, 'kind': 'internal' if not visible else 'skill' if invocation else 'reference',
                          'pluginNamespace': namespace, 'originLabel': label,
                          'scopeLabel': scope_label or ('선택 폴더' if scope == 'project' else '공통'),
                          'installationId': hashlib.sha256(installation.encode('utf-8')).hexdigest()[:24]
-                                           if installation else ''})
+                                           if installation else ''}
+            rows.append(row)
+            if native_priority is not None:
+                native_targets[target_key] = (native_priority, row)
         except (ValueError, OSError, UnicodeError, TypeError):
             fail('skill_header_unreadable')
 
@@ -290,13 +418,14 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
             except (ValueError, OSError, TypeError):
                 fail('command_directory_unreadable')
 
-    def scan(root, source, scope, namespace='', installation='', label='', scope_label=''):
+    def scan(root, source, scope, namespace='', installation='', label='', scope_label='', native_priority=None):
         nonlocal limited
         if len(rows) >= MAX_ITEMS:
             limited = True
             return
         try:
-            _metadata_path(root)
+            logical_root = root
+            root = _native_skill_directory(root) if native_priority is not None else _metadata_path(root)
             if not root.exists():
                 return
             if root.is_file():
@@ -304,7 +433,8 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
                     add(root, source, scope, namespace, installation, label, scope_label)
                 return
             if (root / 'SKILL.md').exists():
-                add(root / 'SKILL.md', source, scope, namespace, installation, label, scope_label)
+                add(root / 'SKILL.md', source, scope, namespace, installation, label, scope_label,
+                    logical_name=logical_root.name, native_priority=native_priority)
                 return
             entries = []
             with os.scandir(root) as stream:
@@ -315,22 +445,30 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
                     entries.append(entry.name)
             for name in sorted(entries, key=str.casefold):
                 try:
-                    child = _metadata_path(root / name)
+                    if native_priority is not None:
+                        info = (root / name).lstat()
+                        if stat.S_ISREG(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400:
+                            continue
+                    child = (_native_skill_directory(root / name) if native_priority is not None
+                             else _metadata_path(root / name))
                     if child.is_dir():
-                        add(child / 'SKILL.md', source, scope, namespace, installation, label, scope_label)
+                        add(child / 'SKILL.md', source, scope, namespace, installation, label, scope_label,
+                            logical_name=name, native_priority=native_priority)
                 except (ValueError, OSError):
                     fail('skill_directory_unreadable')
         except (ValueError, OSError, TypeError):
             fail('skill_directory_unreadable')
 
-    scan(config / 'skills', 'user', 'personal', label='Claude 사용자 스킬')
-    scan_commands(config / 'commands', 'user', 'personal', label='Claude 사용자 명령')
-    for directory in reversed(lineage):
-        distance = lineage.index(directory)
-        label = '선택 폴더' if distance == 0 else f'상위 {distance}단계 폴더'
-        scan(directory / '.claude/skills', 'project', 'project', label='폴더의 Claude 스킬', scope_label=label)
-        scan_commands(directory / '.claude/commands', 'project', 'project', label='폴더의 Claude 명령', scope_label=label)
-    for root, source, scope in reference_roots:
+    if visibility_known and not strict_plugins:
+        scan(config / 'skills', 'user', 'personal', label='Claude 사용자 스킬', native_priority=(1, 0))
+        scan_commands(config / 'commands', 'user', 'personal', label='Claude 사용자 명령')
+        for directory in reversed(lineage):
+            distance = lineage.index(directory)
+            label = '선택 폴더' if distance == 0 else f'상위 {distance}단계 폴더'
+            scan(directory / '.claude/skills', 'project', 'project', label='폴더의 Claude 스킬', scope_label=label,
+                 native_priority=(0, len(directory.parts)))
+            scan_commands(directory / '.claude/commands', 'project', 'project', label='폴더의 Claude 명령', scope_label=label)
+    for root, source, scope in reference_roots if visibility_known and not strict_plugins else ():
         if workspace is None and scope == 'project':
             continue
         try:
@@ -338,11 +476,6 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
             scan(root, source, scope, label='Company Agent 개인 참고 스킬' if source == 'personal' else '회사 참고 스킬')
         except (ValueError, OSError, TypeError):
             fail('reference_scope_unreadable')
-    try:
-        enabled = effective_plugins(config, workspace)
-    except (ValueError, OSError, UnicodeError, TypeError):
-        enabled = {}
-        fail('plugin_settings_invalid')
     installed = read(config / 'plugins/installed_plugins.json').get('plugins', {})
     if not isinstance(installed, dict):
         fail('plugin_registry_invalid')

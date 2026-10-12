@@ -38,6 +38,7 @@ REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
     '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe',
 }) | ARCHIVE_FILE_TYPES
 _COMMAND = re.compile(r'[\w][\w.:-]{0,199}', re.UNICODE)
+_COMMAND_DIRECTORY = re.compile(r'[\w.][\w.-]*', re.UNICODE)
 _WORDS = re.compile(r'[\W_]+', re.UNICODE)
 _COMMAND_DESCRIPTION = '현재 업무 연결에서 보고한 명령'
 _AMBIGUOUS_COMMAND_DESCRIPTION = _COMMAND_DESCRIPTION + ' · 같은 호출명은 하나로 표시'
@@ -108,6 +109,19 @@ def _text(value, limit):
 
 def _identity(kind, value):
     return kind + '-' + hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]
+
+
+def _runtime_command_name(name):
+    """Accept CLI-reported nested skills without treating names as file paths."""
+    if '/' not in name:
+        return _COMMAND.fullmatch(name) is not None
+    # Claude names nested skills as apps/web:deploy. Only the CLI may supply
+    # that qualified name; installed metadata retains its native validator.
+    # No path is resolved or traversed, and an ordinary bad/command is invalid.
+    directory, separator, command = name.partition(':')
+    return bool(separator and _COMMAND.fullmatch(command)
+                and all(part not in {'.', '..'} and _COMMAND_DIRECTORY.fullmatch(part)
+                        for part in directory.split('/')))
 
 
 def _fold(value):
@@ -272,7 +286,7 @@ def _slash(item, query, max_items, deadline):
             continue
         name = _text(entry.get('name'), 201)
         name = name.removeprefix('/') if name else ''
-        if not _COMMAND.fullmatch(name):
+        if not _runtime_command_name(name):
             limited = True
             continue
         invocation = '/' + name
@@ -300,11 +314,11 @@ def _slash(item, query, max_items, deadline):
 
 def _discovered_slash(snapshot, query, max_items, *, workspace=None):
     """Installed names are insertion candidates, not runtime availability claims."""
-    rows = {}
+    candidates, rows = {}, {}
     raw = snapshot.get('skills', [])
     limited = snapshot.get('skillsLimited') is True or len(raw) > MAX_COMMANDS
     for entry in raw[:MAX_COMMANDS]:
-        if not isinstance(entry, dict) or entry.get('userInvocable') is not True:
+        if not isinstance(entry, dict):
             continue
         name = _text(entry.get('invocation'), 201)
         name = name.removeprefix('/') if name else ''
@@ -314,12 +328,27 @@ def _discovered_slash(snapshot, query, max_items, *, workspace=None):
         if storage not in {'personal', 'company', 'project'} or (not workspace and storage == 'project'):
             continue
         invocation = '/' + name
+        candidates.setdefault(invocation, []).append(entry)
+    for invocation, entries in candidates.items():
+        # Resolve exact native names before filtering visibility. A private
+        # personal skill shadows a public project skill of the same name; the
+        # hidden personal row must not accidentally expose its project alias.
+        # Plugin installation scope does not establish which version is loaded.
+        # Keep those collisions ambiguous until the CLI reports the invocation.
+        if all(entry.get('source') in {'user', 'project'} and not entry.get('pluginNamespace')
+               for entry in entries):
+            priority = max(entry.get('source') == 'user' for entry in entries)
+            entries = [entry for entry in entries if (entry.get('source') == 'user') == priority]
+        if any(entry.get('userInvocable') is not True for entry in entries):
+            continue
+        entry = entries[0]
+        storage = entry.get('storageScope')
         row = {'id': _identity('slash', invocation), 'label': invocation,
                'description': _text(entry.get('description', ''), 800) or '설치 메타데이터에서 발견한 항목',
                'invocation': invocation, 'supported': True, 'source': 'installed',
                'scope': 'folder' if storage == 'project' else 'common',
                'availability': 'discovered'}
-        if invocation in rows:
+        if len(entries) > 1:
             row['description'] = '같은 호출명의 설치 항목이 있습니다. 실제 연결에서 적용되는 항목을 확인합니다.'
             row['scope'] = 'folder' if workspace else 'common'
         rows[invocation] = row
@@ -349,7 +378,8 @@ def complete(item, request, *, safe_suffixes=REFERENCE_FILE_TYPES, max_items=40,
     The server owns authentication and task/workspace validation. Deadline checks
     bound traversal between filesystem operations; they cannot interrupt an OS
     filesystem call. A supplied discovery provider reads only bounded metadata
-    when runtime commands have not been reported. It never starts a subprocess.
+    through its short-lived cache, including skills installed after the current
+    CLI connection started. It never starts a subprocess.
     """
     if not isinstance(item, dict) or not isinstance(request, dict):
         raise ValueError('추천할 업무와 입력 내용을 확인해 주세요.')
@@ -367,7 +397,11 @@ def complete(item, request, *, safe_suffixes=REFERENCE_FILE_TYPES, max_items=40,
     max_items = max(1, min(40, int(max_items)))
     deadline = time.monotonic() + max(0., min(.5, float(seconds)))
     if kind in {'slash', 'command'}:
-        result = _slash(item, query, max_items, deadline)
+        # Merge before matching or trimming: a runtime name must keep its
+        # description/support state even when only a conflicting installed
+        # description matches. An exact new skill must also outrank the first
+        # page of broader runtime matches.
+        result = _slash(item, '', MAX_COMMANDS, deadline)
         bridge = item.get('bridge')
         live = (bridge is not None and not getattr(bridge, 'closed', True)
                 and getattr(bridge, 'process', None) and bridge.process.poll() is None)
@@ -377,13 +411,26 @@ def complete(item, request, *, safe_suffixes=REFERENCE_FILE_TYPES, max_items=40,
         reported = reported if isinstance(reported, dict) else {}
         authoritative = (live and reported.get('commands') is True
                          and isinstance(connection.get('slashCommands'), list))
-        if discovery is not None and not authoritative:
+        if discovery is not None:
             workspace = item.get('workspace')
-            fallback = _discovered_slash(discovery.inventory(workspace), query, max_items,
+            fallback = _discovered_slash(discovery.inventory(workspace), '', MAX_COMMANDS,
                                          workspace=workspace)
+            rows = {row['invocation']: row for row in fallback['items']}
+            rows.update((row['invocation'], row) for row in result['items'])
+            matches = [row for row in rows.values() if _match_rank(row, query) is not None]
+            # An absent runtime report does not make a complete installed
+            # metadata scan incomplete. Both sources retain their own evidence
+            # labels; discovery never claims the CLI has loaded a new skill.
+            limited = fallback['limited'] or (authoritative and result['limited'])
+            combined = _finish(matches, query, max_items, limited)
+            if not authoritative or any(row['source'] == 'installed' for row in combined['items']):
+                combined['discovery'] = True
             if result.get('connectRequired'):
-                fallback['connectRequired'] = True
-            return _session_controls(fallback, connection, query, max_items) if live else fallback
+                combined['connectRequired'] = True
+            result = combined
+        else:
+            matches = (row for row in result['items'] if _match_rank(row, query) is not None)
+            result = {**result, **_finish(matches, query, max_items, result['limited'])}
         return _session_controls(result, connection, query, max_items) if live else result
     # Query text is only a filter, never a path to traverse. In particular, no
     # '..', absolute path, wildcard, or catalog folder widens the task scope.

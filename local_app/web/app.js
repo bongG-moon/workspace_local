@@ -39,7 +39,7 @@ const hiddenSessionIds = new Set(), hidingSessionIds = new Set();
 const modalStack = [];
 let pendingConfirmation = null;
 const busyStates = new Set(["starting", "running", "approval", "question"]);
-const statusLabels = {idle:"준비됐어요. 원하는 일을 알려 주세요", starting:"기존 업무 환경에 연결하고 있어요", running:"업무를 진행하고 있어요", stopping:"현재 작업을 중지하고 있어요. 작성 중인 내용은 유지됩니다", approval:"실행 전 확인이 필요해요", question:"다음 단계에 필요한 답변을 기다려요", done:"요청을 마쳤어요. 결과를 확인하거나 이어서 요청하세요", error:"잠시 멈췄어요. 연결 상태를 확인해 주세요", stopped:"작업을 멈췄어요. 이미 변경된 파일은 유지됩니다"};
+const statusLabels = {idle:"준비됐어요. 원하는 일을 알려 주세요", starting:"기존 업무 환경에 연결하고 있어요", running:"업무를 진행하고 있어요", stopping:"중지 요청을 처리하고 있어요. 작성 중인 내용은 유지됩니다", approval:"실행 전 확인이 필요해요", question:"다음 단계에 필요한 답변을 기다려요", done:"요청을 마쳤어요. 결과를 확인하거나 이어서 요청하세요", error:"잠시 멈췄어요. 연결 상태를 확인해 주세요", stopped:"작업을 멈췄어요. 이미 변경된 파일은 유지됩니다"};
 const stateNames = {idle:"대기", starting:"준비 중", running:"진행 중", stopping:"중지 중", approval:"승인 대기", question:"답변 대기", done:"응답 완료", error:"확인 필요", stopped:"중지"};
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function basename(path=""){return String(path).split(/[\\/]/).filter(Boolean).pop()||path;}
@@ -668,7 +668,7 @@ async function requestStop({disconnect=false}={}){
       applyStopState(result.session,id);
       if(active?.id===id){if(result.session.connection!==undefined)active.connection=result.session.connection;if(result.session.state)active.state=result.session.state;}
     }
-    if(active?.id===id&&!appClosed)toast(disconnect?"업무 연결의 종료를 요청했어요. 대화와 작성 중인 내용은 유지됩니다.":"중지 요청을 보냈어요. 작성 중인 내용과 완료된 파일 변경은 유지됩니다.");
+    if(active?.id===id&&!appClosed)toast(disconnect?"업무 연결의 종료를 요청했어요. 대화와 작성 중인 내용은 유지됩니다.":"답변 중지를 요청했어요. 완료 안내 후 같은 대화에서 이어서 보내세요. 이미 변경된 파일은 유지됩니다.");
   }catch(failure){
     if(!handleStopFailure(failure,id,revision)){
       // A failed acknowledgement is not proof that the stop failed. Read
@@ -735,7 +735,7 @@ $("shortcuts-dialog").onclose=()=>{
   if(target?.isConnected&&!target.disabled&&!target.closest?.("[hidden],[inert]")&&(!owner||owner.open))target.focus();
   else if(!appClosed)$("shortcuts-open").focus();
 };
-function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
+function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
 $("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();};
 function restartConnectionLocked(){
@@ -752,7 +752,7 @@ function updateRestartControls(){
   $("settings-refresh").disabled=appClosed||stopBlocked()||restartingConnections.size>0||connectionPreparing;
   $("reconnect").disabled=appClosed||stopState()==="stopping"||stopRequests.has(active?.id)||restartingConnections.size>0||connectionPreparing;
   if(appClosed){$("connection-badge").textContent=shutdownLabel();$("connection-badge").title="종료가 끝날 때까지 새 작업과 연결 변경을 진행하지 않습니다.";$("settings-status").textContent=shutdownLabel();}
-  else if(stopBlocked()){$("connection-badge").textContent=stopState()==="failed"?"중지 확인 필요":"작업 중지 중";$("connection-badge").title="작성한 요청은 유지됩니다. 중지 상태를 확인한 뒤 직접 다시 보내 주세요.";$("settings-status").textContent=$("connection-badge").title;}
+  else if(stopBlocked()){$("connection-badge").textContent=stopState()==="failed"?"중지 확인 필요":"중지 처리 중";$("connection-badge").title="작성한 요청은 유지됩니다. 중지 상태를 확인한 뒤 직접 다시 보내 주세요.";$("settings-status").textContent=$("connection-badge").title;}
   else if(restarting){$("connection-badge").textContent="Claude 재시작 중";$("connection-badge").title=label;$("settings-status").textContent="현재 업무의 Claude Code를 다시 연결하고 있어요.";}
 }
 function applyRestartSession(item){

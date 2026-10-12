@@ -17,13 +17,15 @@ globalThis.WorkspaceComposer = (() => {
     if (sending || choiceSubmission || appClosed || composing || input.readOnly) return null;
     const value = input.value, cursor = typeof input.selectionStart === "number" ? input.selectionStart : value.length;
     if (typeof input.selectionEnd === "number" && input.selectionEnd !== cursor) return null;
-    const before = value.slice(0, cursor), slash = before.match(/(?:^|\s)\/([^\s/]{0,160})$/u);
+    const before = value.slice(0, cursor), slash = before.match(/(?:^|\s)\/([^\s\\]{0,200})$/u);
     const quoted = !slash && before.match(/(?:^|\s)@"((?:[^"\\\n]|\\.){0,512})$/u);
     const file = !slash && !quoted && before.match(/(?:^|\s)@([^\s@"]{0,512})$/u);
     const terminal = !slash && !quoted && !file && /^\s*!/.test(value);
     if (!slash && !file && !quoted && !terminal) return null;
     const kind = terminal ? "terminal" : slash ? "slash" : "file";
-    const start = terminal ? 0 : slash ? before.lastIndexOf("/") : before.lastIndexOf(quoted ? '@"' : "@");
+    // A nested Claude skill can contain '/' (apps/web:deploy). Replace the
+    // whole slash token, not just the part after its last directory separator.
+    const start = terminal ? 0 : slash ? cursor - slash[1].length - 1 : before.lastIndexOf(quoted ? '@"' : "@");
     let end = cursor + value.slice(cursor).match(/^[^\s]*/u)[0].length;
     if (quoted) {
       end = value.length;
@@ -61,14 +63,14 @@ globalThis.WorkspaceComposer = (() => {
     $("composer-connect").textContent = preparing ? "빠른 요청 불러오는 중…" : "빠른 요청 불러오기";
     $("composer-native").hidden = current?.kind !== "terminal" && !rows.some(row => row.supported === false);
     $("composer-suggestion-note").textContent = rows.length
-      ? "↑ ↓ / Ctrl+N·P 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 정보 기준이며 실행 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
+      ? "↑ ↓ / Ctrl+N·P 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 스킬의 실행 가능 여부는 전송 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
       : response.message || (preparing?.id === active?.id && active ? "빠른 요청 목록을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
       : !active ? "설치된 공통 스킬에서 일치하는 항목을 찾지 못했어요. 업무를 선택하면 해당 폴더의 빠른 요청도 확인할 수 있어요."
       : response.connectRequired ? "연결에서 빠른 요청 목록을 확인하지 못했어요. ‘빠른 요청 불러오기’로 다시 시도할 수 있어요."
       : response.message || (response.limited
-        ? current?.kind === "file" ? "파일 목록을 일부만 확인했어요. 자료 추가에서 필요한 파일을 직접 선택할 수 있어요." : "현재 업무 연결의 호출 목록을 충분히 확인하지 못했어요. 연결 상태를 확인해 주세요."
+        ? current?.kind === "file" ? "파일 목록을 일부만 확인했어요. 자료 추가에서 필요한 파일을 직접 선택할 수 있어요." : "스킬·빠른 요청 목록을 충분히 확인하지 못했어요. 스킬 등록 위치와 연결 상태를 확인해 주세요."
         : current?.kind === "file" ? "일치하는 파일이 없어요. 자료 추가로 다른 위치의 파일도 선택할 수 있어요."
-        : current?.query ? "현재 연결이 보고한 목록에 일치하는 빠른 요청이 없어요." : "현재 연결이 보고한 스킬·빠른 요청 목록이 비어 있어요."));
+        : current?.query ? "일치하는 빠른 요청이 없어요. 스킬이 현재 업무 폴더나 공통 스킬 위치에 등록되었는지 확인해 주세요." : "사용자 호출 가능한 스킬·빠른 요청 목록이 비어 있어요. 스킬 등록 위치와 공개 설정을 확인해 주세요."));
     const ticket = generation;
     rows.forEach((row, index) => {
       const button = el("button", null, "composer-suggestion" + (row.supported === false ? " unavailable" : ""));
@@ -83,6 +85,7 @@ globalThis.WorkspaceComposer = (() => {
       copy.append(title);
       if (row.description) copy.append(el("small", row.description));
       button.append(symbol, copy, el("span", row.supported === false ? "터미널" : current?.kind === "file" ? "파일" : row.source === "workspace" ? "설정" : row.source === "installed" ? (row.scope === "folder" ? "폴더 스킬" : "공통 스킬") : "Claude", "completion-kind"));
+      if (row.source === "installed") button.title = "설치 정보에서 찾은 스킬입니다. 선택하면 이름만 입력하며, 실행 가능 여부는 전송 시 Claude가 확인합니다.";
       if (row.supported === false) button.append(el("small", row.reason || "이 앱에서 실행 지원을 확인하지 못했습니다.", "completion-unavailable"));
       button.onmousedown = event => event.preventDefault();
       button.onclick = () => choose(index, ticket); list.append(button);

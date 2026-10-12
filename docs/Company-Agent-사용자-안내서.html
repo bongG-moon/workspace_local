@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="source-sha256" data-file="ONBOARDING_COURSE.md" content="dab2b302b3f2e4476c943f313fa0070be48eb8fcbd730d7da54d7f5265dffeca"><meta name="source-sha256" data-file="CLAUDE_CODE_BASICS.md" content="e06682944525b2dbbc5f6710cc292e7d7a3bb0a0ac20b30ba5e78a6c8275e3eb"><meta name="source-sha256" data-file="USER_GUIDE.md" content="3e3acaba6089f05cae7cfe06ba7b3384d7f2c5fb747636af27415156fcfa49a6"><meta name="source-sha256" data-file="COMPANY_AGENT_HANDBOOK.md" content="e43cb47923119deef19b8a2cfc0fc70515ffa8919b5eb4c4ff604ce12cf039b4"><meta name="source-sha256" data-file="CLAUDE_CODE_COMMANDS.md" content="ce93b1d95d8a0e398bbb3f2ee3c4e8246d642d9fe6899203a3290bdfbfd5227b"><meta name="source-sha256" data-file="DESIGN_TERMS.md" content="4b191e93975eb66e691d53db5c9b6e27398fe61c9114251114f43479655ec125"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src 'none'; script-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Company Agent 사용자 안내서</title><!-- Embedded Noto Sans KR subset.
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="source-sha256" data-file="ONBOARDING_COURSE.md" content="dab2b302b3f2e4476c943f313fa0070be48eb8fcbd730d7da54d7f5265dffeca"><meta name="source-sha256" data-file="CLAUDE_CODE_BASICS.md" content="e2726df44ee3a3b517ce1e51297348d8f2dacb73ec5b11d0e87dc1fdcf313a22"><meta name="source-sha256" data-file="USER_GUIDE.md" content="5b75cca4bfa2c02ce5aea32148daa175bdc10b67c5d072042e7d1d04daaa896c"><meta name="source-sha256" data-file="COMPANY_AGENT_HANDBOOK.md" content="e43cb47923119deef19b8a2cfc0fc70515ffa8919b5eb4c4ff604ce12cf039b4"><meta name="source-sha256" data-file="CLAUDE_CODE_COMMANDS.md" content="ce93b1d95d8a0e398bbb3f2ee3c4e8246d642d9fe6899203a3290bdfbfd5227b"><meta name="source-sha256" data-file="DESIGN_TERMS.md" content="4b191e93975eb66e691d53db5c9b6e27398fe61c9114251114f43479655ec125"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src 'none'; script-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Company Agent 사용자 안내서</title><!-- Embedded Noto Sans KR subset.
 Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
@@ -818,7 +818,13 @@ MCP 연결 등록, 인터넷 패키지 설치, 회사 플랫폼 업로드는 하
 </tbody></table></div>
 <p>Claude Code의 실행 승인과 Company Agent의 업무 범위 확인은 별도 절차일 수 있습니다. 하나를 승인했다고 모든 후속 작업을 허용한 것은 아닙니다. 자주 묻는다는 이유로 회사 정책이나 승인 절차를 끄지 않습니다.</p>
 <p><code>Esc</code>로 응답을 멈추거나 <code>/rewind</code>를 열어도 모든 작업이 취소되는 것은 아닙니다. 특히 이미 보낸 메일, 외부 변경, 일부 명령 실행은 별도로 확인해야 합니다. <a href="https://code.claude.com/docs/en/checkpointing">공식 되돌리기 안내</a></p>
-<p>Workspace의 <strong>작업 중지</strong>도 이미 수행한 일을 되돌리지 않습니다. 앱이 시작한 CLI의 종료 확인을 기다리며, 종료를 확인하지 못하면 중지 성공으로 표시하지 않습니다. 직접 시작한 CLI가 끝나도 모든 하위 프로그램의 종료를 보장하지는 않습니다. 같은 요청을 다시 보내기 전에 실제 결과와 남은 작업을 확인하세요.</p>
+<p>AX Workspace에서는 <strong>답변 중지</strong>와 <strong>연결 종료</strong>를 구분하세요.</p>
+<ul>
+<li><strong>입력창 위 → 답변 중지</strong>: 지금 처리하는 요청만 멈춥니다. Claude가 중지를 확인하면 연결과 대화는 유지됩니다. 중지 완료 안내를 기다린 뒤 같은 대화에서 새 요청을 보내세요.</li>
+<li><strong>설정 → 업무 연결 종료</strong>: 현재 업무의 Claude Code 연결을 닫습니다. 대화 기록과 파일은 남으며, 다음 요청을 보내면 다시 연결합니다.</li>
+<li><strong>설정 → 완전히 종료</strong> 또는 <strong>트레이 → 완전 종료</strong>: 이 앱의 작업과 연결을 모두 정리하고 앱을 끝냅니다. 창의 X는 앱을 트레이에 남기며, 작업을 중지하지 않습니다.</li>
+</ul>
+<p>어느 방법도 이미 만든 파일·수정한 내용·보낸 메일을 되돌리지 않습니다. <strong>답변 중지</strong> 후 남은 <strong>이어 할 일</strong>은 자동 실행하지 않으므로 내용을 확인하고 <strong>이어 실행</strong>하세요. 중지 확인에 실패하거나 연결에 문제가 생기면 연결을 닫고 재연결이 필요할 수 있습니다. 중지 완료가 확인되기 전에는 같은 요청을 반복해서 보내지 말고 화면 안내와 실제 결과를 확인하세요.</p>
 <h3 id="basics-section-5">5. 대화·프로젝트 지침·기억을 구분하세요</h3>
 <div class="table-wrap" tabindex="0" role="region" aria-label="안내 표"><table role="table">
 <thead>
@@ -867,6 +873,8 @@ MCP 연결 등록, 인터넷 패키지 설치, 회사 플랫폼 업로드는 하
 <p>문제가 반복되면 같은 동작을 계속 실행하지 말고 실제 오류와 현재 파일 상태를 남깁니다. 공유할 로그에서는 업무 내용·인증 값·불필요한 개인 경로를 가리세요. 업무별 예문과 오류 대응은 <a href="#usage">업무별 사용법</a>에 있습니다.</p>
 <p class="back"><a href="#start">처음 안내로 돌아가기 ↑</a></p></section><section class="book" aria-labelledby="usage"><div class="book-heading"><span class="book-number" aria-hidden="true">03</span><h2 id="usage">Company Agent 업무별 사용 가이드</h2></div>
 <p>하고 싶은 업무의 예문을 복사하고 자료·범위·결과 형식을 바꿔 요청하세요. Company Agent는 기존 Claude Code의 회사 계정·모델·권한을 그대로 사용합니다.</p>
+<p>Workspace 앱을 사용할 때 실행 권한은 Windows에서 프로그램을 연 방식에 따릅니다. 일반 환경의 EXE 더블클릭은 일반 권한이고, EXE 우클릭의 <strong>관리자 권한으로 실행</strong>은 앱과 Claude·도구에 관리자 권한을 적용합니다. 관리자 터미널에서 실행하면 그 권한을 그대로 유지합니다. 앱 안에서 권한을 전환하거나 다음 실행용으로 저장하지 않습니다. 바꾸려면 <strong>완전 종료</strong> 후 다시 여세요. 창의 X는 앱을 트레이에 남기는 기능입니다. <a href="WORKSPACE_EXECUTION_MODE.md">Windows 실행 권한 안내</a></p>
+<p>작업 중에도 <strong>승인</strong> 목록이나 <strong>Shift+Tab / Alt+M</strong>으로 현재 연결이 지원하는 승인 모드를 바꿀 수 있습니다. 변경 응답을 확인한 뒤 이후 도구 호출에 적용합니다. 이미 화면에 나온 승인·질문은 사라지거나 자동으로 허용되지 않으므로 직접 답하세요. 연결된 CLI가 실시간 변경을 거절하거나 제공하지 않으면 현재 모드를 유지하고 이유를 안내합니다. 모델·Effort 변경과 Windows 관리자 실행은 이 기능과 별개입니다.</p>
 <h3 id="usage-section-1"><span id="section-1" aria-hidden="true"></span>1. 요청은 목적·자료·결과·제한 순서로</h3>
 <div class="table-wrap" tabindex="0" role="region" aria-label="안내 표"><table role="table">
 <thead>
@@ -1048,8 +1056,8 @@ MCP 연결 등록, 인터넷 패키지 설치, 회사 플랫폼 업로드는 하
 <td role="cell" data-label="먼저 할 일"><span class="cell-content">같은 저장 범위에서 정상·오류 입력을 다시 시험. 소스 삭제·재설치·검사 조건 제거로 해결하지 않음</span></td>
 </tr>
 <tr role="row">
-<td role="cell" data-label="상황"><span class="cell-content">작업 중지 후 계속 진행 중</span></td>
-<td role="cell" data-label="먼저 할 일"><span class="cell-content">종료 확인 결과를 기다리고 마지막 실행 상태 확인. 같은 작업 재요청이나 다른 프로그램 전체 종료 금지</span></td>
+<td role="cell" data-label="상황"><span class="cell-content">답변 중지 후 계속 진행 중</span></td>
+<td role="cell" data-label="먼저 할 일"><span class="cell-content">중지 완료 안내를 기다리고 마지막 실행 상태 확인. 정상 중지 후 같은 연결에서 새 요청 가능. 확인 전에 같은 요청 반복 전송 금지</span></td>
 </tr>
 <tr role="row">
 <td role="cell" data-label="상황"><span class="cell-content">한글 깨짐</span></td>
@@ -1069,7 +1077,8 @@ MCP 연결 등록, 인터넷 패키지 설치, 회사 플랫폼 업로드는 하
 </tr>
 </tbody></table></div>
 <p>설치 ZIP을 모두 푼 뒤 <strong>Diagnose-CompanyAgent.cmd</strong>를 열고 실제 작업 폴더를 지정하면 설치·스킬 기록·준비물을 읽기 전용으로 확인할 수 있습니다. 문서·메일·DB 본문이나 모델을 자동 조회하지 않습니다. 로그를 공유하기 전 개인 경로·업무 내용·인증 값을 가리세요.</p>
-<p>작업 중지는 이미 만든 파일·보낸 메일을 되돌리지 않습니다. Workspace가 직접 시작한 CLI의 종료를 확인했어도 모든 하위 프로그램이 종료됐다는 뜻은 아닙니다. 중지가 확인되지 않으면 마지막 상태를 담당자에게 전달하고 실제 결과부터 확인합니다.</p>
+<p>AX Workspace의 <strong>답변 중지</strong>는 현재 요청만 멈추며, Claude가 중지를 확인하면 연결과 대화를 유지합니다. <strong>설정 → 업무 연결 종료</strong>는 현재 업무의 Claude Code 연결을 닫는 별도 기능입니다. 대화 기록과 파일은 남으며 다음 요청을 보내면 다시 연결합니다. 앱 전체를 끝내려면 <strong>설정 → 완전히 종료</strong> 또는 <strong>트레이 → 완전 종료</strong>를 사용하세요.</p>
+<p>답변 중지는 이미 만든 파일·보낸 메일을 되돌리지 않습니다. 남은 <strong>이어 할 일</strong>도 자동 실행하지 않으므로 확인 후 <strong>이어 실행</strong>하세요. 중지 확인 실패나 연결 오류로 연결이 닫힐 수 있습니다. 중지가 확인되지 않으면 마지막 상태를 담당자에게 전달하고 실제 결과부터 확인합니다.</p>
 <h3 id="usage-section-10"><span id="section-10" aria-hidden="true"></span>10. 업데이트와 의견 보내기</h3>
 <p><a href="https://github.com/bongG-moon/claude_base_repo/releases/latest">최신 Release</a>의 직원용 설치 ZIP 전체를 풀고 기존과 같은 범위를 선택해 업데이트합니다. <code>Source code (zip)</code>은 직원용 설치 파일이 아닙니다. Workspace 사용자는 같은 Release의 별도 미리보기 ZIP을 사용합니다. 개인 기억·스킬·지식·모델·MCP·다른 플러그인을 임의로 초기화하지 않습니다. 업데이트 후 Claude Code를 다시 시작하세요.</p>
 <div class="example"><div class="example-label"><span>요청 예문</span><span>선택 후 Ctrl+C로 복사</span></div><pre><code class="language-text">설치 버전 / 사용 화면 (CLI·VS Code·Workspace):

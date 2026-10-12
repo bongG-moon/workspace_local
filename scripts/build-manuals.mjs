@@ -76,6 +76,10 @@ function emit(name,html,folders=['docs','company-agent-plugin/resources/manuals'
 // skills, hooks or model context. Preserve source bytes, including line endings.
 const installedFolders=['company-agent-plugin/resources/manuals'];
 emit('README.md',fs.readFileSync(path.join(root,'docs/README.md'),'utf8'),installedFolders);
+// The usage chapter links to this separate Windows guide. Ship the reference
+// beside the reader while continuing to reject unexpected document links.
+const references=['WORKSPACE_EXECUTION_MODE.md'];
+for(const name of references)emit(name,fs.readFileSync(path.join(root,'docs',name),'utf8'),installedFolders);
 for(const book of books){
   const raw=fs.readFileSync(path.join(root,'docs',book.source),'utf8');
   emit(book.source,raw,installedFolders);
@@ -95,6 +99,7 @@ for(const book of books){
     .replace(/<a href="([^"/:#]+\.(?:md|html))">([\s\S]*?)<\/a>/g,(_,file,t)=>{
       const dest=books.find(b=>b.source===file||b.legacy===file);
       if(dest)return `<a href="#${dest.id}">${t}</a>`;
+      if(references.includes(file))return `<a href="${file}">${t}</a>`;
       throw Error('Link to a document outside the unified guide: '+file);
     });
   if(n!==book.headings.length||/<(?:script|iframe|object|img)\b|\son\w+=/i.test(body))throw Error('Unexpected active content in '+book.source);

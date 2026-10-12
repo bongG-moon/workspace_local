@@ -127,6 +127,49 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual({'user', 'project'}, {row['source'] for row in result['skills']})
         self.assertIn('plugin', {row['source'] for row in self.client.discovery_inventory()['skills']})
 
+    def test_skill_visibility_off_hides_native_names_without_disabling_plugin(self):
+        write(self.config / 'settings.json', {'enabledPlugins': {self.plugin_id: True},
+                                             'skillOverrides': {'shared': 'off', 'fixture:shared': 'off'}})
+        result = self.client.completion_inventory(self.project)
+        self.assertEqual(['fixture:shared'], [row['invocation'] for row in result['skills']])
+        self.assertFalse(result['skillsLimited'])
+        # Local visibility can re-enable a native name. An alias or basename
+        # must not hide a separate namespaced legacy command.
+        write(self.project / '.claude/settings.local.json', {'skillOverrides': {'shared': 'on', 'task': 'off'}})
+        write(self.project / '.claude/commands/team/task.md', '---\ndescription: Task\n---\nbody')
+        result = self.client.completion_inventory(self.project)
+        self.assertTrue({'shared', 'team:task', 'fixture:shared'} <=
+                        {row['invocation'] for row in result['skills']})
+
+    def test_skill_visibility_modes_preserve_explicit_only_and_internal_rules(self):
+        self.skill(self.config / 'skills/manual/SKILL.md', 'manual')
+        self.skill(self.config / 'skills/internal/SKILL.md', 'internal', 'user-invocable: false\n')
+        write(self.project / '.claude/settings.json', {'skillOverrides': {
+            'shared': 'name-only', 'manual': 'user-invocable-only', 'internal': 'on'}})
+        rows = {row['invocation']: row for row in self.client.completion_inventory(self.project)['skills']}
+        self.assertTrue(rows['shared']['userInvocable'])
+        self.assertTrue(rows['manual']['explicitOnly'])
+        self.assertTrue(rows['manual']['userInvocable'])
+        self.assertFalse(rows['internal']['userInvocable'])
+        self.assertFalse(self.client.completion_inventory()['skillsLimited'])
+
+    def test_plugin_only_setting_omits_native_skills_and_commands(self):
+        write(self.config / 'commands/manual.md', '---\ndescription: Manual\n---\nbody')
+        write(self.project / '.claude/settings.local.json', {'strictPluginOnlyCustomization': True})
+        result = self.client.completion_inventory(self.project)
+        self.assertEqual(['fixture:shared'], [row['invocation'] for row in result['skills']])
+        self.assertFalse(result['skillsLimited'])
+
+    def test_unknown_visibility_settings_do_not_reintroduce_hidden_candidates(self):
+        for value in ({'skillOverrides': []}, {'skillOverrides': {'shared': False}},
+                      {'skillOverrides': {'shared': 'unknown'}}, {'strictPluginOnlyCustomization': 'false'}):
+            with self.subTest(value=value):
+                write(self.project / '.claude/settings.local.json', value)
+                result = self.client.completion_inventory(self.project)
+                self.assertEqual([], result['skills'])
+                self.assertTrue(result['skillsLimited'])
+                self.assertGreater(result['readFailures'], 0)
+
     def test_project_plugin_scope_cannot_leak_to_common_or_sibling_folder(self):
         self.installed([{**self.entry, 'scope': 'project', 'projectPath': str(self.project)}])
         self.assertNotIn('plugin', {row['source'] for row in self.client.discovery_inventory()['skills']})
@@ -168,7 +211,10 @@ class DiscoveryTests(unittest.TestCase):
                     write(path, '{"nested":' + '[' * 2000 + '0' + ']' * 2000 + '}')
                     result = self.client.discovery_inventory()
                     self.assertTrue(result['skillsLimited'])
-                    self.assertIn('user', {row['source'] for row in result['skills']})
+                    if path == self.config / 'settings.json':
+                        self.assertEqual([], result['skills'])  # Visibility policy is unreadable.
+                    else:
+                        self.assertIn('user', {row['source'] for row in result['skills']})
                 finally:
                     path.write_bytes(before)
 

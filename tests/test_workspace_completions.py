@@ -347,6 +347,43 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(['/skill'], [row['invocation'] for row in result['items']])
         self.assertTrue(result['limited'])
 
+    def test_runtime_nested_skill_keeps_qualified_name_and_matches_leaf(self):
+        raw = [{'name': 'apps/web:deploy', 'description': 'Web project deployment'},
+               {'name': '/apps/web:deploy', 'description': 'Web project deployment'},
+               {'name': 'packages/\ud55c\uae00-ui:review', 'description': 'Nested review'},
+               {'name': 'team:deploy', 'description': 'Plugin deployment'}]
+        result = self.commands(raw, query='deploy')
+        self.assertEqual({'/apps/web:deploy', '/team:deploy'},
+                         {row['invocation'] for row in result['items']})
+        self.assertFalse(result['limited'])
+        nested = self.commands(raw, query='apps/web')['items']
+        self.assertEqual(1, len(nested))
+        self.assertEqual('/apps/web:deploy', nested[0]['invocation'])
+        self.assertEqual('runtime', nested[0]['source'])
+        self.assertEqual('reported', nested[0]['availability'])
+        self.assertEqual('/packages/\ud55c\uae00-ui:review',
+                         self.commands(raw, query='review')['items'][0]['invocation'])
+
+    def test_runtime_nested_names_reject_traversal_absolute_and_empty_segments(self):
+        invalid = ['../apps:deploy', 'apps/../web:deploy', 'apps/./web:deploy',
+                   'apps//web:deploy', 'apps/:deploy', '//apps/web:deploy',
+                   'C:/apps/web:deploy', '/C:/apps/web:deploy', 'apps\\web:deploy',
+                   'apps/web:', 'apps/web:/deploy', 'apps/web:bad arg',
+                   'apps/web:bad\nname', 'apps/web:$(cmd)', 'apps/web']
+        for name in invalid:
+            with self.subTest(name=name):
+                result = self.commands([name])
+                self.assertEqual([], result['items'])
+                self.assertTrue(result['limited'])
+
+    def test_installed_metadata_cannot_invent_runtime_nested_invocations(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [{
+            'invocation': 'apps/web:deploy', 'storageScope': 'project',
+            'source': 'project', 'userInvocable': True}]}
+        result = self.commands([], discovery=CompletionDiscovery(client))
+        self.assertEqual([], result['items'])
+
     def test_repeated_invocation_has_one_row_and_no_arbitrary_origin_claim(self):
         result = self.commands([{'name': 'report', 'description': 'source A'},
                                 {'name': '/report', 'description': 'source B'}])
@@ -382,11 +419,142 @@ class CompletionTests(unittest.TestCase):
         self.assertTrue(result['connectRequired'])
         self.assertTrue(all(item['availability'] == 'discovered' and item['source'] == 'installed'
                             and item['scope'] == 'common' for item in result['items']))
-        # Once reported, even an empty runtime catalog is authoritative.
+        # A live startup report is not a filesystem watcher. Installed skill
+        # names remain discoverable without pretending the CLI reported them.
         self.commands([])
         result = complete(self.item, {'kind': 'slash'}, discovery=discovery)
-        self.assertEqual({'items': [], 'limited': False}, result)
-        client.completion_inventory.assert_called_once_with(None)
+        self.assertEqual(['/company:skills', '/project', '/skill-creator'],
+                         [item['invocation'] for item in result['items']])
+        self.assertTrue(result['discovery'])
+        self.assertFalse(result['limited'])
+        self.assertNotIn('connectRequired', result)
+        self.assertEqual([None, str(self.root)],
+                         [call.args[0] for call in client.completion_inventory.call_args_list])
+
+    def test_live_runtime_merges_new_installed_skill_without_starting_cli(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': 'mumu-pocket-launch', 'storageScope': 'project',
+             'userInvocable': True, 'description': 'Launch the selected instance'},
+            {'invocation': 'mumu-internal', 'storageScope': 'project', 'userInvocable': False}]}
+        with patch('subprocess.Popen', side_effect=AssertionError('must not start Claude')):
+            result = self.commands(['compact'], query='/mumu', discovery=CompletionDiscovery(client))
+        self.assertEqual(['/mumu-pocket-launch'], [row['invocation'] for row in result['items']])
+        self.assertEqual(('installed', 'discovered', 'folder'),
+                         tuple(result['items'][0][key] for key in ('source', 'availability', 'scope')))
+        self.assertTrue(result['discovery'])
+        self.assertNotIn('connectRequired', result)
+
+    def test_runtime_collision_keeps_support_description_and_exact_namespace(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': name, 'description': 'LOCAL-CONFLICT', 'storageScope': 'personal',
+             'userInvocable': True} for name in ('login', 'report', 'plugin:report')]}
+        discovery = CompletionDiscovery(client)
+        raw = ['login', {'name': 'report', 'description': 'Live description'}]
+        result = self.commands(raw, discovery=discovery)
+        rows = {row['invocation']: row for row in result['items']}
+        self.assertEqual(3, len(rows))
+        self.assertFalse(rows['/login']['supported'])
+        self.assertEqual('runtime', rows['/login']['source'])
+        self.assertEqual('Live description', rows['/report']['description'])
+        self.assertEqual('installed', rows['/plugin:report']['source'])
+        result = self.commands(raw, query='LOCAL-CONFLICT', discovery=discovery)
+        self.assertEqual(['/plugin:report'], [row['invocation'] for row in result['items']])
+
+    def test_personal_skill_visibility_shadows_same_project_name_before_filtering(self):
+        client = Mock()
+        personal = {'invocation': 'same', 'source': 'user', 'storageScope': 'personal',
+                    'userInvocable': False, 'description': 'Personal skill'}
+        project = {'invocation': 'same', 'source': 'project', 'storageScope': 'project',
+                   'userInvocable': True, 'description': 'Project skill'}
+        plugin = {'invocation': 'plugin:same', 'source': 'plugin', 'storageScope': 'personal',
+                  'userInvocable': True, 'description': 'Plugin skill'}
+        for rows in ([personal, project, plugin], [plugin, project, personal]):
+            with self.subTest(order=[row['source'] for row in rows]):
+                client.completion_inventory.return_value = {'skills': rows}
+                result = self.commands([], query='same', discovery=CompletionDiscovery(client))
+                self.assertEqual(['/plugin:same'], [row['invocation'] for row in result['items']])
+        personal['userInvocable'], project['userInvocable'] = True, False
+        client.completion_inventory.return_value = {'skills': [project, personal, plugin]}
+        result = self.commands([], query='same', discovery=CompletionDiscovery(client))
+        self.assertEqual(['/same', '/plugin:same'], [row['invocation'] for row in result['items']])
+        self.assertEqual('Personal skill', result['items'][0]['description'])
+
+    def test_unknown_same_scope_visibility_collision_waits_for_runtime_report(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': 'same', 'storageScope': 'project', 'userInvocable': True},
+            {'invocation': 'same', 'storageScope': 'project', 'userInvocable': False}]}
+        self.assertEqual([], self.commands([], discovery=CompletionDiscovery(client))['items'])
+        result = self.commands(['same'], discovery=CompletionDiscovery(client))
+        self.assertEqual(['/same'], [row['invocation'] for row in result['items']])
+        self.assertEqual('runtime', result['items'][0]['source'])
+
+    def test_plugin_installation_scope_does_not_choose_an_unreported_version(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': 'plugin:same', 'source': 'plugin', 'pluginNamespace': 'plugin',
+             'storageScope': 'personal', 'userInvocable': True, 'description': 'User install'},
+            {'invocation': 'plugin:same', 'source': 'plugin', 'pluginNamespace': 'plugin',
+             'storageScope': 'project', 'userInvocable': False, 'description': 'Project install'}]}
+        self.assertEqual([], self.commands([], discovery=CompletionDiscovery(client))['items'])
+        client.completion_inventory.return_value['skills'][1]['userInvocable'] = True
+        result = self.commands([], discovery=CompletionDiscovery(client))
+        self.assertEqual(1, len(result['items']))
+        self.assertIn('같은 호출명', result['items'][0]['description'])
+        result = self.commands([{'name': 'plugin:same', 'description': 'Actual install'}],
+                               discovery=CompletionDiscovery(client))
+        self.assertEqual('Actual install', result['items'][0]['description'])
+        self.assertEqual('runtime', result['items'][0]['source'])
+
+    def test_exact_installed_match_outranks_broad_runtime_matches_before_trimming(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': 'report', 'storageScope': 'personal', 'userInvocable': True}]}
+        result = self.commands([f'archive:old-report-{i}' for i in range(70)], query='report',
+                               max_items=1, discovery=CompletionDiscovery(client))
+        self.assertEqual(['/report'], [row['invocation'] for row in result['items']])
+        self.assertTrue(result['limited'])
+
+    def test_live_skill_addition_and_removal_refresh_after_ttl_without_keystroke_scans(self):
+        from local_app.claude_inventory import ClaudeInventory
+        client = ClaudeInventory(config=self.base / 'config')
+        discovery = CompletionDiscovery(client, ttl=5)
+        with patch.object(client, 'completion_inventory', wraps=client.completion_inventory) as read, \
+                patch('local_app.completions.time.monotonic', return_value=0):
+            self.assertEqual([], self.commands(['compact'], query='mumu', discovery=discovery)['items'])
+            path = self.root / '.claude/skills/mumu-pocket-launch/SKILL.md'
+            path.parent.mkdir(parents=True)
+            path.write_text('---\nname: mumu-pocket-launch\n---\nNever execute this body.', encoding='utf-8')
+            self.assertEqual([], self.commands(['compact'], query='mumu', discovery=discovery)['items'])
+            self.assertEqual(1, read.call_count)
+        with patch('local_app.completions.time.monotonic', return_value=6):
+            result = self.commands(['compact'], query='mumu', discovery=discovery)
+        self.assertEqual(['/mumu-pocket-launch'], [row['invocation'] for row in result['items']])
+        path.unlink()
+        with patch('local_app.completions.time.monotonic', return_value=12):
+            self.assertEqual([], self.commands(['compact'], query='mumu', discovery=discovery)['items'])
+
+    def test_live_discovery_read_failure_keeps_runtime_rows_and_reports_partial(self):
+        client = Mock()
+        client.completion_inventory.side_effect = OSError('PRIVATE details')
+        result = self.commands(['compact'], discovery=CompletionDiscovery(client))
+        self.assertEqual(['/compact'], [row['invocation'] for row in result['items']])
+        self.assertEqual('runtime', result['items'][0]['source'])
+        self.assertTrue(result['limited'])
+        self.assertNotIn('PRIVATE', str(result))
+
+    def test_installed_skill_cannot_override_supported_effort_session_control(self):
+        client = Mock()
+        client.completion_inventory.return_value = {'skills': [
+            {'invocation': 'effort', 'storageScope': 'personal', 'userInvocable': True}]}
+        self.commands([])
+        self.item['connection']['capabilities'] = {'setEffort': True}
+        result = complete(self.item, {'kind': 'slash', 'query': 'eff'}, discovery=CompletionDiscovery(client))
+        self.assertEqual(1, len(result['items']))
+        self.assertEqual('workspace', result['items'][0]['source'])
+        self.assertEqual('/effort', result['items'][0]['invocation'])
 
     def test_discovery_cache_coalesces_queries_and_isolates_contexts_and_expiration(self):
         client = Mock()

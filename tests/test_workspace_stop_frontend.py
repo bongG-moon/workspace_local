@@ -19,7 +19,7 @@ class WorkspaceStopFrontendTests(unittest.TestCase):
           assert.deepEqual(calls,[{path:'/api/stop',data:{id:'A'}}]);
           assert.equal($('status').dataset.state,'stopping');assert.equal($('send').disabled,true);
           assert.equal($('stop').disabled,true);assert.equal($('prompt').readOnly,false);
-          assert.equal($('connection-badge').textContent,'작업 중지 중');
+          assert.equal($('connection-badge').textContent,'중지 처리 중');
           handleEvent({type:'result',data:{stopState:null,connectionStopped:false}});
           assert.equal(active.state,'stopping');assert.doesNotMatch($('status-text').textContent,/요청을 마쳤/);
           await submit();await $('stop').onclick();assert.equal(calls.length,1);
@@ -45,7 +45,7 @@ class WorkspaceStopFrontendTests(unittest.TestCase):
           assert.equal(calls,1);assert.equal(active.state,'stopping');
           assert.equal($('send').disabled,true);assert.equal($('prompt').value,'keep this');
           assert.deepEqual(attachments,['input.csv']);assert.equal($('error-banner').hidden,true);
-          assert.equal($('recovery-actions').hidden,true);assert.equal($('connection-badge').textContent,'작업 중지 중');
+          assert.equal($('recovery-actions').hidden,true);assert.equal($('connection-badge').textContent,'중지 처리 중');
           await submit();await reconnect();await setModel('other');assert.equal(calls,1);
         })()''')
 
