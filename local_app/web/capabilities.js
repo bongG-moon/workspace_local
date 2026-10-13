@@ -1,12 +1,27 @@
 "use strict";
 
-// Read-only inventory with an explicit, trusted connection preparation action.
+// Read-only inventory; runtime tabs prepare only the selected, already trusted task.
 // Metadata never becomes HTML or an executable request.
 globalThis.WorkspaceCapabilities = (() => {
   let opened = false, kind = "skills", data = null, generation = 0;
   let controller = null, loading = false, refreshTimer = null;
   let scope = "common", selectedFolder = "", selectedSession = null, folderOptionsKey = "";
   let commonSession = null, commonExplicit = false, preparing = null;
+  let autoTimer = null;
+  const attempted = new Map();
+  function autoPrepare() {
+    clearTimeout(autoTimer);
+    if (!opened || kind === "skills" || !runtimeSession() || data?.runtime?.state === "live" || boot.demo || appClosed) return;
+    const key = contextKey(), id = runtimeSession().id;
+    if (Date.now() - (attempted.get(id) || 0) < 30000) return;
+    autoTimer = setTimeout(() => {
+      if (!opened || contextKey() !== key || kind === "skills") return;
+      if (preparing) return;
+      attempted.set(id, Date.now());
+      while (attempted.size > 16) attempted.delete(attempted.keys().next().value);
+      void prepareCatalog({automatic:true});
+    }, 150);
+  }
   const isLive = item => item?.connection?.connected === true || item?.connectionState === "live";
   const kinds = ["skills", "tools", "mcp", "commands"];
   const names = {skills:"스킬", tools:"실행 기능", mcp:"연결된 기능(MCP)", commands:"빠른 요청(/명령)"};
@@ -107,10 +122,10 @@ globalThis.WorkspaceCapabilities = (() => {
     contextLine();
     const selected=runtimeSession();
     $("capabilities-connect").disabled=!!preparing||!selected||appClosed||!!globalThis.WorkspaceConnectionRestart?.isCurrent();
-    $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "연결하고 목록 확인";
+    $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "다시 확인";
     const attention = active && ["approval", "question"].includes(active.state)
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
-    $("capabilities-status").textContent = loading
+    $("capabilities-status").textContent = loading || preparing
       ? "기능 목록을 확인하고 있어요. AI 요청은 보내지 않습니다." + attention
       : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "공통 설치 스킬과 선택한 업무 연결의 보고 목록을 구분해 확인합니다.")) + attention;
   }
@@ -172,7 +187,7 @@ globalThis.WorkspaceCapabilities = (() => {
       return String(inventory.skills.length);
     }
     return runtime?.reported ? String(runtime.items.length)
-      : loading && !data ? "확인 중" : beforeConnection() ? (runtimeSession()?"연결 필요":"업무 선택") : "CLI 미제공";
+      : preparing ? "확인 중" : loading && !data ? "확인 중" : beforeConnection() ? (runtimeSession()?"연결 확인":"업무 선택") : "CLI 미제공";
   }
   function tabState(inventory) {
     for (const type of kinds) {
@@ -288,7 +303,7 @@ globalThis.WorkspaceCapabilities = (() => {
         : "확인한 설치 목록에 일반 스킬이 없어요."
       : current.reported ? `CLI가 보고한 ${names[kind]} 목록이 비어 있어요.`
       : data?.schemaVersion === 2 && data?.status === "installed-only" ? "이 범위의 업무 연결 보고가 없어요. 설치 정보와 실제 연결 목록은 별도로 확인합니다."
-      : beforeConnection() ? `선택한 업무의 Claude 연결이 준비되면 ${names[kind]} 목록을 확인할 수 있어요. 위의 ‘연결하고 목록 확인’을 눌러 주세요.`
+      : beforeConnection() ? `선택한 업무의 Claude 연결을 자동으로 확인합니다. 처음 연결하는 폴더이거나 다시 시도하려면 ‘다시 확인’을 눌러 주세요.`
       : `현재 Claude 연결에서 ${names[kind]} 목록을 전달받지 못했어요. 항목이 없다는 뜻은 아닙니다.`;
     const notes = [...(data?.warnings || [])];
     if (kind === "skills" && data?.installed?.diagnostics?.summary && !["ready", "metadata_read"].includes(data.installed.diagnostics.code)) notes.push(data.installed.diagnostics.summary);
@@ -353,7 +368,7 @@ globalThis.WorkspaceCapabilities = (() => {
       else if (commonSession) query += `&id=${encodeURIComponent(commonSession.id)}`;
       const response = await api("/api/capabilities" + query, undefined, controller.signal);
       if (!opened || ticket !== generation || contextKey() !== key) return;
-      data = response; loading = false; render();
+      data = response; loading = false; render(); autoPrepare();
     } catch (err) {
       if (err.name === "AbortError" || ticket !== generation || !opened) return;
       data = null; loading = false; render();
@@ -379,6 +394,7 @@ globalThis.WorkspaceCapabilities = (() => {
     $("capabilities-search").focus();
   }
   function close() {
+    clearTimeout(autoTimer);
     if (!opened) return;
     opened = false; generation++; loading = false;
     if (controller) controller.abort();
@@ -389,7 +405,7 @@ globalThis.WorkspaceCapabilities = (() => {
     taskHeader();
     globalThis.WorkspaceStream?.resume();
   }
-  async function prepareCatalog() {
+  async function prepareCatalog({automatic=false} = {}) {
     if(preparing||!runtimeSession()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     const context={key:contextKey(),id:runtimeSession().id};preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
     const current=()=>opened&&!appClosed&&contextKey()===context.key;
@@ -397,22 +413,24 @@ globalThis.WorkspaceCapabilities = (() => {
       const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);
       if(!current())return;
       if(!item.trusted){
+        if(automatic){context.error="처음 연결하는 폴더예요. ‘다시 확인’을 눌러 이 폴더의 설정·후크·MCP 실행을 확인해 주세요.";return;}
         const accepted=await confirmAction({title:"이 업무 폴더의 Claude 연결",message:`${item.workspace}\n이 폴더의 Claude 설정·후크·MCP를 실행해 목록을 확인합니다. AI 질문은 보내지 않습니다.`,confirmLabel:"이 폴더 연결"});
         if(!accepted||!current())return;
         await api('/api/trust',{id:context.id,trusted:true});
         if(!current())return;
       }
-      if(["starting","running","approval","question"].includes(item.state)){
-        await refresh();toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
+      if(["starting","running","approval","question"].includes(item.state) || item.connection?.connected===true){
+        await refresh();if(!automatic)toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
       }
-      const response=await api('/api/connect',{id:context.id});
+      context.promise=(active?.id===context.id ? globalThis.WorkspaceComposer?.waitForPreparation?.() || globalThis.WorkspaceInlineControls?.waitForPreparation?.() : null) || api('/api/connect',{id:context.id});
+      const response=await context.promise;
       if(!current())return;
       sessions=sessions.map(row=>row.id===context.id?{...row,connectionState:"live"}:row);
       if(active?.id===context.id){active.trusted=true;active.connection=response.connection;renderConnection(response.connection);}
       await refresh();
-      if(current())toast("연결 목록을 확인했어요. 실행 기능 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
-    }catch(err){if(current())toast(err.message);}
-    finally{if(preparing===context){preparing=null;if(opened)statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();}}
+      if(current()&&!automatic)toast("연결 목록을 확인했어요. 실행 기능 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
+    }catch(err){if(current()){$("capabilities-status").textContent=err.message;if(!automatic)toast(err.message);context.error=err.message;}}
+    finally{if(preparing===context){preparing=null;if(opened){statusLine();if(context.error&&current())$("capabilities-status").textContent=context.error;if(!current())autoPrepare();}globalThis.WorkspaceConnectionRestart?.refreshControls();}}
   }
   function contextChanged(reload = false) {
     if (!opened) return;
@@ -437,6 +455,7 @@ globalThis.WorkspaceCapabilities = (() => {
     } else selectFolder($("capabilities-folder").value);
     data = null; render(); return refresh();
   };
+  $("capabilities-manage").onclick = () => globalThis.WorkspaceCustomizations?.open("skills",runtimeSession()?.id);
   $("capabilities-open").onclick = open;
   $("capabilities-back").onclick = () => { close(); $("capabilities-open").focus(); };
   $("capabilities-refresh").onclick = refresh;
@@ -444,15 +463,16 @@ globalThis.WorkspaceCapabilities = (() => {
   $("capabilities-search").oninput = render;
   for (const type of kinds) {
     const tab = $(`capabilities-${type}-tab`);
-    tab.onclick = () => { kind = type; render(); };
+    tab.onclick = () => { kind = type; render(); autoPrepare(); };
     tab.onkeydown = event => {
       const index = kinds.indexOf(type);
       const next = event.key === "ArrowRight" ? (index + 1) % kinds.length
         : event.key === "ArrowLeft" ? (index + kinds.length - 1) % kinds.length
         : event.key === "Home" ? 0 : event.key === "End" ? kinds.length - 1 : -1;
       if (next < 0) return;
-      event.preventDefault(); kind = kinds[next]; render(); $(`capabilities-${kind}-tab`).focus();
+      event.preventDefault(); kind = kinds[next]; render(); autoPrepare(); $(`capabilities-${kind}-tab`).focus();
     };
   }
-  return {open, close, contextChanged, isOpen: () => opened, isPreparing: id => preparing?.id === id};
+  return {open, close, contextChanged, isOpen: () => opened, isPreparing: id => preparing?.id === id,
+    waitForPreparation: id => preparing?.id === id ? preparing.promise : null};
 })();

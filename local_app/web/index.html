@@ -52,6 +52,7 @@
   <script src="/desktop.js" defer></script>
   <script src="/session-import.js" defer></script>
   <script src="/capabilities.js" defer></script>
+  <script src="/customizations.js" defer></script>
   <script src="/productivity.js" defer></script>
   <script src="/palette.js" defer></script>
   <script src="/layout.js" defer></script>
@@ -116,7 +117,7 @@
       <div id="recovery-actions" class="recovery-actions" hidden><button id="reconnect" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>연결 다시 확인</button><button id="connection-settings" class="text-button">연결 설정 보기 <span aria-hidden="true">↗</span></button></div>
       <div id="work-area" class="work-area">
         <section id="capabilities-view" class="capabilities-view" aria-labelledby="capabilities-heading" hidden>
-          <div class="capabilities-utility"><button id="capabilities-back" class="text-button"><svg class="icon back-icon"><use href="#i-arrow"/></svg>업무로 돌아가기</button><button id="capabilities-connect" class="quiet-button" type="button">연결하고 목록 확인</button><button id="capabilities-refresh" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>새로고침</button></div>
+          <div class="capabilities-utility"><button id="capabilities-back" class="text-button"><svg class="icon back-icon"><use href="#i-arrow"/></svg>업무로 돌아가기</button><button id="capabilities-manage" class="quiet-button" type="button">스킬·플러그인 관리</button><button id="capabilities-connect" class="quiet-button" type="button">다시 확인</button><button id="capabilities-refresh" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>새로고침</button></div>
           <div class="capabilities-heading"><span class="capabilities-emblem" aria-hidden="true"><svg class="icon"><use href="#i-box"/></svg></span><div><span class="eyebrow">YOUR CLAUDE TOOLKIT</span><h2 id="capabilities-heading" tabindex="-1">스킬·기능</h2><p>업무 절차, 실행 기능, 외부 연결과 빠른 요청을 구분해 확인해요.</p></div></div>
           <div class="catalog-location"><label for="capabilities-scope-select">조회 범위</label><select id="capabilities-scope-select"><option value="common">공통 스킬</option><option value="folder">폴더별 스킬</option></select><label id="capabilities-folder-label" for="capabilities-folder" hidden>업무 폴더</label><select id="capabilities-folder" aria-describedby="capabilities-context" hidden><option value="">업무 폴더를 선택하세요</option></select></div>
           <div class="capabilities-scope"><span class="capabilities-scope-dot" aria-hidden="true"></span><div><p id="capabilities-context">공통 기능을 확인하고 있어요.</p><p id="capabilities-status" role="status" aria-live="polite">목록을 불러오는 중이에요.</p></div></div>
@@ -343,5 +344,26 @@
     <div class="app-update-dialog-state"><p id="app-update-dialog-status" class="app-update-status" role="status" aria-live="polite"></p><div id="app-update-dialog-progress-wrap" class="app-update-progress-wrap" hidden><progress id="app-update-dialog-progress" max="100" aria-label="업데이트 다운로드 진행률"></progress><span id="app-update-dialog-progress-label"></span></div><button id="app-update-dialog-retry" class="text-button" type="button" hidden>다시 확인</button></div>
     <footer><button id="app-update-dismiss" class="text-button" type="button">다음에 하기</button><button id="app-update-install" class="app-update-install" type="button" disabled>업데이트하기</button></footer>
   </dialog>
+<dialog id="customizations-dialog" class="customizations-dialog" aria-labelledby="customizations-title">
+  <header class="customizations-header"><div><h2 id="customizations-title">스킬·플러그인 관리</h2><p id="customizations-context" class="composer-note"></p></div><button id="customizations-close" class="icon-button" type="button" aria-label="닫기">×</button></header>
+  <div class="customizations-body">
+  <div class="customizations-toolbar">
+    <div class="customizations-tabs" role="group" aria-label="관리할 항목"><button id="customizations-skills" class="quiet-button" type="button" aria-pressed="true">스킬</button><button id="customizations-plugins" class="quiet-button" type="button" aria-pressed="false">플러그인</button></div>
+    <div class="customizations-scope-row"><label for="customizations-scope">저장 범위 <select id="customizations-scope" aria-describedby="customizations-scope-hint"><option value="local">이 프로젝트에서만</option><option value="user">사용자 공통</option></select></label><button id="customizations-refresh" class="quiet-button" type="button">다시 확인</button></div>
+  </div>
+  <p id="customizations-scope-hint" class="composer-note">선택한 범위에 사용 상태를 저장해요. 스킬 원본과 플러그인 설치 파일은 그대로 유지합니다.</p>
+  <details class="customizations-help"><summary>사용 상태·저장 범위 도움말</summary><div class="customizations-help-content">
+    <p class="customizations-help-key"><strong id="customizations-inherit-title">공통·기존 설정 따르기</strong>는 이 범위의 별도 지정만 지워요. <strong>사용 안 함</strong>은 끄는 값을 저장해요.</p>
+    <h3>스킬 사용 상태</h3>
+    <dl><dt id="customizations-inherit-term">공통·기존 설정 따르기</dt><dd id="customizations-inherit-description">이 프로젝트에서 별도로 지정한 값만 지우고 공통 설정과 기존 프로젝트 설정, 스킬 원래 규칙을 따릅니다. 스킬을 삭제하거나 반드시 켜는 기능은 아니에요.</dd><dt>사용</dt><dd>Claude에 이름과 설명을 제공하고, /스킬이름으로 직접 호출할 수 있게 설정해요.</dd><dt>이름만 제공</dt><dd>Claude에는 설명 없이 이름만 제공해요. /스킬이름으로 직접 호출할 수도 있어요.</dd><dt>직접 호출만</dt><dd>Claude가 스스로 고르는 목록에는 숨기고, 내가 /스킬이름으로 호출할 때 사용해요.</dd><dt>사용 안 함</dt><dd>Claude와 / 목록에서 숨기고, 이름을 직접 입력해도 실행하지 않도록 설정해요. 파일은 지우지 않습니다.</dd></dl>
+    <p class="customizations-help-example">예: 사용자 공통에서 끈 스킬은 프로젝트에서 ‘공통·기존 설정 따르기’를 선택해도 꺼진 상태를 따릅니다. 이 프로젝트에서만 켜려면 ‘사용’을 선택하세요.</p>
+    <h3>저장 범위와 플러그인</h3>
+    <dl><dt>이 프로젝트에서만</dt><dd>현재 업무 폴더에 저장해요. 같은 폴더를 사용하는 다른 업무와 Claude 터미널에도 적용됩니다.</dd><dt>사용자 공통</dt><dd>같은 Claude 사용자 설정을 사용하는 여러 프로젝트에 적용해요. 프로젝트에 별도 설정이 있으면 그 설정이 우선할 수 있습니다.</dd><dt>플러그인 사용 / 사용 안 함</dt><dd>설치된 플러그인을 켜거나 꺼요. 플러그인이 제공하는 스킬도 함께 관리하며, 삭제하거나 새로 설치하지 않습니다.</dd></dl>
+    <p class="composer-note">회사 정책이나 스킬 원래 규칙이 변경을 제한할 수 있어요. 저장 후에는 진행 중인 작업을 마치고 Claude Code를 재시작해 현재 연결에 적용하세요. ‘다시 확인’은 목록만 새로 읽습니다.</p>
+  </div></details>
+  <label for="customizations-search">항목 찾기</label><input id="customizations-search" type="search" placeholder="이름이나 설명으로 검색">
+  <p id="customizations-status" role="status" class="composer-note"></p><div id="customizations-list"></div>
+  <details><summary>설정 저장 위치</summary><p id="customizations-path" class="composer-note"></p></details></div>
+</dialog>
 </body>
 </html>

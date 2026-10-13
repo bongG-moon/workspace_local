@@ -583,13 +583,18 @@ function chooseFolder(resume=false){if(appClosed)return;$("import-open").hidden=
 async function submit(){
   if(sending||choiceSubmission||modelChanging||permissionChanging||active?.connection?.permissionModeChangePending===true||effortChanging||connectionPreparing||globalThis.WorkspaceConnectionRestart?.isCurrent()||globalThis.WorkspaceAttachments?.isUploading()||globalThis.WorkspaceWorkflow?.isSubmitting()||appClosed)return;
   if(globalThis.WorkspaceStop?.blocked()){saveDraft();toast(stopState()==="failed"?"중지 상태를 정리한 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.":"현재 작업의 중지가 끝난 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.");return;}
-  if(busyStates.has(active?.state)){if(globalThis.WorkspaceWorkflow)return WorkspaceWorkflow.send("enqueue");return;}
   if(!$("prompt").value.trim())return $("prompt").focus();
-  if(/^\/effort(?:\s|$)/u.test($("prompt").value.trim())){
+  if(/^\/(?:skills|plugin)(?:\s|$)/u.test($("prompt").value.trim())){
+    if(globalThis.WorkspaceCustomizations)await WorkspaceCustomizations.handleCommand($("prompt").value);
+    else toast("설정 화면을 불러오지 못했어요. 작성한 명령은 유지됩니다.");
+    return;
+  }
+  if(/^\/(?:model|effort|permissions)(?:\s|$)/u.test($("prompt").value.trim())){
     if(globalThis.WorkspaceInlineControls)await WorkspaceInlineControls.handleCommand($("prompt").value);
     else toast("Effort 선택 화면을 불러오지 못했어요. 앱을 다시 열어 주세요. 요청은 전송하지 않았습니다.");
     return;
   }
+  if(busyStates.has(active?.state)){if(globalThis.WorkspaceWorkflow)return WorkspaceWorkflow.send("enqueue");return;}
   if(!active)return chooseFolder();if(!active.trusted)return chooseFolder(true);
   if(controlRestoreState()){
     saveDraft();

@@ -204,7 +204,7 @@ globalThis.WorkspaceInlineControls = (() => {
     message("기존 Claude 연결을 준비하고 있어요. AI 질문은 보내지 않습니다."); setStatus(active.state);
     const request = {...source};
     try {
-      request.promise = globalThis.WorkspaceComposer?.waitForPreparation?.() || api("/api/connect",{id:source.id});
+      request.promise = globalThis.WorkspaceCapabilities?.waitForPreparation?.(source.id) || globalThis.WorkspaceComposer?.waitForPreparation?.() || api("/api/connect",{id:source.id});
       preparation = request;
       const response = await request.promise;
       if (!same(source)) return false;
@@ -289,14 +289,22 @@ globalThis.WorkspaceInlineControls = (() => {
     }
   }
   async function handleCommand(text) {
-    const match = text.trim().match(/^\/effort(?:\s+([\s\S]*))?$/u);
+    const match = text.trim().match(/^\/(effort|model|permissions)(?:\s+([\s\S]*))?$/u);
     if (!match) return false;
-    const value = (match[1] || "").trim();
-    if (value && !["low","medium","high","xhigh","max","auto"].includes(value)) {
+    const kind = match[1] === "permissions" ? "permission" : match[1];
+    const value = (match[2] || "").trim();
+    if (kind === "permission" && value) {
+      status("/permissions로 승인 모드를 선택해 주세요.",true); return true;
+    }
+    if (kind === "model" && value && (!/^[\w.:-]+$/u.test(value) || value.length > 200)) {
+      status("/model 다음에는 모델 이름 하나를 입력해 주세요.",true); return true;
+    }
+    if (kind === "effort" && value && !["low","medium","high","xhigh","max","auto"].includes(value)) {
       globalThis.WorkspaceComposer?.close();
       status("/effort 다음에는 low, medium, high, xhigh, max 또는 auto를 입력해 주세요. 지원하는 값은 모델마다 달라요.",true); return true;
     }
-    await open("effort",{commandDraft:text,commandValue:value});
+    if (active && blocked(kind)) {status("현재 요청이 끝난 뒤 이 설정을 변경할 수 있어요. 명령은 대기열에 넣지 않았습니다.",true);return true;}
+    await open(kind,{commandDraft:text,commandValue:value});
     if (value && view?.commandDraft === text && same(view) && active?.trusted && active.connection?.connected === true)
       await apply(value === "auto" ? null : value);
     return true;

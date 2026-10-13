@@ -27,7 +27,7 @@ from .artifacts import available_artifacts, changes, linked, snapshot, PREVIEW_T
 from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .capabilities import catalog
-from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES
+from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES, workspace_commands
 from .picker_protocol import read_result as read_picker_result
 from .picker_channel import private_picker_directory
 from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
@@ -43,7 +43,7 @@ from .idle_connections import with_connection_slot, occupies_slot
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.22"
+WORKSPACE_VERSION = "0.23.23"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -183,6 +183,8 @@ class LocalApp:
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.error = str(exc)
         self._load()
+        from .customizations import Customizations
+        self.customizations = Customizations(self.inventory_client.config, self.command or [], self.info)
         self.dispatch = DispatchController(self)
         from .desktop_notifications import DesktopNotifications
         self.desktop = DesktopNotifications(state, notify=self._notify_desktop,
@@ -900,6 +902,7 @@ class LocalApp:
             info = probe_cli(command)
             with self.lock:
                 self.command, self.info, self.error = command, info, None
+                self.customizations.command, self.customizations.info = command, info
             return self.bootstrap() | {'ok': True, 'message': '실행 프로그램 연결을 확인했습니다. 로그인과 모델 응답은 다음 요청에서 확인합니다.'}
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             with self.lock:
@@ -1855,6 +1858,7 @@ class LocalApp:
                 if self._shutdown_state in {'running', 'failed'}:
                     self._shutdown_state = 'closing'
                 self._picker_cancel.set()
+                self.customizations.cancel.set()
         with self._close_lock:
             with self._lifecycle:
                 if self._shutdown_state == 'closed':
@@ -2041,6 +2045,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(app.progress_logs.page(sid,
                         before=query.get('before', [None])[0], limit=query.get('limit', ['50'])[0],
                         run_id=query.get('runId', [None])[0]))
+            if route.path == '/api/customizations':
+                if app.demo or not app.command:
+                    raise ValueError('실제 Claude 업무에서 스킬·플러그인 설정을 확인할 수 있어요.')
+                with app.lock:
+                    item = dict(app.get(sid))
+                return self.reply(app.customizations.snapshot(str(workspace_folder(item)), query.get('scope', ['local'])[0]))
             if route.path == "/api/capabilities":
                 with app.lock:
                     selected = app.public(app.get(sid)) if sid else None
@@ -2134,6 +2144,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/archived-tasks.css": ("archived-tasks.css", "text/css; charset=utf-8"),
                       "/workflow.js": ("workflow.js", "text/javascript; charset=utf-8"),
                       "/capabilities.js": ("capabilities.js", "text/javascript; charset=utf-8"),
+                      "/customizations.js": ("customizations.js", "text/javascript; charset=utf-8"),
                       "/productivity.js": ("productivity.js", "text/javascript; charset=utf-8"),
                       "/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                       "/layout.js": ("layout.js", "text/javascript; charset=utf-8"),
@@ -2414,8 +2425,24 @@ class Handler(BaseHTTPRequestHandler):
                     item['connection'] = dict(item.get('connection') or {})
                     item['attachments'] = list(item.get('attachments', []))
                 item['workspace'] = str(workspace_folder(item))
-            return self.reply(complete(item, data, safe_suffixes=REFERENCE_FILE_TYPES,
-                                       discovery=None if app.demo else app.completion_discovery))
+            result = complete(item, data, safe_suffixes=REFERENCE_FILE_TYPES,
+                              discovery=None if app.demo else app.completion_discovery)
+            if data.get('kind') in {'slash', 'command'}:
+                result = workspace_commands(result, data.get('query', ''))
+            return self.reply(result)
+        if route == '/api/customizations':
+            if set(data) - {'id', 'scope', 'kind', 'name', 'value', 'revision'}:
+                raise ValueError('설정 변경 요청을 확인해 주세요.')
+            with app.lock:
+                app._require_running()
+                item = dict(app.get(sid))
+                if app.demo or not app.command or not item.get('trusted'):
+                    raise ValueError('확인한 업무 폴더에서 설정을 변경해 주세요.')
+                app.customizations.command, app.customizations.info = list(app.command), dict(app.info)
+            result = app.customizations.change(str(workspace_folder(item)), data)
+            # Common settings can affect every cached project.
+            app.completion_discovery.clear()
+            return self.reply(result)
         if route == '/api/model':
             if 'model' not in data:
                 raise ValueError('사용할 모델 또는 기본 모델 복원을 선택해 주세요.')

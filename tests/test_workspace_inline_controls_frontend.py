@@ -64,6 +64,24 @@ function positionFixture() {
 
 @unittest.skipUnless(NODE, "Node.js is required for inline-control UI checks")
 class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
+    def test_model_command_uses_existing_control_endpoint_not_send(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {ok:true,model:body.model,modelOverride:body.model,connection:{...connection(),model:body.model}};};
+          $('prompt').value='/model company-next';await submit();
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/model');
+          assert.equal(calls[0].body.model,'company-next');assert.equal($('prompt').value,'');
+          assert.equal(attachments[0],'C:/fixture/A/report.csv');
+        })()""")
+
+    def test_setting_commands_do_not_enqueue_while_running(self):
+        self.run_case(r"""(async()=>{
+          active.state='running';active.connection.capabilities.setPermissionModeWhileRunning=true;
+          let enqueued=0;globalThis.WorkspaceWorkflow={isSubmitting:()=>false,send:()=>enqueued++};
+          $('prompt').value='/model';await submit();assert.equal(enqueued,0);assert.equal($('prompt').value,'/model');
+          $('prompt').value='/permissions';await submit();assert.equal(enqueued,0);
+          assert.equal($('composer-controls-panel').hidden,false);assert.equal($('runtime-panel-title').textContent,'승인 모드');
+        })()""")
+
     def run_case(self, script):
         result = subprocess.run(
             [NODE, '-', str(ROOT / 'local_app/web/app.js'), SETUP + script,

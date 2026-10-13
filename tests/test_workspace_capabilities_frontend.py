@@ -62,6 +62,56 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
+    def test_runtime_tabs_auto_connect_once_and_reuse_reported_connection(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,connects=0,live=false;
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};
+          globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          api=async(path,body)=>{
+            if(path.startsWith('/api/session'))return {...active,connection:{connected:live}};
+            if(path==='/api/connect'){connects++;live=true;return {connection:{connected:true}};}
+            return modern('A',{state:live?'live':'none',status:live?'live':'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();await tick();assert.equal(connects,0);
+          $('capabilities-tools-tab').onclick();$('capabilities-mcp-tab').onclick();await tick();
+          assert.equal(connects,1);
+          $('capabilities-commands-tab').onclick();await tick();assert.equal(connects,1);
+          WorkspaceCapabilities.close();await tick();assert.equal(connects,1);
+        })()""")
+
+    def test_auto_connection_never_trusts_a_folder_or_interrupts_work(self):
+        self.run_case(r"""(async()=>{
+          let callback,connects=0,trusts=0;
+          globalThis.setTimeout=fn=>{callback=fn;return 1;};globalThis.clearTimeout=()=>{callback=null;};
+          api=async(path)=>{
+            if(path.startsWith('/api/session'))return {...active,trusted:false};
+            if(path==='/api/connect')connects++;
+            if(path==='/api/trust')trusts++;
+            return modern('A',{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();callback();await flush();await flush();
+          assert.equal(connects,0);assert.equal(trusts,0);
+          assert.match($('capabilities-status').textContent,/처음 연결/);
+          WorkspaceCapabilities.close();
+        })()""")
+
+    def test_switching_context_before_debounce_does_not_connect_old_task(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0;const connected=[];
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B',state:'idle',trusted:true});
+          api=async(path,body)=>{
+            if(path.startsWith('/api/session'))return {id:'B',trusted:true,state:'idle'};
+            if(path==='/api/connect'){connected.push(body.id);return {connection:{connected:true}};}
+            return modern(path.includes('id=B')?'B':'A',{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();
+          $('capabilities-folder').value='B';await $('capabilities-folder').onchange();
+          const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();
+          assert.deepEqual(connected,['B']);WorkspaceCapabilities.close();
+        })()""")
+
     def test_plain_labels_explain_distinct_kinds_without_changing_reported_names(self):
         self.run_case(r"""(async()=>{
           const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('A');};
@@ -375,9 +425,9 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.match(flatText(groupsEl[1]),/플러그인: codex/);
           assert.equal($('capabilities-warning').hidden,true);
           for(const type of ['tools','mcp','commands']) {
-            assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 필요');
+            assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 확인');
             $('capabilities-'+type+'-tab').onclick();
-            assert.match($('capabilities-empty').textContent,/선택한 업무의 Claude 연결이 준비/);
+            assert.match($('capabilities-empty').textContent,/선택한 업무의 Claude 연결을 자동/);
           }
         })()""")
 
@@ -414,7 +464,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           api=async()=>fixture(null,{status:'no-session',state:'unavailable',groups,
             installed:{state:'not-selected',skills:[]}});
           WorkspaceCapabilities.open();await flush();
-          for(const type of ['skills','tools','mcp','commands'])assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 필요');
+          for(const type of ['skills','tools','mcp','commands'])assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 확인');
           assert.match($('capabilities-empty').textContent,/먼저 새 업무/);
           active={id:'A',title:'업무 A',workspace:'C:\\fixture\\A',state:'idle'};
           api=async()=>fixture('A',{groups:{skills:{reported:true,items:[]},tools:{reported:false,items:[]}},
@@ -558,7 +608,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           const calls=[];let live=false,timer;
           api=async path=>{calls.push(path);return live?modern('A'):modern('A',{status:'awaiting-runtime',state:'unavailable',groups:{
             tools:{reported:false,items:[]},mcp:{reported:false,items:[]},commands:{reported:false,items:[]}}});};
-          WorkspaceCapabilities.open();await flush();assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'연결 필요');
+          WorkspaceCapabilities.open();await flush();assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'연결 확인');
           live=true;setTimeout=fn=>{timer=fn;return 1;};WorkspaceCapabilities.contextChanged(true);
           assert.equal(typeof timer,'function');await timer();await flush();
           assert.equal(calls.length,2);assert.ok(calls.every(path=>path==='/api/capabilities?scope=common&id=A'));

@@ -328,6 +328,44 @@ class CatalogBridgeTests(unittest.TestCase):
 
 
 class CatalogRouteTests(unittest.TestCase):
+    def test_customization_routes_auth_scope_and_running_session(self):
+        from local_app.customizations import Customizations
+        config=self.root/'isolated-profile'
+        skill=config/'skills/report/SKILL.md';skill.parent.mkdir(parents=True)
+        skill.write_text('---\nname: report\n---\nOriginal',encoding='utf-8')
+        self.app.customizations=Customizations(config,['never-start'],{'version':'2.1.296'},runner=Mock())
+        self.app.customizations.policy=Mock(return_value=[])
+        self.app.info={'version':'2.1.296'}
+        url='/api/customizations?id='+self.sid
+        data=self.request(url)
+        self.assertEqual('report',data['skills'][0]['name'])
+        for kwargs in ({'token':False},{'origin':'https://another-site.example'}):
+            with self.assertRaises(HTTPError) as caught:self.request(url,**kwargs)
+            self.assertEqual(403,caught.exception.code)
+        payload=dict(id=self.sid,scope='local',kind='skills',name='report',value='off',revision=data['revision'])
+        def post(body):
+            headers={'Authorization':'Bearer '+self.app.token,'Content-Type':'application/json','Origin':self.server.origin}
+            with urlopen(Request(self.server.origin+'/api/customizations',data=json.dumps(body).encode(),headers=headers),timeout=3) as response:
+                return json.loads(response.read())
+        self.app.get(self.sid)['trusted']=False
+        with self.assertRaises(HTTPError):post(payload)
+        self.assertFalse((self.work/'.claude/settings.local.json').exists())
+        self.app.get(self.sid).update(trusted=True,state='running')
+        self.assertTrue(post(payload)['ok'])
+        self.assertEqual('running',self.app.get(self.sid)['state'])
+        self.app.get(self.sid)['state']='idle'
+        self.app.customizations.runner.assert_not_called()
+
+    def test_completion_http_boundary_adds_local_actions_without_connecting(self):
+        headers={'Authorization':'Bearer '+self.app.token,'Content-Type':'application/json','Origin':self.server.origin}
+        body=json.dumps({'id':self.sid,'kind':'slash','query':'skills'}).encode()
+        with urlopen(Request(self.server.origin+'/api/completions',data=body,headers=headers),timeout=3) as response:
+            data=json.loads(response.read())
+        row=next(row for row in data['items'] if row['invocation']=='/skills')
+        self.assertEqual('workspace',row['source'])
+        self.assertFalse(data['connectRequired'])
+        self.assertIsNone(self.app.get(self.sid)['bridge'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

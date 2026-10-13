@@ -75,6 +75,10 @@ class CompletionDiscovery:
         with self._lock:
             self._cache.pop(key, None)
 
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
+
     def inventory(self, workspace=None):
         key = os.path.normcase(str(workspace)) if workspace else None
         with self._lock:
@@ -354,6 +358,25 @@ def _discovered_slash(snapshot, query, max_items, *, workspace=None):
         rows[invocation] = row
     matches = (row for row in rows.values() if _match_rank(row, query) is not None)
     return {**_finish(matches, query, max_items, limited), 'discovery': True}
+
+
+def workspace_commands(result, query):
+    """Add UI actions at the HTTP boundary, separately from CLI discovery."""
+    query = _fold(str(query).strip().removeprefix('/'))
+    commands = {'model': '현재 업무의 모델 선택 · /model 모델명',
+                'skills': '스킬 사용 상태 관리 · Claude 표준 설정',
+                'plugin': '설치된 플러그인 사용 여부 관리',
+                'permissions': '현재 업무의 승인 모드 선택'}
+    if query and any(name.startswith(query) for name in commands):
+        result = {**result, 'connectRequired': False}
+    rows = [item for item in result['items'] if item.get('invocation') not in {'/' + name for name in commands}]
+    for name, description in commands.items():
+        row = {'id': _identity('slash', '/' + name), 'label': '/' + name, 'invocation': '/' + name,
+               'description': description, 'supported': True, 'source': 'workspace',
+               'scope': 'session', 'availability': 'local'}
+        if _match_rank(row, query) is not None:
+            rows.append(row)
+    return {**result, **_finish(rows, query, 40, result.get('limited', False))}
 
 
 def _session_controls(result, connection, query, max_items):

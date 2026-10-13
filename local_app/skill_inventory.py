@@ -282,7 +282,7 @@ def _skill_header(path, *, command=False):
     return fields
 
 
-def discover_native_metadata(config, workspace=None, *, reference_roots=(), include_commands=False):
+def discover_native_metadata(config, workspace=None, *, reference_roots=(), include_commands=False, include_disabled=False):
     """Discover bounded native metadata without executing any installation code.
 
     Missing registrations do not hide ~/.claude/skills, selected-project skills,
@@ -356,7 +356,7 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
             # plugin namespace. Plugins have their own enabledPlugins setting.
             # https://code.claude.com/docs/en/skills#override-skill-visibility-from-settings
             override = overrides.get(command_name) if source in {'user', 'project'} else None
-            if override == 'off':
+            if override == 'off' and not include_disabled:
                 return
             visible = fields.get('user-invocable', 'true').casefold() == 'true'
             digest = hashlib.sha256('\0'.join(key).encode('utf-8')).hexdigest()[:24]
@@ -370,6 +370,10 @@ def discover_native_metadata(config, workspace=None, *, reference_roots=(), incl
                          'scopeLabel': scope_label or ('선택 폴더' if scope == 'project' else '공통'),
                          'installationId': hashlib.sha256(installation.encode('utf-8')).hexdigest()[:24]
                                            if installation else ''}
+            if include_disabled:
+                row.update(visibility=override or 'on',
+                           visibilityLocked=command or source not in {'user', 'project'}
+                           or fields.get('disable-model-invocation', 'false').casefold() == 'true')
             rows.append(row)
             if native_priority is not None:
                 native_targets[target_key] = (native_priority, row)
