@@ -359,10 +359,11 @@
     <p class="customizations-help-example">예: 사용자 공통에서 끈 스킬은 프로젝트에서 ‘공통·기존 설정 따르기’를 선택해도 꺼진 상태를 따릅니다. 이 프로젝트에서만 켜려면 ‘사용’을 선택하세요.</p>
     <h3>저장 범위와 플러그인</h3>
     <dl><dt>이 프로젝트에서만</dt><dd>현재 업무 폴더에 저장해요. 같은 폴더를 사용하는 다른 업무와 Claude 터미널에도 적용됩니다.</dd><dt>사용자 공통</dt><dd>같은 Claude 사용자 설정을 사용하는 여러 프로젝트에 적용해요. 프로젝트에 별도 설정이 있으면 그 설정이 우선할 수 있습니다.</dd><dt>플러그인 사용 / 사용 안 함</dt><dd>설치된 플러그인을 켜거나 꺼요. 플러그인이 제공하는 스킬도 함께 관리하며, 삭제하거나 새로 설치하지 않습니다.</dd></dl>
-    <p class="composer-note">회사 정책이나 스킬 원래 규칙이 변경을 제한할 수 있어요. 저장 후에는 진행 중인 작업을 마치고 Claude Code를 재시작해 현재 연결에 적용하세요. ‘다시 확인’은 목록만 새로 읽습니다.</p>
+    <p class="composer-note">저장 후 ‘지금 적용’을 선택하면 이 관리창에 표시된 업무의 Claude Code를 재연결해요. 작업 중이면 중지할 내용을 먼저 안내합니다. ‘나중에’를 선택하면 현재 연결을 유지하며, ‘저장한 설정 적용’이나 상단 재시작 버튼으로 적용할 수 있어요. 다른 업무와 터미널은 각각 재시작해야 합니다. ‘다시 확인’은 목록만 새로 읽어요. 회사 정책이나 스킬 원래 규칙이 변경을 제한할 수 있습니다.</p>
+    <p class="composer-note">재연결해도 대화는 유지됩니다. 꺼진 플러그인의 이전 지침이 답변에 계속 영향을 준다면 새 업무의 새 대화에서 확인해 주세요. 별도로 등록된 후크·스킬·프로젝트 지침은 해당 플러그인을 끄는 것만으로 삭제되지 않습니다.</p>
   </div></details>
   <label for="customizations-search">항목 찾기</label><input id="customizations-search" type="search" placeholder="이름이나 설명으로 검색">
-  <p id="customizations-status" role="status" class="composer-note"></p><div id="customizations-list"></div>
+  <p id="customizations-status" role="status" class="composer-note"></p><button id="customizations-apply" class="quiet-button" type="button" hidden>저장한 설정 적용</button><div id="customizations-list"></div>
   <details><summary>설정 저장 위치</summary><p id="customizations-path" class="composer-note"></p></details></div>
 </dialog>
 </body>

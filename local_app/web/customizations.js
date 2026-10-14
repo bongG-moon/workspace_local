@@ -2,6 +2,7 @@
 
 globalThis.WorkspaceCustomizations = (() => {
   const dialog = $("customizations-dialog"), list = $("customizations-list");
+  const pendingApplications = new Set();
   let view = null, sequence = 0, controller = null, changing = false, limit = 100;
   const labels = {on:"사용", "name-only":"이름만 제공", "user-invocable-only":"직접 호출만", off:"사용 안 함"};
   const inheritLabels = {local:"공통·기존 설정 따르기", user:"스킬 기본 설정 따르기"};
@@ -15,6 +16,8 @@ globalThis.WorkspaceCustomizations = (() => {
       : "사용자 공통에서 별도로 지정한 값만 지우고 스킬 원래 규칙을 따릅니다. 프로젝트별 설정이나 회사 정책이 있으면 계속 우선 적용될 수 있어요. 스킬은 삭제하지 않습니다.";
     $("customizations-scope").disabled = changing;
     $("customizations-refresh").disabled = changing;
+    $("customizations-apply").hidden = !view?.pendingApply;
+    $("customizations-apply").disabled = changing;
     for (const id of ["customizations-skills", "customizations-plugins"]) $(id).disabled = changing;
   }
   function render() {
@@ -33,7 +36,7 @@ globalThis.WorkspaceCustomizations = (() => {
       text.append(el("strong", row.name));
       if (row.description) text.append(el("p", row.description, "composer-note"));
       if (kind === "skills") text.append(el("small", `현재 설정: ${labels[row.visibility] || row.visibility} · ${row.source === "user" ? "개인 스킬" : "프로젝트 스킬"}`));
-      else text.append(el("small", `현재 업무 설정: ${row.enabled ? "사용" : "사용 안 함"}`));
+      else text.append(el("small", `저장된 업무 설정: ${row.enabled ? "사용" : "사용 안 함"}`));
       if (row.locked) text.append(el("small", row.reason));
       const select = el("select"); select.setAttribute("aria-label", row.name+" 사용 상태");
       const choices = kind === "skills" ? {inherit:inheritLabels[current.scope], ...labels} : {on:"사용", off:"사용 안 함"};
@@ -67,7 +70,8 @@ globalThis.WorkspaceCustomizations = (() => {
   async function open(kind="skills", id=active?.id) {
     if (changing || appClosed) return;
     if (!id) {toast("먼저 설정을 적용할 업무를 선택해 주세요.");return;}
-    view={id,kind,scope:"local",data:null};limit=100;
+    for(const pendingId of pendingApplications)if(pendingId!==id&&pendingId!==active?.id&&!sessions.some(row=>row.id===pendingId))pendingApplications.delete(pendingId);
+    view={id,kind,scope:"local",data:null,pendingApply:pendingApplications.has(id)};limit=100;
     $("customizations-scope").value="local";$("customizations-search").value="";
     const item = [active, ...sessions].find(row=>row?.id===id);
     $("customizations-context").textContent=`${item?.title || "선택한 업무"} · ${item?.workspace || ""}`;
@@ -88,12 +92,29 @@ globalThis.WorkspaceCustomizations = (() => {
       const result=await api('/api/customizations',{id:current.id,scope:current.scope,kind:current.kind,
         name:row.name,value:current.kind==="plugins" ? value==="on" : value==="inherit" ? null : value,
         revision:current.data.revision});
+      if(result.reconnectRequired===true)pendingApplications.add(current.id);
       if (view!==current || !dialog.open) return;
-      current.data=result.catalog; notice(result.notice);
+      current.data=result.catalog; current.pendingApply=pendingApplications.has(current.id); notice(result.notice);
+      if(current.pendingApply)await applySaved(current,item);
       globalThis.WorkspaceCapabilities?.contextChanged(true);
     } catch (err) {if(view===current)notice(err.message+" 목록을 다시 확인한 뒤 재시도해 주세요.");}
     finally {changing=false;render();}
   }
+  async function applySaved(current,item){
+    if(view!==current||!dialog.open||appClosed)return;
+    const result=await restartConnection({customizations:{id:current.id,item,scope:current.scope,
+      isCurrent:()=>view===current&&dialog.open,close:()=>dialog.close()}});
+    if(view!==current||!dialog.open)return;
+    if(result?.ok===true)current.pendingApply=false;
+    else notice(result?.error||"설정은 저장했어요. 현재 연결에는 아직 적용하지 않았습니다. ‘저장한 설정 적용’으로 재연결하거나, 작업을 마친 뒤 Claude Code를 재시작해 주세요.");
+  }
+  $("customizations-apply").onclick=async()=>{
+    if(changing||!view?.pendingApply||!dialog.open||appClosed)return;
+    const current=view;changing=true;render();
+    try{const item=await api(`/api/session?id=${encodeURIComponent(current.id)}`);await applySaved(current,item);}
+    catch(err){if(view===current)notice("설정은 저장되어 있어요. "+err.message);}
+    finally{changing=false;render();}
+  };
   async function handleCommand(text) {
     const match=text.trim().match(/^\/(skills|plugin)(?:\s+([\s\S]*))?$/u);
     if(!match)return false;
@@ -107,6 +128,7 @@ globalThis.WorkspaceCustomizations = (() => {
   $("customizations-search").oninput=render;
   $("customizations-refresh").onclick=refresh;
   $("customizations-close").onclick=()=>dialog.close();
-  dialog.addEventListener("close",()=>{sequence++;controller?.abort();view=null;list.replaceChildren();});
-  return {open,handleCommand};
+  dialog.addEventListener("close",()=>{if(dialog.open)return;sequence++;controller?.abort();view=null;list.replaceChildren();});
+  function connectionRestarted(id){pendingApplications.delete(id);if(view?.id===id){view.pendingApply=false;controls();}}
+  return {open,handleCommand,connectionRestarted};
 })();

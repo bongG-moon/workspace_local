@@ -50,12 +50,13 @@ function toast(text){
   if(dialog){dialog.prepend(notice);notice.scrollIntoView({block:"nearest"});}else document.body.append(notice);
   clearTimeout(toast.timer);toast.timer=setTimeout(()=>notice.hidden=true,6500);
 }
-function confirmAction({title,message,confirmLabel="확인",danger=false,returnFocus=document.activeElement}){
+function confirmAction({title,message,confirmLabel="확인",cancelLabel="취소",danger=false,returnFocus=document.activeElement}){
   // A second click cannot reuse an approval for a different action.
   if(pendingConfirmation)return Promise.resolve(false);
   const dialog=$("action-dialog");
   $("action-title").textContent=title;$("action-message").textContent=message;
   $("action-confirm").textContent=confirmLabel;$("action-confirm").classList.toggle("danger-button",danger);
+  $("action-cancel").textContent=cancelLabel;
   dialog.returnValue="";
   pendingConfirmation=new Promise(resolve=>{
     dialog.oncancel=event=>{event.preventDefault();dialog.close("cancel");};
@@ -756,8 +757,8 @@ $("shortcuts-dialog").onclose=()=>{
 function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
 $("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();};
-function restartConnectionLocked(){
-  return !active||stopState()==="stopping"||stopRequests.has(active?.id)||boot.demo||appClosed||quitting||connectionRestarting()||connectionPreparing||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||nativeOpening||attachmentPicking||pendingRequestAnswers.has(active?.id)||!!pendingConfirmation||!!globalThis.WorkspaceAttachments?.isUploading()||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceComposer?.waitForPreparation?.()||!!globalThis.WorkspaceInlineControls?.waitForPreparation?.()||!!globalThis.WorkspaceCapabilities?.isPreparing?.(active?.id)||modalStack.some(dialog=>dialog.open&&dialog!==$("settings-dialog"));
+function restartConnectionLocked(allowedDialog=null,item=active){
+  return !item||stopState(item)==="stopping"||stopRequests.has(item?.id)||boot.demo||appClosed||quitting||restartingConnections.has(item?.id)||item?.connection?.restarting===true||connectionPreparing||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||nativeOpening||attachmentPicking||pendingRequestAnswers.has(item?.id)||!!pendingConfirmation||!!globalThis.WorkspaceAttachments?.isUploading()||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceComposer?.waitForPreparation?.()||!!globalThis.WorkspaceInlineControls?.waitForPreparation?.()||!!globalThis.WorkspaceCapabilities?.isPreparing?.(item?.id)||modalStack.some(dialog=>dialog.open&&dialog!==$("settings-dialog")&&dialog!==allowedDialog);
 }
 function updateRestartControls(){
   const restarting=connectionRestarting(),blocked=restartConnectionLocked(),top=$("restart-connection"),settings=$("settings-restart-connection");
@@ -789,38 +790,51 @@ function applyRestartSession(item){
   globalThis.WorkspaceWorkflow?.refresh();globalThis.WorkspaceStream?.changed();refreshInspector();
   pollController=new AbortController();void poll(item.id,item.seq||0,pollController.signal);
 }
-async function restartConnection(){
-  if(restartConnectionLocked())return null;
-  const context={id:active.id,generation:selectionGeneration},same=()=>active?.id===context.id&&selectionGeneration===context.generation&&!appClosed;
-  const confirmStop=()=>confirmAction({title:"현재 작업을 중지하고 Claude Code를 재시작할까요?",message:"진행 중인 요청과 응답 대기를 중지합니다. 이미 변경한 파일과 작성 중인 입력은 유지되며, 이전 요청은 자동으로 다시 보내지 않습니다. 이어 할 일과 실행 예약은 일시 정지되며 직접 재개할 수 있어요.",confirmLabel:"중지하고 재시작",danger:true});
-  restartingConnections.set(context.id,context);saveDraft();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();setStatus(active.state);
+async function restartConnection(options={}){
+  const custom=options.customizations,item=custom?.item||active;
+  if(custom&&(!custom.isCurrent()||custom.id!==item?.id))return null;
+  if(restartConnectionLocked(custom?$("customizations-dialog"):null,item))return null;
+  const context={id:item.id,generation:selectionGeneration},same=()=>active?.id===context.id&&selectionGeneration===context.generation&&!appClosed;
+  const stillCurrent=()=>!appClosed&&(custom?custom.isCurrent()&&selectionGeneration===context.generation:same());
+  const confirmStop=()=>confirmAction({title:custom?`‘${item.title||"선택한 업무"}’의 작업을 중지하고 재연결할까요?`:"현재 작업을 중지하고 Claude Code를 재시작할까요?",message:"진행 중인 요청과 응답 대기를 중지합니다. 이미 변경한 파일과 작성 중인 입력은 유지되며, 이전 요청은 자동으로 다시 보내지 않습니다. 이어 할 일과 실행 예약은 일시 정지되며 직접 재개할 수 있어요.",confirmLabel:"중지하고 재시작",danger:true});
+  restartingConnections.set(context.id,context);saveDraft();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();setStatus(active?.state||"idle");
   let failure="",response=null;
   try{
-    let stopRunning=busyStates.has(active.state)||!!$("requests").children.length||!!active.requests?.length||!!active.choice;
-    if(stopRunning&&(!await confirmStop()||!same()))return null;
-    if(!same())return null;
+    let stopRunning=busyStates.has(item.state)||!!item.requests?.length||!!item.choice||(same()&&!!$("requests").children.length);
+    if(custom){
+      const accepted=await confirmAction({title:"변경한 설정을 바로 적용할까요?",cancelLabel:"나중에",confirmLabel:stopRunning?"중지하고 적용":"지금 적용",danger:stopRunning,
+        message:`설정을 저장했어요. ‘${item.title||"선택한 업무"}’의 Claude Code를 재연결해 새 설정을 불러옵니다. 대화, 파일과 작성 중인 입력은 유지돼요.${stopRunning?"\n진행 중인 요청과 승인·답변 대기는 중지되며, 이전 요청은 자동으로 다시 보내지 않습니다.":""}\n이 업무의 이어 할 일과 실행 예약이 있으면 일시 정지됩니다. 재연결 후 직접 재개해 주세요.\n다른 업무와 터미널의 연결은 유지되며, 변경한 설정은 각 연결을 다시 시작할 때 반영됩니다.`});
+      if(!accepted||!stillCurrent())return null;
+    }else if(stopRunning&&(!await confirmStop()||!same()))return null;
+    if(appClosed||(!custom&&!same()))return null;
     const request=()=>api("/api/restart-connection",{id:context.id,...(stopRunning?{stopRunning:true}:{})});
     try{response=await request();}
     catch(err){
       // A schedule may start between the click and the server check. Only an
       // explicit confirmation authorizes stopping that newly active request.
-      if(err.code!=="restart_requires_stop"||stopRunning||!same())throw err;
-      if(!await confirmStop()||!same())return null;
+      if(err.code!=="restart_requires_stop"||stopRunning)throw err;
+      if(!stillCurrent())return null;
+      if(!await confirmStop()||!stillCurrent())return null;
       stopRunning=true;response=await request();
     }
-    if(!same())return null;
+    if(appClosed||(!custom&&!same()))return null;
     if(response?.ok!==true||response.session?.id!==context.id)throw new Error("재시작 결과를 확인하지 못했어요. 연결 상태를 확인한 뒤 다시 시도해 주세요.");
-    applyRestartSession(response.session);
-    globalThis.WorkspaceCapabilities?.contextChanged(true);error("");
-    toast(response.workflowPaused?"현재 업무의 Claude Code를 다시 열었어요. 이어 할 일과 예약은 일시 정지 상태입니다. 필요한 항목을 직접 재개해 주세요.":"현재 업무의 Claude Code를 다시 열었어요. 다음 요청부터 새 연결을 사용합니다.");
+    globalThis.WorkspaceCustomizations?.connectionRestarted?.(context.id);
+    if(custom?.isCurrent())custom.close();
+    if(same())applyRestartSession(response.session);
+    else {sessions=sessions.map(row=>row.id===context.id?sessionMetadata(response.session):row);renderSessions();}
+    globalThis.WorkspaceCapabilities?.contextChanged(true);if(same())error("");
+    const success=custom?`‘${item.title||"선택한 업무"}’의 Claude Code를 새 설정으로 다시 연결했어요.`:"현재 업무의 Claude Code를 다시 열었어요.";
+    toast(success+(response.workflowPaused?" 이어 할 일과 예약은 일시 정지 상태입니다. 필요한 항목을 직접 재개해 주세요.":" 다음 요청부터 새 연결을 사용합니다."));
     return response;
   }catch(err){
-    if(!same())return null;
+    if(appClosed||(!custom&&!same()))return null;
     failure=err.message||"Claude Code를 다시 연결하지 못했어요. 연결 상태를 확인한 뒤 다시 시도해 주세요.";
+    if(custom)failure="설정은 저장했지만 재연결하지 못했어요. "+failure;
     // A failed start may already have stopped the previous child. Refresh only
     // observed state; never pretend that the old connection remains alive.
-    try{const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);if(same())applyRestartSession(item);}catch{}
-    if(same()){error(failure);toast(failure);}
+    try{const updated=await api(`/api/session?id=${encodeURIComponent(context.id)}`);if(same())applyRestartSession(updated);else if(custom){sessions=sessions.map(row=>row.id===context.id?sessionMetadata(updated):row);renderSessions();}}catch{}
+    if(same())error(failure);toast(failure);
     return {ok:false,error:failure};
   }finally{
     if(restartingConnections.get(context.id)===context)restartingConnections.delete(context.id);

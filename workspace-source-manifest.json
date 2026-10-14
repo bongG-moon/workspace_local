@@ -607,8 +607,8 @@
     },
     {
       "path": "docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md",
-      "sha256": "86dc0cfc3d1a48497817fb787dc99c00a792abb3fd7700f9c1e8df17f88044d7",
-      "size": 5307
+      "sha256": "951ba3c89ad80a457ea0f6e97869ba16f8c6e055506547e9cd34a24ab43dedb4",
+      "size": 6226
     },
     {
       "path": "docs/WORKSPACE_DESIGN_SPEC.md",
@@ -712,8 +712,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "c94ff267655f98e9d1d32077478d529c5f122cd7cc68bec47a50131e47a9fadb",
-      "size": 61570
+      "sha256": "e08858aa634f115ea8de5c195eab5331bc85276d95b8bc3458911d3638e99958",
+      "size": 63102
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -1022,8 +1022,8 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "f043035c09310c14bde71f079363a2c54bcfa46689437a271df847f431a498a6",
-      "size": 138802
+      "sha256": "634470ac9876acc5f97d7605523fd4c9c500413a40b5fa40931b53db7f97c7d2",
+      "size": 140917
     },
     {
       "path": "local_app/web/appearance.css",
@@ -1092,8 +1092,8 @@
     },
     {
       "path": "local_app/web/customizations.js",
-      "sha256": "3bddd9ff5d2539573a176edca08b9617ee50b5ab18576e63ade80c70d3d9c5c8",
-      "size": 7890
+      "sha256": "e95ee3c272a7b94987bf43950579be72f21b461a96d3ac6bb15b36dcd28e41b2",
+      "size": 9640
     },
     {
       "path": "local_app/web/desktop.js",
@@ -1142,8 +1142,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "5bfb3301803dacd73df2c5117a5487fe4dfd0dec62d585e862cb3165b8d8db94",
-      "size": 81084
+      "sha256": "86e64b96b0379cb191adf670aab3fb0a8d66355ca09baf8bd6d89d833e6cfe57",
+      "size": 81809
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1732,8 +1732,8 @@
     },
     {
       "path": "tests/test_workspace_customizations_frontend.py",
-      "sha256": "f895950409c015c637f34b3223c7664564e7fa603361aa9f090d9826a766bd89",
-      "size": 4781
+      "sha256": "275f52e1e948e4e0d3963712550755f6353fc2b3a58e5722d8c4f46c1c064ac9",
+      "size": 19155
     },
     {
       "path": "tests/test_workspace_desktop_notifications.py",
