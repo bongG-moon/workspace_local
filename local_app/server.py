@@ -44,7 +44,7 @@ from .idle_connections import MAX_CONNECTIONS, with_connection_slot, occupies_sl
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.24"
+WORKSPACE_VERSION = "0.23.25"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"

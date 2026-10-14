@@ -1,4 +1,4 @@
-# AX Workspace 0.23.24
+# AX Workspace 0.23.25
 
 **내 업무와 AI가 만나는 공간**
 
@@ -6,7 +6,7 @@
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.24/AX-Workspace-0.23.24-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.24/AX-Workspace-0.23.24-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-vbs.zip)**
 
 [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -14,7 +14,7 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.24.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.25.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
@@ -22,6 +22,15 @@
 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
+
+## 0.23.25 변경
+
+- 0.23.24 동일 버전 수정본에 담긴 업무 폴더·드래그 개선을 새 버전으로 배포합니다. 동작은 동일하며 앱·실행기·진단·배포 정보의 버전을 0.23.25로 맞췄습니다.
+- 업무 이름을 잡아 폴더 제목·하위 업무·빈 공간으로 옮길 수 있고, 드래그와 포커스 테두리는 업무 행 전체에 표시됩니다. 직접 폴더를 지정하는 아이콘은 제거했습니다.
+- Enter로 업무 이름 저장, 폴더 접기·펼치기, 폴더 삭제 시 업무를 일반 목록으로 돌리는 기존 개선을 포함합니다. 대화와 실제 파일은 유지됩니다.
+- 사내 배포 도구의 변경 이력과 현재 사용 안내서·실행 파일 이름도 갱신했습니다.
+
+[업무 폴더와 검증 범위](docs/WORKSPACE_TASK_FOLDERS_0.23.24.md) · [사용 안내서](docs/WORKSPACE_USER_GUIDE.html)
 
 ## 0.23.24 변경
 
@@ -42,7 +51,7 @@
 
 [설계와 검증](docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md) · [설정 명령 사용 안내](docs/WORKSPACE_USER_GUIDE.html#claude-settings-commands)
 
-[0.23.24 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.24)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.24/workspace-local-0.23.24-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
+[0.23.25 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.25)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/workspace-local-0.23.25-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
 
 ## 0.23.22 변경
 

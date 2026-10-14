@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "currentVersion": "0.23.24",
+  "currentVersion": "0.23.25",
   "releases": [
+    {
+      "version": "0.23.25",
+      "title": "AX Workspace 0.23.25 — 업무 폴더와 드래그 개선",
+      "notes": "0.23.24 동일 버전 수정본에 포함된 개선을 0.23.25로 구분해 배포합니다. 이번 변경은 버전과 배포 정보 갱신이며 기능 동작은 그대로입니다.\n\n- 업무 폴더 만들기·접기·펼치기와 이름 검색을 지원합니다.\n- 업무 이름이나 손잡이를 잡아 폴더 제목, 펼친 폴더의 하위 업무·빈 공간으로 옮깁니다. 일반 목록이나 목록 아래 빈 공간으로 끌어 폴더에서 꺼낼 수 있습니다.\n- 포커스와 드래그 테두리가 업무 행 전체에 표시됩니다. 업무별 폴더 지정 아이콘과 직접 지정 창은 제거했습니다.\n- 업무 이름은 Enter로 저장합니다. 한글 조합 중 Enter와 중복 저장은 구분합니다.\n- 폴더를 삭제하면 안의 업무는 일반 목록으로 돌아갑니다. 대화·실제 파일·예약은 유지됩니다.\n- 스킬·플러그인 변경 후 현재 업무의 Claude Code에 바로 적용하는 재연결 안내를 포함합니다.\n- 동시 작업 최대 5개와 완료된 오래된 연결을 정리해 평소 전체 연결을 3개까지 유지하는 기존 정책을 유지합니다.\n- 앱·실행기·진단 버전, 현재 사용 안내서와 사내 배포 도구의 변경 이력을 0.23.25 기준으로 갱신했습니다.\n\n### 다운로드\n\n`AX-Workspace-0.23.25.exe`는 단독 실행 파일입니다. EXE ZIP·VBS ZIP과 이전 Company-Workspace 이름의 호환 파일도 제공합니다. 기존 Python 3.11 이상과 Claude Code 설치·인증을 사용하며, 이 배포는 Python이나 Claude Code를 포함하거나 설치하지 않습니다.\n\nGitHub 업데이트를 사용하는 앱은 자동 확인 또는 **설정 → 앱 업데이트 → 새 버전 확인**에서 확인할 수 있습니다. 사내 GitLab 배포판은 사내 배포 서버에 0.23.25를 게시한 뒤 해당 채널에서 업데이트합니다.\n\nCode → Download ZIP과 `workspace-local-0.23.25-source.zip`에는 사내 GitLab 배포 도구·변경 이력·사용 가이드가 포함됩니다. 사내 GitLab 게시 자체는 사내 PC에서 진행하세요.\n\n[업무 폴더와 기존 검증 범위](https://github.com/bongG-moon/workspace_local/blob/v0.23.25/docs/WORKSPACE_TASK_FOLDERS_0.23.24.md) · [사용 안내서](https://github.com/bongG-moon/workspace_local/blob/v0.23.25/docs/WORKSPACE_USER_GUIDE.html)\n\n파일 무결성은 첨부된 `SHA256SUMS.txt`로 확인하세요."
+    },
     {
       "version": "0.23.24",
       "title": "AX Workspace 0.23.24 — 업무 폴더와 드래그 사용성 개선",
