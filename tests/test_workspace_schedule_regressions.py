@@ -359,7 +359,7 @@ class ScheduleCapacityRegressionTests(unittest.TestCase):
         # Capacity rejection happens before CLI construction and before a user
         # message is recorded, so this request should remain safely queued.
         occupied = [self.sid]
-        for _ in range(2):
+        for _ in range(4):
             sid = self.app.create(str(self.work), True)['id']
             self.app.get(sid)['bridge'] = dispatch_fixtures.Bridge(self.app, sid)
             occupied.append(sid)
@@ -397,6 +397,9 @@ class ScheduleCapacityRegressionTests(unittest.TestCase):
             self.assertTrue(self.app.connection_capacity_available(candidate))
             third = self.app.get(self.app.create(str(self.work), True)['id'])
             third['_dispatchClaim'] = 'third-reservation'
+            for _ in range(2):
+                extra = self.app.get(self.app.create(str(self.work), True)['id'])
+                extra['_dispatchClaim'] = 'extra-reservation'
             self.assertFalse(self.app.connection_capacity_available(candidate))
             # A task already connected needs no additional connection slot.
             self.assertTrue(self.app.connection_capacity_available(self.app.get(self.sid)))
@@ -406,6 +409,9 @@ class ScheduleCapacityRegressionTests(unittest.TestCase):
     def test_competing_connect_and_send_cannot_take_dispatch_reservation(self):
         occupied = self.app.create(str(self.work), True)['id']
         self.app.get(occupied)['bridge'] = dispatch_fixtures.Bridge(self.app, occupied)
+        for _ in range(2):
+            extra = self.app.get(self.app.create(str(self.work), True)['id'])
+            extra['bridge'] = dispatch_fixtures.Bridge(self.app, extra['id'])
         waiting = self.app.create(str(self.work), True)['id']
         competitor = self.app.create(str(self.work), True)['id']
         self.app.dispatch.action(waiting, {'action': 'enqueue', 'text': 'reserved request', 'attachments': []})
@@ -417,9 +423,9 @@ class ScheduleCapacityRegressionTests(unittest.TestCase):
             claim = self.app.get(sid).get('_dispatchClaim')
             claims.append(claim)
             self.assertEqual(kwargs['_dispatch_claim'], claim)
-            with self.assertRaisesRegex(ValueError, '3개'):
+            with self.assertRaisesRegex(ValueError, '5개'):
                 self.app.connect(competitor)
-            with self.assertRaisesRegex(ValueError, '3개'):
+            with self.assertRaisesRegex(ValueError, '5개'):
                 original_send(competitor, 'competing request', [])
             return original_send(sid, text, attachments, **kwargs)
 

@@ -81,14 +81,27 @@ function error(text,kind=null){
   const label=kind==="stop"?(cleanupRetryable()?"중지 다시 시도":"Claude Code 재시작"):"연결 다시 확인",button=$("reconnect");
   if(button.lastChild?.nodeType===3)button.lastChild.textContent=label;else button.textContent=label;
 }
-async function api(path,data,signal){
+async function api(path,data,signal,capacityRetried=false){
   if(appClosed&&data!==undefined&&!["/api/quit","/api/ui-health"].includes(path))throw new Error("앱 종료를 진행 중이에요. 위의 종료 안내를 확인해 주세요.");
+  const requestSelection=selectionGeneration, catalogContext=globalThis.WorkspaceCapabilities?.capacityContext?.(data?.id);
   const finish=globalThis.WorkspaceUpgrade?.begin(path,data!==undefined);
   try{
     const options={headers:{Authorization:`Bearer ${token}`},signal};
     if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
     let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
-    const value=await response.json();if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;for(const field of ["stopState","cleanupRetryable","connectionStopped"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];if(path==="/api/upgrade")failure.upgrade=value.upgrade;if(Array.isArray(value.shutdownIssues))failure.shutdownIssues=value.shutdownIssues;for(const field of ["closing","closed","shutdownState"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];throw failure;}return value;
+    const value=await response.json();
+    if(!response.ok&&value.code==="connection_capacity_wait"&&value.replacement&&!capacityRetried&&data?.automatic!==true){
+      const proposal=value.replacement;
+      const stillCurrent=()=>!appClosed&&!signal?.aborted&&selectionGeneration===requestSelection&&
+        (catalogContext?catalogContext===globalThis.WorkspaceCapabilities?.capacityContext?.(data.id):active?.id===data.id);
+      if(!stillCurrent())throw new Error("화면이 바뀌어 연결 교체를 취소했어요. 입력한 내용은 유지됩니다.");
+      const connected=proposal.connectedAt?` · ${new Date(proposal.connectedAt*1000).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"})} 연결`:"";
+      const accepted=await confirmAction({title:"새 업무를 연결할까요?",danger:true,confirmLabel:"기존 작업 중지 후 연결",
+        message:`현재 ${proposal.limit}개 업무가 연결되어 있어요.\n가장 오래 연결된 ‘${proposal.title}’의 연결을 종료하고 ‘${proposal.targetTitle}’를 연결합니다.\n현재 상태: ${stateNames[proposal.state]||"연결됨"}${connected}\n\n진행 중인 요청은 중지됩니다. 대화와 이미 저장된 파일은 유지되며, 해당 업무의 이어 할 일과 예약은 일시정지됩니다.`});
+      if(!accepted||!stillCurrent()){const cancelled=new Error("연결 교체를 취소했어요. 입력한 내용과 첨부파일은 유지됩니다.");cancelled.code="connection_replacement_cancelled";throw cancelled;}
+      return await api(path,{...data,replacementToken:proposal.token},signal,true);
+    }
+    if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;for(const field of ["stopState","cleanupRetryable","connectionStopped"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];if(path==="/api/upgrade")failure.upgrade=value.upgrade;if(Array.isArray(value.shutdownIssues))failure.shutdownIssues=value.shutdownIssues;for(const field of ["closing","closed","shutdownState"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];throw failure;}return value;
   }finally{finish?.();}
 }
 function setStatus(state,label,runId){
@@ -623,7 +636,7 @@ async function submit(){
         if(e.connection)applyConnectionState(e.connection);
         saveDraft();WorkspaceInlineControls.restoreFailure(e.message);renderConnection(active.connection);
       }
-    }else if(active?.id===sid&&selectionGeneration===ticket&&!appClosed)error(e.message);
+    }else if(active?.id===sid&&selectionGeneration===ticket&&!appClosed){if(e.code==="connection_replacement_cancelled")toast(e.message);else error(e.message);}
   }finally{sending=false;setStatus(active?.state||"idle");renderAttachments();}
 }
 $("composer").onsubmit=e=>{e.preventDefault();submit();};$("prompt").onkeydown=e=>{

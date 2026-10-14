@@ -38,12 +38,12 @@ from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_p
 from .drafts import DraftStore, MAX_REQUEST as MAX_DRAFT_REQUEST
 from .app_dispatch import DispatchController
 from .progress_log import ProgressStore
-from .idle_connections import with_connection_slot, occupies_slot
+from .idle_connections import MAX_CONNECTIONS, with_connection_slot, occupies_slot
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.23"
+WORKSPACE_VERSION = "0.23.24"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -938,7 +938,7 @@ class LocalApp:
             if self.error:
                 raise ValueError(self.error)
             if not self.connection_capacity_available(item):
-                raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
+                raise ValueError(f'연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.')
             pending = self.dispatch.queue.snapshot(sid)
             previous_hold = pending.get('reason')
             workflow_paused = pending.get('paused') is True
@@ -1135,7 +1135,7 @@ class LocalApp:
         if bridge is not None and not bridge.closed:
             return True
         occupied = sum(1 for row in self.sessions.values() if row is not item and occupies_slot(row))
-        return occupied < 3
+        return occupied < MAX_CONNECTIONS
 
     @with_connection_slot
     def connect(self, sid, *, _dispatch_claim=None, _restart_claim=None):
@@ -1165,7 +1165,7 @@ class LocalApp:
             if bridge is None or bridge.closed:
                 self._capture_control_baselines(item, bridge)
                 if not self.connection_capacity_available(item):
-                    raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
+                    raise ValueError(f'연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.')
                 resume_options = self._resume_options(item)
                 if _restart_claim is not None and resume_options.get('resume') and not item.get('branch'):
                     resume_options['require_resume_identity'] = True
@@ -1654,7 +1654,7 @@ class LocalApp:
                     raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
                 if old_bridge is None or old_bridge.closed:
                     if not self.connection_capacity_available(current):
-                        raise ValueError('연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.')
+                        raise ValueError(f'연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.')
                     self._resume_options(current)
                 elif current.get('branch', {}).get('status') == 'pending':
                     self._resume_options(current)
@@ -1697,7 +1697,7 @@ class LocalApp:
                     raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
                 if bridge is None or bridge.closed:
                     if not self.connection_capacity_available(item):
-                        raise ValueError("연결된 대화가 3개입니다. 다른 업무의 설정에서 업무 연결 종료를 선택한 뒤 다시 시도해 주세요.")
+                        raise ValueError(f"연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.")
                     resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
                                            lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
@@ -2241,6 +2241,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload['code'] = exc.code
             if getattr(exc, 'next_action', None):
                 payload['nextAction'] = exc.next_action
+            if getattr(exc, 'replacement', None):
+                payload['replacement'] = exc.replacement
             if getattr(exc, 'code', None) in {'stop_in_progress', 'stop_cleanup_unverified'}:
                 with app.lock:
                     item = app.sessions.get(data.get('id'))
@@ -2370,11 +2372,11 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/api/reconnect':
             return self.reply(app.reconnect(sid))
         if route == '/api/restart-connection':
-            if set(data) - {'id', 'stopRunning'}:
+            if set(data) - {'id', 'stopRunning', 'replacementToken'}:
                 raise ValueError('재시작 요청 형식을 확인해 주세요.')
-            return self.reply(app.restart_connection(sid, stop_running=data.get('stopRunning', False)))
+            return self.reply(app.restart_connection(sid, stop_running=data.get('stopRunning', False), _offer_replacement=True, _replacement_token=data.get('replacementToken')))
         if route == '/api/connect':
-            return self.reply(app.connect(sid))
+            return self.reply(app.connect(sid, _offer_replacement=data.get('automatic') is not True, _replacement_token=data.get('replacementToken')))
         if route == '/api/control-restore':
             return self.reply(app.accept_current_control(sid, data.get('control'), data.get('action')))
         if route == '/api/window/hide':
@@ -2460,7 +2462,7 @@ class Handler(BaseHTTPRequestHandler):
             app.get(sid)['trusted'] = True
             return self.reply({'ok': True})
         if route == "/api/send":
-            app.send(sid, data.get("text"), data.get("attachments", []), data.get("trusted"))
+            app.send(sid, data.get("text"), data.get("attachments", []), data.get("trusted"), _offer_replacement=True, _replacement_token=data.get("replacementToken"))
         elif route == "/api/respond":
             app.respond(sid, data.get("requestId"), data.get("allow"), data.get("answers"), data.get('permissionChoiceId'))
         elif route == '/api/permission-mode':

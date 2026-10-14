@@ -51,7 +51,7 @@ class ExecutionModeFrontendTests(unittest.TestCase):
     def test_settings_no_longer_installs_shortcuts_or_starts_downloads(self):
         self.run_case("""
           let calls=0;WorkspaceExecutionMode.configure({api:async()=>{calls++;}});
-          WorkspaceExecutionMode.start('normal',{appVersion:'0.23.23',entryVersion:'0.23.19',repairRecommended:true});
+          WorkspaceExecutionMode.start('normal',{appVersion:'0.23.24',entryVersion:'0.23.19',repairRecommended:true});
           assert.match($('launcher-migration-note').textContent,/최신 EXE/);
           assert.doesNotMatch($('launcher-migration-note').textContent,/바로가기/);
           emit($('launcher-prepare'),'click');await settle();

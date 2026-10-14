@@ -63,7 +63,7 @@ class IdleConnectionTests(unittest.TestCase):
         self.app = LocalApp(self.root / 'state', command=['fixture-only'], managed_workspace_root=self.root / 'managed')
         self.addCleanup(self.app.close)
         self.rows = []
-        for index in range(3):
+        for index in range(5):
             row = self.app.get(self.app.create(str(self.root), True)['id'])
             bridge = MemoryBridge()
             row.update(bridge=bridge, state='done', updated=index + 1, sessionId=bridge.session_id,
@@ -108,7 +108,8 @@ class IdleConnectionTests(unittest.TestCase):
 
     def test_busy_approval_controls_children_and_queued_work_are_not_reclaimed(self):
         candidate = self.rows[0]; bridge = candidate['bridge']
-        self.rows[1]['state'] = self.rows[2]['state'] = 'running'
+
+        for other in self.rows[1:]: other['state'] = 'running'
         for owner, key, value in ((candidate, 'state', 'approval'), (candidate, 'choice', {'id': 'q'}),
                 (candidate, 'requests', {'r': {}}), (candidate, '_restarting', True),
                 (candidate, '_permissionUpdating', True), (candidate, '_dispatchClaim', 'claim'),
@@ -148,7 +149,8 @@ class IdleConnectionTests(unittest.TestCase):
 
     def test_close_wait_releases_global_lock_and_reserves_only_one_new_connection(self):
         old = self.rows[0]['bridge']; entered = threading.Event(); release = threading.Event(); errors = []
-        self.rows[1]['state'] = self.rows[2]['state'] = 'running'
+
+        for other in self.rows[1:]: other['state'] = 'running'
         original_close = old.close
         def blocked_close():
             entered.set()
@@ -206,7 +208,7 @@ class IdleConnectionTests(unittest.TestCase):
                 for worker in workers:
                     if worker.ident: worker.join(5)
         self.assertEqual([], errors); self.assertEqual(2, factory.call_count)
-        self.assertEqual(3, sum(row.get('bridge') is not None and not row['bridge'].closed for row in self.app.sessions.values()))
+        self.assertEqual(5, sum(row.get('bridge') is not None and not row['bridge'].closed for row in self.app.sessions.values()))
 
     def test_stop_during_slot_preparation_prevents_the_pending_send(self):
         old = self.rows[0]['bridge']; entered = threading.Event(); release = threading.Event(); errors = []
@@ -245,7 +247,8 @@ class IdleConnectionTests(unittest.TestCase):
         with patch('local_app.conversation_fork.branch_connection', return_value={'resume': item['sessionId']}), \
              patch('local_app.server.runtime_context', return_value={'configRoot': str(self.root)}):
             self.assertEqual({'resume': item['sessionId'], 'require_resume_identity': True}, self.app._resume_options(item))
-        self.rows[1]['state'] = self.rows[2]['state'] = 'running'
+
+        for other in self.rows[1:]: other['state'] = 'running'
         item['branch']['status'] = 'pending'
         with self.app.lock: self.assertIsNone(idle_candidate(self.app, self.target))
 
@@ -262,7 +265,7 @@ class IdleConnectionTests(unittest.TestCase):
 
 class IdleResumeFixtureTests(unittest.TestCase):
     def connect_completed(self, app, rows):
-        for row in rows[:3]:
+        for row in rows[:5]:
             app.connect(row['id']); app.send(row['id'], 'initial fixture request', [])
             deadline = time.monotonic() + 5
             while row['state'] != 'done' and time.monotonic() < deadline: time.sleep(.01)
@@ -274,8 +277,8 @@ class IdleResumeFixtureTests(unittest.TestCase):
             root = Path(temporary).resolve(); command = [sys.executable, '-B', str(fixture.resolve())]
             app = LocalApp(root / 'state', command=command, info=probe_cli(command), managed_workspace_root=root / 'managed')
             try:
-                rows = [app.get(app.create(str(root), True)['id']) for _ in range(4)]
-                self.connect_completed(app, rows); app.connect(rows[3]['id'])
+                rows = [app.get(app.create(str(root), True)['id']) for _ in range(6)]
+                self.connect_completed(app, rows); app.connect(rows[5]['id'])
                 first = rows[0]; original_id = first['sessionId']
                 messages = list(first['messages'])
                 (root / 'restart-config.json').write_text(json.dumps({'wrongIdentity': True}), encoding='utf-8')
@@ -284,7 +287,7 @@ class IdleResumeFixtureTests(unittest.TestCase):
                 self.assertEqual(original_id, first['sessionId'])
                 self.assertEqual(messages, first['messages'])
                 wire = [json.loads(line) for line in (root / 'restart-wire.jsonl').read_text(encoding='utf-8').splitlines()]
-                self.assertEqual(3, sum(frame['type'] == 'user' for frame in wire))
+                self.assertEqual(5, sum(frame['type'] == 'user' for frame in wire))
             finally:
                 self.assertTrue(app.close())
 
@@ -294,13 +297,13 @@ class IdleResumeFixtureTests(unittest.TestCase):
             root = Path(temporary).resolve(); command = [sys.executable, '-B', str(fixture.resolve())]
             app = LocalApp(root / 'state', command=command, info=probe_cli(command), managed_workspace_root=root / 'managed')
             try:
-                rows = [app.get(app.create(str(root), True)['id']) for _ in range(4)]
+                rows = [app.get(app.create(str(root), True)['id']) for _ in range(6)]
                 self.connect_completed(app, rows)
                 first = rows[0]; original = first['bridge']; session = first['sessionId']
                 app.set_model(first['id'], 'alternate-model'); app.set_effort(first['id'], 'high')
                 app.set_permission_mode(first['id'], 'auto')
                 first['updated'] = 0
-                app.connect(rows[3]['id'])
+                app.connect(rows[5]['id'])
                 self.assertTrue(original.cleanup_complete)
                 self.assertIsNotNone(original.process.poll())
                 self.assertFalse(app.dispatch.queue.snapshot(first['id'])['paused'])
@@ -311,8 +314,8 @@ class IdleResumeFixtureTests(unittest.TestCase):
                 connection = app.public(first)['connection']
                 self.assertEqual(('alternate-model', 'high', 'auto'), tuple(connection[key] for key in ('model', 'effort', 'permissionMode')))
                 wire = [json.loads(line) for line in (root / 'restart-wire.jsonl').read_text(encoding='utf-8').splitlines()]
-                self.assertEqual(4, sum(frame['type'] == 'user' for frame in wire))
-                self.assertLessEqual(sum(not row['bridge'].closed for row in rows), 3)
+                self.assertEqual(6, sum(frame['type'] == 'user' for frame in wire))
+                self.assertLessEqual(sum(not row['bridge'].closed for row in rows), 5)
             finally:
                 self.assertTrue(app.close())
 
@@ -322,8 +325,8 @@ class IdleResumeFixtureTests(unittest.TestCase):
             root = Path(temporary).resolve(); command = [sys.executable, '-B', str(fixture.resolve())]
             app = LocalApp(root / 'state', command=command, info=probe_cli(command), managed_workspace_root=root / 'managed')
             try:
-                rows = [app.get(app.create(str(root), True)['id']) for _ in range(4)]
-                self.connect_completed(app, rows); app.connect(rows[3]['id'])
+                rows = [app.get(app.create(str(root), True)['id']) for _ in range(6)]
+                self.connect_completed(app, rows); app.connect(rows[5]['id'])
                 first = rows[0]; expected = app.dispatch.context(first)
                 self.assertTrue(first['_idleReleased'])
                 queue = app.dispatch.queue; now = queue.clock()

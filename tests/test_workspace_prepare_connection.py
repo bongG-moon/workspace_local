@@ -147,10 +147,10 @@ class PrepareConnectionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.app.connect(self.sid)
             item['state'] = 'idle'
-            for i in range(3):
+            for i in range(5):
                 extra = self.app.create(str(self.root), True)
                 self.app.get(extra['id'])['bridge'] = Mock(closed=False, close=Mock(return_value=True))
-            with self.assertRaisesRegex(ValueError, '3개'):
+            with self.assertRaisesRegex(ValueError, '5개'):
                 self.app.connect(self.sid)
         self.assertIsNone(item['bridge'])
 

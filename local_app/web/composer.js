@@ -178,7 +178,7 @@ globalThis.WorkspaceComposer = (() => {
       // Completion and Shift+Tab can ask for the same connection in one key
       // sequence. Share only the in-flight request for this exact task/view.
       context.promise = globalThis.WorkspaceCapabilities?.waitForPreparation?.(context.id) || globalThis.WorkspaceInlineControls?.waitForPreparation?.()
-        || api("/api/connect", {id:context.id});
+        || api("/api/connect", {id:context.id,...(automatic?{automatic:true}:{})});
       const response = await context.promise;
       if (active?.id !== context.id || selectionGeneration !== context.selection || appClosed) return;
       active.connection = response.connection; renderConnection(response.connection);

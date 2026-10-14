@@ -422,7 +422,7 @@ globalThis.WorkspaceCapabilities = (() => {
       if(["starting","running","approval","question"].includes(item.state) || item.connection?.connected===true){
         await refresh();if(!automatic)toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
       }
-      context.promise=(active?.id===context.id ? globalThis.WorkspaceComposer?.waitForPreparation?.() || globalThis.WorkspaceInlineControls?.waitForPreparation?.() : null) || api('/api/connect',{id:context.id});
+      context.promise=(active?.id===context.id ? globalThis.WorkspaceComposer?.waitForPreparation?.() || globalThis.WorkspaceInlineControls?.waitForPreparation?.() : null) || api('/api/connect',{id:context.id,...(automatic?{automatic:true}:{})});
       const response=await context.promise;
       if(!current())return;
       sessions=sessions.map(row=>row.id===context.id?{...row,connectionState:"live"}:row);
@@ -473,6 +473,6 @@ globalThis.WorkspaceCapabilities = (() => {
       event.preventDefault(); kind = kinds[next]; render(); autoPrepare(); $(`capabilities-${kind}-tab`).focus();
     };
   }
-  return {open, close, contextChanged, isOpen: () => opened, isPreparing: id => preparing?.id === id,
+  return {open, close, contextChanged, capacityContext: id => opened && runtimeSession()?.id === id ? contextKey() : null, isOpen: () => opened, isPreparing: id => preparing?.id === id,
     waitForPreparation: id => preparing?.id === id ? preparing.promise : null};
 })();

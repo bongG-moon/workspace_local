@@ -409,3 +409,6 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 .customizations-dialog select{font:inherit;max-width:100%;min-height:38px}.customizations-dialog input{width:100%;box-sizing:border-box}
 #customizations-path{overflow-wrap:anywhere}
 @media(max-width:560px){.customization-row{grid-template-columns:1fr}.customization-row.has-state-hint>div{grid-row:auto}.customization-state-hint{grid-column:1}.customizations-header,.customizations-body{padding:16px}.customizations-scope-row{gap:12px}.customizations-scope-row label{flex:1;min-width:160px}.customizations-scope-row select{width:100%}.customizations-help-content dl{grid-template-columns:1fr;gap:4px}.customizations-help-content dd{margin-bottom:10px}}
+
+/* Preserve readable paragraphs in confirmation dialogs, including connection replacement. */
+#action-message{white-space:pre-line;overflow-wrap:anywhere;line-height:1.7}

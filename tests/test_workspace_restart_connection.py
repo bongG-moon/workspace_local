@@ -194,7 +194,7 @@ class RestartConnectionTests(unittest.TestCase):
         self.assertEqual(before, self.app.public(self.item))
 
     def test_restart_reserves_slot_and_blocks_send_controls_dispatch_and_second_restart(self):
-        for index in range(2):
+        for index in range(4):
             other = self.app.create(str(self.root), True)
             self.app.connect(other['id'])
             # Completed idle connections are now reclaimable; busy connections
