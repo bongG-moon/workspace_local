@@ -9,7 +9,7 @@ import time
 from .work_queue import WorkQueue
 from .schedule_time import first_run as scheduled_first_run
 from .bridge import ControlRestoreRequired
-from .idle_connections import connection_slot, ConnectionCapacityUnavailable
+from .idle_connections import connection_slot, ConnectionCapacityUnavailable, trim_idle_connection
 
 
 class DispatchController:
@@ -20,6 +20,20 @@ class DispatchController:
         self.thread = None
         self.steering = {}
         self.error = None
+        self._retention_pending = False
+
+    def request_retention(self):
+        with self.app.lock:
+            self._retention_pending = True
+
+    def maintain_connections(self):
+        with self.app.lock:
+            if not self._retention_pending or self.stopped.is_set() or self.error:
+                return
+            # Consume before releasing the lock, preserving concurrent signals.
+            self._retention_pending = False
+        if trim_idle_connection(self.app):
+            self.request_retention()  # At most one child per existing worker tick.
 
     @staticmethod
     def context(item):
@@ -181,12 +195,15 @@ class DispatchController:
         while not self.stopped.wait(.5):
             try:
                 self.pump()
+                self.maintain_connections()
             except (ValueError, OSError, RuntimeError):
                 # Storage errors stop automatic work, not the whole UI. No
                 # failed/uncertain send is retried by this loop.
                 self.error = '대기·예약 실행을 멈췄습니다. 해당 업무의 상태를 확인해 주세요.'
 
     def observe(self, sid, kind, data):
+        if kind == 'result':
+            self.request_retention()
         if kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped':
             try:
                 self.queue.observe(sid, kind, data)
@@ -427,4 +444,5 @@ class DispatchController:
                 self.queue.set_schedule_enabled(sid, identifier, action == 'schedule_resume')
             else:
                 raise ValueError('대기·예약 작업을 확인해 주세요.')
+            self.request_retention()
             return {'ok': True, **self.snapshot(sid)}

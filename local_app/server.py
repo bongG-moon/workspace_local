@@ -1026,6 +1026,7 @@ class LocalApp:
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
+                self.dispatch.request_retention()
 
     def set_effort(self, sid, effort):
         if effort is not None and (not isinstance(effort, str) or not effort or len(effort) > 20):
@@ -1055,6 +1056,7 @@ class LocalApp:
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
+                self.dispatch.request_retention()
 
     def set_permission_mode(self, sid, mode, *, bypass_confirmed=False):
         if mode is not None and (not isinstance(mode, str) or not mode or len(mode) > 40):
@@ -1122,6 +1124,7 @@ class LocalApp:
         finally:
             with self.lock:
                 item['_permissionUpdating'] = False
+                self.dispatch.request_retention()
 
     def connection_capacity_available(self, item):
         """Call while holding self.lock; reservations and live bridges share slots."""
@@ -1282,6 +1285,7 @@ class LocalApp:
         finally:
             with self.lock:
                 item['_modelUpdating'] = False
+                self.dispatch.request_retention()
 
     def _control_selected(self, item, bridge, name):
         with self.lock:
@@ -1378,6 +1382,7 @@ class LocalApp:
             with self.lock:
                 if item.get('_choiceAnswerClaim') == claim:
                     item.pop('_choiceAnswerClaim', None)
+                    self.dispatch.request_retention()
 
     def emit(self, sid, kind, data):
         with self.lock:

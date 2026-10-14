@@ -1,4 +1,4 @@
-"""On-demand connection admission; no timer, process scan, or extra CLI probe."""
+"""Connection admission and event-driven retention; no extra timer or CLI probe."""
 from contextlib import contextmanager
 from functools import wraps
 import threading
@@ -11,6 +11,7 @@ import json
 from .bridge import BridgeError
 
 MAX_CONNECTIONS = 5
+RETAINED_CONNECTIONS = 3
 
 
 class ConnectionCapacityUnavailable(BridgeError):
@@ -101,6 +102,94 @@ def idle_candidate(app, target):
     return selected[1] if selected else None
 
 
+def _prepare_release(app, candidate, owner, *, explicit=False):
+    """Caller holds app.lock; reserve the exact child before releasing the lock."""
+    old = candidate['bridge']
+    resumable = bool(getattr(old, 'resume_id', None) or candidate.get('lastRunId')
+                     or candidate.get('messages') or candidate.get('state') != 'idle')
+    app._capture_control_baselines(candidate, old)
+    actual = old.model_state()
+    candidate['_idleRestoreControls'] = {name: actual[name] for name in
+        ('model', 'effort', 'permissionMode') if isinstance(actual.get(name), str) and actual[name]}
+    if explicit:
+        app.dispatch.manual_stop(candidate['id'])
+        candidate['bridge'] = None
+    candidate['_idleReleasing'] = owner
+    candidate['_connecting'] = True
+    return old, resumable
+
+
+def _finish_release(app, candidate, old, resumable, *, explicit=False):
+    """Close outside app.lock and keep unverified children occupying their slot."""
+    try:
+        cleaned = (old.close() is True and getattr(old, 'cleanup_complete', False) is True
+                   and getattr(old, 'descendant_cleanup_uncertain', False) is not True)
+    except (OSError, ValueError, RuntimeError):
+        cleaned = False
+    with app.lock:
+        if not cleaned:
+            if explicit:
+                candidate['bridge'] = old
+                app.emit(candidate['id'], 'error', {'code': 'connection_replacement_cleanup_failed',
+                    'message': '연결 종료를 확인하지 못했어요. 이 업무의 연결 상태를 확인해 주세요. 이어 할 일과 예약은 일시정지됩니다.',
+                    'resumeSessionId': old.session_id if resumable else None})
+            candidate['_idleReleaseFailed'] = True
+            return False
+        if explicit:
+            candidate['bridge'] = old
+            for request_id in list(candidate.get('requests', {})):
+                app.emit(candidate['id'], 'request_closed', {'id': request_id})
+            if candidate.get('choice'):
+                app.emit(candidate['id'], 'choice_closed', {'id': candidate['choice']['id']})
+            app.emit(candidate['id'], 'status', {'state': 'stopped', 'label': '새 업무 연결을 위해 중지했어요 · 이어 할 일과 예약은 일시정지됩니다'})
+        candidate['sessionId'] = old.session_id if resumable else None
+        candidate['_idleReleased'] = True
+        candidate['_requireResumeIdentity'] = resumable
+        candidate.pop('_idleReleasing', None)
+        candidate['_connecting'] = False
+        # Connection metadata only: no stopped/result event, queue pause or replay.
+        app.emit(candidate['id'], 'connection_idle', {
+            'state': candidate['state'], 'connection': app.public(candidate)['connection']})
+        return True
+
+
+def trim_idle_connection(app):
+    """Retire at most one safe child on the existing dispatch worker, after queues.
+
+    The soft target counts working and idle connections together. Five working
+    connections remain untouched; state changes request another bounded pass.
+    """
+    candidate = None
+    owner = object()
+    try:
+        with app.operation():
+            with app.lock:
+                if app.demo or app.dispatch.stopped.is_set() or app.dispatch.error:
+                    return False
+                # Admission may already be closing a child. Do not over-trim or
+                # race its replacement; connection_slot requests a later pass.
+                if any(row.get('_idleReleasing') for row in app.sessions.values()):
+                    return False
+                if sum(occupies_slot(row) for row in app.sessions.values()) <= RETAINED_CONNECTIONS:
+                    return False
+                candidate = idle_candidate(app, None)
+                if candidate is None:
+                    return False
+                old, resumable = _prepare_release(app, candidate, owner)
+            return _finish_release(app, candidate, old, resumable)
+    except (OSError, ValueError, RuntimeError):
+        # Optional memory cleanup must never pause queued/scheduled work.
+        if candidate is not None:
+            with app.lock:
+                candidate['_idleReleaseFailed'] = True
+        return False
+    finally:
+        with app.lock:
+            if candidate is not None and candidate.get('_idleReleasing') is owner:
+                candidate.pop('_idleReleasing', None)
+                candidate['_connecting'] = False
+
+
 def _preflight(app, item, mode, args, kwargs):
     """Reject invalid admission before retiring another task's idle process."""
     app._require_running()
@@ -187,57 +276,13 @@ def connection_slot(app, sid, *, mode='dispatch', args=(), kwargs=None, offer_re
                         candidate, explicit = approved, True
                     else:
                         raise replacement_offer(app, item, fingerprint) if offer_replacement else ConnectionCapacityUnavailable()
-                old = candidate['bridge']
-                resumable = bool(getattr(old, 'resume_id', None) or candidate.get('lastRunId')
-                                 or candidate.get('messages') or candidate.get('state') != 'idle')
-                app._capture_control_baselines(candidate, old)
-                actual = old.model_state()
-                candidate['_idleRestoreControls'] = {name: actual[name] for name in
-                    ('model', 'effort', 'permissionMode') if isinstance(actual.get(name), str) and actual[name]}
-                if explicit:
-                    app.dispatch.manual_stop(candidate['id'])
-                    # Ignore late callbacks from the retired child while closing.
-                    candidate['bridge'] = None
-                candidate['_idleReleasing'] = sid
-                candidate['_connecting'] = True
+                old, resumable = _prepare_release(app, candidate, sid, explicit=explicit)
             item['_capacityReservation'] = owner
             reserved = True
     try:
         if candidate is not None:
-            # Idle reclamation preserves queues; explicit replacement already
-            # paused them under the admission lock before closing the child.
-            try:
-                cleaned = (old.close() is True and getattr(old, 'cleanup_complete', False) is True
-                           and getattr(old, 'descendant_cleanup_uncertain', False) is not True)
-            except (OSError, ValueError, RuntimeError):
-                cleaned = False
-            with app.lock:
-                if not cleaned:
-                    if explicit:
-                        candidate['bridge'] = old
-                        app.emit(candidate['id'], 'error', {'code': 'connection_replacement_cleanup_failed',
-                            'message': '연결 종료를 확인하지 못했어요. 이 업무의 연결 상태를 확인해 주세요. 이어 할 일과 예약은 일시정지됩니다.',
-                            'resumeSessionId': old.session_id if resumable else None})
-                    else:
-                        candidate.pop('_idleRestoreControls', None)
-                    candidate['_idleReleaseFailed'] = True
-                    raise ConnectionCapacityUnavailable('기존 연결의 종료를 확인하지 못해 새 연결을 시작하지 않았습니다. 현재 연결 상태를 확인해 주세요.')
-                if explicit:
-                    candidate['bridge'] = old
-                    for request_id in list(candidate.get('requests', {})):
-                        app.emit(candidate['id'], 'request_closed', {'id': request_id})
-                    if candidate.get('choice'):
-                        app.emit(candidate['id'], 'choice_closed', {'id': candidate['choice']['id']})
-                    app.emit(candidate['id'], 'status', {'state': 'stopped', 'label': '새 업무 연결을 위해 중지했어요 · 이어 할 일과 예약은 일시정지됩니다'})
-                candidate['sessionId'] = old.session_id if resumable else None
-                candidate['_idleReleased'] = True
-                candidate['_requireResumeIdentity'] = resumable
-                candidate.pop('_idleReleasing', None)
-                candidate['_connecting'] = False
-                # Preserve completed state, transcript and queue. This event is
-                # connection metadata, not a stopped or completed user request.
-                app.emit(candidate['id'], 'connection_idle', {
-                    'state': candidate['state'], 'connection': app.public(candidate)['connection']})
+            if not _finish_release(app, candidate, old, resumable, explicit=explicit):
+                raise ConnectionCapacityUnavailable('기존 연결의 종료를 확인하지 못해 새 연결을 시작하지 않았습니다. 현재 연결 상태를 확인해 주세요.')
         with app.lock:
             app._require_running()
             if reserved and item.get('_capacityCancelled'):
@@ -251,6 +296,7 @@ def connection_slot(app, sid, *, mode='dispatch', args=(), kwargs=None, offer_re
             if reserved and item.get('_capacityReservation') == owner:
                 item.pop('_capacityReservation', None)
                 item.pop('_capacityCancelled', None)
+            app.dispatch.request_retention()
 
 
 def with_connection_slot(method):

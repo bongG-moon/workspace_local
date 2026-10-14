@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "fac7ca691333ce4a871f417847cc16fc5a56b119280c81e2d1ed9d4ef004c1f1",
-      "size": 37434
+      "sha256": "1689a4d99a67c73fb54b5dd9a23797db3665aa62a1dcbcd1aeec83d9e9f1fec9",
+      "size": 37707
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -137,8 +137,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "0d28f720428b7e389d0f87863b3488f7fbd30bfbeb7540c156bf53865e0a5d86",
-      "size": 37069
+      "sha256": "aed461c34b598727ba8b87686e7f646f65c7f8f81a8d8ff632ab8329bf3f38f7",
+      "size": 37263
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -172,8 +172,8 @@
     },
     {
       "path": "docs/LOCAL_WORKSPACE.md",
-      "sha256": "427ad7a1d58c4d1fabc54cd21acf72af359ef2b0ec69100eb1e3676e5010d0c3",
-      "size": 48869
+      "sha256": "0f7bef13c7946fb7f32d6d745e373a09dd5a4942bc30885174aaed77ec7b1656",
+      "size": 49146
     },
     {
       "path": "docs/ONBOARDING_COURSE.md",
@@ -197,8 +197,8 @@
     },
     {
       "path": "docs/USER_GUIDE.md",
-      "sha256": "5b75cca4bfa2c02ce5aea32148daa175bdc10b67c5d072042e7d1d04daaa896c",
-      "size": 26220
+      "sha256": "892682ee0addb2e925f44aef3fec5213e77c245efd03b9337c3313255c02aa65",
+      "size": 26930
     },
     {
       "path": "docs/VALIDATION_0.11.4.md",
@@ -602,8 +602,8 @@
     },
     {
       "path": "docs/WORKSPACE_CONNECTIONS_0.23.24.md",
-      "sha256": "586001e53683641dc4bd815a281f98dabdd01b291a43fae330830706172c26bb",
-      "size": 3072
+      "sha256": "94f40e53b00c3ac56ccb97cada67cdb25be0be58e0cd8d2d284c9cc1491c4d0a",
+      "size": 5145
     },
     {
       "path": "docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md",
@@ -712,8 +712,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "42ff02c7ee84d626841e6259773dc80a70797ed88f5e64284e0de2679631eaaf",
-      "size": 61113
+      "sha256": "c94ff267655f98e9d1d32077478d529c5f122cd7cc68bec47a50131e47a9fadb",
+      "size": 61570
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -742,8 +742,8 @@
     },
     {
       "path": "local_app/app_dispatch.py",
-      "sha256": "694e380d718728f5575aa86e16dca6bf966e0862f35fe05c1d081fe01df8119c",
-      "size": 28477
+      "sha256": "cd3e5d29e9f8117c04b5d7c51416647c27e10541df0116e6f4e3c4ceed74f9d1",
+      "size": 29213
     },
     {
       "path": "local_app/app_updates.py",
@@ -877,8 +877,8 @@
     },
     {
       "path": "local_app/idle_connections.py",
-      "sha256": "2fe944e6dab7f7d6ef1e3147c2da7840f6f3e3c0c30208acc14ccc08791c7f7b",
-      "size": 16046
+      "sha256": "34cfcf620ffd3ccbe19e21fe00ebbfa51ef7cfeeceaf0d43e267d119fdedac0a",
+      "size": 17569
     },
     {
       "path": "local_app/managed_launcher.py",
@@ -927,8 +927,8 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "8c60fa655e2932c0d93a44c91c46cdd130c5a824253ca0ffdd0ac6921d286230",
-      "size": 158028
+      "sha256": "f4fa7ca967de93c34e6f90f4a983da8f7a14159823016bb249ba2ebb312c7280",
+      "size": 158287
     },
     {
       "path": "local_app/session_import.py",
@@ -1694,6 +1694,11 @@
       "path": "tests/test_workspace_connection_replacement_frontend.py",
       "sha256": "08102804eeeb4a3ed4010d0bf0109d5861428fe645fde5ea24b6110e1feb4078",
       "size": 3772
+    },
+    {
+      "path": "tests/test_workspace_connection_retention.py",
+      "sha256": "ae0f0429957fb6b90d6a18f6bd3dc8ab52e49d48316dc57c95c2dfb250967c19",
+      "size": 16760
     },
     {
       "path": "tests/test_workspace_continuity_frontend.py",
