@@ -46,6 +46,17 @@ class UiHealthTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', self.log.path.read_text())
         self.assertNotIn('private.example', self.log.path.read_text())
 
+    def test_folder_load_failure_survives_restart_without_task_or_folder_names(self):
+        self.assertTrue(self.log.frontend(event(event='module', module='session-groups',
+            reason='resource-error', missing=['session-groups'],
+            message='PRIVATE TASK NAME', groupName='PRIVATE PROJECT')))
+        restarted = UiHealthLog(self.state, '0.23.24')
+        row = restarted.rows[-1]
+        self.assertEqual(('session-groups', 'resource-error', ['session-groups']),
+                         (row['module'], row['reason'], row['missing']))
+        self.assertNotIn('groupName', row)
+        self.assertNotIn('PRIVATE', self.log.path.read_text())
+
     def test_rejects_freeform_values_nonfinite_numbers_and_unbounded_lists(self):
         for changes in ({'documentId':'http://private/path'}, {'module':'secrets'},
                         {'reason':'file content'}, {'event':[]}, {'status':'CUSTOM'},

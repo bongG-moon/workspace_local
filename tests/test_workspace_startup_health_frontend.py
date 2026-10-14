@@ -15,6 +15,7 @@ let now=1000000,nextTimer=1,reloads=0,storageFails=false;
 function node(id){if(!nodes.has(id))nodes.set(id,{id,hidden:false,textContent:'',dataset:{},disabled:false,onclick:null,tagName:'BUTTON',closest(){return this;}});return nodes.get(id);}
 const modules={drafts:'WorkspaceDraftPersistence','attachment-storage':'WorkspaceAttachmentStorage','archived-tasks':'WorkspaceArchivedTasks','path-picker':'WorkspacePathPicker',stream:'WorkspaceStream',attachments:'WorkspaceAttachments',workflow:'WorkspaceWorkflow',composer:'WorkspaceComposer','inline-controls':'WorkspaceInlineControls', 'input-keys':'WorkspaceInputKeys','chat-shortcuts':'WorkspaceShortcuts',attention:'WorkspaceAttention',desktop:'WorkspaceDesktop','session-import':'WorkspaceSessionImport',capabilities:'WorkspaceCapabilities',productivity:'WorkspaceProductivityActions',palette:'WorkspacePalette',layout:'WorkspaceLayout','rich-content':'WorkspaceRichContent','execution-view':'WorkspaceExecutionView','tool-activity':'WorkspaceToolActivity','progress-view':'WorkspaceProgressView','upgrade-handoff':'WorkspaceUpgrade','app-updates':'WorkspaceAppUpdates'};
 const controls=['new-chat','settings-open','shortcuts-open','workflow-open','schedule-open','composer-model','composer-effort','composer-permission','attention-open','desktop-open','import-open','capabilities-open','changes-open','branch-open','palette-open','sidebar-toggle','materials-button','input-history-close','app-update-check','app-update-notes-open','app-update-install','progress-open'];
+modules['session-groups']='WorkspaceSessionGroups';controls.push('task-group-create');
 const posted=[],restores=[],directCalls=[];
 const context={assert,console,URL,URLSearchParams,Math,JSON,Object,Map,Set,Date:{now:()=>now},location:{href:'http://127.0.0.1:1234/',hash:'#token=TEST_AUTH_SECRET',reload:()=>reloads++},
  crypto:{randomUUID:()=> '12345678-abcd-1234-abcd-123456789abc'},
@@ -99,6 +100,33 @@ class WorkspaceStartupHealthFrontendTests(unittest.TestCase):
           globalThis.WorkspaceAppUpdates={};fire('load',{target:{tagName:'SCRIPT',src:'/app-updates.js'}});
           assert.equal(health.snapshot().modules['app-updates'].status,'ready');
           assert.equal(health.snapshot().missing.length,0);
+        })()""")
+
+    def test_missing_folders_script_reports_and_blocks_create_without_blocking_other_features(self):
+        self.run_case(r"""(async()=>{
+          installAll();delete WorkspaceSessionGroups;health.attach(hooks);
+          fire('error',{target:{tagName:'SCRIPT',src:'/session-groups.js'}});
+          fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(health.snapshot().modules['session-groups'].reason,'resource-error');
+          assert.equal(JSON.stringify(health.snapshot().missing),JSON.stringify(['session-groups']));
+          assert.ok(posted.some(row=>row.module==='session-groups'&&row.reason==='resource-error'));
+          let blocked=0;fire('click',{target:node('task-group-create'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.match(node('startup-health-text').textContent,/다시 열어/);
+          fire('click',{target:node('settings-open'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.equal(readReloads(),0);
+          globalThis.WorkspaceSessionGroups={};fire('load',{target:{tagName:'SCRIPT',src:'/session-groups.js'}});
+          assert.equal(health.snapshot().modules['session-groups'].status,'ready');assert.equal(health.snapshot().missing.length,0);
+        })()""")
+
+    def test_folder_global_without_create_handler_is_not_ready(self):
+        self.run_case(r"""(async()=>{
+          installAll();node('task-group-create').onclick=null;health.attach(hooks);
+          fire('DOMContentLoaded');await health.bootstrapReady();await flush();
+          assert.equal(health.snapshot().modules['session-groups'].reason,'missing-handler');
+          let blocked=0;fire('click',{target:node('task-group-create'),preventDefault(){blocked++;},stopImmediatePropagation(){blocked++;}});
+          assert.equal(blocked,2);assert.equal(readReloads(),0);
+          node('task-group-create').onclick=()=>{};health.check();
+          assert.equal(health.snapshot().modules['session-groups'].status,'ready');
         })()""")
 
     def test_updater_global_requires_check_notes_and_install_handlers(self):

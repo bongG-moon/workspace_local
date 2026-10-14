@@ -77,8 +77,8 @@
     },
     {
       "path": "deploy/New-WorkspaceBundle.ps1",
-      "sha256": "7448e6118e5473b0e8dbab5b7be6cf16b890ce3f254b4c24268f1b38e85499a9",
-      "size": 7624
+      "sha256": "df649e8bb1a547822bb2281555adc5297ff53f3f37cc29d585efcbcb0df51a37",
+      "size": 7695
     },
     {
       "path": "deploy/New-WorkspaceDesktop.ps1",
@@ -137,8 +137,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "aed461c34b598727ba8b87686e7f646f65c7f8f81a8d8ff632ab8329bf3f38f7",
-      "size": 37263
+      "sha256": "c39fbd8843e39be1860c76fa921426819e28671ba94c828fbf7cff0427c3d3f4",
+      "size": 37860
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -706,14 +706,19 @@
       "size": 17091
     },
     {
+      "path": "docs/WORKSPACE_TASK_FOLDERS_0.23.24.md",
+      "sha256": "b1212aab0f9b3a7911c685eced3f1c590da97bd4afdb3180b0209cf066b5ace1",
+      "size": 3425
+    },
+    {
       "path": "docs/WORKSPACE_UI_AUDIT_2026-09-28.md",
       "sha256": "cb85b20fb82ad2679da8f670dac8b8806a715fa453fe7080943a76f07f088bf9",
       "size": 5069
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "e08858aa634f115ea8de5c195eab5331bc85276d95b8bc3458911d3638e99958",
-      "size": 63102
+      "sha256": "7aa6358e3987dfbba8cf3fc4d27de09caf7ebc89e76d249372f3765e73673c5d",
+      "size": 64897
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -927,8 +932,13 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "f4fa7ca967de93c34e6f90f4a983da8f7a14159823016bb249ba2ebb312c7280",
-      "size": 158287
+      "sha256": "bd4f3d1d8803e227b0544a230ba6615f33d351e1b8da940d8d1faa2038d95193",
+      "size": 159989
+    },
+    {
+      "path": "local_app/session_groups.py",
+      "sha256": "ac90f43426e16e49610db3c3be73f05cfadcf02aadf7cd6a398a79b4d7354c0c",
+      "size": 7736
     },
     {
       "path": "local_app/session_import.py",
@@ -967,8 +977,8 @@
     },
     {
       "path": "local_app/ui_health.py",
-      "sha256": "61411ca4b62923ba45197c6cf9dfb08e61c4807527be2a1b10fdb7108a3d3190",
-      "size": 7576
+      "sha256": "427f08ba2c294631085384055cc6f464ec5d8b3803b850d6862bd3793c617528",
+      "size": 7594
     },
     {
       "path": "local_app/update_install.py",
@@ -1017,13 +1027,13 @@
     },
     {
       "path": "local_app/web/app.css",
-      "sha256": "70ba75c2021183755cbf2723a8fe76aba6636d17232f4c8b16fcd1bc53429efb",
-      "size": 135144
+      "sha256": "7db6bfb7702037768ea1b4ab7dc2addf17621c390a922f3c1d0ba6c564dda48c",
+      "size": 140293
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "634470ac9876acc5f97d7605523fd4c9c500413a40b5fa40931b53db7f97c7d2",
-      "size": 140917
+      "sha256": "0f6baf0359ee8042aef10ed4cc09aa392bf31a15302ea965aef552846432ddbb",
+      "size": 144851
     },
     {
       "path": "local_app/web/appearance.css",
@@ -1142,8 +1152,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "86e64b96b0379cb191adf670aab3fb0a8d66355ca09baf8bd6d89d833e6cfe57",
-      "size": 81809
+      "sha256": "5797528243a7d64eeafacc569f54067612ef9ac838f7e635f7f64f0f3e435653",
+      "size": 83261
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1216,6 +1226,11 @@
       "size": 18076
     },
     {
+      "path": "local_app/web/session-groups.js",
+      "sha256": "9990d82bf27b7583aefe29328b0292607736661213ce3174523c46376464bc5a",
+      "size": 9198
+    },
+    {
       "path": "local_app/web/session-import.js",
       "sha256": "cf98829caba5866d15e257c70528ae2b70c65ba43c6ca059d442e0ddfbb0ed7f",
       "size": 5726
@@ -1227,8 +1242,8 @@
     },
     {
       "path": "local_app/web/startup-health.js",
-      "sha256": "d54052153036e603fd203028fa5122df0d7aaedfa3e52fb10a8f95ccd6ed9002",
-      "size": 16240
+      "sha256": "2e187c41b9d7c73d667b19bb3e5b22b881bba1a40fa3796a84d7f49f7a76cc07",
+      "size": 16351
     },
     {
       "path": "local_app/web/tool-activity.css",
@@ -1342,8 +1357,8 @@
     },
     {
       "path": "scripts/test-lab/check-workspace-bundle.py",
-      "sha256": "11dd1c91271781a8c2902f4dc65d619c88fba9afbd9a16fceb0871e747d572e8",
-      "size": 9368
+      "sha256": "ea7f1d57ee178c13a81923f11e45b5dd0d79b963407f281ef65b0ebee95abfbb",
+      "size": 9453
     },
     {
       "path": "scripts/test-lab/check-workspace-transport.py",
@@ -2166,6 +2181,16 @@
       "size": 6830
     },
     {
+      "path": "tests/test_workspace_session_groups.py",
+      "sha256": "a8a2a572fbf48aa6b69b4a03ec3b878f9997d35faecc8eb0543487be0685df93",
+      "size": 17810
+    },
+    {
+      "path": "tests/test_workspace_session_groups_frontend.py",
+      "sha256": "95514289804498e4018d10e791f5ad76696859fd7885258d2ee3e8281395bfd7",
+      "size": 42150
+    },
+    {
       "path": "tests/test_workspace_session_import.py",
       "sha256": "27e6655869739083ec2c0da50e4ee1617726c4a52ab5532e4c4b0f9e7b499084",
       "size": 15467
@@ -2177,8 +2202,8 @@
     },
     {
       "path": "tests/test_workspace_session_order_frontend.py",
-      "sha256": "685051cd414d14db664a64283a8af7ec0513047dd35f0d249d802d0587977c67",
-      "size": 13767
+      "sha256": "47cb8c0a0a9934ae2d5145477caea072b9188b83c4560bcb0e749a700d1cc2a1",
+      "size": 22711
     },
     {
       "path": "tests/test_workspace_session_visibility.py",
@@ -2217,8 +2242,8 @@
     },
     {
       "path": "tests/test_workspace_startup_health_frontend.py",
-      "sha256": "660d63774fc84463806287d1e928ccdd57ce56084d8034328e857c7c169bc4ac",
-      "size": 35837
+      "sha256": "4135189ca800d384f249dcc309571e5ce43fc86b82afc8466cce774778c7bec5",
+      "size": 38035
     },
     {
       "path": "tests/test_workspace_status_responsiveness.py",
@@ -2272,8 +2297,8 @@
     },
     {
       "path": "tests/test_workspace_ui_health.py",
-      "sha256": "f941d1a35623d1fd07c30b92cfd2b0d527ab2a5b6bd8658f9681476dd61a4730",
-      "size": 8898
+      "sha256": "7f7b8be8d6f71013b5985d49959ef23044c220c27094d54361523eb668f07af7",
+      "size": 9561
     },
     {
       "path": "tests/test_workspace_update_install.py",

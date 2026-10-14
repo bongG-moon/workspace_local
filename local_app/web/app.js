@@ -130,7 +130,7 @@ function orderedSessions(){
       (ranks.has(a.id)?ranks.get(a.id)-ranks.get(b.id):(b.created||0)-(a.created||0))):
       (b.updated||b.created||0)-(a.updated||a.created||0))||a.id.localeCompare(b.id));
 }
-function clearSessionDrop(){for(const id of ["sessions","home-recents","all-sessions"])for(const row of $(id).children){row.classList.remove("drop-before","drop-after");row.classList.toggle("dragging",!!sessionPointerDrag?.active&&row.dataset.sessionId===sessionDragId);}}
+function clearSessionDrop(){for(const id of ["sessions","home-recents","all-sessions"])for(const row of $(id).children){row.classList.remove("drop-before","drop-after","drop-folder");row.classList.toggle("dragging",!!sessionPointerDrag?.active&&row.dataset.sessionId===sessionDragId);}}
 function focusSessionHandle(id,container){const row=[...$(container).children].find(row=>row.dataset.sessionId===id);row?.querySelector(".session-drag")?.focus();row?.scrollIntoView({block:"nearest"});}
 function sessionDragArea(container){
   const rect=container.getBoundingClientRect(),area={left:Math.max(0,rect.left),top:Math.max(0,rect.top),right:Math.min(globalThis.innerWidth||Infinity,rect.right),bottom:Math.min(globalThis.innerHeight||Infinity,rect.bottom)};
@@ -143,6 +143,10 @@ function sessionDragTarget(drag){
   const container=$(drag.container),area=sessionDragArea(container),{x,y}=drag;
   if(x<area.left||x>area.right||y<area.top||y>area.bottom||area.right<=area.left||area.bottom<=area.top)return null;
   const hit=document.elementFromPoint(x,y);if(!hit||!container.contains(hit))return null;
+  const groups=globalThis.WorkspaceSessionGroups;
+  const folderTarget=drag.container==="sessions"?groups?.dropTarget(container,hit,y,drag.id):null;
+  if(folderTarget)return folderTarget;
+  if(hit.closest(".task-group-header"))return null;
   let row=hit.closest(".session-row");
   if(!row||row.parentElement!==container){
     // Small gaps between cards still expose the nearest visible insertion edge.
@@ -152,10 +156,10 @@ function sessionDragTarget(drag){
       .sort((a,b)=>a.distance-b.distance)[0]?.candidate;
   }
   const source=sessions.find(item=>item.id===drag.id),target=sessions.find(item=>item.id===row?.dataset.sessionId);
-  if(!source||!target||source.id===target.id||!!source.pinned!==!!target.pinned)return null;
+  if(!source||!target||source.id===target.id||!!source.pinned!==!!target.pinned||groups&&groups.groupFor(source.id)!==groups.groupFor(target.id))return null;
   const bounds=row.getBoundingClientRect();return {row,id:target.id,position:y<bounds.top+bounds.height/2?"before":"after"};
 }
-function paintSessionDrag(drag){clearSessionDrop();drag.target=sessionDragTarget(drag);drag.target?.row.classList.add("drop-"+drag.target.position);}
+function paintSessionDrag(drag){clearSessionDrop();drag.target=sessionDragTarget(drag);drag.target?.row.classList.add(drag.target.kind==="folder"?"drop-folder":"drop-"+drag.target.position);drag.target?.header?.classList.add("drop-folder");}
 function scrollSessionDrag(drag){
   if(sessionPointerDrag!==drag||!drag.active)return;drag.frame=null;
   if(!$(drag.container).contains(document.elementFromPoint(drag.x,drag.y)))return;
@@ -172,15 +176,19 @@ function finishSessionDrag(event,cancel=false){
   if(drag.active)event?.preventDefault?.();
   if(Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)){drag.x=event.clientX;drag.y=event.clientY;}
   const target=!cancel&&drag.active?sessionDragTarget(drag):null;
+  if(drag.active||cancel)drag.handle.suppressSessionClick=true;
   sessionPointerDrag=null;sessionDragId=null;if(drag.frame!==null)globalThis.cancelAnimationFrame?.(drag.frame);
   globalThis.removeEventListener?.("blur",drag.cancel);
   try{if(drag.handle.hasPointerCapture(drag.pointerId))drag.handle.releasePointerCapture(drag.pointerId);}catch(_){}
+  // Keep the title connected until the browser dispatches its ordinary click.
+  if(!drag.active)return;
   clearSessionDrop();renderSessions();
+  if(target?.kind==="folder")return globalThis.WorkspaceSessionGroups.move(drag.id,target.groupId);
   if(target)return moveSession(drag.id,target.id,target.position,drag.container);
   focusSessionHandle(drag.id,drag.container);
 }
 function startSessionDrag(event,item,handle,container){
-  if(handle.disabled||sessionOrderSaving||appClosed||sessionPointerDrag||event.isPrimary===false||event.button!==0)return;
+  if(handle.disabled||sessionOrderSaving||globalThis.WorkspaceSessionGroups?.isSaving()||appClosed||boot.sessionOrder?.warning||hidingSessionIds.has(item.id)||sessionPointerDrag||event.isPrimary===false||event.button!==0)return;
   const drag={id:item.id,handle,container,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,active:false,target:null,frame:null};
   drag.cancel=()=>finishSessionDrag(null,true);sessionPointerDrag=drag;sessionDragId=item.id;
   try{handle.setPointerCapture(event.pointerId);}catch(_){sessionPointerDrag=null;sessionDragId=null;return;}
@@ -190,13 +198,14 @@ function moveSessionDrag(event){
   const drag=sessionPointerDrag;if(!drag||event.pointerId!==drag.pointerId)return;
   drag.x=event.clientX;drag.y=event.clientY;
   if(!drag.active&&Math.hypot(drag.x-drag.startX,drag.y-drag.startY)<6)return;
-  drag.active=true;event.preventDefault();paintSessionDrag(drag);
+  drag.active=true;drag.handle.suppressSessionClick=true;event.preventDefault();paintSessionDrag(drag);
   if(drag.frame===null)drag.frame=requestAnimationFrame(()=>scrollSessionDrag(drag));
 }
 async function moveSession(id,targetId,position,container="sessions"){
-  if(sessionOrderSaving||appClosed||boot.sessionOrder?.warning)return false;
+  if(sessionOrderSaving||globalThis.WorkspaceSessionGroups?.isSaving()||appClosed||boot.sessionOrder?.warning)return false;
   const rows=orderedSessions(),source=rows.find(row=>row.id===id),target=rows.find(row=>row.id===targetId);
-  if(!source||!target||id===targetId||!!source.pinned!==!!target.pinned)return false;
+  const groups=globalThis.WorkspaceSessionGroups;
+  if(!source||!target||id===targetId||!!source.pinned!==!!target.pinned||groups&&groups.groupFor(id)!==groups.groupFor(targetId))return false;
   const previous=boot.sessionOrder,ids=rows.filter(row=>row.id!==id).map(row=>row.id);
   ids.splice(ids.indexOf(targetId)+(position==="after"?1:0),0,id);
   sessionOrderSaving=true;boot.sessionOrder={manual:true,ids,warning:null};renderSessions();
@@ -212,28 +221,46 @@ async function moveSession(id,targetId,position,container="sessions"){
 function sessionRow(item,button,container){
   const row=el("div",null,"session-row"+(container==="home-recents"?" recent-row":""));row.dataset.sessionId=item.id;
   const handle=el("button",null,"session-drag"),grip=el("span",null,"session-drag-grip");
-  handle.type="button";handle.draggable=false;handle.disabled=sessionOrderSaving||appClosed||!!boot.sessionOrder?.warning;
+  const groupSaving=!!globalThis.WorkspaceSessionGroups?.isSaving();
+  handle.type="button";handle.draggable=false;handle.disabled=sessionOrderSaving||groupSaving||appClosed||!!boot.sessionOrder?.warning;
   handle.setAttribute("aria-label",`${item.title} 순서 이동. Alt와 위 또는 아래 방향키로 이동`);handle.setAttribute("aria-keyshortcuts","Alt+ArrowUp Alt+ArrowDown");
-  handle.title="끌어서 순서 변경 · Alt+↑/↓";grip.setAttribute("aria-hidden","true");handle.append(grip);
+  handle.title=container==="sessions"&&globalThis.WorkspaceSessionGroups?"끌어서 순서 변경·폴더로 이동 · Alt+↑/↓":"끌어서 순서 변경 · Alt+↑/↓";grip.setAttribute("aria-hidden","true");handle.append(grip);
   handle.onpointerdown=event=>startSessionDrag(event,item,handle,container);handle.onpointermove=moveSessionDrag;
   handle.onpointerup=event=>finishSessionDrag(event);handle.onpointercancel=event=>finishSessionDrag(event,true);
   handle.onlostpointercapture=event=>finishSessionDrag(event,true);
   handle.onkeydown=event=>{if(event.key==="Escape"&&sessionPointerDrag){event.preventDefault();finishSessionDrag(null,true);return;}if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||!["ArrowUp","ArrowDown"].includes(event.key))return;
-    event.preventDefault();const visible=new Set([...$(container).children].map(row=>row.dataset.sessionId)),group=orderedSessions().filter(other=>visible.has(other.id)&&!!other.pinned===!!item.pinned),index=group.findIndex(other=>other.id===item.id),target=group[index+(event.key==="ArrowUp"?-1:1)];
+    event.preventDefault();const visible=new Set([...$(container).children].map(row=>row.dataset.sessionId)),groups=globalThis.WorkspaceSessionGroups,group=orderedSessions().filter(other=>visible.has(other.id)&&!!other.pinned===!!item.pinned&&(!groups||groups.groupFor(other.id)===groups.groupFor(item.id))),index=group.findIndex(other=>other.id===item.id),target=group[index+(event.key==="ArrowUp"?-1:1)];
     if(target)return moveSession(item.id,target.id,event.key==="ArrowUp"?"before":"after",container);};
-  const pin=el("button",null,"session-pin"),icon=el("span",null,"session-pin-icon");pin.type="button";pin.disabled=sessionOrderSaving||appClosed;
+  // Names are both click targets and drag sources; adjacent action buttons stay independent.
+  const openTask=button.onclick;button.draggable=false;button.classList.add("session-title-drag");
+  button.title=(button.title?button.title+"\n":"")+"클릭하여 열기 · 끌어서 순서 변경"+(container==="sessions"?"·폴더로 이동":"");
+  button.onclick=event=>{
+    const suppress=button.suppressSessionClick&&event?.detail!==0;button.suppressSessionClick=false;
+    if(suppress){event?.preventDefault?.();event?.stopPropagation?.();return;}
+    return openTask?.call(button,event);
+  };
+  button.onpointerdown=event=>{
+    button.suppressSessionClick=false;
+    // Touch scrolling stays natural; the dedicated grip remains available for touch dragging.
+    if(event.pointerType!=="touch")startSessionDrag(event,item,button,container);
+  };
+  button.onpointermove=moveSessionDrag;button.onpointerup=event=>finishSessionDrag(event);
+  button.onpointercancel=button.onlostpointercapture=event=>finishSessionDrag(event,true);
+  button.onkeydown=handle.onkeydown;
+  const pin=el("button",null,"session-pin"),icon=el("span",null,"session-pin-icon");pin.type="button";pin.disabled=sessionOrderSaving||groupSaving||appClosed;
   pin.setAttribute("aria-label",`${item.title} ${item.pinned?"고정 해제":"고정"}`);pin.setAttribute("aria-pressed",String(!!item.pinned));pin.title=item.pinned?"고정 해제":"상단에 고정";icon.setAttribute("aria-hidden","true");pin.append(icon);
   pin.onclick=async()=>{try{await updateSession(item.id,{pinned:!item.pinned});}catch(e){toast(e.message);}finally{const focused=document.activeElement;if(!focused||focused===document.body||!focused.isConnected||focused===pin){const next=[...$(container).children].find(row=>row.dataset.sessionId===item.id);next?.querySelector(".session-pin")?.focus({preventScroll:true});}}};
-  const remove=el("button",null,"session-remove");remove.type="button";remove.disabled=sessionOrderSaving||appClosed||hidingSessionIds.has(item.id);
+  const remove=el("button",null,"session-remove");remove.type="button";remove.disabled=sessionOrderSaving||groupSaving||appClosed||hidingSessionIds.has(item.id);
   remove.setAttribute("aria-label",`${item.title} 목록에서 삭제`);remove.title="목록에서 삭제";
   const removeIcon=el("span",null,"session-remove-icon");removeIcon.setAttribute("aria-hidden","true");remove.append(removeIcon);
   remove.onclick=()=>hideSession(item.id,remove);
-  row.append(handle,button,pin,remove);return row;
+  row.append(handle,button,pin,remove);
+  return row;
 }
 async function hideSession(id,returnFocus){
   const item=sessions.find(row=>row.id===id);if(!item||hidingSessionIds.has(id)||appClosed)return false;
   const container=["sessions","home-recents","all-sessions"].find(name=>[...$(name).children].some(row=>row.querySelector(".session-remove")===returnFocus))||"sessions";
-  const position=[...$(container).children].findIndex(row=>row.dataset.sessionId===id);
+  const position=[...$(container).children].filter(row=>row.dataset.sessionId).findIndex(row=>row.dataset.sessionId===id);
   const needsReturn=()=>{const current=document.activeElement;return !current||current===document.body||!current.isConnected||current.closest?.(".session-row")?.dataset.sessionId===id;};
   const focusNeighbor=()=>{const rows=[...$(container).children].filter(row=>row.dataset.sessionId),row=rows[Math.min(Math.max(0,position),rows.length-1)];const next=row?.querySelector(container==="home-recents"?".recent-card":".session")||$(container==="all-sessions"?"tasks-close":"new-chat");next.focus({preventScroll:true});};
   const accepted=await confirmAction({title:"업무 목록에서 삭제할까요?",message:`‘${item.title}’을 앱 목록에서만 지웁니다. Claude 대화 기록과 작업 폴더의 파일은 그대로 남아요. 진행 중인 작업이나 남은 이어 할 일·실행 예약이 있으면 먼저 정리해 주세요.`,confirmLabel:"목록에서 삭제",returnFocus});
@@ -253,11 +280,11 @@ function renderSessions(){
   // Polling must not replace the native drag source before its drop event.
   if(sessionDragId)return;
   sessions=sessions.filter(item=>!hiddenSessionIds.has(item.id));
-  let focused=null;for(const container of ["sessions","home-recents","all-sessions"])for(const row of $(container).children)for(const selector of [".session-drag",".session-pin",".session-remove",".session",".recent-card"])if(row.querySelector(selector)===document.activeElement)focused={container,id:row.dataset.sessionId,selector};
-  const query=$("session-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
+  let focused=null;for(const container of ["sessions","home-recents","all-sessions"])for(const row of $(container).children)for(const selector of [".session-drag",".session-pin",".session-remove",".session",".recent-card",".task-group-toggle",".task-group-menu"])if(row.querySelector(selector)===document.activeElement)focused={container,id:row.dataset.sessionId,groupId:row.dataset.groupId,selector};
+  const groups=globalThis.WorkspaceSessionGroups,query=$("session-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query)||groups?.matches(s,query));
   $("sessions").replaceChildren();$("home-recents").replaceChildren();
   if(boot.sessionOrder?.warning)$("sessions").append(el("p",boot.sessionOrder.warning,"sidebar-empty"));
-  for(const item of items){
+  const createSidebarRow=item=>{
     const b=el("button",null,"session"+(item.id===active?.id?" active":"")),waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;
     b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}${waiting?` · 응답 대기 ${waiting}`:""}`);
     if(item.id===active?.id)b.setAttribute("aria-current","page");
@@ -266,16 +293,18 @@ function renderSessions(){
     else if(busyStates.has(item.state)||item.state==="error"){const dot=el("span",null,"session-state-dot");dot.dataset.state=item.state;dot.setAttribute("aria-hidden","true");b.append(dot);}
     b.title=`${item.title}\n${stateNames[item.state]||"대기"} · ${when(item.updated||item.created)}\n${item.workspace}`;
     b.onclick=async()=>{try{const selected=await selectSession(item.id);if(selected&&globalThis.WorkspaceLayout?.snapshot().sidebarOverlay)globalThis.WorkspaceLayout.closeSidebar();}catch(e){error(e.message);}};
-    $("sessions").append(sessionRow(item,b,"sessions"));
-  }
-  if(!items.length)$("sessions").append(el("p",query?"찾는 업무가 없어요":"시작한 업무가 여기에 모여요","sidebar-empty"));
+    return sessionRow(item,b,"sessions");
+  };
+  const grouped=groups?groups.render(items,createSidebarRow,query):false;
+  if(!groups)for(const item of items)$("sessions").append(createSidebarRow(item));
+  if(!items.length&&!grouped)$("sessions").append(el("p",query?"찾는 업무가 없어요":"시작한 업무가 여기에 모여요","sidebar-empty"));
   for(const item of items.slice(0,4)){const b=el("button",null,"recent-card");b.type="button";b.append(el("span",item.pinned?"고정한 업무":"이어서 하기","recent-kicker"),el("strong",item.title),el("span",`${basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",stateNames[item.state]||"대기","recent-status"));b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(sessionRow(item,b,"home-recents"));}
   if(!items.length)$("home-recents").append(el("p",query?"검색어를 바꾸어 다시 찾아보세요.":"첫 업무를 시작하면, 다음에 이곳에서 이어갈 수 있어요.","empty-recents"));
   $("tasks-open").hidden=!sessions.length;renderAllSessions();globalThis.WorkspaceCapabilities?.contextChanged();
-  if(focused){const row=[...$(focused.container).children].find(row=>row.dataset.sessionId===focused.id);row?.querySelector(focused.selector)?.focus({preventScroll:true});}
+  if(focused){const row=[...$(focused.container).children].find(row=>focused.id?row.dataset.sessionId===focused.id:row.dataset.groupId===focused.groupId);row?.querySelector(focused.selector)?.focus({preventScroll:true});}
 }
 function renderAllSessions(){
-  const query=$("task-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query));
+  const query=$("task-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query)||globalThis.WorkspaceSessionGroups?.matches(s,query));
   $("all-sessions").replaceChildren();$("tasks-empty").hidden=!!items.length;
   for(const item of items){const button=el("button",null,"session all-session"),meta=el("span",null,"session-meta");button.type="button";button.title=item.workspace;button.append(el("span",item.pinned?"고정한 업무":"업무","session-kicker"),el("strong",item.title,"session-title"),el("span",item.workspace,"all-session-path"));meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));button.append(meta);if(item.id===active?.id)button.setAttribute("aria-current","page");button.onclick=async()=>{const pending=selectSession(item.id),ticket=selectionGeneration;try{if(await pending&&ticket===selectionGeneration)$("tasks-dialog").close();}catch(e){if(ticket===selectionGeneration)toast(e.message);}};$("all-sessions").append(sessionRow(item,button,"all-sessions"));}
 }
@@ -918,16 +947,28 @@ async function useCurrentControl(control){
   }catch(e){return stillCurrent()?{ok:false,error:e.message}:null;}
   finally{changing(false);setStatus(active?.state||"idle");}
 }
-$("task-title").onclick=()=>{if(appClosed||!active)return;$("rename-input").value=active.title;showDialog("rename-dialog");};
+let renameContext=null,renameSaving=false;
+$("task-title").onclick=()=>{if(appClosed||!active||renameSaving)return;renameContext={id:active.id};$("rename-input").value=active.title;$("rename-error").hidden=true;showDialog("rename-dialog");$("rename-input").focus();$("rename-input").select?.();};
+$("rename-cancel").onclick=()=>$("rename-dialog").close();
+$("rename-dialog").addEventListener("close",()=>{if(!$("rename-dialog").open)renameContext=null;});
+$("rename-input").onkeydown=event=>{if(event.key==="Enter"&&(event.isComposing||event.keyCode===229))event.preventDefault();};
 async function updateSession(id,change){
   if(appClosed)return false;
   const pinning=typeof change.pinned==="boolean";
-  if(pinning&&(sessionOrderSaving||sessionDragId))throw new Error("업무 순서 변경을 마친 뒤 고정해 주세요.");
+  if(pinning&&(sessionOrderSaving||sessionDragId||globalThis.WorkspaceSessionGroups?.isSaving()))throw new Error("업무 순서·폴더 변경을 마친 뒤 고정해 주세요.");
   if(pinning){sessionOrderSaving=true;renderSessions();}
   try{const response=await api("/api/session/update",{id,...change}),updated=response.session||response,metadata={title:updated.title,pinned:updated.pinned,updated:updated.updated};sessions=sessions.map(s=>s.id===id?{...s,...metadata}:s);if(active?.id===id){Object.assign(active,metadata);taskHeader();}renderSessions();return updated;}
   finally{if(pinning){sessionOrderSaving=false;renderSessions();}}
 }
-$("rename-form").onsubmit=async e=>{if(e.submitter?.value!=="ok")return;e.preventDefault();const id=active?.id;if(!id)return;try{await updateSession(id,{title:$("rename-input").value.trim()});$("rename-dialog").close();}catch(e){toast(e.message);}};
+$("rename-form").onsubmit=async event=>{
+  event.preventDefault();if(event.submitter?.value==="cancel"||renameSaving||appClosed||!renameContext||!$("rename-dialog").open)return;
+  const context=renameContext,title=$("rename-input").value.trim();
+  if(!title){$("rename-error").textContent="업무 이름을 입력해 주세요.";$("rename-error").hidden=false;$("rename-input").focus();return;}
+  renameSaving=true;$("rename-confirm").disabled=true;$("rename-error").hidden=true;
+  try{const result=await updateSession(context.id,{title});if(result!==false&&renameContext===context&&$("rename-dialog").open)$("rename-dialog").close();}
+  catch(err){if(renameContext===context){$("rename-error").textContent=err.message;$("rename-error").hidden=false;}}
+  finally{renameSaving=false;$("rename-confirm").disabled=false;}
+};
 $("task-pin").onclick=async()=>{if(appClosed||!active)return;const id=active.id,pinned=!active.pinned;try{await updateSession(id,{pinned});}catch(e){toast(e.message);}};
 let nativeOpening=false;
 $("native").onclick=async()=>{

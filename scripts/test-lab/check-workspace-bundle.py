@@ -38,6 +38,7 @@ expected.update({'local_app/appearance.py', 'local_app/managed_launcher.py',
                  'local_app/web/appearance.js', 'local_app/web/appearance.css'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
+expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
                  'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md'})

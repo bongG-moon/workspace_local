@@ -13,6 +13,7 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Nu
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
     'local_app\customizations.py', 'local_app\web\customizations.js',
+    'local_app\session_groups.py', 'local_app\web\session-groups.js',
     'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\web\drafts.js',
     'local_app\web\attachment-storage.js', 'local_app\web\attachment-storage.css',
     'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',

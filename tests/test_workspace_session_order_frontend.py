@@ -57,6 +57,135 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'keep draft');assert.equal(attachments[0],'keep.csv');
         })()""")
 
+    def test_title_short_click_and_small_pointer_motion_still_open_task_once(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('A short click must not save task order');};
+          for(const [dx,dy] of [[0,0],[3,2]]){
+            const original=row('A'),title=original.querySelector('.session');
+            title.onpointerdown(event(80,250,{target:title}));
+            title.onpointermove(event(80+dx,250+dy,{target:title}));
+            assert.equal(sessionPointerDrag.active,false);
+            await title.onpointerup(event(80+dx,250+dy,{target:title}));
+            // Native click follows pointerup on this same connected button.
+            assert.equal(row('A'),original);assert.equal(sessionPointerDrag,null);
+            await title.onclick(event(80+dx,250+dy,{detail:1,target:title}));
+          }
+          assert.deepEqual(selected,['A','A']);assert.equal(ids(),'C,B,A');
+        })()""")
+
+    def test_title_drag_reorders_without_opening_and_next_real_click_still_works(self):
+        self.run_case(r"""(async()=>{
+          const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
+          api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
+          $('prompt').value='keep title-drag draft';attachments=['keep.zip'];
+          const original=row('A'),title=original.querySelector('.session');
+          title.onpointerdown(event(80,250,{target:title}));
+          title.onpointermove(event(80,15,{target:title}));
+          sessions[0].state='running';renderSessions();assert.equal(row('A'),original);
+          assert.equal(sessionPointerDrag.active,true);assert.ok(row('C').classList.contains('drop-before'));
+          await title.onpointerup(event(80,15,{target:title}));
+          await title.onclick(event(80,15,{detail:1,target:title}));
+          assert.deepEqual(selected,[]);assert.equal(ids(),'A,C,B');assert.equal(calls.length,1);
+          assert.deepEqual(calls[0],{path:'/api/session/reorder',body:{id:'A',targetId:'C',position:'before'}});
+          const next=row('A').querySelector('.session');
+          next.onpointerdown(event(80,50,{target:next}));await next.onpointerup(event(80,50,{target:next}));
+          await next.onclick(event(80,50,{detail:1,target:next}));
+          assert.deepEqual(selected,['A']);assert.equal($('prompt').value,'keep title-drag draft');assert.equal(attachments[0],'keep.zip');
+        })()""")
+
+    def test_recent_and_all_task_titles_support_drag_and_ordinary_click(self):
+        self.run_case(r"""(async()=>{
+          const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
+          api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
+          for(const container of ['home-recents','all-sessions']){
+            boot.sessionOrder={};renderSessions();hitContainer=container;
+            const title=row('A',container).querySelector(container==='home-recents'?'.recent-card':'.session');
+            title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
+            await title.onpointerup(event(80,15,{target:title}));await title.onclick(event(80,15,{detail:1,target:title}));
+            assert.equal(ids(),'A,C,B');assert.equal(selected.length,0);
+            const click=row('B',container).querySelector(container==='home-recents'?'.recent-card':'.session');
+            click.onpointerdown(event(80,250,{target:click}));await click.onpointerup(event(80,250,{target:click}));
+            await click.onclick(event(80,250,{detail:1,target:click}));assert.equal(selected.pop(),'B');
+          }
+          assert.equal(calls.length,2);assert.ok(calls.every(call=>call.path==='/api/session/reorder'));
+        })()""")
+
+    def test_title_drag_cancel_capture_loss_and_escape_cannot_open_or_reorder(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('Cancelled title drag must not save');};
+          for(const ending of ['onpointercancel','onlostpointercapture','Escape']){
+            const title=row('A').querySelector('.session');
+            title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
+            if(ending==='Escape')title.onkeydown({key:'Escape',preventDefault(){}});
+            else title[ending](event(80,15,{target:title}));
+            assert.equal(sessionPointerDrag,null);assert.equal(title.capture,null);
+            await title.onclick(event(80,15,{detail:1,target:title}));
+            assert.deepEqual(selected,[]);assert.equal(ids(),'C,B,A');
+          }
+        })()""")
+
+    def test_exact_title_threshold_suppresses_click_but_keyboard_activation_remains(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('Same-row drag must not save');};
+          const title=row('A').querySelector('.session');
+          title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(86,250,{target:title}));
+          assert.equal(sessionPointerDrag.active,true);await title.onpointerup(event(86,250,{target:title}));
+          await title.onclick(event(86,250,{detail:1,target:title}));assert.deepEqual(selected,[]);
+          const keyboard=row('A').querySelector('.session');let prevented=false;
+          keyboard.onkeydown?.({key:'Enter',preventDefault(){prevented=true;}});
+          assert.equal(prevented,false);await keyboard.onclick({detail:0,preventDefault(){},target:keyboard});
+          assert.deepEqual(selected,['A']);
+          await row('B').querySelector('.session').onclick(event(80,150,{detail:1}));
+          assert.deepEqual(selected,['A','B']);
+        })()""")
+
+    def test_title_drag_handlers_do_not_turn_pin_or_remove_into_drag_handles(self):
+        self.run_case(r"""(async()=>{
+          const mutations=[];selectSession=()=>{throw Error('Action buttons must not open task');};
+          updateSession=async(id,patch)=>mutations.push({id,patch});
+          hideSession=async id=>mutations.push({id,hide:true});
+          const pinButton=pin('A'),remove=row('A').querySelector('.session-remove');
+          pinButton.onpointerdown?.(event(10,250,{target:pinButton}));assert.equal(sessionPointerDrag,null);
+          await pinButton.onclick();remove.onpointerdown?.(event(10,250,{target:remove}));assert.equal(sessionPointerDrag,null);
+          await remove.onclick();assert.deepEqual(mutations,[{id:'A',patch:{pinned:true}},{id:'A',hide:true}]);
+          assert.equal(ids(),'C,B,A');
+        })()""")
+
+    def test_cancel_before_title_drag_threshold_does_not_open_task(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('Cancelled click must not reorder');};
+          const title=row('A').querySelector('.session');
+          title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(82,251,{target:title}));
+          title.onpointercancel(event(82,251,{target:title}));
+          await title.onclick(event(82,251,{detail:1,target:title}));
+          assert.deepEqual(selected,[]);assert.equal(sessionPointerDrag,null);assert.equal(title.capture,null);
+          title.onpointerdown(event(80,250,{target:title}));await title.onpointerup(event(80,250,{target:title}));
+          await title.onclick(event(80,250,{detail:1,target:title}));assert.deepEqual(selected,['A']);
+        })()""")
+
+    def test_touch_title_keeps_native_scrolling_and_unrelated_pointers_cannot_drag(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('Touch scroll or secondary pointer must not reorder');};
+          const title=row('A').querySelector('.session');
+          for(const extra of [{pointerType:'touch'},{isPrimary:false},{button:2}]){
+            const start=event(80,250,{target:title,...extra});title.onpointerdown(start);
+            title.onpointermove(event(80,15,{target:title,...extra}));
+            assert.equal(sessionPointerDrag,null);assert.equal(start.prevented,undefined);
+          }
+          title.onpointerdown(event(80,250,{target:title}));
+          title.onpointermove(event(80,15,{target:title,pointerId:8}));
+          assert.equal(sessionPointerDrag.active,false);
+          title.onpointerup(event(80,15,{target:title,pointerId:8}));assert.ok(sessionPointerDrag);
+          await title.onpointerup(event(80,250,{target:title}));
+          await title.onclick(event(80,250,{detail:1,target:title}));
+          assert.deepEqual(selected,['A']);assert.equal(ids(),'C,B,A');
+        })()""")
+
     def test_cross_pin_drag_and_plain_arrow_keys_do_not_change_order(self):
         self.run_case(r"""(()=>{
           sessions[0].pinned=true;renderSessions();api=()=>{throw Error('No mutation expected');};

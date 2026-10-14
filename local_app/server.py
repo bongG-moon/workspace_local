@@ -22,6 +22,7 @@ from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, 
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, safe
 from .session_order import SessionOrder
+from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
 from .artifacts import available_artifacts, changes, linked, snapshot, PREVIEW_TYPES
 from .file_preview import build_preview, source_preview_allowed
@@ -306,6 +307,7 @@ class LocalApp:
             self.sessions[item['id']] = item
         self.session_order = SessionOrder(self.state)
         self.session_visibility = SessionVisibility(self.state)
+        self.session_groups = SessionGroups(self.state)
 
     def save(self, sid=None):
         with self.lock:
@@ -437,6 +439,7 @@ class LocalApp:
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', [])),
                                   "historyDetailsPending": bool(item.get('_historyMetadataPending'))} for item in sessions],
                     "sessionOrder": order,
+                    "sessionGroups": self.session_groups.snapshot(),
                     "attachmentPolicy": attachment_policy(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
@@ -709,8 +712,25 @@ class LocalApp:
         with self.lock:
             if self.history.warning:
                 raise ValueError(self.history.warning)
+            if not isinstance(sid, str) or not isinstance(target, str):
+                raise ValueError('이동할 업무를 다시 선택해 주세요.')
+            if self.session_groups.warning:
+                raise ValueError(self.session_groups.warning)
+            if self.session_groups.group_for(sid) != self.session_groups.group_for(target):
+                raise ValueError('같은 폴더 안에서 업무 순서를 변경해 주세요. 다른 폴더로 옮길 때는 업무를 폴더로 끌어 놓아 주세요.')
             return {'ok': True, 'sessionOrder': self.session_order.move(
                 self.visible_sessions(), sid, target, position)}
+
+    def change_session_groups(self, data):
+        with self.lock:
+            if self.history.warning or self.session_visibility.warning:
+                raise ValueError(self.history.warning or self.session_visibility.warning)
+            visible_ids = {item['id'] for item in self.visible_sessions() if not item.get('_removingFromList')}
+            snapshot = self.session_groups.change(data, visible_ids)
+            result = {'ok': True, 'sessionGroups': snapshot}
+            if data.get('action') == 'create':
+                result['groupId'] = snapshot['groups'][-1]['id']
+            return result
 
     def visible_sessions(self):
         return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id'])]
@@ -2002,6 +2022,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
             if route.path == '/api/drafts':
                 return self.reply(app.drafts.snapshot())
+            if route.path == '/api/session-groups':
+                return self.reply(app.session_groups.snapshot())
             if route.path == '/api/attachments/storage':
                 with app.lock:
                     references = app.attachment_references()
@@ -2123,6 +2145,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
                       "/desktop.js": ("desktop.js", "text/javascript; charset=utf-8"),
                       "/session-import.js": ("session-import.js", "text/javascript; charset=utf-8"),
+                      "/session-groups.js": ("session-groups.js", "text/javascript; charset=utf-8"),
                       "/rich-content.js": ("rich-content.js", "text/javascript; charset=utf-8"),
                       "/startup-health.js": ("startup-health.js", "text/javascript; charset=utf-8"),
                       "/startup-health.css": ("startup-health.css", "text/css; charset=utf-8"),
@@ -2261,7 +2284,7 @@ class Handler(BaseHTTPRequestHandler):
             if getattr(exc, 'code', None) == 'quit_confirmation_expired':
                 payload.update(app.shutdown_status())
                 return self.reply(payload, 409)
-            return self.reply(payload, 409 if isinstance(exc, AppClosing) else 400)
+            return self.reply(payload, 409 if isinstance(exc, (AppClosing, GroupRevisionConflict)) else 400)
 
     def upload_attachment(self):
         self.close_connection = True
@@ -2312,6 +2335,8 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/session-groups':
+            return self.reply(app.change_session_groups(data))
         if route == '/api/drafts':
             with app.lock:
                 return self.reply(app.drafts.update(data))
