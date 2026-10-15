@@ -22,7 +22,7 @@
     },
     {
       "path": "Check-Workspace.ps1",
-      "sha256": "2c21c02901c6c1ed1ebb7df7e1dbdc21ab5ceb8c07c7f54789e84062b207da7e",
+      "sha256": "62a7f9f0f6cd3ae6671f806313cd50490600f882be8b29e693bec21a970d2e73",
       "size": 10692
     },
     {
@@ -162,8 +162,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "b44dbd4fa199d47c22f6bdad75abced3342fbadff0a183c1d2933b5be1a63155",
-      "size": 44440
+      "sha256": "ec17d457cdaa142f656145bbedc7844c7b306a1db1e83a8c5445a382d3a229bb",
+      "size": 45194
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -652,8 +652,8 @@
     },
     {
       "path": "docs/WORKSPACE_GITLAB_PUBLISHER.md",
-      "sha256": "521388d0b440ae7bc9a2cb8092c64054aff4492cf4a4c61e4811b4e5417ce09e",
-      "size": 26048
+      "sha256": "09d0be4aea9bf2a6be7b60b7030e1b9405e40acc916235b820deff5cb353f30e",
+      "size": 26987
     },
     {
       "path": "docs/WORKSPACE_IMPLEMENTATION_PLAN_R01_R14_2026-09-29.md",
@@ -1407,8 +1407,8 @@
     },
     {
       "path": "scripts/test-lab/check-workspace-bundle.py",
-      "sha256": "ea7f1d57ee178c13a81923f11e45b5dd0d79b963407f281ef65b0ebee95abfbb",
-      "size": 9453
+      "sha256": "adf3c7adf3165ab1520c90ba76e486adc6724acdc0ef51665049296f409806e3",
+      "size": 9546
     },
     {
       "path": "scripts/test-lab/check-workspace-transport.py",
@@ -1694,6 +1694,11 @@
       "path": "tests/test_workspace_brand_packages.py",
       "sha256": "45c418980a69dde075360222b41d3c5dab888845e0e2b8cd3bf5bafb13ec1b06",
       "size": 5288
+    },
+    {
+      "path": "tests/test_workspace_bundle_check.py",
+      "sha256": "c4ecde1c634973ff061e77b36bb5d935548a8a040c3ed20e76078e32d02a5056",
+      "size": 6215
     },
     {
       "path": "tests/test_workspace_bypass.py",

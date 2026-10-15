@@ -41,7 +41,8 @@ expected.update({'local_app/customizations.py', 'local_app/web/customizations.js
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
-                 'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md'})
+                 'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md',
+                 'docs/WORKSPACE_NSIS_INSTALLER.md', 'docs/WORKSPACE_ONLINE_INSTALLER.md'})
 expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py', 'local_app/web/path-picker.js', 'local_app/web/path-picker.css'})
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/progress_log.py', 'local_app/web/progress-view.js', 'local_app/web/progress-view.css'})
