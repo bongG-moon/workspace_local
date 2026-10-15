@@ -10,10 +10,12 @@ from urllib.parse import quote, quote_plus
 
 
 CONFIG_KEYS = ("schema", "baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag",
-               "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind", "includeSource")
+               "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind", "includeSource",
+               "includeInstaller", "nsisCompiler")
 DEFAULT_CONFIG = {"schema": 1, "baseUrl": "", "projectId": "", "remoteName": "intranet",
                   "remoteUrl": "", "releaseTag": "", "title": "", "notes": "",
-                  "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto", "includeSource": True}
+                  "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto", "includeSource": True,
+                  "includeInstaller": True, "nsisCompiler": ""}
 TOKEN_LABELS = {"auto": "자동 감지", "access": "액세스 토큰 (Personal / Project)",
                 "deploy": "배포 토큰 (Deploy Token)", "job": "CI 작업 토큰 (Job Token)"}
 ACTION_NAMES = {"load": "설정과 소스 확인", "inspect": "소스 확인", "save": "설정 저장",
@@ -51,7 +53,7 @@ def settings_only(value):
 
 def build_identity(config):
     return json.dumps({key: value for key, value in settings_only(config).items()
-                       if key not in {"title", "notes", "notesVersion", "tokenKind", "includeSource"}}, sort_keys=True, ensure_ascii=True)
+                       if key not in {"title", "notes", "notesVersion", "tokenKind", "includeSource", "nsisCompiler"}}, sort_keys=True, ensure_ascii=True)
 
 
 def public_text(value, token=""):
@@ -271,12 +273,13 @@ class PublisherWindow:
         self.mutable = []
         self.buttons = []
         self.fields = {key: tk.StringVar(value=DEFAULT_CONFIG[key]) for key in
-                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title")}
+                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title", "nsisCompiler")}
         self.origins, self.token = tk.StringVar(), tk.StringVar()
         self.sdk_url = tk.StringVar()
         self.sdk_label = tk.StringVar(value="SDK를 확인하고 있어요.")
         self.token_kind = tk.StringVar(value=TOKEN_LABELS["auto"])
         self.include_source = tk.BooleanVar(value=True)
+        self.include_installer = tk.BooleanVar(value=True)
         self.status = tk.StringVar(value="저장된 설정과 현재 소스를 확인하고 있어요.")
         self.source_label = tk.StringVar(value=str(self.repo_root))
         self.build_label = tk.StringVar(value="게시할 설치 파일이 없습니다. 먼저 빌드해 주세요.")
@@ -404,6 +407,14 @@ class PublisherWindow:
         self.publish_button.pack(side="left", padx=(0, 8))
         self._button(legacy_actions, "SDK 다시 확인", lambda: self.start("sdk-status")).pack(side="left")
         self._button(advanced, "구성 파일만 올리기", lambda: self.start("source-publish")).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        installer_option = ttk.Checkbutton(advanced, text="NSIS 설치 파일 만들기 (권장)", variable=self.include_installer)
+        installer_option.grid(row=6, column=0, columnspan=2, sticky="w", pady=(16, 4))
+        self.mutable.append(installer_option)
+        field(advanced, 7, "NSIS 컴파일러 (선택)", self.fields["nsisCompiler"])
+        self._button(advanced, "makensis.exe 선택", self.select_nsis).grid(row=8, column=0, sticky="w", pady=(0, 4))
+        ttk.Label(advanced, text="NSIS 3가 설치되어 있으면 자동으로 찾습니다. 별도 폴더에 준비했다면 makensis.exe를 선택하세요.\n"
+                  "설치 파일과 기존 앱의 업데이트용 ZIP을 함께 만듭니다. 컴파일러는 사용자 배포 파일에 포함하지 않습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=9, column=0, columnspan=2, sticky="w")
 
         ttk.Label(outer, textvariable=self.build_label, style="Note.TLabel", wraplength=790).pack(anchor="w", pady=(12, 10))
         actions = ttk.Frame(outer)
@@ -420,7 +431,7 @@ class PublisherWindow:
         self.log.pack(fill="both", expand=True)
         self.log.tag_config("error", foreground="#9c4144")
         self.log.tag_config("info", foreground="#3d485b")
-        for variable in [*self.fields.values(), self.origins, self.token_kind, self.include_source]:
+        for variable in [*self.fields.values(), self.origins, self.token_kind, self.include_source, self.include_installer]:
             variable.trace_add("write", lambda *_: self.refresh_controls())
         self.fields["title"].trace_add("write", self.mark_notes_edited)
         self.notes.bind("<<Modified>>", self.mark_notes_edited)
@@ -438,7 +449,15 @@ class PublisherWindow:
                 "notesVersion": self.notes_version,
                 "allowedDownloadOrigins": [item.strip() for item in self.origins.get().replace("\n", ",").split(",") if item.strip()],
                 "tokenKind": next((key for key, label in TOKEN_LABELS.items() if label == self.token_kind.get()), "auto"),
-                "includeSource": self.include_source.get()}
+                "includeSource": self.include_source.get(), "includeInstaller": self.include_installer.get()}
+
+    def select_nsis(self):
+        if self.active_action is not None or self.closing:
+            return
+        path = self.filedialog.askopenfilename(parent=self.root, title="NSIS 컴파일러 선택",
+                                              filetypes=[("NSIS compiler", "makensis.exe")])
+        if path:
+            self.fields["nsisCompiler"].set(path)
 
     def toggle_notes(self):
         opened = bool(self.notes_frame.winfo_manager())
@@ -625,6 +644,7 @@ class PublisherWindow:
                 kind = config["tokenKind"] if config["tokenKind"] in {"access", "job"} else "auto"
                 self.token_kind.set(TOKEN_LABELS[kind])
                 self.include_source.set(config["includeSource"])
+                self.include_installer.set(config["includeInstaller"])
                 self._set_notes(config["title"], config["notes"])
                 self.notes_version = config["notesVersion"]
                 self._release(result, apply=not bool(config["notesVersion"] or config["title"] or config["notes"]))

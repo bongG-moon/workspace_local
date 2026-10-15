@@ -22,10 +22,10 @@ VERSION = '0.23.0'
 CONFIG = {'schema': 1, 'baseUrl': 'https://gitlab.corp:8443/company', 'projectId': '42',
           'remoteName': 'intranet', 'remoteUrl': 'git@gitlab.corp:team/workspace.git',
           'releaseTag': 'v0.23.0', 'title': '회사 업데이트', 'notes': '한국어 변경 내용',
-          'allowedDownloadOrigins': [], 'tokenKind': 'deploy'}
+          'allowedDownloadOrigins': [], 'tokenKind': 'deploy', 'includeInstaller': False}
 
 
-def release_files(directory, source=None, *, branded=False):
+def release_files(directory, source=None, *, branded=False, installer=False):
     directory.mkdir(parents=True, exist_ok=True)
     source = source or runtime_config(CONFIG)
     entries = {'Company-Workspace.vbs': b'fixture', 'deploy/Start-CompanyWorkspace.ps1': b'fixture',
@@ -56,6 +56,10 @@ def release_files(directory, source=None, *, branded=False):
             archive.writestr(ax_name + '.sha256', hashlib.sha256(executable).hexdigest() + '  ' + ax_name + '\n')
             archive.writestr('README.txt', b'fixture')
         packages += [ax_vbs, ax_exe]
+    if installer:
+        setup = directory / f'AX-Workspace-{VERSION}-Setup.exe'
+        setup.write_bytes(b'MZfixture NSIS installer')
+        packages.append(setup)
     (directory / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n'
                                                    for path in packages), encoding='utf-8')
     files = verify_files(directory, VERSION, source)
@@ -305,7 +309,15 @@ class GitAndBuildTests(unittest.TestCase):
         elif '-File' in args:
             output = Path(args[args.index('-OutputDirectory') + 1])
             injected = json.loads(Path(args[args.index('-UpdateConfig') + 1]).read_text())
-            release_files(output, injected, branded=True)
+            release_files(output, injected, branded=True, installer='-IncludeInstaller' in args)
+            if '-IncludeInstaller' in args:
+                setup = output / f'AX-Workspace-{VERSION}-Setup.exe'
+                standalone = Path(args[args.index('-StandaloneExe') + 1])
+                installer_report = {'version': VERSION, 'installer': str(setup),
+                                    'sha256': hashlib.sha256(setup.read_bytes()).hexdigest(),
+                                    'bytes': setup.stat().st_size, 'testMode': False, 'productId': 'AX.Workspace.Desktop',
+                                    'standaloneSha256': hashlib.sha256(standalone.read_bytes()).hexdigest()}
+                (cwd / f'build/workspace-installer-{VERSION}.json').write_text(json.dumps(installer_report))
             report = {'version': VERSION, 'pythonBundled': False, 'identicalSourceFiles': 9,
                       'vbsZip': str(output / f'AX-Workspace-{VERSION}-vbs.zip'),
                       'exeZip': str(output / f'AX-Workspace-{VERSION}-exe.zip')}

@@ -1,5 +1,6 @@
 [CmdletBinding()]
-param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
+param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python',
+      [switch]$IncludeInstaller, [string]$NsisCompiler)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
@@ -14,7 +15,10 @@ $exeZip = Join-Path $outputRoot ('AX-Workspace-' + $version + '-exe.zip')
 $legacyVbsZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-vbs.zip')
 $legacyExeZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-exe.zip')
 $checksums = Join-Path $outputRoot 'SHA256SUMS.txt'
-foreach ($target in @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip, $checksums)) {
+$installerExe = Join-Path $outputRoot ('AX-Workspace-' + $version + '-Setup.exe')
+$targets = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip, $checksums)
+if ($IncludeInstaller) { $targets += @($installerExe, ($installerExe + '.sha256')) }
+foreach ($target in $targets) {
     if (Test-Path -LiteralPath $target) { throw ('Output already exists: ' + $target) }
 }
 if ([Reflection.AssemblyName]::GetAssemblyName($StandaloneExe).Version.ToString() -ne ($version + '.0')) {
@@ -108,13 +112,19 @@ Copy-Item -LiteralPath $StandaloneExe -Destination (Join-Path $legacyStage $lega
 [IO.File]::WriteAllText((Join-Path $legacyStage ($legacyExeName + '.sha256')), ($exeHash + '  ' + $legacyExeName + "`n"), $utf8)
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $legacyStage --output $legacyExeZip --contents-only
 if ($LASTEXITCODE -ne 0) { throw 'Legacy-compatible EXE ZIP creation failed; release checksums were not published.' }
-$rows = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip) | ForEach-Object {
+$releaseFiles = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip)
+if ($IncludeInstaller) {
+    & (Join-Path $PSScriptRoot 'New-WorkspaceInstaller.ps1') -StandaloneExe $StandaloneExe -OutputDirectory $outputRoot -NsisCompiler $NsisCompiler | Out-Null
+    $releaseFiles += $installerExe
+}
+$rows = $releaseFiles | ForEach-Object {
     (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($_)
 }
 [IO.File]::WriteAllText($checksums, (($rows -join "`n") + "`n"), $utf8)
 $report = [ordered]@{version=$version; vbsZip=$vbsZip; exeZip=$exeZip; checksums=$checksums;
     legacyVbsZip=$legacyVbsZip; legacyExeZip=$legacyExeZip;
-    identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage}
+    identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage;
+    installer=$(if ($IncludeInstaller) { $installerExe } else { $null })}
 $json = $report | ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $repoRoot ('build\workspace-release-' + $version + '.json')), $json, $utf8)
 $json

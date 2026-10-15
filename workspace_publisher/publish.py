@@ -159,6 +159,12 @@ def verify_files(directory, version, expected_source):
     # Keep old saved build results publishable. New builds include aliases that
     # older installed clients can understand without a state migration.
     names = legacy + branded if any((directory / name).exists() for name in branded) else legacy
+    setup = f'AX-Workspace-{version}-Setup.exe'
+    has_installer = (directory / setup).exists()
+    if has_installer:
+        if names == legacy:
+            raise PublisherError('NSIS 설치 파일에는 같은 버전의 AX Workspace 호환 ZIP이 필요합니다.')
+        names.append(setup)
     content = {name: _file(directory / name) for name in names}
     if len(content['SHA256SUMS.txt']) > 65536:
         raise PublisherError('체크섬 파일이 너무 큽니다.')
@@ -188,15 +194,17 @@ def verify_files(directory, version, expected_source):
                 raise ValueError()
         from local_app.managed_launcher import unpack_archive
         executable = unpack_archive(content[names[2]], version)
-        for brand in ('Company-Workspace', 'AX-Workspace') if len(names) == 5 else ('Company-Workspace',):
+        for brand in ('Company-Workspace', 'AX-Workspace') if len(names) >= 5 else ('Company-Workspace',):
             with zipfile.ZipFile(io.BytesIO(content[f'{brand}-{version}-exe.zip'])) as archive:
                 if f'{brand}-{version}.exe' not in archive.namelist():
                     raise ValueError()
-        if len(names) == 5:
+        if len(names) >= 5:
             if content[branded[0]] != content[legacy[0]]:
                 raise ValueError()
             if unpack_archive(content[branded[1]], version) != executable:
                 raise ValueError()
+        if has_installer and not content[setup].startswith(b'MZ'):
+            raise ValueError()
     except (ValueError, KeyError, OSError, UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
         raise PublisherError('배포 파일의 버전·체크섬·구성 검사가 실패했습니다. 같은 설정으로 다시 빌드해 주세요.') from exc
     return [{'name': name, 'path': str(directory / name), 'size': len(content[name]),

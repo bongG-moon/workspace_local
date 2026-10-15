@@ -6,24 +6,33 @@
 
 기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
 
+**[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
+
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-vbs.zip)**
 
-[이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
+[NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.25-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.25.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
-앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **기존 Claude Code 설치와 인증**을 사용합니다. 두 방식 모두 Python을 포함하거나 설치하지 않고 실행 조건만 확인합니다. EXE는 앱 파일을 사용자 캐시에 풀어 실행하는 서명되지 않은 실행기입니다. 회사의 EXE·VBS·PowerShell 실행 정책에 따라 사용이 제한될 수 있습니다.
+앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
+**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.25 Release의 `AX-Workspace-0.23.25-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.25.exe`, `Company-Workspace-0.23.25.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+
+설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
+
+기존 ZIP 방식도 계속 사용할 수 있습니다. 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
 
 ## 0.23.25 변경
+
+- **2026-10-15 설치 배포 추가:** NSIS 설치·제거, 시작 메뉴 바로가기와 사내 배포 도구의 설치 파일 생성을 추가했습니다. 앱 버전은 그대로이며 새 상주 프로세스는 없습니다. 기존 직접 EXE 링크는 설치 프로그램으로 연결하고, 자동 업데이트용 ZIP은 유지합니다.
 
 - 0.23.24 동일 버전 수정본에 담긴 업무 폴더·드래그 개선을 새 버전으로 배포합니다. 동작은 동일하며 앱·실행기·진단·배포 정보의 버전을 0.23.25로 맞췄습니다.
 - 업무 이름을 잡아 폴더 제목·하위 업무·빈 공간으로 옮길 수 있고, 드래그와 포커스 테두리는 업무 행 전체에 표시됩니다. 직접 폴더를 지정하는 아이콘은 제거했습니다.

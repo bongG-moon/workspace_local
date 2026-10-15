@@ -13,7 +13,7 @@ import sys
 import uuid
 import zipfile
 
-from . import git_sync, source_archive
+from . import git_sync, source_archive, installer
 from .config import PublisherError, active, atomic_json, checked_version, normalize, runtime_config, safe_path
 from . import publish as publishing
 
@@ -191,7 +191,7 @@ class Publisher:
         active(cancel)
         script = Path(arguments[arguments.index('-File') + 1]).name if '-File' in arguments else 'bundle-check'
         step = {'New-WorkspaceStandalone.ps1': 'standalone', 'New-WorkspaceRelease.ps1': 'release'}.get(script, 'bundle-check')
-        label = {'standalone': 'EXE 만들기', 'release': '배포 ZIP 만들기', 'bundle-check': '배포 파일 검사'}[step]
+        label = {'standalone': 'EXE 만들기', 'release': '설치 프로그램·배포 ZIP 만들기', 'bundle-check': '배포 파일 검사'}[step]
         environment = os.environ.copy()
         environment['PYTHONDONTWRITEBYTECODE'] = '1'
         environment['PYTHONUTF8'] = '1'
@@ -275,6 +275,7 @@ class Publisher:
         active(cancel)
         config = normalize(config)
         info = self.inspect_source(require_clean=True, cancel=cancel)
+        nsis = installer.compiler_path(self.repo_root, config['nsisCompiler']) if config['includeInstaller'] else None
         self.save_config(config)
         self.work_root.mkdir(parents=True, exist_ok=True)
         stage = self._owned(self.work_root / ('build-' + uuid.uuid4().hex))
@@ -307,9 +308,11 @@ class Publisher:
                      '-VerificationDirectory', str(stage / 'v')], cwd=source, cancel=cancel)
         active(cancel)
         exe = output / f"AX-Workspace-{info['version']}.exe"
-        self._info('EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
+        self._info('NSIS 설치 프로그램과 기존 앱 업데이트용 ZIP·체크섬을 만듭니다.' if nsis else
+                   'EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceRelease.ps1'), '-UpdateConfig', str(config_path),
-                     '-ConfigPython', sys.executable, '-StandaloneExe', str(exe), '-OutputDirectory', str(release)],
+                     '-ConfigPython', sys.executable, '-StandaloneExe', str(exe), '-OutputDirectory', str(release),
+                     *(['-IncludeInstaller', '-NsisCompiler', str(nsis)] if nsis else [])],
                     cwd=source, cancel=cancel)
         active(cancel)
         try:
@@ -330,6 +333,8 @@ class Publisher:
                      str(release / f"AX-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path)],
                     cwd=source, cancel=cancel, timeout=120)
         files = publishing.verify_files(release, info['version'], injected)
+        if nsis:
+            installer.verify_build_report(source, release, info['version'], standalone['sha256'])
         # Archive users have no Git status to expose edits made while the
         # compiler was running. Revalidate both copies before recording success.
         if info['sourceKind'] == 'archive':
@@ -372,7 +377,7 @@ class Publisher:
             source = source_from_config(build_result['runtimeConfig'])
             if source.provider != 'gitlab' or source.config != build_result['runtimeConfig']:
                 raise ValueError()
-            if not isinstance(build_result['files'], list) or len(build_result['files']) not in (3, 5):
+            if not isinstance(build_result['files'], list) or len(build_result['files']) not in (3, 5, 6):
                 raise ValueError()
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise PublisherError('이전 빌드 기록을 확인하지 못했습니다. 원래 빌드 폴더와 기록을 복원하거나 새 소스 폴더에서 진행해 주세요.') from exc
@@ -387,6 +392,11 @@ class Publisher:
             files = publishing.verify_files(directory, build_result['version'], expected_source)
             if files != build_result['files']:
                 raise ValueError()
+            if any(row['name'].endswith('-Setup.exe') for row in files):
+                from local_app.managed_launcher import unpack_archive
+                archive = directory / f"AX-Workspace-{build_result['version']}-exe.zip"
+                digest = hashlib.sha256(unpack_archive(archive.read_bytes(), build_result['version'])).hexdigest()
+                installer.verify_build_report(build_result['sourceRoot'], directory, build_result['version'], digest)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise PublisherError('저장된 배포 파일의 위치·설정·체크섬을 확인하지 못했습니다. 원래 빌드 폴더와 게시 대상 설정을 복원해 주세요. 같은 버전 파일을 새로 만들면 기존 게시 파일과 충돌할 수 있습니다.') from exc
         return build_result
@@ -444,6 +454,9 @@ class Publisher:
         if (isinstance(candidate, dict) and candidate.get('version') == version
                 and candidate.get('runtimeConfig') == runtime_config(config)):
             checked = self._validated_build(config, candidate)
+            if config['includeInstaller'] and not any(row['name'].endswith('-Setup.exe') for row in checked['files']):
+                raise PublisherError('이전 빌드에는 NSIS 설치 파일이 없습니다. 고급 설정의 빌드만 하기로 설치 파일을 먼저 만들어 주세요. '
+                                     '이미 게시한 버전이라면 새 버전의 소스를 사용하세요. 기존 파일을 게시하려면 NSIS 설치 파일 만들기를 해제하세요.')
             self._info('이전에 만든 배포 파일을 확인했습니다. 같은 파일로 게시를 이어갑니다.')
             return checked
         return self.build(config, cancel=cancel)

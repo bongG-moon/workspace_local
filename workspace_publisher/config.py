@@ -16,7 +16,8 @@ class PublisherError(ValueError):
 
 DEFAULTS = {'schema': 1, 'baseUrl': '', 'projectId': '', 'remoteName': 'intranet',
             'remoteUrl': '', 'releaseTag': '', 'title': '', 'notes': '',
-            'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': '', 'includeSource': True}
+            'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': '', 'includeSource': True,
+            'includeInstaller': True, 'nsisCompiler': ''}
 VERSION = re.compile(r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z')
 
 
@@ -71,11 +72,14 @@ def normalize(config, *, require_target=True):
         raise PublisherError('지원하지 않는 게시 설정 버전입니다.')
     if type(value['includeSource']) is not bool:
         raise PublisherError('소스·구성 파일 게시 여부는 켜기 또는 끄기로 선택해 주세요.')
+    if type(value['includeInstaller']) is not bool:
+        raise PublisherError('NSIS 설치 파일 생성 여부는 켜기 또는 끄기로 선택해 주세요.')
     for key, limit in [('baseUrl', 2048), ('projectId', 20), ('remoteName', 80), ('remoteUrl', 2048),
-                       ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20)]:
+                       ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20),
+                       ('nsisCompiler', 4096)]:
         if not isinstance(value[key], str) or len(value[key].encode('utf-8')) > limit or '\x00' in value[key]:
             raise PublisherError('게시 설정에 너무 길거나 올바르지 않은 값이 있습니다.')
-    for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title', 'notesVersion'):
+    for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title', 'notesVersion', 'nsisCompiler'):
         value[key] = value[key].strip()
     if require_target or value['baseUrl']:
         value['baseUrl'] = https_base(value['baseUrl'])
