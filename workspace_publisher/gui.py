@@ -37,6 +37,18 @@ def source_can_sync(source):
     return bool(source) and not source_is_archive(source) and source.get("canSync", True)
 
 
+def sharing_file(build):
+    """Prefer the reusable GitLab installer; old saved builds keep their label."""
+    files = (build or {}).get("files", [])
+    online = next((row for row in files if row.get("name") == "AX-Workspace-Install.exe"), None)
+    if online:
+        return "사용자 공유용 · 실행 시 최신 버전 설치\n" + str(online.get("path", ""))
+    setup = next((row for row in files if row.get("name", "").endswith("-Setup.exe")), None)
+    if setup:
+        return "사용자 공유용 · 이 버전 설치\n" + str(setup.get("path", ""))
+    return ""
+
+
 def sdk_status(repo_root):
     """A missing SDK must not hide the remaining settings or source."""
     from .sdk import inspect_sdk
@@ -413,7 +425,7 @@ class PublisherWindow:
         field(advanced, 7, "NSIS 컴파일러 (선택)", self.fields["nsisCompiler"])
         self._button(advanced, "makensis.exe 선택", self.select_nsis).grid(row=8, column=0, sticky="w", pady=(0, 4))
         ttk.Label(advanced, text="NSIS 3가 설치되어 있으면 자동으로 찾습니다. 별도 폴더에 준비했다면 makensis.exe를 선택하세요.\n"
-                  "설치 파일과 기존 앱의 업데이트용 ZIP을 함께 만듭니다. 컴파일러는 사용자 배포 파일에 포함하지 않습니다.",
+                  "한 번 공유하면 최신 버전을 설치하는 EXE, 버전별 설치 파일, 기존 앱 업데이트 ZIP을 함께 만듭니다.",
                   style="Note.TLabel", wraplength=730).grid(row=9, column=0, columnspan=2, sticky="w")
 
         ttk.Label(outer, textvariable=self.build_label, style="Note.TLabel", wraplength=790).pack(anchor="w", pady=(12, 10))
@@ -558,6 +570,8 @@ class PublisherWindow:
                     label += "\n설정이 바뀌었습니다. 이전 빌드를 다시 확인하거나 새로 빌드해 주세요."
                 elif self.source and source_identifier(built) != source_identifier(self.source):
                     label += "\n현재 소스와 다른 " + ("소스 ZIP" if source_is_archive(built) else "커밋") + "의 파일입니다. 위 버전으로 게시를 이어갑니다."
+                if valid_build and sharing_file(built):
+                    label += "\n" + sharing_file(built)
                 self.build_label.set(label)
         self.cancel_button.configure(state="normal" if self.jobs.busy and not self.closing else "disabled")
 
@@ -683,6 +697,9 @@ class PublisherWindow:
         if action in {"publish", "deploy"}:
             message = ("소스·배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다."
                        if result.get("sourcePublication") else "배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다.")
+            share = sharing_file(self.build_result)
+            if share:
+                self.append_log(share)
         self.status.set(public_text(message))
         self.append_log(message)
 

@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import patch
 
 from workspace_publisher.config import PublisherError, normalize, runtime_config
-from workspace_publisher.gui import build_identity, settings_only
-from workspace_publisher.installer import compiler_path
+from workspace_publisher.gui import build_identity, settings_only, sharing_file
+from workspace_publisher.installer import ONLINE_NAME, compiler_path
 from workspace_publisher.publish import endpoint, publish, verify_files
 from tests import test_workspace_publisher_core as fixture
 
@@ -75,7 +75,7 @@ class InstallerBuildTests(unittest.TestCase):
 
     def test_installer_build_publish_and_retry_preserve_legacy_update_contract(self):
         result = self.build()
-        self.assertEqual(6, len(result['files']))
+        self.assertEqual(7, len(result['files']))
         self.assertIn('-IncludeInstaller', self.fixture.calls[1])
         self.assertIn(str(self.compiler), self.fixture.calls[1])
         self.assertEqual('', self.fixture.run_git('status', '--porcelain'))
@@ -86,9 +86,17 @@ class InstallerBuildTests(unittest.TestCase):
         self.assertTrue(self.publisher.publish(self.config, result, 'fixture-token')['verified'])
         setup_url = endpoint(self.config, fixture.VERSION, f'AX-Workspace-{fixture.VERSION}-Setup.exe')
         self.assertEqual(b'MZfixture NSIS installer', registry.files[setup_url])
+        online_url = endpoint(self.config, fixture.VERSION, ONLINE_NAME)
+        self.assertEqual(b'MZfixture latest GitLab installer', registry.files[online_url])
         channel = json.loads(registry.files[endpoint(self.config, fixture.VERSION, 'latest.json', channel=True)])
         self.assertEqual(3, len(channel['files']))
-        self.assertFalse(any(row['name'].endswith('-Setup.exe') for row in channel['files']))
+        self.assertEqual({'schema', 'channel', 'version', 'publishedAt', 'title', 'notes', 'files'}, set(channel))
+        self.assertFalse(any(row['name'].startswith('AX-Workspace-') for row in channel['files']))
+        checksums = registry.files[endpoint(self.config, fixture.VERSION, 'SHA256SUMS.txt')].decode()
+        self.assertIn(ONLINE_NAME, checksums)
+        self.assertIn(f'AX-Workspace-{fixture.VERSION}-Setup.exe', checksums)
+        self.assertIn(ONLINE_NAME, sharing_file(result))
+        self.assertIn('최신 버전', sharing_file(result))
         calls = len(self.fixture.calls)
         self.assertEqual(result, self.publisher.prepare_deploy(self.config))
         self.assertEqual(calls, len(self.fixture.calls))
@@ -130,9 +138,93 @@ class InstallerBuildTests(unittest.TestCase):
     def test_existing_zip_build_is_restorable_but_not_misrepresented_as_installer(self):
         previous = self.fixture.build()
         self.assertEqual(previous, self.publisher.load_last_build(self.config))
-        with self.assertRaisesRegex(PublisherError, '이전 빌드에는 NSIS'):
+        with self.assertRaisesRegex(PublisherError, '이전 빌드에는 최신 버전 설치기'):
             self.publisher.prepare_deploy(self.config)
         self.assertEqual(previous, self.publisher.prepare_deploy(fixture.CONFIG))
+
+    def test_previous_offline_installer_build_is_recoverable_but_requires_new_build_for_latest(self):
+        previous = self.build()
+        directory = Path(previous['directory'])
+        (directory / ONLINE_NAME).unlink()
+        checksum = directory / 'SHA256SUMS.txt'
+        checksum.write_text(''.join(line + '\n' for line in checksum.read_text().splitlines()
+                                    if not line.endswith('  ' + ONLINE_NAME)))
+        previous['files'] = verify_files(directory, fixture.VERSION, runtime_config(self.config))
+        for record in (directory.parent / 'build-result.json', self.publisher.work_root / 'last-build.json'):
+            record.write_text(json.dumps(previous))
+        self.assertEqual(6, len(previous['files']))
+        self.assertEqual(previous, self.publisher.load_last_build(self.config))
+        self.assertIn('이 버전 설치', sharing_file(previous))
+        with self.assertRaisesRegex(PublisherError, '최신 버전 설치기가 없습니다'):
+            self.publisher.prepare_deploy(self.config)
+        with patch.object(self.publisher, 'current_version', side_effect=PublisherError('missing source')):
+            with self.assertRaisesRegex(PublisherError, '최신 버전 설치기가 없습니다'):
+                self.publisher.prepare_deploy(self.config)
+        self.assertEqual(previous, self.publisher.prepare_deploy(fixture.CONFIG))
+
+    def test_online_report_rejects_wrong_config_origin_version_digest_and_protocol(self):
+        result = self.build()
+        report = Path(result['sourceRoot']) / f'build/workspace-online-installer-{fixture.VERSION}.json'
+        original = json.loads(report.read_text())
+        wrong_source = runtime_config({**self.config, 'baseUrl': 'https://other.gitlab.corp'})
+        for key, value in (('version', '0.22.0'), ('sha256', '0' * 64), ('bytes', 1),
+                           ('schema', True), ('protocol', 2), ('protocol', True),
+                           ('embeddedConfigVerified', False), ('appPayloadBundled', True),
+                           ('pythonRequiredToInstall', True),
+                           ('productId', 'AX.Workspace.OnlineInstaller.Test'), ('sourceIdentity', '0' * 64),
+                           ('installer', str(report.parent / ONLINE_NAME)), ('updateSource', wrong_source),
+                           ('updateSource', {**original['updateSource'], 'token': 'private-fixture-token'})):
+            report.write_text(json.dumps({**original, key: value}))
+            with self.subTest(field=key, value=value), self.assertRaises(PublisherError):
+                self.publisher.load_last_build(self.config)
+        report.write_text(json.dumps(original))
+        self.assertEqual(result, self.publisher.load_last_build(self.config))
+        self.assertNotIn('token', report.read_text().lower())
+        self.assertNotIn('nsisCompiler', report.read_text())
+
+    def test_online_report_cannot_be_missing_on_a_new_build(self):
+        original_runner = self.publisher.runner
+        def runner(args, *, cwd, **kwargs):
+            returned = original_runner(args, cwd=cwd, **kwargs)
+            report = cwd / f'build/workspace-online-installer-{fixture.VERSION}.json'
+            if report.exists():
+                report.unlink()
+            return returned
+        self.publisher.runner = runner
+        with self.assertRaisesRegex(PublisherError, '최신 버전 설치기'):
+            self.build()
+        self.assertFalse((self.publisher.work_root / 'last-build.json').exists())
+
+    def test_online_file_is_verified_again_before_upload(self):
+        result = self.build()
+        directory = Path(result['directory'])
+        online = directory / ONLINE_NAME
+        before = hashlib.sha256(online.read_bytes()).hexdigest()
+        online.write_bytes(b'MZaltered online installer')
+        checksum = directory / 'SHA256SUMS.txt'
+        checksum.write_text(checksum.read_text().replace(before, hashlib.sha256(online.read_bytes()).hexdigest()))
+        registry = fixture.Registry()
+        self.publisher.transport = registry
+        with self.assertRaises(PublisherError):
+            self.publisher.publish(self.config, result, 'fixture-token')
+        self.assertEqual([], registry.calls)
+
+    def test_online_requires_offline_setup_and_executable_header(self):
+        result = self.build()
+        directory = Path(result['directory'])
+        setup = directory / f'AX-Workspace-{fixture.VERSION}-Setup.exe'
+        setup_bytes = setup.read_bytes()
+        setup.unlink()
+        with self.assertRaisesRegex(PublisherError, 'NSIS 설치 파일과 호환 ZIP'):
+            verify_files(directory, fixture.VERSION, runtime_config(self.config))
+        setup.write_bytes(setup_bytes)
+        online = directory / ONLINE_NAME
+        before = hashlib.sha256(online.read_bytes()).hexdigest()
+        online.write_bytes(b'not an executable')
+        checksum = directory / 'SHA256SUMS.txt'
+        checksum.write_text(checksum.read_text().replace(before, hashlib.sha256(online.read_bytes()).hexdigest()))
+        with self.assertRaises(PublisherError):
+            verify_files(directory, fixture.VERSION, runtime_config(self.config))
 
     def test_plain_text_disguised_as_setup_is_rejected(self):
         result = self.build()

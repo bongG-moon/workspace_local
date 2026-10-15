@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "currentVersion": "0.23.25",
+  "currentVersion": "0.23.26",
   "releases": [
+    {
+      "version": "0.23.26",
+      "title": "AX Workspace 0.23.26 — 사내 최신 버전 설치 EXE",
+      "notes": "사내에서 한 번 공유한 AX-Workspace-Install.exe로 최신 버전을 바로 설치할 수 있습니다.\n\n- 사내 GitLab의 최신 버전·변경 내용을 확인한 뒤 설치 파일을 내려받아 검증하고 NSIS 설치 화면을 엽니다. 예전 버전을 먼저 설치한 뒤 다시 업데이트하지 않아도 됩니다.\n- 사내 배포 도구의 기존 서버 주소·숫자 Project ID를 사용합니다. NSIS 설치 파일 만들기를 켜면 최신 설치 EXE, 버전별 Setup과 기존 EXE/VBS ZIP을 함께 생성·게시합니다.\n- 사용자 설치 EXE에는 토큰이나 SSH 키를 넣지 않습니다. 파일 무결성·제품·버전을 확인하며 다운로드 실패·취소 시 불완전한 파일을 실행하지 않습니다.\n- 기존 앱의 ZIP 업데이트와 Claude 환경을 유지합니다. 새 서비스나 상주 프로세스는 추가하지 않습니다.\n- 사용 안내서와 사내 배포 가이드에 새 설치 흐름을 반영했습니다.\n\n처음 한 번은 사내에서 생성한 AX-Workspace-Install.exe를 공유하세요. 같은 서버·프로젝트를 사용하는 동안 동일한 EXE로 최신 버전을 설치합니다. 서버나 프로젝트를 바꾸면 새 EXE가 필요합니다.\n\n앱 실행에는 기존 Python 3.11 이상, 최신 Claude Code 설치·인증과 Windows 실행 환경이 필요합니다. 설치 EXE를 실행하는 데 NSIS나 Python이 필요한 것은 아닙니다. NSIS는 배포 담당 PC에서 준비합니다.\n\n사내 GitLab 게시는 사내 PC에서 진행하며 실제 서버의 익명 다운로드와 인증서 정책을 확인해야 합니다. 기존 0.23.25 패키지를 덮어쓰지 않고 새 버전으로 게시하세요.\n\n검증: 관련 자동 검사 231개 통과. 설치 화면과 실제 NSIS 파일의 무결성·제품 버전 검증을 마쳤습니다. 실제 사내 GitLab 접속·설치는 사내 환경에서 확인해 주세요.\n\n### 다운로드\n\n[설치 파일](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/AX-Workspace-0.23.26-Setup.exe) · [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/workspace-local-0.23.26-source.zip)\n\nGitHub의 Setup·직접 EXE는 공개 업데이트를 사용하는 NSIS 설치 파일입니다. EXE/VBS ZIP은 기존 실행기와 앱 자동 업데이트용입니다.\n\n사내 최신 설치용 AX-Workspace-Install.exe의 생성·게시 기능도 소스에 포함되어 있습니다. 실제 사내 주소와 Project ID를 입력해 사내 배포 도구로 생성하세요. 사내용 EXE에는 토큰·SSH 키를 넣지 않습니다. 공개 Release에는 예시 서버 설정의 검증용 EXE를 올리지 않습니다.\n\n[사내 최신 설치 EXE 안내](https://github.com/bongG-moon/workspace_local/blob/v0.23.26/docs/WORKSPACE_ONLINE_INSTALLER.md) · [검증 기록](https://github.com/bongG-moon/workspace_local/blob/v0.23.26/docs/WORKSPACE_ONLINE_INSTALLER_VALIDATION_0.23.26.md)\n\n파일 무결성은 첨부된 SHA256SUMS.txt로 확인하세요."
+    },
     {
       "version": "0.23.25",
       "title": "AX Workspace 0.23.25 — 업무 폴더와 드래그 개선",

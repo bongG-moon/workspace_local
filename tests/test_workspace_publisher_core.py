@@ -25,7 +25,7 @@ CONFIG = {'schema': 1, 'baseUrl': 'https://gitlab.corp:8443/company', 'projectId
           'allowedDownloadOrigins': [], 'tokenKind': 'deploy', 'includeInstaller': False}
 
 
-def release_files(directory, source=None, *, branded=False, installer=False):
+def release_files(directory, source=None, *, branded=False, installer=False, online=False):
     directory.mkdir(parents=True, exist_ok=True)
     source = source or runtime_config(CONFIG)
     entries = {'Company-Workspace.vbs': b'fixture', 'deploy/Start-CompanyWorkspace.ps1': b'fixture',
@@ -60,6 +60,10 @@ def release_files(directory, source=None, *, branded=False, installer=False):
         setup = directory / f'AX-Workspace-{VERSION}-Setup.exe'
         setup.write_bytes(b'MZfixture NSIS installer')
         packages.append(setup)
+    if online:
+        bootstrap = directory / 'AX-Workspace-Install.exe'
+        bootstrap.write_bytes(b'MZfixture latest GitLab installer')
+        packages.append(bootstrap)
     (directory / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n'
                                                    for path in packages), encoding='utf-8')
     files = verify_files(directory, VERSION, source)
@@ -309,7 +313,8 @@ class GitAndBuildTests(unittest.TestCase):
         elif '-File' in args:
             output = Path(args[args.index('-OutputDirectory') + 1])
             injected = json.loads(Path(args[args.index('-UpdateConfig') + 1]).read_text())
-            release_files(output, injected, branded=True, installer='-IncludeInstaller' in args)
+            release_files(output, injected, branded=True, installer='-IncludeInstaller' in args,
+                          online='-IncludeInstaller' in args)
             if '-IncludeInstaller' in args:
                 setup = output / f'AX-Workspace-{VERSION}-Setup.exe'
                 standalone = Path(args[args.index('-StandaloneExe') + 1])
@@ -318,9 +323,20 @@ class GitAndBuildTests(unittest.TestCase):
                                     'bytes': setup.stat().st_size, 'testMode': False, 'productId': 'AX.Workspace.Desktop',
                                     'standaloneSha256': hashlib.sha256(standalone.read_bytes()).hexdigest()}
                 (cwd / f'build/workspace-installer-{VERSION}.json').write_text(json.dumps(installer_report))
+                from local_app.update_source import source_from_config
+                online = output / 'AX-Workspace-Install.exe'
+                online_report = {'schema': 1, 'version': VERSION, 'installer': str(online),
+                                 'sha256': hashlib.sha256(online.read_bytes()).hexdigest(), 'bytes': online.stat().st_size,
+                                 'productId': 'AX.Workspace.OnlineInstaller', 'protocol': 1,
+                                 'embeddedConfigVerified': True, 'appPayloadBundled': False,
+                                 'pythonRequiredToInstall': False,
+                                 'updateSource': injected, 'sourceIdentity': source_from_config(injected).identity}
+                (cwd / f'build/workspace-online-installer-{VERSION}.json').write_text(json.dumps(online_report))
             report = {'version': VERSION, 'pythonBundled': False, 'identicalSourceFiles': 9,
                       'vbsZip': str(output / f'AX-Workspace-{VERSION}-vbs.zip'),
                       'exeZip': str(output / f'AX-Workspace-{VERSION}-exe.zip')}
+            if '-IncludeInstaller' in args:
+                report.update(installer=str(setup), onlineInstaller=str(online))
             (cwd / f'build/workspace-release-{VERSION}.json').write_text(json.dumps(report))
         return subprocess.CompletedProcess(args, 0)
 

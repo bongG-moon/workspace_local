@@ -499,6 +499,19 @@ class PublisherWindowTests(unittest.TestCase):
         self.window.fields["projectId"].set("99")
         self.assertEqual("disabled", str(self.window.publish_button.cget("state")))
 
+    def test_latest_installer_sharing_path_shows_after_build_and_publish(self):
+        built = {**deepcopy(BUILD), "files": [
+            {"name": "AX-Workspace-0.22.0-Setup.exe", "path": "C:/build/output/AX-Workspace-0.22.0-Setup.exe"},
+            {"name": "AX-Workspace-Install.exe", "path": "C:/build/output/AX-Workspace-Install.exe"}]}
+        identity = build_identity(self.window.config())
+        self.window.done("build", built, identity)
+        self.window.refresh_controls()
+        self.assertIn("실행 시 최신 버전 설치", self.window.build_label.get())
+        self.assertIn("C:/build/output/AX-Workspace-Install.exe", self.window.build_label.get())
+        self.assertNotIn("AX-Workspace-0.22.0-Setup.exe", self.window.build_label.get())
+        self.window.done("publish", {"verified": True}, identity)
+        self.assertIn("C:/build/output/AX-Workspace-Install.exe", self.window.log.get("1.0", "end"))
+
     def test_restart_after_failed_publish_reuses_exact_build_without_automatic_publish(self):
         self.window.start("build")
         self.finish()

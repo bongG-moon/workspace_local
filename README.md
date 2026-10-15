@@ -1,4 +1,4 @@
-# AX Workspace 0.23.25
+# AX Workspace 0.23.26
 
 **내 업무와 AI가 만나는 공간**
 
@@ -8,7 +8,7 @@
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/AX-Workspace-0.23.25-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/AX-Workspace-0.23.26-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/AX-Workspace-0.23.26-vbs.zip)**
 
 [NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -16,19 +16,28 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.25-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.25.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.26-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.26.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.25 Release의 `AX-Workspace-0.23.25-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.25.exe`, `Company-Workspace-0.23.25.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.26 Release의 `AX-Workspace-0.23.26-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.26.exe`, `Company-Workspace-0.23.26.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 
 기존 ZIP 방식도 계속 사용할 수 있습니다. 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
+
+## 0.23.26 변경
+
+- 사내에서 한 번 공유한 **AX-Workspace-Install.exe**로 항상 최신 버전을 설치할 수 있습니다. GitLab 최신 정보 확인 → 설치 파일 다운로드·검증 → NSIS 설치 순서입니다.
+- 사내 배포 도구에서 기존 서버 주소·프로젝트 ID를 사용해 함께 생성합니다. 사용자 설치 EXE에 토큰이나 SSH 키를 포함하지 않습니다.
+- 기존 앱의 ZIP 업데이트는 유지하며, 새 서비스·상주 프로세스는 추가하지 않습니다.
+- [사내 최신 설치 EXE 사용 안내](docs/WORKSPACE_ONLINE_INSTALLER.md)
+
+공개 Release에는 GitHub용 Setup·업데이트 ZIP과 사내 반입용 소스 ZIP을 제공합니다. 사내 전용 `AX-Workspace-Install.exe`는 이 소스로 사내 서버 주소를 넣어 생성·게시하세요.
 
 ## 0.23.25 변경
 
@@ -60,7 +69,7 @@
 
 [설계와 검증](docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md) · [설정 명령 사용 안내](docs/WORKSPACE_USER_GUIDE.html#claude-settings-commands)
 
-[0.23.25 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.25)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.25/workspace-local-0.23.25-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
+[0.23.26 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.26)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/workspace-local-0.23.26-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
 
 ## 0.23.22 변경
 

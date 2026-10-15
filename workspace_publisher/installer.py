@@ -9,6 +9,8 @@ import shutil
 
 from .config import PublisherError, checked_version, safe_path
 
+ONLINE_NAME = 'AX-Workspace-Install.exe'
+
 
 def compiler_path(repo_root, configured=''):
     """Never download a compiler or copy it into the source snapshot."""
@@ -57,4 +59,33 @@ def verify_build_report(source_root, directory, version, standalone_digest):
             raise ValueError()
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise PublisherError('NSIS 설치 파일의 버전·원본 EXE·체크섬 검증 기록이 일치하지 않습니다. '
+                             '같은 설정으로 다시 빌드해 주세요. 게시하지 않았습니다.') from exc
+
+
+def verify_online_build_report(source_root, directory, version, expected_source):
+    """Bind the reusable installer to this exact credential-free GitLab source."""
+    from local_app.update_source import source_from_config
+    version = checked_version(version)
+    target = safe_path(Path(directory) / ONLINE_NAME)
+    report_path = safe_path(Path(source_root) / f'build/workspace-online-installer-{version}.json')
+    try:
+        if not report_path.is_file() or report_path.stat().st_size > 65536:
+            raise ValueError()
+        report = json.loads(report_path.read_text(encoding='utf-8-sig'))
+        source = source_from_config(expected_source)
+        recorded_source = source_from_config(report['updateSource'])
+        if (source.provider != 'gitlab' or source.config != expected_source
+                or recorded_source.provider != 'gitlab' or recorded_source.config != report['updateSource']
+                or report['updateSource'] != expected_source or report['sourceIdentity'] != source.identity
+                or type(report['schema']) is not int or report['schema'] != 1
+                or type(report['protocol']) is not int or report['protocol'] != 1
+                or report['version'] != version or Path(report['installer']) != target
+                or report['productId'] != 'AX.Workspace.OnlineInstaller'
+                or report['embeddedConfigVerified'] is not True or report['appPayloadBundled'] is not False
+                or report['pythonRequiredToInstall'] is not False
+                or type(report['bytes']) is not int or report['bytes'] != target.stat().st_size
+                or report['sha256'] != hashlib.sha256(target.read_bytes()).hexdigest()):
+            raise ValueError()
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise PublisherError('최신 버전 설치기의 사내 GitLab 주소·설정·체크섬 검증 기록이 일치하지 않습니다. '
                              '같은 설정으로 다시 빌드해 주세요. 게시하지 않았습니다.') from exc

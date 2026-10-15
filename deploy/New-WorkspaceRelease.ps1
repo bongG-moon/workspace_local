@@ -16,8 +16,10 @@ $legacyVbsZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-vbs.z
 $legacyExeZip = Join-Path $outputRoot ('Company-Workspace-' + $version + '-exe.zip')
 $checksums = Join-Path $outputRoot 'SHA256SUMS.txt'
 $installerExe = Join-Path $outputRoot ('AX-Workspace-' + $version + '-Setup.exe')
+$onlineInstaller = Join-Path $outputRoot 'AX-Workspace-Install.exe'
 $targets = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip, $checksums)
 if ($IncludeInstaller) { $targets += @($installerExe, ($installerExe + '.sha256')) }
+if ($IncludeInstaller -and $UpdateConfig) { $targets += @($onlineInstaller, ($onlineInstaller + '.sha256')) }
 foreach ($target in $targets) {
     if (Test-Path -LiteralPath $target) { throw ('Output already exists: ' + $target) }
 }
@@ -116,6 +118,10 @@ $releaseFiles = @($vbsZip, $exeZip, $legacyVbsZip, $legacyExeZip)
 if ($IncludeInstaller) {
     & (Join-Path $PSScriptRoot 'New-WorkspaceInstaller.ps1') -StandaloneExe $StandaloneExe -OutputDirectory $outputRoot -NsisCompiler $NsisCompiler | Out-Null
     $releaseFiles += $installerExe
+    if ($UpdateConfig) {
+        & (Join-Path $PSScriptRoot 'New-WorkspaceOnlineInstaller.ps1') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython -OutputDirectory $outputRoot | Out-Null
+        $releaseFiles += $onlineInstaller
+    }
 }
 $rows = $releaseFiles | ForEach-Object {
     (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + [IO.Path]::GetFileName($_)
@@ -124,7 +130,8 @@ $rows = $releaseFiles | ForEach-Object {
 $report = [ordered]@{version=$version; vbsZip=$vbsZip; exeZip=$exeZip; checksums=$checksums;
     legacyVbsZip=$legacyVbsZip; legacyExeZip=$legacyExeZip;
     identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage;
-    installer=$(if ($IncludeInstaller) { $installerExe } else { $null })}
+    installer=$(if ($IncludeInstaller) { $installerExe } else { $null });
+    onlineInstaller=$(if ($IncludeInstaller -and $UpdateConfig) { $onlineInstaller } else { $null })}
 $json = $report | ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $repoRoot ('build\workspace-release-' + $version + '.json')), $json, $utf8)
 $json

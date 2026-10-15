@@ -19,6 +19,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
 from .config import PublisherError, active, checked_version, https_base, runtime_config, safe_path
+from .installer import ONLINE_NAME
 from local_app.update_source import https_parts, origin, source_from_config
 from local_app.app_updates import parse_manifest
 
@@ -165,6 +166,11 @@ def verify_files(directory, version, expected_source):
         if names == legacy:
             raise PublisherError('NSIS 설치 파일에는 같은 버전의 AX Workspace 호환 ZIP이 필요합니다.')
         names.append(setup)
+    has_online = (directory / ONLINE_NAME).exists()
+    if has_online:
+        if not has_installer:
+            raise PublisherError('최신 버전 설치기에는 같은 버전의 NSIS 설치 파일과 호환 ZIP이 필요합니다.')
+        names.append(ONLINE_NAME)
     content = {name: _file(directory / name) for name in names}
     if len(content['SHA256SUMS.txt']) > 65536:
         raise PublisherError('체크섬 파일이 너무 큽니다.')
@@ -204,6 +210,8 @@ def verify_files(directory, version, expected_source):
             if unpack_archive(content[branded[1]], version) != executable:
                 raise ValueError()
         if has_installer and not content[setup].startswith(b'MZ'):
+            raise ValueError()
+        if has_online and not content[ONLINE_NAME].startswith(b'MZ'):
             raise ValueError()
     except (ValueError, KeyError, OSError, UnicodeError, zipfile.BadZipFile, RuntimeError) as exc:
         raise PublisherError('배포 파일의 버전·체크섬·구성 검사가 실패했습니다. 같은 설정으로 다시 빌드해 주세요.') from exc
