@@ -34,10 +34,11 @@ def version(value):
 
 def snapshot(value):
     """Validate without silently filtering/truncating any unsent user input."""
-    if not isinstance(value, dict) or set(value) not in ({'sessionId', 'drafts'}, {'sessionId', 'drafts', 'stashes'}):
+    if (not isinstance(value, dict) or not {'sessionId', 'drafts'}.issubset(value)
+            or set(value) - {'sessionId', 'drafts', 'stashes', 'mode'}):
         raise ValueError('작성 중인 내용의 저장 형식을 확인해 주세요.')
     def identifier(sid, home=False):
-        if home and sid == 'home':
+        if home and sid in {'home', 'home:chat', 'home:work'}:
             return sid
         if not isinstance(sid, str) or str(uuid.UUID(sid)) != sid:
             raise ValueError('작성 중인 업무의 식별자를 확인하지 못했습니다.')
@@ -46,7 +47,7 @@ def snapshot(value):
     if selected is not None:
         identifier(selected)
     drafts = value['drafts']
-    if not isinstance(drafts, list) or len(drafts) > MAX_SESSIONS + 1:
+    if not isinstance(drafts, list) or len(drafts) > MAX_SESSIONS + 3:
         raise ValueError('작성 중인 업무의 개수가 저장 범위를 넘었습니다.')
     def entries(rows, *, stashes=False):
         result, seen = [], set()
@@ -75,6 +76,10 @@ def snapshot(value):
             result.append(entry)
         return result
     clean = {'sessionId': selected, 'drafts': entries(drafts)}
+    if 'mode' in value:
+        if value['mode'] not in ('chat', 'work'):
+            raise ValueError('복원할 화면 모드를 확인해 주세요.')
+        clean['mode'] = value['mode']
     if 'stashes' in value:
         stashes = value['stashes']
         if not isinstance(stashes, list) or len(stashes) > 50:
@@ -107,6 +112,15 @@ class UpgradeHandoff:
                 saved = snapshot(value.get('snapshot'))
                 if value['status'] == 'ready' and value['targetVersion'] == self.version:
                     self.restore = {'requestId': value['requestId'], 'snapshot': saved}
+                    # Older handoffs remain restorable without claiming an update.
+                    try:
+                        source = value.get('sourceVersion')
+                        source_parts = tuple(map(int, version(source).split('-')[0].split('.')))
+                        target_parts = tuple(map(int, version(self.version).split('-')[0].split('.')))
+                        if source_parts < target_parts:
+                            self.restore.update(sourceVersion=source, targetVersion=self.version)
+                    except (ValueError, TypeError):
+                        pass
                 elif value['status'] == 'ready':
                     self.warning = ('작성 중이던 내용을 ' + value['targetVersion']
                                     + ' 버전에 보관했습니다. 해당 버전을 실행해 내용을 먼저 복원해 주세요.')
@@ -121,7 +135,7 @@ class UpgradeHandoff:
 
     def _write(self, pending, status):
         value = {'schemaVersion': 1, 'requestId': pending['requestId'],
-                 'targetVersion': pending['targetVersion'], 'status': status,
+                 'sourceVersion': self.version, 'targetVersion': pending['targetVersion'], 'status': status,
                  'snapshot': pending['snapshot']}
         HistoryStore(self.path.parent)._write(self.path, json.dumps(value, ensure_ascii=False).encode('utf-8'))
 
@@ -188,6 +202,8 @@ class UpgradeHandoff:
             if request_id is not None and (not pending or nonce(request_id) != pending['requestId']):
                 raise ValueError('이 버전 전환 요청은 더 이상 유효하지 않습니다.')
             public = None if not pending else {key: pending[key] for key in ('requestId', 'targetVersion', 'stage', 'revision')}
+            if pending:
+                public['sourceVersion'] = self.version
             if pending and pending.get('executionMode'):
                 public['executionMode'] = pending['executionMode']
             if pending and pending.get('error'):

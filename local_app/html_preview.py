@@ -150,6 +150,8 @@ class StaticPreview(HTMLParser):
         self.report_body = self.report_main = False
         self.picker_ids = set()
         self.report_views = []
+        self.layout_nodes = []
+        self.styles = []
 
     def handle_starttag(self, tag, attrs):
         if tag in DROP:
@@ -162,6 +164,8 @@ class StaticPreview(HTMLParser):
         for key, value in attrs:
             attributes.setdefault(key, value)  # Like HTML, the first duplicate wins.
         classes = set((attributes.get('class') or '').split())
+        if len(self.layout_nodes) < 256 and tag in {'body', 'main', 'article', 'section', 'div', 'table', 'svg', 'img'}:
+            self.layout_nodes.append((tag, attributes, classes))
         if tag == 'body':
             self.report_body |= 'data-style' in attributes
         if tag == 'main':
@@ -203,7 +207,147 @@ class StaticPreview(HTMLParser):
 
     def handle_data(self, data):
         if not self.dropped:
-            self.parts.append(static_css(data) if self.styling else escape(data))
+            value = static_css(data) if self.styling else escape(data)
+            if self.styling:
+                self.styles.append(value)
+            self.parts.append(value)
+
+
+
+def _layout_rules(css, conditional=False, level=0):
+    """Yield bounded ordinary rules; ignore print and animation declarations."""
+    if level > 5:
+        return
+    index = 0
+    while index < len(css):
+        opening = css.find('{', index)
+        if opening < 0:
+            return
+        selector = css[index:opening].strip()
+        cursor, depth, quote = opening + 1, 1, None
+        while cursor < len(css) and depth:
+            char = css[cursor]
+            if char == '\\':
+                cursor += 2
+                continue
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+            cursor += 1
+        body = css[opening + 1:cursor - 1]
+        if selector.startswith('@'):
+            if re.match(r'@(media|supports|layer|container)\b', selector, re.I) and not (
+                    re.match(r'@media\b', selector, re.I) and re.search(r'\bprint\b', selector, re.I)
+                    and not re.search(r'\bscreen\b|\ball\b', selector, re.I)):
+                yield from _layout_rules(body, conditional or not selector.startswith('@layer'), level + 1)
+        else:
+            yield selector, body, conditional
+        index = cursor
+
+
+def _layout_declarations(css):
+    # Quoted CSS content is not a layout declaration. Strip it before splitting.
+    cleaned, index = [], 0
+    while index < len(css):
+        char = css[index]
+        if char in "\"'":
+            quote = char
+            index += 1
+            while index < len(css):
+                if css[index] == '\\':
+                    index += 2
+                elif css[index] == quote:
+                    index += 1
+                    break
+                else:
+                    index += 1
+        else:
+            cleaned.append(char)
+            index += 1
+    result = {}
+    for declaration in ''.join(cleaned).split(';'):
+        name, separator, value = declaration.partition(':')
+        if separator and name.strip().lower() in {'width', 'max-width', 'box-sizing', 'padding', 'padding-left', 'padding-right', 'margin', 'margin-left', 'margin-right', 'border', 'border-width', 'border-left-width', 'border-right-width'}:
+            result[name.strip().lower()] = re.sub(r'\s*!important\s*$', '', value.strip(), flags=re.I)
+    return result
+
+
+
+def _horizontal_space(values, name):
+    def pixels(value):
+        match = re.fullmatch(r'(\d+(?:\.\d+)?)(?:px)?', value or '', re.I)
+        return min(4096, float(match[1])) if match else 0
+    tokens = values.get(name, '').split()
+    if name == 'border-width' and not tokens:
+        tokens = values.get('border', '').split()[:1]
+    right = tokens[1] if len(tokens) > 1 else (tokens[0] if tokens else '')
+    left = tokens[3] if len(tokens) > 3 else right
+    prefix = 'border' if name == 'border-width' else name
+    suffix = '-width' if name == 'border-width' else ''
+    return pixels(values.get(prefix + '-left' + suffix, left)) + pixels(values.get(prefix + '-right' + suffix, right))
+
+
+def _fixed_canvas_width(parser):
+    """Conservative numeric display hint, never a CSS/HTML fragment.
+
+    Only literal widths on present elements qualify. Conditional/responsive
+    layouts keep their normal viewport. Work is bounded even for large reports.
+    """
+    rules = []
+    for index, (selectors, body, conditional) in enumerate(_layout_rules(''.join(parser.styles))):
+        if index >= 512:
+            break
+        values = _layout_declarations(body)
+        if not values:
+            continue
+        for selector in selectors.split(',')[:32]:
+            # Complex ancestry and pseudo states cannot be resolved statically.
+            match = re.fullmatch(r'([a-z][\w-]*|\*)?((?:[.#][\w-]+)*)', selector.strip(), re.I)
+            if match:
+                rules.append((match[1], re.findall(r'([.#])([\w-]+)', match[2]), values, conditional))
+        if len(rules) >= 256:
+            break
+    maximum, seen = 0, set()
+    for tag, attrs, classes in parser.layout_nodes:
+        signature = (tag, attrs.get('id'), tuple(sorted(classes)), attrs.get('style'), attrs.get('width'))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        values, responsive = {}, False
+        for rule_tag, tokens, declarations, conditional in rules:
+            if rule_tag and rule_tag.lower() not in {tag, '*'}:
+                continue
+            if all(name in classes if prefix == '.' else attrs.get('id') == name for prefix, name in tokens):
+                if conditional:
+                    responsive |= bool({'width', 'max-width'} & declarations.keys())
+                else:
+                    values.update(declarations)
+        values.update(_layout_declarations(static_css(attrs.get('style') or '')))
+        width = values.get('width', str(attrs.get('width') or ''))
+        if width.isdigit():
+            width += 'px'
+        fixed = re.fullmatch(r'(\d+(?:\.\d+)?)px', width, re.I)
+        max_width = values.get('max-width', '')
+        responsive |= bool(re.search(r'%|vw|vmin|clamp\(|min\(', max_width, re.I))
+        if fixed and not responsive:
+            size = float(fixed[1])
+            maximum_fixed = re.fullmatch(r'(\d+(?:\.\d+)?)px', max_width, re.I)
+            if maximum_fixed:
+                size = min(size, float(maximum_fixed[1]))
+            if 640 <= size <= 16384:
+                if values.get('box-sizing') != 'border-box':
+                    size += _horizontal_space(values, 'padding') + _horizontal_space(values, 'border-width')
+                size += _horizontal_space(values, 'margin')
+                if size <= 16384:
+                    maximum = max(maximum, size)
+    # Reserve the browser's ordinary body margin and vertical scroll bar.
+    return int(maximum + 32) if maximum else 0
 
 
 def render(text: str) -> str:
@@ -218,6 +362,8 @@ def render(text: str) -> str:
     if parser.picker_ids == {'additional-designs', 'choice-result'}:
         fixes.append('.mini-window{height:380px!important}.mini-window .style-preview{transform:scale(.4)!important;transform-origin:top left}'
                      'details.design-options{display:block}details.design-options>*{content-visibility:visible}')
+    width = _fixed_canvas_width(parser)
+    fit = f'<meta name="ax-preview-width" content="{width}">' if width else ''
     # The CSP must precede all source content. Sandbox is also applied by the UI.
     return ('<!doctype html><meta http-equiv="Content-Security-Policy" content="'+escape(CSP, quote=True)+'">'
-            + ''.join(parser.parts) + ('<style>' + ''.join(fixes) + '</style>' if fixes else ''))
+            + fit + ''.join(parser.parts) + ('<style>' + ''.join(fixes) + '</style>' if fixes else ''))

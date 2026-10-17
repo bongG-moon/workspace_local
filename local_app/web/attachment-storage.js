@@ -23,7 +23,9 @@ globalThis.WorkspaceAttachmentStorage = (() => {
     dialog.setAttribute("aria-labelledby", "attachment-storage-title");
     const header = make("div", null, "dialog-head"), title = make("h2", "첨부 저장공간");
     title.id = "attachment-storage-title";
-    const close = make("button", "닫기", "text-button");close.type = "button";close.onclick = () => dialog.close();
+    const close = make("button", null, "icon-button");close.type = "button";close.onclick = () => dialog.close();
+    close.setAttribute("aria-label", "첨부 저장 공간 닫기");
+    close.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>';
     header.append(title, close);
     const description = make("p", "앱에 끌어 넣은 파일의 복사본만 관리합니다. 원본 파일과 작업 결과물은 그대로 유지돼요.", "attachment-storage-description");
     const usage = make("strong", "저장공간 확인 중", "attachment-storage-usage");

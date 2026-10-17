@@ -1,14 +1,18 @@
-# AX Workspace 0.23.26
+# AX Workspace 0.23.27
 
 **내 업무와 AI가 만나는 공간**
 
 [AX Workspace를 만든 이유](docs/AX_WORKSPACE_STORY.html)
 
-기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. 터미널 경로 이동 없이 업무 폴더를 선택하고 대화와 자료를 다룹니다. 특정 하네스 설치는 필요하지 않습니다.
+기존 Claude Code를 창과 버튼으로 사용하는 Windows 로컬 앱입니다. **일반 대화**에서는 폴더 선택 없이 질문하거나 첨부 자료로 대화하고, **업무**에서는 폴더·파일·스킬·실행 예약을 사용합니다. 특정 하네스 설치는 필요하지 않습니다.
+
+왼쪽의 **일반 대화 / 업무**를 선택하면 시작 버튼과 목록이 함께 바뀝니다. 일반 대화는 첨부한 텍스트·이미지·지원 문서만 전달하며 파일 탐색·수정·프로그램 실행 도구는 사용하지 않습니다. 대화를 삭제하면 확인 후 앱의 기록·첨부 사본·전용 폴더를 정리하고 원본 파일은 남깁니다. 기존 업무 삭제는 목록에서만 제거하는 동작을 유지합니다. [두 모드와 첨부·삭제 안내](docs/WORKSPACE_CHAT_MODES.md)
+
+화면은 중앙 뉴트럴과 기존 좌우 패널 색상을 조합한 A2 구성입니다. 사이드바의 글자·아이콘·행 간격을 줄여 목록을 간결하게 표시하며 라이트·다크 모드를 함께 지원합니다.
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/AX-Workspace-0.23.26-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/AX-Workspace-0.23.26-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.27/AX-Workspace-0.23.27-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.27/AX-Workspace-0.23.27-vbs.zip)**
 
 [NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -16,19 +20,30 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.26-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.26.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.27-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.27.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.26 Release의 `AX-Workspace-0.23.26-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.26.exe`, `Company-Workspace-0.23.26.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.27 Release의 `AX-Workspace-0.23.27-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.27.exe`, `Company-Workspace-0.23.27.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 
 기존 ZIP 방식도 계속 사용할 수 있습니다. 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전이나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 창의 X는 앱을 트레이에 남깁니다.
 
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
+
+## 0.23.27 변경
+
+- **일반 대화 / 업무**를 구분합니다. 일반 대화에서는 폴더 선택 없이 첨부 자료로 질문하고, 대화 삭제 시 앱의 전용 폴더와 첨부 사본을 정리합니다. 원본 파일은 유지합니다.
+- **간편 화면** 아이콘으로 업무 목록과 채팅 중심 화면을 켜고 끕니다. 현재 업무·초안·첨부·모델·승인 설정은 유지하며 다시 실행해도 화면 선택을 복원합니다.
+- 사이드바, 상단 아이콘, 설정·팝업과 결과 목록의 글자·간격을 정리했습니다. 우측 패널 너비를 드래그로 조절하며, 열린 패널의 닫기 버튼은 패널 안에만 표시합니다.
+- HTML 미리보기 자동 맞춤, 코드 영역 높이, 화면 확대·축소 비율 안내와 키보드 포커스 표시를 개선했습니다.
+- 스킬·기능의 자동 목록 확인과 연결 재사용, 스킬·플러그인 변경 적용 안내를 보완했습니다.
+- 업데이트 준비부터 새 화면이 열릴 때까지 진행 안내를 표시합니다. 사용 안내서도 현재 동작에 맞췄습니다.
+
+[변경 내용](docs/RELEASE_NOTES_0.23.27.md) · [릴리즈 검증](docs/VALIDATION_0.23.27.md) · [사용 안내서](docs/WORKSPACE_USER_GUIDE.html)
 
 ## 0.23.26 변경
 
@@ -69,7 +84,7 @@
 
 [설계와 검증](docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md) · [설정 명령 사용 안내](docs/WORKSPACE_USER_GUIDE.html#claude-settings-commands)
 
-[0.23.26 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.26)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.26/workspace-local-0.23.26-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
+[0.23.27 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.27)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.27/workspace-local-0.23.27-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
 
 ## 0.23.22 변경
 
@@ -119,7 +134,7 @@
 - CLI 확인·실행·업데이트의 시간 초과와 취소 후 PowerShell이 남을 수 있는 경로를 정리했습니다. 앱이 생성한 프로세스만 관리하며, 종료 정리가 늦어지면 재시도할 수 있도록 창과 트레이를 유지합니다.
 - 예약 대기 중 과거 업무 전체를 반복 검사하던 계산을 줄였습니다. 실제 PowerShell 기반 연결·작업·중지·후속 요청·연결 종료를 8회 반복해 연결 종료 후 잔류 프로세스 0개를 확인했습니다.
 
-같은 버전 수정 파일은 위 링크에서 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다. **기존 앱을 트레이에서 완전 종료한 뒤 수정본을 실행하세요.** 실행 중인 동일 버전 프로세스는 자동 교체되지 않고 기존 창을 재사용합니다. 최신 화면 검증은 [입력 메뉴·알림·간격 검증](docs/VALIDATION_UI_POLISH_0.23.20.md), 최신 배포 파일의 해시는 [Release의 SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/SHA256SUMS.txt)를 기준으로 확인하세요. [최초 검증](docs/VALIDATION_0.23.20.md), [전환 대기 수정](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md), [반응성·승인 모드](docs/VALIDATION_RESPONSIVENESS_0.23.20.md), [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md)에 있는 당시 검증 결과와 해시는 기록으로 보존합니다.
+같은 버전 수정 파일은 위 링크에서 다시 받아야 하며 버전 비교만으로 업데이트 알림이 나오지 않습니다. **기존 앱을 트레이에서 완전 종료한 뒤 수정본을 실행하세요.** 실행 중인 동일 버전 프로세스는 자동 교체되지 않고 기존 창을 재사용합니다. 최신 화면 검증은 [입력 메뉴·알림·간격 검증](docs/VALIDATION_UI_POLISH_0.23.20.md), 당시 배포 파일의 해시는 [0.23.20 SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.20/SHA256SUMS.txt)에 보존되어 있습니다. [최초 검증](docs/VALIDATION_0.23.20.md), [전환 대기 수정](docs/VALIDATION_EXECUTION_WAIT_LOCAL.md), [반응성·승인 모드](docs/VALIDATION_RESPONSIVENESS_0.23.20.md), [백그라운드 자원 검증](docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md)에 있는 당시 검증 결과와 해시는 기록으로 보존합니다.
 
 ## 0.23.19 변경
 

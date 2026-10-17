@@ -64,6 +64,11 @@ class UiHealthLog:
         self.rows = deque(maxlen=MAX_EVENTS)
         self.writes = deque()
         self.native_context = {}
+        # Readiness belongs to this server launch, never the persisted log.
+        self._startup_state = 'pending'
+        self._startup_document = None
+        self._startup_documents = deque(maxlen=8)
+        self._startup_native_failed = False
         try:
             previous = read(self.path, 256 * 1024)
             # Prior records are local diagnostics, but do not carry unknown data
@@ -118,6 +123,25 @@ class UiHealthLog:
 
     def _append(self, row, native=False):
         with self.lock:
+            if native and row['event'] in {'ready', 'exited', 'process_failed', 'navigation_failed', 'error'}:
+                self._startup_native_failed = row['event'] != 'ready'
+                if row['event'] == 'ready':
+                    self._startup_document = None
+                self._startup_state = 'pending' if row['event'] == 'ready' else 'failed'
+            elif not native and row['module'] == 'app' and not self._startup_native_failed:
+                document = row['documentId']
+                if row['event'] == 'document' and row['status'] == 'pending':
+                    if document not in self._startup_documents:
+                        self._startup_documents.append(document)
+                        self._startup_document, self._startup_state = document, 'pending'
+                elif row['event'] == 'startup' and row['status'] in {'ready', 'failed'}:
+                    if self._startup_document is None:
+                        if document in self._startup_documents:
+                            return False  # A late report from the replaced native host.
+                        self._startup_document = document
+                        self._startup_documents.append(document)
+                    if document == self._startup_document:
+                        self._startup_state = row['status']
             if native:
                 if row.get('hostPid') != self.native_context.get('hostPid'):
                     self.native_context.clear()
@@ -131,6 +155,7 @@ class UiHealthLog:
                 self.writes.popleft()
             if len(self.writes) >= 300:
                 return False
+
             self.writes.append(now)
             self.rows.append(row)
             temp = self.path.with_suffix('.tmp')
@@ -142,3 +167,8 @@ class UiHealthLog:
             except (OSError, ValueError):
                 # Diagnostics must never make an otherwise usable app fail.
                 return False
+
+    def startup_snapshot(self):
+        """Cheap, credential-free state for the authenticated restart waiter."""
+        with self.lock:
+            return {'launchId': self.launch_id, 'startupState': self._startup_state}

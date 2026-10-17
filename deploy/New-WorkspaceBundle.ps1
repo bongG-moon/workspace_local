@@ -12,12 +12,13 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'local_app\web') -Force |
 New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
+    'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'docs\WORKSPACE_CHAT_MODES.md',
     'local_app\customizations.py', 'local_app\web\customizations.js',
     'local_app\session_groups.py', 'local_app\web\session-groups.js',
     'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\web\drafts.js',
     'local_app\web\attachment-storage.js', 'local_app\web\attachment-storage.css',
     'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',
-    'local_app\appearance.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',
+    'local_app\appearance.py', 'local_app\layout_preferences.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',
     'local_app\session_visibility.py', 'local_app\path_browser.py', 'local_app\web\path-picker.js', 'local_app\web\path-picker.css',
     'local_app\native_window.py', 'local_app\ui_health.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',
     'deploy\New-WorkspaceDesktop.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
@@ -46,13 +47,18 @@ $files = @(
     'local_app\web\fonts\NotoSansKR-Variable.woff', 'local_app\web\fonts\OFL.txt', 'local_app\web\fonts\SOURCE.json',
     'local_app\web\index.html', 'local_app\web\app.css', 'local_app\web\app.js', 'local_app\web\capabilities.js',
     'local_app\web\composer.js', 'local_app\web\inline-controls.js', 'local_app\web\attention.js',
+    'local_app\web\html-preview.js',
+    'local_app\web\focus-navigation.js',
+    'local_app\web\zoom-feedback.js', 'local_app\web\zoom-feedback.css',
     'local_app\web\input-keys.js', 'local_app\web\chat-shortcuts.js', 'local_app\web\chat-shortcuts.css',
     'local_app\web\startup-health.js', 'local_app\web\startup-health.css',
     'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\layout.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
     'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
     'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py', 'local_app\progress_log.py',
     'local_app\web\progress-view.js', 'local_app\web\progress-view.css', 'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
-    'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py',
+    'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py', 'local_app\update_progress.py',
+    'local_app\native_fonts\AXWorkspaceUpdate-Regular.ttf', 'local_app\native_fonts\AXWorkspaceUpdate-SemiBold.ttf',
+    'local_app\native_fonts\OFL.txt', 'local_app\native_fonts\SOURCE.json', 'local_app\native_fonts\README.md',
     'local_app\app_updates.py', 'local_app\update_install.py', 'local_app\update_source.py',
     'local_app\web\app-updates.js', 'local_app\web\app-updates.css',
     'docs\WORKSPACE_APP_UPDATES.md',
@@ -80,7 +86,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('ax-workspace-preview-0.23.26-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('ax-workspace-preview-0.23.27-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

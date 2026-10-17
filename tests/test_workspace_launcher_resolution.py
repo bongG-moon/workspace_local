@@ -286,7 +286,7 @@ finally {
             }.items():
                 body = body.replace(key, value)
             result = self.powershell(body)
-            queries = [json.loads(line) for line in transcript.read_text().splitlines()] if transcript.exists() else []
+            queries = [json.loads(line) for line in transcript.read_text(encoding='utf-8').splitlines()] if transcript.exists() else []
             self.diagnosis = json.loads(diagnosis.read_text(encoding='utf-8-sig'))
             return result, queries, str(installed)
 

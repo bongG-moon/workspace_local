@@ -118,11 +118,16 @@ class UiHealthTests(unittest.TestCase):
 
     def test_record_count_and_write_rate_are_bounded(self):
         log = UiHealthLog(self.state, '0.21.1', monotonic=lambda:1)
-        for _ in range(300):
-            self.assertTrue(log.frontend(event()))
-        self.assertEqual(MAX_EVENTS, len(log.rows))
-        self.assertFalse(log.frontend(event()))
-        self.assertLess(log.path.stat().st_size, 256*1024)
+        # This is the count/rate contract. Real file storage and its permitted
+        # failures are covered separately; antivirus locks are not rate limits.
+        with patch.object(Path, 'write_text') as write, patch('local_app.ui_health.os.replace') as replace:
+            for _ in range(300):
+                self.assertTrue(log.frontend(event()))
+            self.assertEqual(MAX_EVENTS, len(log.rows))
+            self.assertFalse(log.frontend(event()))
+            self.assertEqual(300, write.call_count)
+            self.assertEqual(300, replace.call_count)
+            self.assertLess(len(write.call_args.args[0].encode('utf-8')), 256*1024)
 
     def test_restart_retains_sanitized_history_not_private_modified_values(self):
         self.log.frontend(event())
@@ -161,6 +166,55 @@ class UiHealthTests(unittest.TestCase):
         with patch('local_app.ui_health.os.replace',side_effect=OSError('unavailable')):
             self.assertFalse(self.log.frontend(event()))
         self.assertTrue(self.log.frontend(event()))
+
+    def test_update_readiness_never_reuses_persisted_ready(self):
+        self.log.frontend(event(status='ready', reason='', missing=[]))
+        self.assertEqual('ready', self.log.startup_snapshot()['startupState'])
+        restarted = UiHealthLog(self.state, '0.21.1')
+        self.assertEqual('pending', restarted.startup_snapshot()['startupState'])
+        self.assertNotEqual(self.log.startup_snapshot()['launchId'], restarted.startup_snapshot()['launchId'])
+
+    def test_new_document_waits_for_its_own_startup_not_late_old_ready(self):
+        self.log.frontend(event(status='ready', reason='', missing=[]))
+        self.log.frontend(event(documentId='new-document-123', event='document', status='pending'))
+        self.log.frontend(event(status='ready', reason='', missing=[]))
+        self.assertEqual('pending', self.log.startup_snapshot()['startupState'])
+        self.log.frontend(event(documentId='new-document-123', status='failed'))
+        self.assertEqual('failed', self.log.startup_snapshot()['startupState'])
+        self.log.frontend(event(documentId='new-document-123', status='ready', reason='', missing=[]))
+        self.assertEqual('ready', self.log.startup_snapshot()['startupState'])
+        self.log.native({'type': 'process_failed', 'pid': 321})
+        self.assertEqual('failed', self.log.startup_snapshot()['startupState'])
+        self.log.frontend(event(documentId='new-document-123', status='ready', reason='', missing=[]))
+        self.assertEqual('failed', self.log.startup_snapshot()['startupState'])
+        self.log.native({'type': 'ready', 'pid': 654})
+        self.log.frontend(event(documentId='new-document-123', status='ready', reason='', missing=[]))
+        self.assertEqual('pending', self.log.startup_snapshot()['startupState'])
+        self.log.frontend(event(documentId='replacement-document-123', event='document', status='pending'))
+        self.log.frontend(event(documentId='replacement-document-123', status='ready', reason='', missing=[]))
+        self.assertEqual('ready', self.log.startup_snapshot()['startupState'])
+
+    def test_readiness_does_not_depend_on_diagnostic_disk_or_write_budget(self):
+        log = UiHealthLog(self.state, '0.21.1', monotonic=lambda: 1)
+        for _ in range(300):
+            log.frontend(event())
+        self.assertFalse(log.frontend(event(status='ready', reason='', missing=[])))
+        self.assertEqual('ready', log.startup_snapshot()['startupState'])
+        with patch('local_app.ui_health.os.replace', side_effect=OSError('unavailable')):
+            self.assertFalse(self.log.frontend(event(status='ready', reason='', missing=[])))
+        self.assertEqual('ready', self.log.startup_snapshot()['startupState'])
+
+    def test_window_bootstrap_exposes_only_live_startup_state(self):
+        app = LocalApp(self.state, demo=True)
+        try:
+            self.assertEqual('pending', app.bootstrap()['window']['startupState'])
+            app.ui_health.frontend(event(status='ready', reason='', missing=[]))
+            state = app.bootstrap()['window']
+            self.assertEqual('ready', state['startupState'])
+            self.assertEqual(app.ui_health.launch_id, state['launchId'])
+            self.assertNotIn('documentId', state)
+        finally:
+            app.close()
 
 
 class UiHealthRouteTests(unittest.TestCase):

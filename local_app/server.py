@@ -40,11 +40,13 @@ from .drafts import DraftStore, MAX_REQUEST as MAX_DRAFT_REQUEST
 from .app_dispatch import DispatchController
 from .progress_log import ProgressStore
 from .idle_connections import MAX_CONNECTIONS, with_connection_slot, occupies_slot
+from .plain_chat import ChatSpaces, CHAT_PROFILE
+from .chat_attachments import prepare_chat_content, chat_attachment_policy, validate_chat_file
 
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.26"
+WORKSPACE_VERSION = "0.23.27"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -127,8 +129,10 @@ class LocalApp:
         self.state = state
         self.state.mkdir(parents=True, exist_ok=True)
         from .appearance import Appearance
+        from .layout_preferences import LayoutPreferences
         from .managed_launcher import entry_details
         self.appearance = Appearance(state)
+        self.layout_preferences = LayoutPreferences(state)
         self.launcher_details = entry_details(WORKSPACE_VERSION)
         self.token = secrets.token_urlsafe(32)
         from .ui_health import UiHealthLog
@@ -154,6 +158,8 @@ class LocalApp:
         self._viewed_session = None
         self._viewed_until = 0
         self.attachment_store = AttachmentStore(state)
+        self.chat_spaces = ChatSpaces(state)
+        self._chat_io = {}
         self.drafts = DraftStore(state)
         self.file_diffs = FileDiffStore(state / 'file-changes')
         self.progress_logs = ProgressStore(state / 'progress')
@@ -202,6 +208,7 @@ class LocalApp:
             handoff_status=lambda: self.upgrade.status(),
             source=load_source(Path(__file__).resolve().parents[1]))
         self.update_warning = None
+        self.retry_chat_cleanup()
 
     def _install_app_update(self, version, package_bytes, sha256, *, cancel=None, launcher_bytes=None):
         from .update_install import stage_and_launch
@@ -280,6 +287,8 @@ class LocalApp:
             if sid in self.sessions:
                 raise ValueError('같은 세션의 업무 기록이 이미 존재합니다. 기존 업무를 확인해 주세요.')
             item = {key: record[key] for key in ('id', 'sessionId', 'title', 'workspace', 'created', 'updated', 'messages')}
+            if Path(item['workspace']).absolute().is_relative_to(self.chat_spaces.root):
+                raise ValueError('앱이 관리하는 일반 대화는 일반 대화 목록에서 이어 주세요. 업무로 가져오지 않습니다.')
             item['title'] = self.unique_title(item['title'][:100])
             workspace_folder(item)
             item.update(pinned=False, trusted=False, state='idle', seq=0, events=[], requests={},
@@ -303,7 +312,7 @@ class LocalApp:
         self.history = HistoryStore(self.state)
         self._history_access = {}
         for item in self.history.load(lazy=True):
-            item.update(bridge=None, requests={}, events=[], seq=0, trusted=False, state='idle')
+            item.update(bridge=None, requests={}, events=[], seq=0, trusted=item.get('kind') == 'chat', state='idle')
             self.sessions[item['id']] = item
         self.session_order = SessionOrder(self.state)
         self.session_visibility = SessionVisibility(self.state)
@@ -328,6 +337,8 @@ class LocalApp:
             if sid not in self.sessions:
                 raise ValueError("대화를 찾을 수 없습니다.")
             item = self.sessions[sid]
+            if not _internal and (item.get('_deleting') or sid in self.chat_spaces.pending):
+                raise ValueError('삭제 중인 대화입니다. 전용 파일 정리가 끝날 때까지 기다려 주세요.')
             if not _internal and item.get('_removingFromList'):
                 raise ValueError('업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.')
             if not _internal and self.session_visibility.contains(sid):
@@ -355,6 +366,114 @@ class LocalApp:
     def public(self, item):
         with self.lock:
             return self._public(item)
+
+    def require_work(self, sid):
+        item = self.get(sid)
+        if item.get('kind', 'work') != 'work':
+            raise ValueError('이 기능은 업무 모드에서 사용할 수 있어요. 일반 대화의 실행 범위는 변경되지 않습니다.')
+        return item
+
+    def chat_runtime_options(self, item):
+        if item.get('kind', 'work') != 'chat':
+            return {}
+        if item.get('runtimeProfile') != CHAT_PROFILE:
+            raise ValueError('일반 대화 실행 범위를 확인하지 못했습니다.')
+        self.chat_spaces.validate(item['id'], item['workspace'])
+        return {'runtime_profile': CHAT_PROFILE}
+
+    @contextmanager
+    def chat_io(self, sid):
+        """Deletion closes admission and waits for only this chat's file I/O."""
+        event = threading.Event()
+        with self.lock:
+            item = self.get(sid)
+            tracked = item.get('kind') == 'chat'
+            if tracked:
+                self._chat_io.setdefault(sid, set()).add(event)
+        try:
+            yield item
+        finally:
+            if tracked:
+                with self.lock:
+                    self._chat_io.get(sid, set()).discard(event)
+                    if not self._chat_io.get(sid):
+                        self._chat_io.pop(sid, None)
+                    event.set()
+
+    def _cleanup_chat(self, sid):
+        # All paths derive from validated IDs and owned stores, not request paths.
+        self.attachment_store.delete_session(sid)
+        self.drafts.delete_session(sid)
+        self.desktop.delete_session(sid)
+        with self.progress_logs.lock:
+            for suffix in ('.sqlite3', '.sqlite3-wal', '.sqlite3-shm', '.sqlite3-journal'):
+                safe(self.state / 'progress' / (sid + suffix)).unlink(missing_ok=True)
+            self.progress_logs.failures.discard(sid)
+        safe(self.state / 'history-sessions' / (sid + '.json')).unlink(missing_ok=True)
+        self.chat_spaces.remove_space(sid)
+        self.chat_spaces.finish_delete(sid)
+
+    def retry_chat_cleanup(self):
+        if self.chat_spaces.warning or self.history.warning:
+            return
+        # A startup retry has no watcher/poll and never hydrates unrelated bodies.
+        deadline = time.monotonic() + .5
+        for sid in list(self.chat_spaces.pending)[:20]:
+            if time.monotonic() > deadline:
+                break
+            try:
+                with self.lock:
+                    self.sessions.pop(sid, None)
+                    self.save(sid)
+                self._cleanup_chat(sid)
+            except (OSError, ValueError):
+                continue
+
+    def delete_chat(self, sid, confirmed=False):
+        if confirmed is not True:
+            raise ValueError('대화와 첨부 사본 삭제 안내를 확인해 주세요.')
+        with self.lock:
+            if sid in self.chat_spaces.pending:
+                item = None
+            else:
+                item = self.get(sid)
+                if item.get('kind') != 'chat':
+                    raise ValueError('업무는 목록에서만 제거할 수 있습니다. 원본 폴더를 삭제하지 않습니다.')
+                if self.history.warning or self.chat_spaces.warning:
+                    raise ValueError(self.history.warning or self.chat_spaces.warning)
+                self.chat_spaces.validate(sid, item['workspace'])
+                if any(item.get(key) for key in ('_connecting', '_restarting', '_modelUpdating', '_permissionUpdating', '_idleReleasing', '_capacityReservation')):
+                    raise ValueError('연결 변경이 끝난 뒤 대화를 삭제해 주세요.')
+                item['_deleting'] = True
+            inflight = list(self._chat_io.get(sid, ()))
+        try:
+            deadline = time.monotonic() + 10
+            for event in inflight:
+                if not event.wait(max(0, deadline - time.monotonic())):
+                    raise ValueError('첨부 파일 처리를 마무리 중이에요. 잠시 후 삭제를 다시 시도해 주세요.')
+            if item is not None:
+                bridge = item.get('bridge')
+                if bridge and (bridge.close() is not True or getattr(bridge, 'cleanup_complete', False) is not True):
+                    raise ValueError('현재 대화의 연결 종료를 확인하지 못해 삭제를 보류했어요. 다시 시도해 주세요.')
+                with self.lock:
+                    self.chat_spaces.begin_delete(sid, item['workspace'])
+                    self.sessions.pop(sid, None)
+                    self._history_access.pop(sid, None)
+                    if self._viewed_session == sid:
+                        self._viewed_session = None
+                    if self._navigation and self._navigation.get('sessionId') == sid:
+                        self._navigation = None
+                    self.save(sid)
+            try:
+                self._cleanup_chat(sid)
+                return {'ok': True, 'deletedId': sid, 'cleanupPending': False}
+            except (OSError, ValueError):
+                return {'ok': True, 'deletedId': sid, 'cleanupPending': True,
+                        'message': '대화는 삭제했으며 일부 파일 정리는 보류 중이에요. 다음 앱 실행 때 다시 정리합니다. 원본 파일은 유지됩니다.'}
+        finally:
+            if item is not None:
+                with self.lock:
+                    item.pop('_deleting', None)
 
     @staticmethod
     def stop_state(item):
@@ -384,6 +503,8 @@ class LocalApp:
     def _public(self, item):
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification", "branch") } | {
+            'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
+            'attachmentReads': item.get('attachmentReads', []),
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
             "executions": list(item.get("executions", [])),
@@ -435,12 +556,15 @@ class LocalApp:
                     "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
+                                 {'kind': item.get('kind', 'work')} |
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', [])),
                                   "historyDetailsPending": bool(item.get('_historyMetadataPending'))} for item in sessions],
                     "sessionOrder": order,
                     "sessionGroups": self.session_groups.snapshot(),
                     "attachmentPolicy": attachment_policy(),
+                    "chatAttachmentPolicy": chat_attachment_policy(),
+                    "chatCleanup": self.chat_spaces.snapshot(),
                     "managedWorkspaceRoot": str(self.managed_workspace_root) if self.managed_workspace_root is not None else None,
                     "defaultWorkspace": str(self.default_workspace) if self.default_workspace is not None else '',
                     "workspaceLocationError": self.workspace_location_error,
@@ -449,6 +573,7 @@ class LocalApp:
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
                     "appearance": self.appearance.snapshot(),
+                    "layout": self.layout_preferences.snapshot(),
                     "launcher": self.launcher_details,
                     "executionMode": self.execution_mode,
                     "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
@@ -480,7 +605,8 @@ class LocalApp:
 
     def window_state(self):
         available = self.tray is not None and self.tray.available is True
-        return {'traySupported': available, 'hideSupported': available and self.notifier.native_state['supported'],
+        return {**self.ui_health.startup_snapshot(),
+                'traySupported': available, 'hideSupported': available and self.notifier.native_state['supported'],
                 'reopenSupported': self._open_window_callback is not None,
                 'mode': 'desktop' if self._desktop_window is not None else 'headless',
                 'engine': 'WebView2' if self._desktop_window is not None else None,
@@ -507,6 +633,7 @@ class LocalApp:
             for item in pending['items']:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
+                    'sessions': [{'id': row['id'], 'kind': row.get('kind', 'work'), 'state': row['state']} for row in visible],
                     'pendingHistoryCount': sum(bool(item.get('_historyMetadataPending')) for item in visible),
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
@@ -639,7 +766,30 @@ class LocalApp:
                 return candidate
         raise ValueError('업무 이름을 구분할 수 없습니다. 다른 이름을 입력해 주세요.')
 
-    def create(self, workspace, trusted, *, managed=False, title=None, managed_root=None):
+    def create(self, workspace='', trusted=False, *, managed=False, title=None, managed_root=None, kind='work'):
+        if kind not in {'work', 'chat'}:
+            raise ValueError('일반 대화 또는 업무를 선택해 주세요.')
+        if kind == 'chat':
+            if workspace or managed_root is not None or managed:
+                raise ValueError('일반 대화의 저장 공간은 앱이 관리합니다. 작업 폴더를 지정하지 마세요.')
+            with self.lock:
+                self._check_session_capacity()
+                sid = str(uuid.uuid4())
+                root = self.chat_spaces.create(sid)
+                now = time.time()
+                item = {'id': sid, 'kind': 'chat', 'runtimeProfile': CHAT_PROFILE,
+                        'workspace': str(root), 'title': self.unique_title(self.clean_title(title) if title else '새 대화'),
+                        'created': now, 'updated': now, 'pinned': False, 'messages': [], 'state': 'idle',
+                        'seq': 0, 'events': [], 'requests': {}, 'sessionId': None, 'bridge': None,
+                        'trusted': True, 'attachments': [], 'artifacts': [], 'lastRunId': None, 'modelOverride': None}
+                self.sessions[sid] = item
+                try:
+                    self.save(sid)
+                except (OSError, ValueError):
+                    self.sessions.pop(sid, None)
+                    self.chat_spaces.begin_delete(sid, str(root))
+                    raise
+                return self.public(item)
         if trusted is not True:
             raise ValueError("이 폴더의 Claude 설정·후크·MCP 실행에 동의해 주세요.")
         if type(managed) is not bool:
@@ -669,6 +819,8 @@ class LocalApp:
                         folder(self.default_workspace)
                         base.mkdir(exist_ok=True)
                 base = workspace_path(base.resolve(strict=True))
+                if base.is_relative_to(self.chat_spaces.root):
+                    raise ValueError('일반 대화 전용 공간은 업무 폴더로 사용할 수 없습니다.')
                 root = workspace_path(base / (time.strftime('%Y-%m-%d') + '-' + sid[:8]))
                 if root.parent != base:
                     raise ValueError('새 업무 폴더 위치를 확인하지 못했습니다.')
@@ -676,8 +828,10 @@ class LocalApp:
                 root = root.resolve(strict=True)
             else:
                 root = folder(workspace)
+                if root.is_relative_to(self.chat_spaces.root):
+                    raise ValueError('일반 대화 전용 공간은 업무 폴더로 사용할 수 없습니다.')
             now = time.time()
-            item = {"id": sid, "workspace": str(root), "title": title, "created": now, "updated": now, "pinned": False,
+            item = {"id": sid, "kind": "work", "runtimeProfile": "work", "workspace": str(root), "title": title, "created": now, "updated": now, "pinned": False,
                     "messages": [], "state": "idle", "seq": 0, "events": [], "requests": {},
                     "sessionId": None, "bridge": None, "trusted": True, "attachments": [], "artifacts": [], "lastRunId": None,
                     "modelOverride": None}
@@ -725,7 +879,7 @@ class LocalApp:
         with self.lock:
             if self.history.warning or self.session_visibility.warning:
                 raise ValueError(self.history.warning or self.session_visibility.warning)
-            visible_ids = {item['id'] for item in self.visible_sessions() if not item.get('_removingFromList')}
+            visible_ids = {item['id'] for item in self.visible_sessions() if not item.get('_removingFromList') and item.get('kind', 'work') == 'work'}
             snapshot = self.session_groups.change(data, visible_ids)
             result = {'ok': True, 'sessionGroups': snapshot}
             if data.get('action') == 'create':
@@ -733,7 +887,7 @@ class LocalApp:
             return result
 
     def visible_sessions(self):
-        return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id'])]
+        return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id']) and item['id'] not in self.chat_spaces.pending and not item.get('_deleting')]
 
     def _check_session_capacity(self, *, restoring=False):
         """The 500-task limit applies to the working list, not preserved history."""
@@ -784,6 +938,8 @@ class LocalApp:
         if confirmed is not True:
             raise ValueError('업무 목록 삭제 안내를 확인해 주세요.')
         with self.lock:
+            if self.sessions.get(sid, {}).get('kind') == 'chat':
+                raise ValueError('일반 대화는 전용 공간과 함께 삭제해야 합니다.')
             if self.session_visibility.contains(sid):
                 return {'ok': True, 'hiddenId': sid, 'historyPreserved': True}
             item = self.get(sid)
@@ -881,7 +1037,7 @@ class LocalApp:
                 raise ValueError(self.history.warning)
             if not preview:
                 self._check_session_capacity()
-            parent = self.get(sid)
+            parent = self.require_work(sid)
             workspace_folder(parent)
             root = runtime_context(self.command)['configRoot']
             item = prepare_fork(parent, self.info, root)
@@ -1028,10 +1184,11 @@ class LocalApp:
             item = self.get(sid)
             self._check_stopping(item)
             if item['state'] in {'starting', 'running', 'question', 'approval'} or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting') or item.get('_dispatchClaim'):
-                raise ValueError('현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
+                raise ValueError('현재 답변을 마치거나 중지한 뒤 모델을 변경해 주세요.' if item.get('kind') == 'chat'
+                                 else '현재 업무를 마치거나 중지한 뒤 모델을 변경해 주세요.')
             bridge = item.get('bridge')
             if self.demo or not bridge or bridge.closed or not getattr(bridge, 'ready', threading.Event()).is_set():
-                raise ValueError('업무를 한 번 실행해 연결한 뒤, 다음 요청부터 사용할 모델을 선택해 주세요.')
+                raise ValueError('Claude 연결을 준비한 뒤 모델을 선택해 주세요. 메시지를 먼저 보낼 필요는 없습니다.')
             item['_modelUpdating'] = True
             self._apply_control_baselines(item, bridge)
         try:
@@ -1079,6 +1236,7 @@ class LocalApp:
                 self.dispatch.request_retention()
 
     def set_permission_mode(self, sid, mode, *, bypass_confirmed=False):
+        self.require_work(sid)
         if mode is not None and (not isinstance(mode, str) or not mode or len(mode) > 40):
             raise ValueError('승인 모드를 확인해 주세요.')
         if mode == 'bypassPermissions' and bypass_confirmed is not True:
@@ -1161,11 +1319,12 @@ class LocalApp:
         return occupied < MAX_CONNECTIONS
 
     @with_connection_slot
-    def connect(self, sid, *, _dispatch_claim=None, _restart_claim=None):
+    def connect(self, sid, *, _dispatch_claim=None, _restart_claim=None, _catalog=False):
         """Explicitly prepare one trusted task's CLI; never send a prompt."""
         with self.lock:
             self._require_running()
             item = self.get(sid)
+            runtime_options = self.chat_runtime_options(item)
             if item.get('_restarting') != _restart_claim:
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 잠시 후 다시 시도해 주세요.')
             if item.get('_dispatchClaim') != _dispatch_claim:
@@ -1194,7 +1353,10 @@ class LocalApp:
                     resume_options['require_resume_identity'] = True
                 bridge = ClaudeSession(self.command, self.info, root,
                     lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
+                    **runtime_options,
                     **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
+                bridge._workspace_catalog_only = bool(_catalog and not item.get('sessionId')
+                    and not item.get('messages') and not item.get('lastRunId'))
                 item['bridge'] = bridge
                 item['modelOverride'] = None
                 item['permissionModeOverride'] = None
@@ -1203,6 +1365,11 @@ class LocalApp:
                 item['_needsControlRestore'] = bool(remembered)
                 item['_pendingControlRestore'] = set(remembered)
                 item['_controlRestoreIssues'] = {}
+            # A catalog-only handshake has no durable conversation to resume.
+            # Mark only a child this call created; browsing a live user connection
+            # must never make that connection newly eligible for idle retirement.
+            if not _catalog:
+                bridge._workspace_catalog_only = False
             item['_connecting'] = True
         try:
             # Reader events need the app lock. Never hold it while waiting for
@@ -1329,6 +1496,12 @@ class LocalApp:
                 return
             choices = {**item.get('_idleRestoreControls', {}), **item.get('_sessionControls', {})}
             pending = item.setdefault('_pendingControlRestore', set(choices))
+            if item.get('kind') == 'chat':
+                choices.pop('permissionMode', None)
+                pending.discard('permissionMode')
+                item.get('_controlRestoreIssues', {}).pop('permissionMode', None)
+                for key in ('_idleRestoreControls', '_sessionControls'):
+                    item.get(key, {}).pop('permissionMode', None)
         actionable = {'model_invalid', 'model_rejected', 'model_unavailable',
                       'effort_invalid', 'effort_rejected', 'effort_reset_unavailable', 'effort_unavailable',
                       'permission_mode_invalid', 'permission_mode_rejected', 'permission_mode_unavailable',
@@ -1366,7 +1539,7 @@ class LocalApp:
         # connection for the same task.
         with self.lock:
             item = self.sessions.get(sid)
-            if item is None or item.get('bridge') is not bridge or item.get('_idleReleasing'):
+            if self._shutdown_state == 'closed' or item is None or item.get('_deleting') or sid in self.chat_spaces.pending or item.get('bridge') is not bridge or item.get('_idleReleasing'):
                 return
             if (kind == 'status' and data.get('state') == 'stopped' and data.get('runId')
                     and data['runId'] != item.get('lastRunId')):
@@ -1406,7 +1579,8 @@ class LocalApp:
 
     def emit(self, sid, kind, data):
         with self.lock:
-            if self.session_visibility.contains(sid):
+            if (self._shutdown_state == 'closed' or sid not in self.sessions or self.sessions[sid].get('_deleting')
+                    or sid in self.chat_spaces.pending or self.session_visibility.contains(sid)):
                 return
             item = self.get(sid, _internal=True)
             if kind == 'run_activity':
@@ -1647,6 +1821,31 @@ class LocalApp:
 
     @with_connection_slot
     def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None, _dispatch_claim=None):
+        with self.chat_io(sid) as item:
+            chat = item.get('kind') == 'chat'
+            with self.lock:
+                if chat and item.get('_chatPreparing'):
+                    raise ValueError('첨부 내용을 준비하고 있어요. 잠시 후 다시 보내 주세요.')
+                if chat:
+                    item['_chatPreparing'] = True
+            try:
+                return self._send(sid, text, attachments, trusted, _choice_claim=_choice_claim, _dispatch_claim=_dispatch_claim)
+            finally:
+                if chat:
+                    with self.lock:
+                        item.pop('_chatPreparing', None)
+
+    def validate_session_attachments(self, item, attachments):
+        paths = self.validate_attachments(attachments)
+        if item.get('kind') == 'chat':
+            return self.attachment_store.owned_paths(item['id'], paths)
+        for path in paths:
+            owner = self.attachment_store.owner(path)
+            if owner and (owner in self.chat_spaces.pending or self.sessions.get(owner, {}).get('kind') == 'chat'):
+                raise ValueError('일반 대화의 첨부 사본은 공유하지 않습니다. 원본 파일을 이 업무에 다시 첨부해 주세요.')
+        return paths
+
+    def _send(self, sid, text, attachments, trusted=False, *, _choice_claim=None, _dispatch_claim=None):
         if not isinstance(text, str) or not text.strip() or len(text) > 32000:
             raise ValueError("요청은 1~32,000자로 입력해 주세요.")
         if not isinstance(attachments, list) or len(attachments) > 12:
@@ -1654,6 +1853,8 @@ class LocalApp:
         with self.lock:
             self._require_running()
             current = self.get(sid)
+            runtime_options = self.chat_runtime_options(current)
+            chat = current.get('kind') == 'chat'
             if current.get('_restarting'):
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 요청을 보내 주세요.')
             if current.get('_dispatchClaim') != _dispatch_claim:
@@ -1671,7 +1872,7 @@ class LocalApp:
                     or current.get('_modelUpdating') or current.get('_permissionUpdating') or current.get('_connecting')
                     or getattr(old_bridge, '_control_active', False)):
                 raise ValueError('현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.')
-            paths = self.validate_attachments(attachments)
+            paths = self.validate_session_attachments(current, attachments)
             if self.error:
                 raise ValueError(self.error)
             if not self.demo:
@@ -1689,6 +1890,11 @@ class LocalApp:
             self.attachment_store.mark_used(paths)
             restore = (not self.demo and bool(current.get('_sessionControls') or current.get('_idleRestoreControls') or current.get('_idleReleased'))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
+        chat_content, notices = (None, [])
+        if chat:
+            chat_content, notices = prepare_chat_content(text.strip(), paths, self.chat_spaces.path(sid) / 'cache')
+            if paths and not any(row.get('status') in {'read', 'partial'} for row in notices):
+                raise ValueError('첨부파일을 읽지 못했어요. ' + ' '.join(row['message'] for row in notices))
         if restore:
             self.connect(sid, _dispatch_claim=_dispatch_claim)
         with self.lock:
@@ -1713,7 +1919,7 @@ class LocalApp:
             if restore and item.get('branch', {}).get('status') == 'pending':
                 self._resume_options(item)  # Recheck even after control-only preparation.
             if restore:
-                paths = self.validate_attachments(attachments)
+                paths = self.validate_session_attachments(item, attachments)
             if self.error:
                 raise ValueError(self.error)
             if not self.demo:
@@ -1726,6 +1932,7 @@ class LocalApp:
                     resume_options = self._resume_options(item)
                     bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
                                            lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
+                                           **runtime_options,
                                            **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
                     item["bridge"] = bridge
                     item['modelOverride'] = None
@@ -1736,9 +1943,12 @@ class LocalApp:
             item.pop('verification', None)
             item["trusted"] = True
             item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
-            if not item['messages'] and re.fullmatch(r'새 업무(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
+            if not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
                 item["title"] = self.unique_title(text.strip().splitlines()[0][:35], sid)
             item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
+            if chat:
+                item['messages'][-1]['attachmentReads'] = notices
+                item['attachmentReads'] = notices
             if _dispatch_claim is not None:
                 item['messages'][-1]['requestId'] = _dispatch_claim
             item["state"] = "starting"
@@ -1746,19 +1956,27 @@ class LocalApp:
             item['lastRunId'] = uuid.uuid4().hex
             item.pop('runActivity', None)
             item['messages'][-1]['runId'] = item['lastRunId']
-            item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
-            self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
-            item['artifactObservation'] = item['_artifactSnapshot'].public()
+            if not chat:
+                item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
+                self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
+                item['artifactObservation'] = item['_artifactSnapshot'].public()
             self.save(sid)
             if _dispatch_claim is not None:
                 self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
             # No copied files, skill hardcode, auxiliary inference or rewritten user intent.
             prompt = text.strip()
-            if paths:
+            if chat:
+                prompt = chat_content
+            elif paths:
                 prompt += "\n\n사용자가 선택한 원본 파일 경로(JSON):\n" + json.dumps(paths, ensure_ascii=False)
             if self.demo:
-                from .demo import run
-                threading.Thread(target=run, args=(self, sid, text), daemon=True).start()
+                if chat:
+                    self.emit(sid, 'connected', {'model': '화면 체험 · AI 미호출', 'skills': [], 'tools': [], 'mcp': []})
+                    self.emit(sid, 'assistant', {'text': '일반 대화 화면 체험입니다. 첨부 사본의 형식과 읽기 범위를 확인했으며 실제 AI에는 전달하지 않았어요.'})
+                    self.emit(sid, 'result', {})
+                else:
+                    from .demo import run
+                    threading.Thread(target=run, args=(self, sid, text), daemon=True).start()
             else:
                 try:
                     bridge._tool_activity_run_id = item['lastRunId']
@@ -1825,6 +2043,9 @@ class LocalApp:
         if not candidate.is_absolute() or '..' in candidate.parts:
             raise ValueError('파일의 전체 경로를 확인해 주세요.')
         path = workspace_path(candidate).resolve(strict=True)
+        if item.get('kind') == 'chat':
+            self.chat_runtime_options(item)
+            self.attachment_store.owned_paths(sid, [str(path)])
         root = workspace_folder(item)
         if not path.is_file() or path.suffix.lower() not in SAFE_FILES:
             raise ValueError("미리보기를 지원하지 않는 파일입니다.")
@@ -1833,7 +2054,10 @@ class LocalApp:
         return path
 
     def files(self, sid):
-        root = workspace_folder(self.get(sid))
+        item = self.get(sid)
+        if item.get('kind') == 'chat':
+            return []
+        root = workspace_folder(item)
         observed = snapshot(root, max_files=100)
         return [{"name": str(Path(value).relative_to(root)), "path": value, "size": signature[1]}
                 for value, signature in observed.files.items()]
@@ -1931,10 +2155,14 @@ class LocalApp:
                 self.notifier.close()
                 if hasattr(self, 'desktop'):
                     self.desktop.close()
-            with self._lifecycle:
-                self._shutdown_issues = issues
-                self._shutdown_state = 'closed' if not issues else 'failed'
-                self._lifecycle.notify_all()
+            # Drain event writers before acknowledging a complete shutdown. A
+            # stopped reader/interrupt worker can still deliver its last callback
+            # after its owned process has exited; emit ignores those once closed.
+            with self.lock:
+                with self._lifecycle:
+                    self._shutdown_issues = issues
+                    self._shutdown_state = 'closed' if not issues else 'failed'
+                    self._lifecycle.notify_all()
             return not issues
 
 
@@ -2052,6 +2280,7 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == '/api/schedules':
                 return self.reply(app.dispatch.overview())
             if route.path == '/api/dispatch':
+                app.require_work(sid)
                 return self.reply(app.dispatch.snapshot(sid))
             if route.path == "/api/events":
                 after = int(query.get("after", ["0"])[0])
@@ -2073,12 +2302,15 @@ class Handler(BaseHTTPRequestHandler):
                         before=query.get('before', [None])[0], limit=query.get('limit', ['50'])[0],
                         run_id=query.get('runId', [None])[0]))
             if route.path == '/api/customizations':
+                app.require_work(sid)
                 if app.demo or not app.command:
                     raise ValueError('실제 Claude 업무에서 스킬·플러그인 설정을 확인할 수 있어요.')
                 with app.lock:
                     item = dict(app.get(sid))
                 return self.reply(app.customizations.snapshot(str(workspace_folder(item)), query.get('scope', ['local'])[0]))
             if route.path == "/api/capabilities":
+                if sid:
+                    app.require_work(sid)
                 with app.lock:
                     selected = app.public(app.get(sid)) if sid else None
                 # Older clients retain the task-bound view. The explicit scope
@@ -2140,6 +2372,10 @@ class Handler(BaseHTTPRequestHandler):
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
                       "/input-keys.js": ("input-keys.js", "text/javascript; charset=utf-8"),
+                      "/focus-navigation.js": ("focus-navigation.js", "text/javascript; charset=utf-8"),
+                      "/html-preview.js": ("html-preview.js", "text/javascript; charset=utf-8"),
+                      "/zoom-feedback.js": ("zoom-feedback.js", "text/javascript; charset=utf-8"),
+                      "/zoom-feedback.css": ("zoom-feedback.css", "text/css; charset=utf-8"),
                       "/chat-shortcuts.js": ("chat-shortcuts.js", "text/javascript; charset=utf-8"),
                       "/chat-shortcuts.css": ("chat-shortcuts.css", "text/css; charset=utf-8"),
                       "/attention.js": ("attention.js", "text/javascript; charset=utf-8"),
@@ -2313,9 +2549,11 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(self.headers.get('X-File-Name', ''), errors='strict')
             app = self.server.app
             with app.operation(upgrade_change=True):
-                with app.lock:
-                    app.get(sid)
-                return self.reply(app.attachment_store.save(sid, name, source, size))
+                with app.chat_io(sid) as item:
+                    if item.get('kind') == 'chat':
+                        app.chat_runtime_options(item)
+                        validate_chat_file(name, size)
+                    return self.reply(app.attachment_store.save(sid, name, source, size))
         except (ValueError, OSError, KeyError, TypeError) as exc:
             # Authenticated, size-bounded callers can lose the JSON error on
             # Windows when the socket closes with unread upload bytes. Preflight
@@ -2339,6 +2577,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.change_session_groups(data))
         if route == '/api/drafts':
             with app.lock:
+                for key in ('id', 'selectedId'):
+                    value = data.get(key)
+                    if value not in ('home', 'home:chat', 'home:work'):
+                        app.get(value)
+                item = app.sessions.get(data.get('id'), {})
+                for name in ('draft', 'stash'):
+                    entry = data.get(name)
+                    paths = entry.get('attachments', []) if isinstance(entry, dict) else []
+                    for path in paths if isinstance(paths, list) else []:
+                        owner = app.attachment_store.owner(path)
+                        if owner and (owner in app.chat_spaces.pending or app.sessions.get(owner, {}).get('kind') == 'chat') and owner != item.get('id'):
+                            raise ValueError('다른 일반 대화의 첨부 사본을 사용할 수 없어요.')
                 return self.reply(app.drafts.update(data))
         if route == '/api/attachments/cleanup':
             if data:
@@ -2353,12 +2603,16 @@ class Handler(BaseHTTPRequestHandler):
             if set(data) != {'id', 'name', 'size'}:
                 raise ValueError('첨부할 파일의 이름과 크기를 확인해 주세요.')
             with app.lock:
-                app.get(sid)
+                item = app.get(sid)
+                if item.get('kind') == 'chat':
+                    validate_chat_file(data['name'], data['size'])
             return self.reply(app.attachment_store.prepare(data['name'], data['size']))
         if route == '/api/appearance':
             if set(data) != {'theme'}:
                 raise ValueError('화면 모드를 다시 선택해 주세요.')
             return self.reply(app.configure_appearance(data['theme']))
+        if route == '/api/layout':
+            return self.reply(app.layout_preferences.configure(data))
         if route == '/api/launcher/prepare':
             if data:
                 raise ValueError('실행기 준비 요청을 확인해 주세요.')
@@ -2392,7 +2646,11 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/api/session/branch':
             return self.reply(app.fork_session(sid))
         if route == "/api/create":
-            return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot')))
+            return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot'), kind=data.get('kind', 'work')))
+        if route == '/api/session/delete':
+            if set(data) != {'id', 'confirmed'}:
+                raise ValueError('삭제할 대화를 확인해 주세요.')
+            return self.reply(app.delete_chat(sid, data['confirmed']))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
         if route == '/api/session/hide':
@@ -2406,7 +2664,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('재시작 요청 형식을 확인해 주세요.')
             return self.reply(app.restart_connection(sid, stop_running=data.get('stopRunning', False), _offer_replacement=True, _replacement_token=data.get('replacementToken')))
         if route == '/api/connect':
-            return self.reply(app.connect(sid, _offer_replacement=data.get('automatic') is not True, _replacement_token=data.get('replacementToken')))
+            if type(data.get('catalog', False)) is not bool:
+                raise ValueError('목록 연결 요청을 확인해 주세요.')
+            return self.reply(app.connect(sid, _catalog=data.get('catalog', False),
+                _offer_replacement=data.get('automatic') is not True, _replacement_token=data.get('replacementToken')))
         if route == '/api/control-restore':
             return self.reply(app.accept_current_control(sid, data.get('control'), data.get('action')))
         if route == '/api/window/hide':
@@ -2416,6 +2677,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('앱 창 연결을 준비하지 못했습니다.')
             return self.reply(app._open_window_callback())
         if route == '/api/dispatch':
+            app.require_work(sid)
             return self.reply(app.dispatch.action(sid, data))
         if route == '/api/claude-sessions/import':
             return self.reply(app.import_session(data.get('sessionId')))
@@ -2446,6 +2708,8 @@ class Handler(BaseHTTPRequestHandler):
             # native window identity. bind() examines the current OS window.
             return self.reply({'ok': True, 'native': app.notifier.bind()})
         if route == '/api/completions':
+            if sid:
+                app.require_work(sid)
             from .completions import complete
             if not sid:
                 if data.get('kind') not in {'slash', 'command'}:
@@ -2463,6 +2727,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = workspace_commands(result, data.get('query', ''))
             return self.reply(result)
         if route == '/api/customizations':
+            app.require_work(sid)
             if set(data) - {'id', 'scope', 'kind', 'name', 'value', 'revision'}:
                 raise ValueError('설정 변경 요청을 확인해 주세요.')
             with app.lock:
@@ -2486,6 +2751,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/pick":
             return self.reply(app.pick(data.get("kind"), data.get('initialDirectory')))
         if route == '/api/trust':
+            app.require_work(sid)
             if data.get('trusted') is not True:
                 raise ValueError('작업 폴더 확인이 필요합니다.')
             workspace_folder(app.get(sid))
@@ -2513,7 +2779,7 @@ class Handler(BaseHTTPRequestHandler):
                 app.get(sid)['observation']['fileOpened'] = True
             return self.reply(result)
         elif route == "/api/native":
-            item = app.get(sid)
+            item = app.require_work(sid)
             app._check_import_context(item)
             if item.get("bridge") and getattr(item['bridge'], 'cleanup_complete', False) is not True:
                 raise ValueError("같은 대화의 동시 실행을 막기 위해 먼저 연결을 중지해 주세요.")

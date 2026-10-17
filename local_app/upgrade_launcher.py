@@ -35,6 +35,10 @@ class HandoffError(ValueError):
     pass
 
 
+class LauncherExplainedError(HandoffError):
+    """The startup helper already displayed its specific failure dialog."""
+
+
 class LauncherCleanupPending(HandoffError):
     """Keep exact ownership and the coordinator lock after failed cleanup."""
     def __init__(self, process):
@@ -246,7 +250,8 @@ def wait_shutdown(client, runtime_path, *, sleep=time.sleep, clock=time.monotoni
 
 
 def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_confirm,
-             no_browser=False, execution_mode=None, on_wait=lambda: None, sleep=time.sleep, clock=time.monotonic, timeout=7200):
+             no_browser=False, execution_mode=None, on_wait=lambda: None, on_phase=lambda phase: None,
+             sleep=time.sleep, clock=time.monotonic, timeout=7200):
     health, needs_upgrade = checked_health(client, demo=demo, target_version=target_version, execution_mode=execution_mode)
     if not needs_upgrade:
         if not no_browser:
@@ -269,12 +274,20 @@ def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_c
                 raise HandoffError('전환 요청의 소유자를 확인하지 못했습니다.')
             stage = snapshot.get('stage')
             if stage == 'captured':
+                try:
+                    on_phase('preparing')
+                except (OSError, RuntimeError):
+                    # Failed UI preparation is still before shutdown. Release
+                    # the captured frontend using this exact owned request.
+                    client.request('/api/upgrade', {'action': 'cancel', **request})
+                    raise
                 code, reply = client.request('/api/upgrade', {'action': 'commit', **request}, timeout=60)
                 if code in (200, 202) and reply.get('closed') is True:
                     break
                 # Only an explicit pre-close busy reply permits another attempt.
                 if code != 409 or (reply.get('upgrade') or {}).get('stage') not in {'waiting', 'capture'}:
                     raise HandoffError('이전 앱의 종료 완료를 확인하지 못했습니다.')
+                on_phase('waiting')
             elif stage not in {'waiting', 'capture'}:
                 return 'cancelled' if stage in {'cancelled', 'expired'} else 'failed'
             sleep(1)
@@ -297,6 +310,7 @@ def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_c
                 health, needed = checked_health(client, demo=demo, target_version=target_version)
                 if not needed or not legacy_idle(client, health):
                     raise HandoffError('전환 확인 중 업무 상태가 바뀌었습니다. 기존 업무를 유지합니다.')
+                on_phase('preparing')
                 code, reply = client.request('/api/quit', {}, timeout=60)
                 if code != 200 or reply.get('closed') is not True:
                     raise HandoffError('이전 앱의 종료 완료를 확인하지 못했습니다.')
@@ -307,9 +321,44 @@ def transfer(client, runtime_path, *, demo, target_version, request_id, legacy_c
             sleep(1)
         else:
             return 'expired'
+    on_phase('restarting')
     if not wait_shutdown(client, runtime_path, sleep=sleep, clock=clock):
         raise HandoffError('이전 앱 창의 정리가 끝나지 않았습니다.')
     return 'closed'
+
+
+def wait_replacement(runtime_path, *, previous_token, demo, target_version, execution_mode,
+                     no_browser=False, client_factory=Client, sleep=time.sleep, clock=time.monotonic, timeout=60):
+    """A launcher exit is not success: authenticate the fresh app and its UI.
+
+    Polling exists only during this bounded handoff. Credentials stay in memory;
+    neither the visible card nor result files contain endpoints or tokens.
+    """
+    deadline = clock() + timeout
+    while clock() < deadline:
+        try:
+            origin, token = endpoint(runtime_path)
+            if token != previous_token:
+                code, value = client_factory(origin, token).request('/api/bootstrap', timeout=3)
+                if (code == 200 and value.get('application') == 'company-workspace'
+                        and value.get('demo') is demo and value.get('workspaceVersion') == target_version
+                        and value.get('executionMode') == execution_mode and not value.get('closing')):
+                    if no_browser:
+                        return True
+                    window = value.get('window') or {}
+                    if isinstance(window, dict) and re.fullmatch(r'[a-f0-9]{32}', str(window.get('launchId', ''))):
+                        if window.get('startupState') == 'ready':
+                            return True
+                        if window.get('startupState') == 'failed':
+                            raise HandoffError('새 버전의 화면을 준비하지 못했습니다. 앱을 다시 열어 주세요.')
+        except HandoffError:
+            raise
+        except (OSError, ValueError, KeyError, URLError):
+            # Runtime is atomically replaced. A transient missing/partial file,
+            # refused socket or early startup response is not ready evidence.
+            pass
+        sleep(.5)
+    raise HandoffError('새 버전의 화면이 준비되었는지 확인하지 못했습니다. 앱을 다시 열어 주세요.')
 
 
 def launch(state, python, *, demo=False, no_browser=False, execution_mode=None, popen=subprocess.Popen):
@@ -318,7 +367,11 @@ def launch(state, python, *, demo=False, no_browser=False, execution_mode=None, 
         raise HandoffError('확인한 Python 경로를 찾지 못했습니다.')
     arguments = [powershell_path(), '-NoLogo', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
                  '-File', str(safe(ROOT / 'deploy/Start-CompanyWorkspace.ps1')),
-                 '-PythonCommand', str(executable), '-StateRoot', str(state)]
+                 '-PythonCommand', str(executable), '-StateRoot', str(state),
+                 '-ExecutionRequestId', uuid.uuid4().hex]
+    # The coordinator owns progress and errors. This existing launcher handoff
+    # marker suppresses its blocking error dialog so it cannot sit behind our
+    # progress card; it does not change the requested Windows execution role.
     if execution_mode is not None:
         from .execution_mode import checked_mode
         arguments.extend(['-ExecutionMode', checked_mode(execution_mode)])
@@ -342,7 +395,9 @@ def launch(state, python, *, demo=False, no_browser=False, execution_mode=None, 
         except (OSError, subprocess.SubprocessError):
             raise LauncherCleanupPending(process) from None
         raise HandoffError('새 앱 실행기 응답 시간이 초과되어 실행기만 정리했습니다.') from None
-    if code not in (0, 20):
+    if code == 20:
+        raise LauncherExplainedError('새 앱 실행기의 안내를 확인해 주세요.')
+    if code != 0:
         raise HandoffError('새 앱 실행기를 완료하지 못했습니다.')
     return process
 
@@ -387,6 +442,10 @@ def main():
         # No endpoint credentials, paths, prompt contents or server error text.
         path = status_path if status in {'accepted', 'already_waiting'} else safe(runtime_state / 'upgrade-last-result.json')
         path.write_text(json.dumps({'requestId': args.request_id, 'status': status}), encoding='utf-8')
+    from .update_progress import UpdateProgress
+    from .appearance import Appearance
+    progress = UpdateProgress(enabled=not args.no_browser,
+                              theme=Appearance(runtime_state).snapshot()['effective'])
     try:
         prune_acknowledgements(runtime_state)
         with update_lock(runtime_state) as held:
@@ -404,16 +463,21 @@ def main():
                                execution_mode=execution_mode,
                                request_id=args.request_id, no_browser=args.no_browser,
                                legacy_confirm=lambda: run_helper('Confirm-WorkspaceLegacyUpgrade'),
-                               on_wait=lambda: run_helper('Show-WorkspaceUpgradeWaiting'))
+                               on_wait=lambda: run_helper('Show-WorkspaceUpgradeWaiting'), on_phase=progress.phase)
             report(outcome)
             if outcome == 'closed':
                 try:
+                    progress.phase('opening')
                     launch(args.state, args.python, demo=args.demo, no_browser=args.no_browser, execution_mode=execution_mode)
+                    wait_replacement(runtime, previous_token=token, demo=args.demo, target_version=WORKSPACE_VERSION,
+                                     execution_mode=execution_mode, no_browser=args.no_browser)
+                    report('restarted')
                 except LauncherCleanupPending as exc:
                     # Stay inside update_lock until this exact launcher exits.
                     # A failed termination must not allow another replacement
                     # PowerShell to be created by each repeated app launch.
                     report('failed')
+                    progress.close()
                     if not args.no_browser:
                         try:
                             run_helper('Show-WorkspaceUpgradeFailure')
@@ -422,16 +486,23 @@ def main():
                     exc.wait_for_exit()
                     return 39
             elif outcome in {'failed', 'expired'} and not args.no_browser:
+                progress.close()
                 run_helper('Show-WorkspaceUpgradeFailure')
             return 0
+    except LauncherExplainedError:
+        report('failed')
+        return 39
     except (ValueError, OSError, KeyError, ImportError, RuntimeError, subprocess.SubprocessError):
         report('failed')
+        progress.close()
         if not args.no_browser:
             try:
                 run_helper('Show-WorkspaceUpgradeFailure')
             except (OSError, subprocess.SubprocessError):
                 pass
         return 39
+    finally:
+        progress.close()
 
 
 if __name__ == '__main__':

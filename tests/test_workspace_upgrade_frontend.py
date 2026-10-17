@@ -82,6 +82,25 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.equal(calls.length,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
         })()""")
 
+    def test_version_upgrade_uses_update_labels_even_when_retaining_execution_mode(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting',sourceVersion:'0.22.0',
+            targetVersion:'0.22.1',executionMode:'normal'},{});
+          assert.match($('upgrade-notice-text').textContent,/새 버전/);
+          assert.doesNotMatch($('upgrade-title').textContent,/일반 권한/);
+          await WorkspaceUpgrade.observe({...captureState,stage:'committing',revision:3,
+            sourceVersion:'0.22.0',targetVersion:'0.22.1',executionMode:'administrator'},{});
+          assert.equal($('upgrade-title').textContent,'새 버전으로 다시 시작합니다');
+        })()""")
+
+    def test_same_version_permission_relaunch_retains_its_distinct_label(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting',sourceVersion:'0.22.1',
+            targetVersion:'0.22.1',executionMode:'administrator'},{});
+          assert.match($('upgrade-notice-text').textContent,/관리자 권한/);
+          assert.match($('upgrade-title').textContent,/관리자 권한/);
+        })()""")
+
     def test_file_dialog_submission_and_inflight_request_finish_before_capture(self):
         self.run_case("(async()=>{" + PRELUDE + """
           attachmentPicking=true;await WorkspaceUpgrade.observe(captureState,{});assert.equal(calls.length,0);

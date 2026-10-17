@@ -20,7 +20,7 @@ MAX_REQUEST = 1024 * 1024
 
 
 def identifier(value):
-    if value == 'home':
+    if value in ('home', 'home:chat', 'home:work'):
         return value
     if not isinstance(value, str) or str(uuid.UUID(value)) != value:
         raise ValueError('초안을 저장할 업무를 확인해 주세요.')
@@ -140,3 +140,12 @@ class DraftStore:
         # Called only by explicit storage management, never a keystroke/heartbeat.
         return {path for row in self.snapshot()['entries'] for kind in ('draft', 'stash')
                 for path in (row.get(kind) or {}).get('attachments', [])}
+
+    def delete_session(self, sid):
+        identifier(sid)
+        with self.lock:
+            if not safe(self.path).exists():
+                return
+            with self._connect() as db:
+                db.execute('DELETE FROM drafts WHERE id=?', (sid,))
+                db.execute("UPDATE metadata SET value='home:chat' WHERE key='selected' AND value=?", (sid,))

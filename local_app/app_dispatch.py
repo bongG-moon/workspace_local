@@ -205,17 +205,26 @@ class DispatchController:
         if kind == 'result':
             self.request_retention()
         if kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped':
-            try:
-                self.queue.observe(sid, kind, data)
-            except (ValueError, OSError):
-                self.error = '대기·예약 기록을 저장하지 못해 자동 실행을 멈췄습니다.'
+            with self.app.lock:
+                # General chat has no follow-ups or schedules. A terminal turn
+                # must not create a durable queue hold for an otherwise absent
+                # queue, while connection retention still runs for both modes.
+                if self.app.sessions.get(sid, {}).get('kind') == 'chat':
+                    return
+                try:
+                    self.queue.observe(sid, kind, data)
+                except (ValueError, OSError):
+                    self.error = '대기·예약 기록을 저장하지 못해 자동 실행을 멈췄습니다.'
 
     def manual_stop(self, sid):
         with self.app.lock:
             self.steering.pop(sid, None)
             # Invalidate a claim before send() can reacquire the session lock.
             # A later ambiguous delivery is retained for review, never replayed.
-            self.app.get(sid).pop('_dispatchClaim', None)
+            item = self.app.get(sid)
+            item.pop('_dispatchClaim', None)
+            if item.get('kind') == 'chat':
+                return
             self.queue.pause(sid, 'stopped')
 
     def pump(self):
@@ -352,7 +361,7 @@ class DispatchController:
             raise ValueError('현재 작업 상태를 확인한 뒤 실행해 주세요.')
         # Validate the saved files before interrupting useful work. The normal
         # send path checks them again at delivery; a later removal cannot replay.
-        self.app.validate_attachments(row['attachments'])
+        self.app.validate_session_attachments(item, row['attachments'])
         self.queue.apply_now(sid, identifier, revision, client_id, commit=True)
         if running:
             self._interrupt_for_followup(sid, item, before, identifier)
@@ -363,7 +372,7 @@ class DispatchController:
 
     def action(self, sid, data):
         with self.app.lock:
-            item = self.app.get(sid)
+            item = self.app.require_work(sid)
             if item.get('_restarting'):
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 대기·예약 내용을 변경해 주세요.')
             action, identifier = data.get('action'), data.get('requestId')
@@ -375,7 +384,7 @@ class DispatchController:
             if sid in self.steering:
                 raise ValueError('선택한 대기 요청으로 전환하고 있습니다. 잠시 기다려 주세요.')
             if action in {'enqueue', 'steer', 'update', 'schedule', 'schedule_update'}:
-                paths = self.app.validate_attachments(data.get('attachments', []))
+                paths = self.app.validate_session_attachments(item, data.get('attachments', []))
                 text, context = data.get('text'), self.context(item)
             if action in {'enqueue', 'steer'}:
                 if action == 'steer' and self.app.demo:

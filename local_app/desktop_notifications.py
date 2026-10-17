@@ -211,6 +211,23 @@ class DesktopNotifications:
             if changed:
                 self._save()
 
+    def delete_session(self, session_id):
+        """Remove the deleted chat's summaries and pending desktop notices."""
+        with self._lock:
+            if self.warning:
+                raise ValueError('알림 기록 정리를 보류했어요. 다음 실행 때 다시 확인합니다.')
+            ids = {row['id'] for row in self.data['inbox'] if row['sessionId'] == session_id}
+            if not ids:
+                return
+            previous = deepcopy(self.data)
+            self.data['inbox'] = [row for row in self.data['inbox'] if row['id'] not in ids]
+            self.data['seen'] = [key for key in self.data['seen'] if key not in ids]
+            for key in ids:
+                self._pending.pop(key, None)
+            if not self._save():
+                self.data = previous
+                raise ValueError('대화 알림 기록을 정리하지 못했습니다.')
+
     def _retry(self):
         with self._lock:
             self._retry_timer = None

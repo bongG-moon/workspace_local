@@ -36,9 +36,12 @@ expected.update({'local_app/drafts.py', 'local_app/idle_connections.py', 'local_
                  'local_app/web/archived-tasks.js', 'local_app/web/archived-tasks.css'})
 expected.update({'local_app/appearance.py', 'local_app/managed_launcher.py',
                  'local_app/web/appearance.js', 'local_app/web/appearance.css'})
+expected.add('local_app/web/focus-navigation.js')
+expected.add('local_app/layout_preferences.py')
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
+expected.update({'local_app/plain_chat.py', 'local_app/chat_attachments.py', 'docs/WORKSPACE_CHAT_MODES.md'})
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
                  'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md',
@@ -46,7 +49,11 @@ expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
 expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py', 'local_app/web/path-picker.js', 'local_app/web/path-picker.css'})
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/progress_log.py', 'local_app/web/progress-view.js', 'local_app/web/progress-view.css'})
-expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})
+expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/update_progress.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})
+expected.update({'local_app/native_fonts/AXWorkspaceUpdate-Regular.ttf', 'local_app/native_fonts/AXWorkspaceUpdate-SemiBold.ttf',
+                 'local_app/native_fonts/OFL.txt', 'local_app/native_fonts/SOURCE.json', 'local_app/native_fonts/README.md'})
+expected.update({'local_app/web/html-preview.js'})
+expected.update({'local_app/web/zoom-feedback.js', 'local_app/web/zoom-feedback.css'})
 expected.update({'local_app/web/input-keys.js', 'local_app/web/chat-shortcuts.js', 'local_app/web/chat-shortcuts.css'})
 expected.update({'local_app/ui_health.py','local_app/web/startup-health.js','local_app/web/startup-health.css'})
 expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','deploy/WebView2.lock.json',

@@ -7,6 +7,8 @@ from tests.test_workspace_frontend_state import HARNESS, NODE, ROOT
 
 
 SETUP = r"""
+// The shared DOM double exposes setAttribute; header rendering also reads it.
+Object.getPrototypeOf(document.createElement('div')).getAttribute=function(name){return this.attributes[name]??null;};
 active={id:'A',title:'A',workspace:'C:/task/A',state:'done',messages:[]};
 sessions=[{...active}];
 const snapshot=name=>({files:name?[{name,path:'C:/task/A/'+name}]:[],lastRunId:'run',

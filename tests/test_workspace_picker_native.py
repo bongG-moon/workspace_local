@@ -18,6 +18,7 @@ class PickerAttachmentPolicyTests(unittest.TestCase):
         filters = dict(re.findall(r'new FilterSpec\("([^"]+)", "([^"]+)"\)', source))
         suffixes = lambda value: {pattern.removeprefix('*') for pattern in value.split(';')}
         self.assertEqual(REFERENCE_FILE_TYPES, suffixes(filters['지원하는 모든 자료']))
+        self.assertTrue({'.md', '.markdown'} <= suffixes(filters['문서']))
         self.assertEqual(ARCHIVE_FILE_TYPES, suffixes(filters['압축 파일']))
         self.assertEqual({'.exe'}, suffixes(filters['실행 파일 (EXE)']))
 

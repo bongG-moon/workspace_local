@@ -6,10 +6,13 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from local_app.history import HistoryStore, KEYS
+from local_app.history import HistoryStore
 from local_app.server import LocalApp
 from local_app.session_visibility import SessionVisibility
 
+# Schema 1 predates general-chat kind/profile metadata. Keep the historical
+# fixture independent of whichever fields the current schema adds later.
+LEGACY_KEYS = ('id', 'title', 'workspace', 'created', 'updated', 'pinned', 'sessionId')
 
 class ArchivedHistoryTests(unittest.TestCase):
     def setUp(self):
@@ -122,7 +125,7 @@ class ArchivedHistoryTests(unittest.TestCase):
         store = HistoryStore(self.state)
         store.save(rows)
         index = self.state / 'history-index.json'
-        index.write_text(json.dumps({'schemaVersion': 1, 'sessions': [{key: row.get(key) for key in KEYS} for row in rows]}), encoding='utf-8')
+        index.write_text(json.dumps({'schemaVersion': 1, 'sessions': [{key: row.get(key) for key in LEGACY_KEYS} for row in rows]}), encoding='utf-8')
         before = {path: path.read_bytes() for path in self.state.joinpath('history-sessions').glob('*.json')}
         app = self.app()
         self.assertTrue(app.sessions[rows[0]['id']]['_historyMetadataPending'])
@@ -148,7 +151,7 @@ class ArchivedHistoryTests(unittest.TestCase):
         rows = self.rows(2)
         self.archive(rows)
         index = self.state / 'history-index.json'
-        index.write_text(json.dumps({'schemaVersion': 1, 'sessions': [{key: row.get(key) for key in KEYS} for row in rows]}), encoding='utf-8')
+        index.write_text(json.dumps({'schemaVersion': 1, 'sessions': [{key: row.get(key) for key in LEGACY_KEYS} for row in rows]}), encoding='utf-8')
         before = index.read_bytes()
         bodies = {path: path.read_bytes() for path in self.state.joinpath('history-sessions').glob('*.json')}
         app = self.app()

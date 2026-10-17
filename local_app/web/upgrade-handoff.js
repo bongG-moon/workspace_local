@@ -10,6 +10,12 @@ globalThis.WorkspaceUpgrade = (() => {
   const $=id=>document.getElementById(id);
   const dialog=()=>$("upgrade-dialog");
   const safeId=id=>typeof id==="string"&&/^[a-f0-9]{32}$/i.test(id);
+  const versionUpdate=value=>{
+    const valid=version=>typeof version==="string"&&/^\d+\.\d+\.\d+$/.test(version);
+    if(!valid(value?.sourceVersion)||!valid(value?.targetVersion))return false;
+    const source=value.sourceVersion.split(".").map(Number),target=value.targetVersion.split(".").map(Number);
+    for(let i=0;i<3;i++)if(source[i]!==target[i])return target[i]>source[i];return false;
+  };
   const unattended=path=>/^\/api\/(?:events(?:\?|$)|attention(?:\/|\?|$)|ui-health(?:\?|$)|drafts(?:\?|$)|upgrade(?:\?|$)|window\/presence(?:\?|$))/.test(path);
   function begin(path,mutation){
     if(locked&&mutation&&!unattended(path))throw new Error("새 버전으로 전환하고 있어요. 잠시 기다리거나 전환을 취소해 주세요.");
@@ -21,6 +27,7 @@ globalThis.WorkspaceUpgrade = (() => {
     locked=value;
     if(value){
       focusBefore=document.activeElement;
+      focusBefore=globalThis.WorkspaceAppUpdates?.handoffStarting(current)||focusBefore;
       if(!dialog().open)dialog().showModal();
     }else{
       if(dialog().open)dialog().close();
@@ -29,19 +36,25 @@ globalThis.WorkspaceUpgrade = (() => {
     }
   }
   function render(){
+    globalThis.WorkspaceAppUpdates?.handoffChanged(current,locked);
     const notice=$("upgrade-notice");if(!notice)return;
     notice.hidden=!current&&!localError&&!recoveryNotice;
     $("upgrade-recovery-open").hidden=!recovery;
     const target=current?.targetVersion?` ${current.targetVersion}`:"";
-    const mode=current?.executionMode,modeLabel=mode==="administrator"?"관리자 권한":mode==="normal"?"일반 권한":"";
+    const mode=current?.executionMode,isUpdate=versionUpdate(current)||globalThis.WorkspaceAppUpdates?.canYieldForHandoff(current)===true;
+    const modeLabel=isUpdate?"":mode==="administrator"?"관리자 권한":mode==="normal"?"일반 권한":"";
     $("upgrade-notice-text").textContent=localError||(!current&&recoveryNotice)||(current?.stage==="waiting"
       ?modeLabel?`현재 작업과 응답을 마치면 ${modeLabel}으로 다시 시작해요.`:`현재 작업과 응답을 마치면 새 버전${target}으로 자동 전환해요.`
       :current?.stage==="failed"?(current.error||"버전 전환을 마치지 못했어요. 작성 중인 내용은 이 창에 유지하고 있습니다.")
       :modeLabel?`작성 중인 내용과 첨부 자료를 보관한 뒤 ${modeLabel}으로 다시 시작해요.`:"작성 중인 내용과 첨부 자료를 보관한 뒤 새 버전으로 전환해요.");
     $("upgrade-notice-cancel").hidden=!current;$("upgrade-notice-cancel").disabled=cancelling||current?.stage==="committing";
-    $("upgrade-title").textContent=localError?"전환 상태를 확인하고 있어요":modeLabel?`${modeLabel}으로 다시 시작하고 있어요`:"새 버전으로 전환하고 있어요";
-    $("upgrade-detail").textContent=localError||"작성 중인 내용과 첨부 자료를 그대로 이어서 사용할 수 있도록 보관하고 있어요. 잠시만 기다려 주세요.";
-    $("upgrade-cancel").disabled=cancelling||current?.stage==="committing";
+    const restarting=["committing","closed"].includes(current?.stage);
+    $("upgrade-title").textContent=localError?"전환 상태를 확인하고 있어요":modeLabel?`${modeLabel}으로 다시 시작하고 있어요`:restarting?"새 버전으로 다시 시작합니다":"다시 시작할 준비를 하고 있어요";
+    $("upgrade-detail").textContent=localError||(restarting?"앱이 잠시 닫힌 뒤 자동으로 열려요. 업데이트 안내창에서 진행 상태를 계속 확인할 수 있습니다."
+      :current?.stage==="captured"?"작성 중인 내용과 첨부 자료를 보관했어요. 잠시 후 새 버전으로 다시 시작합니다."
+      :"작성 중인 내용과 첨부 자료를 보관하고 있어요. 잠시만 기다려 주세요.");
+    $("upgrade-dialog").dataset.stage=current?.stage||"capture";
+    $("upgrade-cancel").disabled=cancelling||restarting;
     $("upgrade-cancel").textContent=cancelling?"취소 확인 중…":"전환 취소";
   }
   function clear(){current=null;serial++;capturing=false;cancelling=false;latestRevision=-1;freeze(false);render();}
@@ -60,8 +73,9 @@ globalThis.WorkspaceUpgrade = (() => {
     }finally{if(ticket===serial){cancelling=false;render();}}
   }
   function canCapture(){
+    const ownUpdate=globalThis.WorkspaceAppUpdates?.canYieldForHandoff(current)===true;
     return ready&&hooks&&!locked&&!capturing&&!cancelling&&!requests.size&&hooks.canCapture()
-      &&!document.querySelector("dialog[open]");
+      &&!document.querySelector(ownUpdate?"dialog[open]:not(#app-update-dialog)":"dialog[open]");
   }
   async function capture(){
     if(current?.stage!=="capture"||!canCapture())return;
@@ -130,7 +144,7 @@ globalThis.WorkspaceUpgrade = (() => {
       const response=await hooks.api("/api/upgrade",{action:"restored",requestId:restore.requestId});
       if(response.ok!==true)throw new Error("restore acknowledgement missing");
       restoredId=restore.requestId;recovery=null;recoveryNotice="";render();
-      hooks.restored?.(outcome);
+      if(!globalThis.WorkspaceAppUpdates?.completed(restore))hooks.restored?.(outcome);
     }catch(error){localError="이전 창의 입력 내용 복원을 마치지 못했어요. 창을 다시 열면 다시 확인합니다.";render();}
     finally{ready=true;}
   }
@@ -143,7 +157,7 @@ globalThis.WorkspaceUpgrade = (() => {
   function openRecovery(){
     if(!recovery)return;
     const select=$("upgrade-recovery-task");select.replaceChildren();
-    recoveryRows().forEach((row,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=(row.id==="home"?"업무 홈":hooks.taskTitle?.(row.id)||"이전 업무 "+row.id.slice(0,8))+(row.stashed?" · 임시 보관":"");select.append(option);});
+    recoveryRows().forEach((row,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=(row.id==="home:chat"?"일반 대화 홈":["home","home:work"].includes(row.id)?"업무 홈":hooks.taskTitle?.(row.id)||"이전 업무 "+row.id.slice(0,8))+(row.stashed?" · 임시 보관":"");select.append(option);});
     select.value="0";recoveryRow();$("upgrade-recovery-message").textContent="확인 전까지 이전 초안 기록을 유지합니다.";
     if(hooks.openRecovery)hooks.openRecovery("upgrade-recovery-dialog");else $("upgrade-recovery-dialog").showModal();
   }

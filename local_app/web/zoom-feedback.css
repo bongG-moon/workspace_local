@@ -1,0 +1,15 @@
+/* Informational, event-driven popup: does not block the current dialog/input. */
+.workspace-zoom-feedback{position:fixed;inset:14px 18px auto auto;margin:0;z-index:10000;
+  display:flex;align-items:center;gap:10px;width:max-content;max-width:calc(100vw - 24px);
+  box-sizing:border-box;padding:10px 14px;border:1px solid var(--theme-line,#dce0ed);border-radius:12px;
+  background:var(--theme-surface-raised,#fafbff);color:var(--ink,#30364b);
+  font:inherit;font-size:13px;line-height:20px;box-shadow:0 6px 24px var(--theme-shadow-a38,rgba(35,40,65,.15));
+  pointer-events:none;overflow:hidden;white-space:nowrap}
+.workspace-zoom-feedback[hidden]{display:none}
+.workspace-zoom-feedback::backdrop{background:transparent;pointer-events:none}
+.zoom-feedback-icon{display:flex;align-items:center;justify-content:center;flex:0 0 18px;color:var(--accent-ink,#655bc1)}
+.zoom-feedback-icon svg{display:block;width:18px;height:18px}
+.zoom-feedback-label{color:var(--muted,#697289)}
+.zoom-feedback-value{min-width:39px;font-weight:650;text-align:right;font-variant-numeric:tabular-nums}
+@media(max-width:360px){.workspace-zoom-feedback{inset:10px 12px auto auto;padding:8px 10px;gap:8px}}
+@media(forced-colors:active){.workspace-zoom-feedback{border-color:CanvasText;background:Canvas;color:CanvasText;box-shadow:none}.zoom-feedback-label,.zoom-feedback-icon{color:CanvasText}}

@@ -78,6 +78,26 @@ class HandoffTests(unittest.TestCase):
         self.assertTrue(restored.action({'action': 'restored', 'requestId': self.rid})['ok'])
         self.assertFalse(restored.path.exists())
 
+    def test_newer_restore_identifies_update_but_old_records_still_restore(self):
+        self.prepare()
+        self.capture()
+        self.assertTrue(self.action('commit')['closed'])
+        restored = UpgradeHandoff(self.app, self.target)
+        self.assertEqual(self.upgrade.version, restored.restore['sourceVersion'])
+        self.assertEqual(self.target, restored.restore['targetVersion'])
+        value = json.loads(self.upgrade.path.read_text(encoding='utf-8'))
+        for source in (None, self.target, 'invalid', '100.0.0'):
+            with self.subTest(source=source):
+                if source is None:
+                    value.pop('sourceVersion', None)
+                else:
+                    value['sourceVersion'] = source
+                self.upgrade.path.write_text(json.dumps(value), encoding='utf-8')
+                restored = UpgradeHandoff(self.app, self.target)
+                self.assertEqual(self.draft, restored.restore['snapshot'])
+                self.assertNotIn('sourceVersion', restored.restore)
+                self.assertNotIn('targetVersion', restored.restore)
+
     def test_all_sessions_busy_even_if_not_current_or_visible(self):
         other = self.app.create(str(self.app.state), True)['id']
         item = self.app.sessions[other]

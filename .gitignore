@@ -5,6 +5,8 @@ __pycache__/
 htmlcov/
 dist/
 build/
+# Generated local screenshots and validation reports may contain machine paths.
+outputs/
 .smoke/
 tmp/
 *.zip

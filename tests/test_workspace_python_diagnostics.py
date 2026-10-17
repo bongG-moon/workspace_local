@@ -75,7 +75,7 @@ $saved=Write-WorkspacePythonDiagnostic $blocked $blocked $checks 38 aaaaaaaaaaaa
             self.assertIn('시간 초과', value['text'])
             self.assertEqual('preserve', blocked.read_text(encoding='utf-8'))
 
-    def test_real_launcher_reports_direct_and_relaunched_child_failures(self):
+    def test_real_launcher_reports_normal_and_administrator_python_failures(self):
         for child in (False, True):
             with self.subTest(child=child), tempfile.TemporaryDirectory(prefix='workspace-python-flow-') as raw:
                 root = Path(raw)
@@ -87,8 +87,10 @@ $saved=Write-WorkspacePythonDiagnostic $blocked $blocked $checks 38 aaaaaaaaaaaa
                 overrides = '\nSet-StrictMode -Version 2.0\n'
                 overrides += 'function Get-WorkspaceVerifiedContext { [pscustomobject]@{verified=$true;sid="S-1-5-21-4242001";sessionId=1;isAdministrator=$' + str(child).lower() + ';localAppData=' + ps_quote(root) + '} }\n'
                 overrides += 'function Assert-WorkspaceNormalProcess { param($Context) }\n'
+                # This fixture supplies a synthetic identity; do not inspect
+                # the host token or load the native API from its partial copy.
+                overrides += 'function Get-WorkspaceExecutionMode { param($Context); if ($Context.isAdministrator) { return "administrator" }; return "normal" }\n'
                 overrides += 'function Get-WorkspacePythonExecutable { param($Command); $script:WorkspacePythonChecks = New-Object "System.Collections.Generic.List[object]"; foreach($row in ' + checks + '){$script:WorkspacePythonChecks.Add($row)}; throw "WORKSPACE_STARTUP:38" }\n'
-                overrides += 'function Invoke-WorkspaceNormalTokenRelaunch { param($Context,$ScriptPath,$PythonCommand,$Demo,$NoBrowser,$StateRoot); $null=Write-WorkspacePythonDiagnostic -StateRoot $StateRoot -AppRoot ' + ps_quote(root) + ' -Checks ' + checks + ' -Code 38 -AttemptId $env:COMPANY_WORKSPACE_PYTHON_ATTEMPT; return 38 }\n'
                 overrides += 'function Show-WorkspaceStartupDialog { throw "Unexpected UI" }\n'
                 (deploy / HELPER.name).write_text(HELPER.read_text(encoding='utf-8-sig') + overrides, encoding='utf-8-sig')
                 result = self.ps('& ' + ps_quote(deploy / LAUNCHER.name) + ' -Demo -NoBrowser -StateRoot ' + ps_quote(state) + '; exit $LASTEXITCODE')

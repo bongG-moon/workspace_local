@@ -2,6 +2,12 @@
 
 globalThis.WorkspaceSessionGroups = (() => {
   let saving=false, editContext=null;
+  const previewLimit=5, expandedPreviews=new Set();
+  let lastSelection=null, shortenedSelection=null;
+  function prunePreviews(groups){
+    const ids=new Set(groups.map(group=>group.id));
+    for(const id of expandedPreviews)if(!ids.has(id))expandedPreviews.delete(id);
+  }
   const data=()=>boot.sessionGroups||{groups:[],assignments:{},revision:0,warning:null};
   const groupFor=id=>data().assignments[id]||null;
   const label=id=>data().groups.find(group=>group.id===groupFor(id))?.name||"일반 목록";
@@ -67,18 +73,46 @@ globalThis.WorkspaceSessionGroups = (() => {
     menu.title="폴더 이름 변경·삭제";menu.setAttribute("aria-label",`${group.name} 폴더 설정`);menu.onclick=()=>openEdit(group.id);row.append(menu);
     return row;
   }
+  function moreRow(group,total){
+    const expanded=expandedPreviews.has(group.id),row=el("div",null,"task-group-overflow");
+    row.dataset.groupId=group.id;
+    const button=el("button",expanded?"간단히 보기":"더 보기","task-group-more");
+    button.type="button";button.disabled=locked();button.setAttribute("aria-expanded",String(expanded));
+    button.setAttribute("aria-label",expanded?`${group.name} · 처음 ${previewLimit}개만 보기`:`${group.name} · 나머지 ${total-previewLimit}개 더 보기`);
+    if(!expanded){const count=el("span",String(total-previewLimit),"task-group-more-count");count.setAttribute("aria-hidden","true");button.append(count);}
+    button.onclick=()=>{
+      if(locked())return;
+      expanded?expandedPreviews.delete(group.id):expandedPreviews.add(group.id);
+      // Only an explicit shortening may hide the current task as ordering changes.
+      if(active?.id&&groupFor(active.id)===group.id)shortenedSelection=expanded?`${active.id}:${group.id}`:null;
+      renderSessions();
+      [...$("sessions").children].find(node=>node.classList.contains("task-group-overflow")&&node.dataset.groupId===group.id)?.querySelector(".task-group-more")?.focus({preventScroll:true});
+    };
+    row.append(button);return row;
+  }
   function render(items,createRow,query){
-    controls();const container=$("sessions"),state=data();
+    controls();const container=$("sessions"),state=data();prunePreviews(state.groups);
     if(state.warning)container.append(el("p",state.warning,"sidebar-empty"));
     if(!state.groups.length){for(const item of items)container.append(createRow(item));return false;}
     const buckets=new Map([[null,[]],...state.groups.map(group=>[group.id,[]])]);
     for(const item of items)(buckets.get(groupFor(item.id))||buckets.get(null)).push(item);
+    // Ordering and pin changes must not make the current task silently disappear.
+    // Respect an explicit shorter preview only until the user selects another task.
+    const selection=active?.id?`${active.id}:${groupFor(active.id)||""}`:null;
+    if(selection!==lastSelection)shortenedSelection=null;
+    lastSelection=selection;
+    if(!query&&selection!==shortenedSelection){
+      const groupId=active?.id?groupFor(active.id):null,members=buckets.get(groupId);
+      if(groupId&&members?.findIndex(item=>item.id===active.id)>=previewLimit)expandedPreviews.add(groupId);
+    }
     for(const group of state.groups){
       const members=buckets.get(group.id);
       if(query&&!members.length&&!group.name.toLocaleLowerCase().includes(query))continue;
       container.append(header(group,members,query));
       if(group.collapsed&&!query)continue;
-      for(const item of members){const row=createRow(item);row.classList.add("grouped-session");row.dataset.groupId=group.id;container.append(row);}
+      const visible=query||expandedPreviews.has(group.id)?members:members.slice(0,previewLimit);
+      for(const item of visible){const row=createRow(item);row.classList.add("grouped-session");row.dataset.groupId=group.id;container.append(row);}
+      if(!query&&members.length>previewLimit)container.append(moreRow(group,members.length));
       if(!members.length){const empty=el("p",query?"일치하는 업무가 없어요":"여기로 업무를 끌어 넣으세요","task-group-empty");empty.dataset.groupId=group.id;container.append(empty);}
       const tail=el("div",null,"task-group-tail");tail.dataset.groupId=group.id;tail.setAttribute("aria-hidden","true");container.append(tail);
     }

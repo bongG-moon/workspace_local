@@ -14,6 +14,9 @@ const setup=`
 const assert=globalThis.testAssert;
 let now=10000,active={id:'A',state:'idle',trusted:true,messages:[]},selectionGeneration=1;
 let sessions=[{id:'A'},{id:'B'}];
+// The extracted submit path runs in work mode, as these CLI shortcut cases do.
+let currentMode='work';const isGeneralChat=()=>currentMode==='chat';
+globalThis.WorkspaceModes={isChat:isGeneralChat};
 let attachments=[],sending=false,choiceSubmission=null,appClosed=false,uploading=false;
 let modelChanging=false,permissionChanging=false,effortChanging=false,connectionPreparing=false;
 let selectedText='',completionOpen=false,completionSelected=0,inlineOpen=false,modeCycles=0;
@@ -80,11 +83,13 @@ assert.ok(start>=0&&end>start,'Cannot locate shipped completion key handler');
 vm.runInContext(`globalThis.WorkspaceComposer=(()=>{let composing=false,dismissed=false,selected=0;const box={get hidden(){return !completionOpen;}};const rows=[{},{}];function close(){completionOpen=false;}function choose(){completionSelected++;close();input.value='/selected ';input.setSelectionRange(input.value.length);}function activeOption(){} input.addEventListener('compositionstart',()=>{composing=true;});input.addEventListener('compositionend',()=>{composing=false;});${composer.slice(start,end)}return {keydown,close,refresh(){},beforeSubmit(){return true;}};})();`,ctx);
 const inline=read('inline-controls.js');start=inline.indexOf('  function keydown(event)');end=inline.indexOf('  for (const [kind,button]',start);
 assert.ok(start>=0&&end>start,'Cannot locate shipped inline key handler');
+const inlineChatModeGate=inline.match(/^  const chatMode = .*;$/m)?.[0];
+assert.ok(inlineChatModeGate,'Cannot locate shipped inline chat-mode gate');
 const inlineStopGate=inline.match(/^  const stopBlocked = .*;$/m)?.[0];
 assert.ok(inlineStopGate,'Cannot locate shipped inline stop gate');
 const inlineControlGate=inline.match(/^  const blocked = .*;$/m)?.[0];
 assert.ok(inlineControlGate,'Cannot locate shipped inline control gate');
-vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inlineStopGate}${inlineControlGate}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
+vm.runInContext(`globalThis.WorkspaceInlineControls=(()=>{const panel={get hidden(){return !inlineOpen;}};const view={};function close(){inlineOpen=false;}function cyclePermission(){modeCycles++;}function open(kind){editorOpened.push(kind);}${inlineChatModeGate}${inlineStopGate}${inlineControlGate}${inline.slice(start,end)}return {keydown,close,cyclePermission,open};})();`,ctx);
 vm.runInContext(read('input-keys.js'),ctx);
 vm.runInContext(read('chat-shortcuts.js'),ctx);
 const app=read('app.js');start=app.indexOf('$("composer").onsubmit=');end=app.indexOf('$("folder-form").onsubmit=',start);
@@ -164,6 +169,19 @@ class WorkspaceChatShortcutTests(unittest.TestCase):
           press('m',{altKey:true});press('Tab',{shiftKey:true});assert.equal(modeCycles,2);
           assert.equal(submitted,0);assert.equal(queued.length,0);assert.equal(calls.length,0);
           assert.equal(input.value,'작성한 후속 요청');assert.equal(active.state,'running');
+        """)
+
+    def test_model_shortcut_works_in_general_chat_without_enabling_permission_shortcuts(self):
+        self.run_case(r"""
+          currentMode='chat';set('남겨 둘 질문');attachments=['note.pdf'];
+          press('p',{altKey:true});assert.deepEqual(editorOpened,['model']);
+          press('p',{altKey:true,repeat:true});assert.equal(editorOpened.length,1);
+          active.state='running';press('p',{altKey:true});assert.equal(editorOpened.length,1);
+          active=null;press('p',{altKey:true});assert.deepEqual(editorOpened,['model','model']);
+          assert.notEqual(press('m',{altKey:true}).defaultPrevented,true);
+          assert.notEqual(press('Tab',{shiftKey:true}).defaultPrevented,true);
+          assert.equal(modeCycles,0);assert.equal(input.value,'남겨 둘 질문');
+          assert.deepEqual(attachments,['note.pdf']);assert.equal(submitted,0);assert.equal(calls.length,0);
         """)
 
     def test_queue_chord_bypasses_completion_and_keeps_three_second_window(self):

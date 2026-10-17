@@ -99,9 +99,13 @@ class FlowRoutesTests(unittest.TestCase):
         item['connection'] = {'reported': {'commands': True}, 'slashCommands': [{'name': 'company-agent:html-report', 'description': '보고서'}]}
         first = self.request('/api/completions', {'id': self.a, 'kind': 'slash', 'query': 'company'})
         self.assertEqual('/company-agent:html-report', first['items'][0]['invocation'])
-        self.assertEqual([], self.request('/api/completions', {'id': self.b, 'kind': 'slash', 'query': ''})['items'])
+        self.assertEqual([], self.request('/api/completions', {'id': self.b, 'kind': 'slash', 'query': 'company'})['items'])
         item['bridge'].closed = True
-        self.assertEqual([], self.request('/api/completions', {'id': self.a, 'kind': 'slash', 'query': ''})['items'])
+        self.assertEqual([], self.request('/api/completions', {'id': self.a, 'kind': 'slash', 'query': 'company'})['items'])
+        # App-local controls remain discoverable without a live CLI connection.
+        local = self.request('/api/completions', {'id': self.a, 'kind': 'slash', 'query': ''})['items']
+        self.assertEqual({'/model', '/skills', '/plugin', '/permissions'}, {row['invocation'] for row in local})
+        self.assertTrue(all(row['source'] == 'workspace' and row['availability'] == 'local' for row in local))
 
     def test_home_slash_discovery_never_creates_task_trust_or_cli(self):
         skill = self.root / 'config/skills/skill-creator/SKILL.md'
@@ -114,11 +118,12 @@ class FlowRoutesTests(unittest.TestCase):
         with patch('local_app.bridge.subprocess.Popen', side_effect=AssertionError('no CLI')):
             common = self.request('/api/completions', {'id': None, 'kind': 'slash', 'query': 'sk'})
             folder = self.request('/api/completions', {'id': self.a, 'kind': 'slash', 'query': 'sk'})
-        self.assertEqual(['/skill-creator'], [row['invocation'] for row in common['items']])
-        self.assertEqual({'/skill-creator', '/skill-project'}, {row['invocation'] for row in folder['items']})
+        self.assertEqual({'/skill-creator', '/skills'}, {row['invocation'] for row in common['items']})
+        self.assertEqual({'/skill-creator', '/skill-project', '/skills'}, {row['invocation'] for row in folder['items']})
         self.assertTrue(common['discovery'])
-        self.assertEqual('discovered', common['items'][0]['availability'])
-        self.assertEqual('installed', common['items'][0]['source'])
+        installed = next(row for row in common['items'] if row['invocation'] == '/skill-creator')
+        self.assertEqual('discovered', installed['availability'])
+        self.assertEqual('installed', installed['source'])
         self.assertNotIn('PRIVATE', json.dumps(folder))
         self.assertFalse(self.app.get(self.a)['trusted'])
         self.assertEqual(2, len(self.app.sessions))

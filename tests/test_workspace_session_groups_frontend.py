@@ -80,6 +80,15 @@ api=async(path,body)=>{
   data.revision++;return {ok:true,sessionGroups:data,...(groupId?{groupId}:{})};
 };
 """
+LONG_GROUP_SETUP = r"""
+for(const id of ['D','E','F','G','H','I']){
+  sessions.push({id,title:`보고서 ${id}`,workspace:`C:/fixture/${id}`,state:'done',pinned:false,created:1,updated:1});
+  boot.sessionGroups.assignments[id]='group-a';
+}
+boot.sessionOrder={manual:true,ids:['A','D','E','F','G','H','I','B','C']};
+const groupIds=()=>rows().filter(node=>node.dataset.groupId==='group-a').map(node=>node.dataset.sessionId);
+const more=()=>[...$('sessions').children].find(node=>node.classList.contains('task-group-overflow')&&node.dataset.groupId==='group-a')?.querySelector('.task-group-more');
+"""
 DRAG_SETUP = r"""
 const proto=Object.getPrototypeOf($('sessions'));
 Object.defineProperty(proto,'parentElement',{get(){return this.parent;},configurable:true});
@@ -225,6 +234,109 @@ class SessionGroupsFrontendTests(unittest.TestCase):
           $('session-search').value='';renderSessions();assert.deepEqual(visibleIds(),['A','C']);
           $('session-search').value='기획';renderSessions();assert.deepEqual(visibleIds(),['B']);
           assert.equal(calls.length,0);assert.equal(boot.sessionGroups.groups[1].collapsed,true);
+        })()""")
+
+    def test_large_folder_previews_five_and_toggle_is_local_with_focus_retained(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          const original=deepCopy(boot.sessionGroups),order=deepCopy(boot.sessionOrder);renderSessions();
+          assert.deepEqual(groupIds(),['A','D','E','F','G']);assert.equal(more().attributes['aria-expanded'],'false');
+          assert.match(more().attributes['aria-label'],/나머지 2개/);assert.match(flatText(more()),/더 보기/);
+          more().focus();more().onclick();assert.deepEqual(groupIds(),['A','D','E','F','G','H','I']);
+          assert.equal(more().attributes['aria-expanded'],'true');assert.equal(document.activeElement,more());
+          assert.match(flatText(more()),/간단히 보기/);more().onclick();assert.equal(document.activeElement,more());
+          assert.deepEqual(groupIds(),['A','D','E','F','G']);
+          assert.deepEqual(boot.sessionGroups,original);assert.deepEqual(boot.sessionOrder,order);assert.equal(calls.length,0);
+        })()""")
+
+    def test_exactly_five_members_need_no_more_button_and_total_count_stays_correct(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          sessions=sessions.filter(item=>!['H','I'].includes(item.id));renderSessions();
+          assert.equal(groupIds().length,5);assert.equal(more(),undefined);
+          assert.equal(groupNodes()[0].querySelector('.task-group-count').textContent,'5');
+          assert.equal(calls.length,0);
+        })()""")
+
+    def test_search_finds_hidden_members_and_folder_name_displays_every_match(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          renderSessions();assert.equal(groupIds().includes('I'),false);
+          $('session-search').value='보고서 I';renderSessions();assert.deepEqual(groupIds(),['I']);assert.equal(more(),undefined);
+          $('session-search').value='보고서';renderSessions();assert.equal(groupIds().length,7);assert.equal(more(),undefined);
+          $('session-search').value='';renderSessions();assert.deepEqual(groupIds(),['A','D','E','F','G']);
+          assert.equal(more().attributes['aria-expanded'],'false');assert.equal(calls.length,0);
+        })()""")
+
+    def test_selecting_an_unlisted_task_opens_its_preview_without_changing_sort_or_folder(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          renderSessions();const original=deepCopy(boot.sessionGroups),order=deepCopy(boot.sessionOrder);
+          active={...sessions.find(item=>item.id==='I'),messages:[]};renderSessions();
+          assert.equal(groupIds().length,7);assert.equal(more().attributes['aria-expanded'],'true');
+          assert.equal(rows().find(row=>row.dataset.sessionId==='I').querySelector('.session').attributes['aria-current'],'page');
+          more().onclick();renderSessions();assert.equal(groupIds().length,5);
+          active={...sessions[0],messages:[]};renderSessions();
+          active={...sessions.find(item=>item.id==='H'),messages:[]};renderSessions();assert.equal(groupIds().length,7);
+          assert.deepEqual(boot.sessionGroups,original);assert.deepEqual(boot.sessionOrder,order);assert.equal(calls.length,0);
+        })()""")
+
+    def test_selecting_search_result_remains_visible_after_search_is_cleared(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          renderSessions();$('session-search').value='보고서 I';renderSessions();
+          active={...sessions.find(item=>item.id==='I'),messages:[]};renderSessions();
+          $('session-search').value='';renderSessions();assert.equal(groupIds().includes('I'),true);
+          assert.equal(more().attributes['aria-expanded'],'true');assert.equal(calls.length,0);
+        })()""")
+
+    def test_pin_or_order_changes_cannot_silently_hide_current_task(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          for(const item of sessions)if(['D','E','F','G','H'].includes(item.id))item.pinned=true;
+          renderSessions();assert.equal(groupIds().includes('A'),true);assert.equal(groupIds().length,5);
+          sessions[0].pinned=false;renderSessions();
+          assert.equal(groupIds().includes('A'),true);assert.equal(groupIds().length,7);
+          assert.equal(more().attributes['aria-expanded'],'true');assert.equal(active.id,'A');
+          more().onclick();assert.equal(groupIds().includes('A'),false);
+          for(let i=0;i<3;i++)renderSessions();assert.equal(groupIds().length,5);
+          // A new selection resets only the explicit suppression, without changing the order.
+          active={...sessions.find(item=>item.id==='D'),messages:[]};renderSessions();
+          active={...sessions[0],messages:[]};renderSessions();assert.equal(groupIds().length,7);
+          assert.equal(groupIds().includes('A'),true);assert.equal(calls.length,0);
+        })()""")
+
+    def test_loading_selected_sixth_task_expands_its_preview_immediately(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(()=>{
+          active={...sessions.find(item=>item.id==='H'),messages:[]};renderSessions();
+          assert.equal(groupIds().length,7);assert.equal(more().attributes['aria-expanded'],'true');assert.equal(calls.length,0);
+        })()""")
+
+    def test_group_collapse_preserves_local_more_preference_and_aria_icon_state(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(async()=>{
+          renderSessions();more().onclick();assert.equal(groupIds().length,7);
+          await groupNodes()[0].querySelector('.task-group-toggle').onclick();
+          assert.equal(groupIds().length,0);assert.equal(more(),undefined);
+          assert.equal(groupNodes()[0].querySelector('.task-group-toggle').attributes['aria-expanded'],'false');
+          await groupNodes()[0].querySelector('.task-group-toggle').onclick();
+          assert.equal(groupIds().length,7);assert.equal(more().attributes['aria-expanded'],'true');
+          assert.equal(groupNodes()[0].querySelector('.task-group-toggle').attributes['aria-expanded'],'true');assert.equal(calls.length,2);
+        })()""")
+
+    def test_deleted_folder_does_not_keep_stale_more_state(self):
+        self.run_case(LONG_GROUP_SETUP+r"""(async()=>{
+          renderSessions();more().onclick();const original=deepCopy(boot.sessionGroups);
+          WorkspaceSessionGroups.openEdit('group-a');const pending=$('task-group-delete').onclick();
+          $('action-confirm').onclick();await pending;assert.equal(more(),undefined);
+          // Reusing an ID emulates a fresh catalog: only existing groups may retain UI state.
+          boot.sessionGroups=original;renderSessions();assert.equal(groupIds().length,5);
+          assert.equal(more().attributes['aria-expanded'],'false');assert.equal(calls.length,1);
+        })()""")
+
+    def test_more_row_accepts_drop_and_preserves_unrendered_members(self):
+        self.run_case(LONG_GROUP_SETUP+DRAG_SETUP+r"""(async()=>{
+          const target=more().parentElement,source=row('C'),handle=source.querySelector('.session-drag');
+          handle.onpointerdown(pointer(source));handle.onpointermove(pointer(target));
+          assert.equal(sessionPointerDrag.target.kind,'folder');assert.equal(sessionPointerDrag.target.groupId,'group-a');
+          assert.equal(target.classList.contains('drop-folder'),true);await handle.onpointerup(pointer(target));
+          assert.equal(calls.length,1);assert.equal(WorkspaceSessionGroups.groupFor('C'),'group-a');
+          assert.equal(WorkspaceSessionGroups.groupFor('H'),'group-a');assert.equal(WorkspaceSessionGroups.groupFor('I'),'group-a');
+          assert.equal(groupNodes()[0].querySelector('.task-group-count').textContent,'8');
+          assert.equal(groupIds().length,5);more().onclick();assert.equal(groupIds().length,8);
         })()""")
 
     def test_group_create_and_rename_use_enter_and_preserve_original_task_metadata(self):

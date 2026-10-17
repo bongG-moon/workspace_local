@@ -40,6 +40,25 @@ class ManualRoutingTests(unittest.TestCase):
                 self.assertEqual('_blank', values['target'])
                 self.assertTrue({'noopener', 'noreferrer'}.issubset(values['rel'].split()))
 
+    def test_help_section_links_resolve_in_shipped_guide(self):
+        parser = GuideLinks()
+        parser.feed((ROOT / 'local_app/web/index.html').read_text(encoding='utf-8'))
+        class AnchorIds(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.ids = set()
+            def handle_starttag(self, tag, attrs):
+                value = dict(attrs).get('id')
+                if value:
+                    self.ids.add(value)
+        guide = AnchorIds()
+        guide.feed((ROOT / 'docs/WORKSPACE_USER_GUIDE.html').read_text(encoding='utf-8'))
+        for _, values in parser.links:
+            path, _, anchor = values['href'].partition('#')
+            if path == '/manual/guide' and anchor:
+                with self.subTest(anchor=anchor):
+                    self.assertIn(anchor, guide.ids)
+
 
 if __name__ == '__main__':
     unittest.main()

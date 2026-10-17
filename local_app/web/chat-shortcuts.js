@@ -6,7 +6,7 @@ globalThis.WorkspaceShortcuts = (() => {
   const input=$("prompt"), stashes=new Map();
   let prefix=null, searchContext=null, matches=[], selected=0, composing=false, searchComposing=false, stopPending=null;
   const key=event=>String(event.key).toLowerCase();
-  const id=()=>active?.id||"home";
+  const id=()=>active?.id||(globalThis.WorkspaceModes?.isChat()?"home:chat":"home");
   const snapshot=()=>({text:input.value,attachments:[...attachments],selectionStart:input.selectionStart??input.value.length,selectionEnd:input.selectionEnd??input.value.length});
   const history=()=>((active?.messages||[]).filter(row=>row.role==="user"&&typeof row.text==="string").slice(-100));
   const editable=()=>!appClosed&&!input.readOnly&&!sending&&!choiceSubmission&&!globalThis.WorkspaceAttachments?.isUploading();
@@ -78,7 +78,7 @@ globalThis.WorkspaceShortcuts = (() => {
   const exportStashes=()=>[...stashes].map(([id,draft])=>({id,...draft}));
   function restoreStashes(rows=[],{includeArchived=false}={}){
     const conflicts=[];
-    for(const row of rows){const {id:owner,...draft}=row,previous=stashes.get(owner);if(!includeArchived&&(owner!=="home"&&!sessions.some(item=>item.id===owner)||globalThis.WorkspaceDraftPersistence?.allowStashRestore(owner)===false)||previous&&JSON.stringify(previous)!==JSON.stringify(draft))conflicts.push(owner);else {stashes.set(owner,draft);globalThis.WorkspaceDraftPersistence?.changed(owner);}}
+    for(const row of rows){const {id:owner,...draft}=row,previous=stashes.get(owner);if(!includeArchived&&(!["home","home:chat","home:work"].includes(owner)&&!sessions.some(item=>item.id===owner)||globalThis.WorkspaceDraftPersistence?.allowStashRestore(owner)===false)||previous&&JSON.stringify(previous)!==JSON.stringify(draft))conflicts.push(owner);else {stashes.set(owner,draft);globalThis.WorkspaceDraftPersistence?.changed(owner);}}
     return conflicts;
   }
   function selectedHistory(){
@@ -119,8 +119,9 @@ globalThis.WorkspaceShortcuts = (() => {
       consume(event);if(event.repeat)return true;
       if(busyStates.has(active?.state))void stop();else restore({text:"",attachments:[]});return true;
     }
-    if(alt&&["m","p"].includes(key(event))){
+    if(alt&&(key(event)==="p"||key(event)==="m"&&!globalThis.WorkspaceModes?.isChat())){
       consume(event);if(event.repeat)return true;
+      if(!active&&key(event)==="p"&&globalThis.WorkspaceModes?.isChat()){void globalThis.WorkspaceInlineControls?.open("model");return true;}
       if(!active)return toast("업무를 선택한 뒤 설정을 바꿀 수 있어요."),true;
       if(key(event)==="m"?permissionConnectionLocked():connectionLocked())return toast(key(event)==="m"?"현재 연결에서 승인 모드를 바꿀 수 없어요. 연결 또는 중지 상태를 확인해 주세요.":"현재 요청이 끝난 뒤 모델을 바꿔 주세요."),true;
       if(key(event)==="m")void globalThis.WorkspaceInlineControls?.cyclePermission();else void globalThis.WorkspaceInlineControls?.open("model");return true;

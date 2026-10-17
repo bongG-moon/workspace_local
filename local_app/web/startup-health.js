@@ -22,7 +22,7 @@ globalThis.WorkspaceStartupHealth = (() => {
     "session-groups":{file:"session-groups.js",global:"WorkspaceSessionGroups",buttons:["task-group-create"]},
     capabilities:{file:"capabilities.js",global:"WorkspaceCapabilities",buttons:["capabilities-open"]},
     productivity:{file:"productivity.js",global:"WorkspaceProductivityActions",buttons:["changes-open","branch-open"]},
-    palette:{file:"palette.js",global:"WorkspacePalette",buttons:["palette-open"]},
+    palette:{file:"palette.js",global:"WorkspacePalette",buttons:[]},
     layout:{file:"layout.js",global:"WorkspaceLayout",buttons:["sidebar-toggle","materials-button"],listeners:true},
     "rich-content":{file:"rich-content.js",global:"WorkspaceRichContent"},
     "execution-view":{file:"execution-view.js",global:"WorkspaceExecutionView"},

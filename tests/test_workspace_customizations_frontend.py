@@ -299,3 +299,93 @@ class CustomizationsFrontendTests(unittest.TestCase):
                   else {assert.equal($('customizations-dialog').open,true);assert.equal($('customizations-apply').hidden,false);}
                   assert.equal(saves,1);assert.equal(restartingConnections.size,0);
                 })()''')
+
+    def test_cancel_common_scope_save_restores_selection_and_status_without_writes(self):
+        self.run_case(APPLY_SETUP+r'''(async()=>{
+          await WorkspaceCustomizations.open('skills');$('customizations-scope').value='user';
+          $('customizations-scope').onchange();await flush();
+          const selector=$('customizations-list').children[0].children[1];selector.value='off';
+          const pending=selector.onchange();await flush();
+          assert.match($('action-title').textContent,/공통 설정/);$('action-cancel').onclick();await pending;
+          assert.equal(saves,0);assert.equal(restarts,0);
+          assert.equal(calls.some(row=>row.body),false);
+          assert.match($('customizations-status').textContent,/설정을 변경하지 않았/);
+          assert.doesNotMatch($('customizations-status').textContent,/저장하고/);
+          assert.equal($('customizations-list').children[0].children[1].value,'inherit');
+          assert.equal($('customizations-scope').disabled,false);assert.equal($('customizations-refresh').disabled,false);
+        })()''')
+
+    def test_skill_modes_and_plugin_boolean_are_saved_exactly_without_changing_permissions(self):
+        cases=[('skills','on','on'),('skills','off','off'),('skills','name-only','name-only'),
+               ('skills','user-invocable-only','user-invocable-only'),('skills','inherit',None),
+               ('plugins','on',True),('plugins','off',False)]
+        import json
+        for kind,selected,expected in cases:
+            with self.subTest(kind=kind,selected=selected):
+                self.run_case('const changeCase='+json.dumps([kind,selected,expected])+r''';(async()=>{
+                  active.permissionModeOverride='plan';const original=active;
+                  await WorkspaceCustomizations.open(changeCase[0]);
+                  const selector=$('customizations-list').children[0].children[1];selector.value=changeCase[1];await selector.onchange();
+                  const writes=calls.filter(row=>row.body);assert.equal(writes.length,1);
+                  assert.equal(writes[0].path,'/api/customizations');assert.equal(writes[0].body.kind,changeCase[0]);
+                  assert.equal(writes[0].body.value,changeCase[2]);assert.equal(writes[0].body.revision,'revision-A');
+                  assert.equal(writes[0].body.scope,'local');assert.equal(active,original);
+                  assert.equal(active.permissionModeOverride,'plan');assert.equal(active.state,'running');
+                  assert.equal(calls.some(row=>['/api/send','/api/connect','/api/restart-connection'].includes(row.path)),false);
+                })()''')
+
+    def test_scope_inheritance_help_tracks_selected_scope_and_shows_saved_state(self):
+        self.run_case(r'''(async()=>{
+          await WorkspaceCustomizations.open();
+          assert.equal($('customizations-inherit-title').textContent,'공통·기존 설정 따르기');
+          assert.match($('customizations-inherit-description').textContent,/기존 프로젝트 설정/);
+          assert.match(flatText($('customizations-list')),/저장된 스킬 설정: 사용/);
+          assert.doesNotMatch(flatText($('customizations-list')),/현재 설정:/);
+          $('customizations-scope').value='user';$('customizations-scope').onchange();await flush();
+          assert.equal($('customizations-inherit-title').textContent,'스킬 기본 설정 따르기');
+          assert.match($('customizations-inherit-description').textContent,/프로젝트별 설정이나 회사 정책/);
+          const selector=$('customizations-list').children[0].children[1];
+          assert.equal(selector.children[0].textContent,'스킬 기본 설정 따르기');
+          assert.match(flatText($('customizations-list')),/스킬은 삭제하지 않습니다/);
+        })()''')
+
+    def test_pending_apply_remains_explicit_after_reopen_refresh_and_scope_change(self):
+        self.run_case(APPLY_SETUP+r'''(async()=>{
+          const {pending}=await editSetting();$('action-cancel').onclick();await pending;
+          $('customizations-close').onclick();await WorkspaceCustomizations.open('plugins');
+          assert.match($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          $('customizations-scope').value='user';$('customizations-scope').onchange();await flush();
+          assert.match($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          await $('customizations-refresh').onclick();
+          assert.match($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          assert.equal($('customizations-apply').hidden,false);assert.equal(restarts,0);assert.equal(saves,1);
+          const count=calls.length;WorkspaceCustomizations.connectionRestarted('A');
+          assert.equal($('customizations-apply').hidden,true);
+          assert.doesNotMatch($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          assert.equal(calls.length,count);
+        })()''')
+
+    def test_other_task_pending_apply_does_not_mark_current_task_or_clear_it_on_wrong_restart(self):
+        self.run_case(APPLY_SETUP+r'''(async()=>{
+          const other={...active,id:'B',title:'B'};sessions.push(other);targetSessions.set('B',other);
+          const {pending}=await editSetting('plugins','B');$('action-cancel').onclick();await pending;
+          $('customizations-close').onclick();await WorkspaceCustomizations.open('plugins','A');
+          assert.equal($('customizations-apply').hidden,true);
+          assert.doesNotMatch($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          $('customizations-close').onclick();await WorkspaceCustomizations.open('plugins','B');
+          WorkspaceCustomizations.connectionRestarted('A');assert.equal($('customizations-apply').hidden,false);
+          assert.match($('customizations-status').textContent,/이 연결에 아직 적용하지 않았/);
+          assert.equal(restarts,0);
+        })()''')
+
+    def test_project_override_lock_reason_is_visible_in_common_skill_scope(self):
+        self.run_case(r'''(async()=>{
+          api=async(path)=>({...catalog(),skills:[{name:'report',visibility:'off',source:'project',override:'on',
+            locked:true,reason:'이 프로젝트에 별도 스킬 설정이 있어요. 저장 범위를 이 프로젝트로 바꿔 주세요.'}]});
+          await WorkspaceCustomizations.open('skills');$('customizations-scope').value='user';
+          $('customizations-scope').onchange();await flush();
+          const card=$('customizations-list').children[0],selector=card.children[1];
+          assert.equal(selector.disabled,true);assert.match(flatText(card),/별도 스킬 설정/);
+          assert.match(flatText(card),/저장된 스킬 설정: 사용 안 함/);
+          assert.equal(selector.value,'on');
+        })()''')

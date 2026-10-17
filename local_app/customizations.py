@@ -94,16 +94,25 @@ class Customizations:
         # Additional settings passed by a wrapper cannot safely be rewritten here.
         forced = any(arg == '--settings' or arg.startswith('--settings=') for arg in self.command)
         strict = any(p.get('strictPluginOnlyCustomization') for p in policies)
+        lineage = project_lineage(workspace, self.config)
+        project_plugins, project_skills = {}, {}
+        for directory in reversed(lineage):
+            for filename in ('settings.json', 'settings.local.json'):
+                project_settings = _json_metadata(directory / '.claude' / filename)
+                project_plugins.update(project_settings.get('enabledPlugins', {}))
+                project_skills.update(project_settings.get('skillOverrides', {}))
         skills = []
         for row in inventory['skills']:
             if row.get('source') not in {'user', 'project'}:
                 continue
             name = row['name']
-            locked = row.get('visibilityLocked') or forced or strict or not supported or any(
+            scope_conflict = scope == 'user' and name in project_skills
+            locked = row.get('visibilityLocked') or forced or strict or not supported or scope_conflict or any(
                 name in p.get('skillOverrides', {}) for p in policies)
             skills.append({key: row.get(key) for key in ('candidateId', 'name', 'description', 'source', 'visibility')} |
                           {'locked': bool(locked), 'override': overrides.get(name),
-                           'reason': 'CLI 버전·스킬 원본 또는 관리 정책에 의해 변경할 수 없어요.' if locked else ''})
+                           'reason': '이 프로젝트에 별도 설정이 있어요. 저장 범위를 이 프로젝트로 바꿔 주세요.' if scope_conflict
+                           else 'CLI 버전·스킬 원본 또는 관리 정책에 의해 변경할 수 없어요.' if locked else ''})
         # A name is the native settings key. Do not offer two independent toggles for it.
         skills.sort(key=lambda row: row['source'] != 'user')
         skills = list({row['name']: row for row in reversed(skills)}.values())
@@ -111,11 +120,6 @@ class Customizations:
         registry = _json_metadata(self.config / 'plugins/installed_plugins.json').get('plugins', {})
         if not isinstance(registry, dict) or len(registry) > 1000:
             raise ValueError('플러그인 설치 목록을 확인하지 못했어요.')
-        lineage = project_lineage(workspace, self.config)
-        project_plugins = {}
-        for directory in reversed(lineage):
-            for filename in ('settings.json', 'settings.local.json'):
-                project_plugins.update(_json_metadata(directory / '.claude' / filename).get('enabledPlugins', {}))
         plugins = []
         for name, entries in registry.items():
             if not isinstance(name, str) or not re.fullmatch(r'[\w.-]+@[\w.-]+', name) or not isinstance(entries, list):
@@ -183,7 +187,13 @@ class Customizations:
                     raise ValueError('Claude가 변경을 완료하지 못했어요. 플러그인 의존성·회사 정책·CLI의 --scope 지원을 확인해 주세요. 원본 터미널에서도 확인할 수 있어요.')
                 if _json_metadata(path).get('enabledPlugins', {}).get(name) is not value:
                     raise ValueError('CLI 명령은 끝났지만 선택한 프로필의 적용 상태를 확인하지 못했어요. 실행 래퍼의 Claude 설정 경로를 확인하고 목록을 새로고침해 주세요.')
-            return {'ok': True, 'reconnectRequired': True, 'notice': SAVED,
-                    'catalog': self.snapshot(workspace, scope)}
+            catalog = self.snapshot(workspace, scope)
+            confirmed = next((row for row in catalog[kind] if row['name'] == name), None)
+            # A higher-priority file can change while the local write / CLI runs.
+            # Do not report success when the selected setting is now overridden.
+            if (confirmed is None or confirmed['locked'] or confirmed['override'] != value
+                    or value is not None and confirmed['visibility' if kind == 'skills' else 'enabled'] != value):
+                raise ValueError('설정 파일은 저장됐지만 현재 프로젝트의 적용 상태가 달라졌어요. 저장 범위와 프로젝트·관리 설정을 다시 확인해 주세요.')
+            return {'ok': True, 'reconnectRequired': True, 'notice': SAVED, 'catalog': catalog}
         finally:
             self.lock.release()

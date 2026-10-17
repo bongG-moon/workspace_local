@@ -1,24 +1,24 @@
 "use strict";
 
-// Read-only inventory; runtime tabs prepare only the selected, already trusted task.
+// Inventory discovery is read-only. Runtime tabs prepare only the selected task;
+// choosing its catalog context authorizes folder connection, never tool actions.
 // Metadata never becomes HTML or an executable request.
 globalThis.WorkspaceCapabilities = (() => {
   let opened = false, kind = "skills", data = null, generation = 0;
-  let controller = null, loading = false, refreshTimer = null;
+  let controller = null, loading = false, refreshTimer = null, selectionTimer = null;
+  let refreshPending = null;
   let scope = "common", selectedFolder = "", selectedSession = null, folderOptionsKey = "";
   let commonSession = null, commonExplicit = false, preparing = null;
   let autoTimer = null;
   const attempted = new Map();
   function autoPrepare() {
     clearTimeout(autoTimer);
-    if (!opened || kind === "skills" || !runtimeSession() || data?.runtime?.state === "live" || boot.demo || appClosed) return;
+    if (!opened || loading || !data || kind === "skills" || !runtimeSession() || data.runtime?.state === "live" || boot.demo || appClosed) return;
     const key = contextKey(), id = runtimeSession().id;
-    if (Date.now() - (attempted.get(id) || 0) < 30000) return;
+    if (attempted.has(id) && Date.now() - attempted.get(id) < 30000) return;
     autoTimer = setTimeout(() => {
-      if (!opened || contextKey() !== key || kind === "skills") return;
+      if (!opened || loading || contextKey() !== key || kind === "skills" || data?.runtime?.state === "live") return;
       if (preparing) return;
-      attempted.set(id, Date.now());
-      while (attempted.size > 16) attempted.delete(attempted.keys().next().value);
       void prepareCatalog({automatic:true});
     }, 150);
   }
@@ -50,7 +50,7 @@ globalThis.WorkspaceCapabilities = (() => {
     const folders = new Map();
     const recent = [...sessions].sort((a, b) => (b.updated || b.created || 0) - (a.updated || a.created || 0));
     for (const item of [active, ...recent].filter(Boolean)) {
-      if (typeof item.workspace !== "string" || !item.workspace || !item.id) continue;
+      if (item.kind === "chat" || typeof item.workspace !== "string" || !item.workspace || !item.id) continue;
       const key = pathKey(item.workspace);
       if (!folders.has(key)) folders.set(key, {workspace:item.workspace, sessions:[]});
       const rows = folders.get(key).sessions;
@@ -126,8 +126,11 @@ globalThis.WorkspaceCapabilities = (() => {
     const attention = active && ["approval", "question"].includes(active.state)
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
     $("capabilities-status").textContent = loading || preparing
-      ? "기능 목록을 확인하고 있어요. AI 요청은 보내지 않습니다." + attention
+      ? (kind === "skills" && !preparing ? "설치된 스킬 목록을 확인하고 있어요. AI 요청은 보내지 않습니다." : "선택한 폴더의 설정·후크·MCP로 목록을 자동 확인합니다. AI 요청은 보내지 않습니다.") + attention
       : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "공통 설치 스킬과 선택한 업무 연결의 보고 목록을 구분해 확인합니다.")) + attention;
+    if (!loading && !preparing && kind === "skills" && data?.runtime?.state !== "live" && selected) {
+      $("capabilities-status").textContent += " 설치 스킬은 파일에서 바로 확인해요. 실행 기능·MCP·빠른 요청 탭을 선택하면 해당 업무를 자동으로 연결합니다.";
+    }
   }
   function skillInventory() {
     if (data?.schemaVersion === 2) {
@@ -303,7 +306,7 @@ globalThis.WorkspaceCapabilities = (() => {
         : "확인한 설치 목록에 일반 스킬이 없어요."
       : current.reported ? `CLI가 보고한 ${names[kind]} 목록이 비어 있어요.`
       : data?.schemaVersion === 2 && data?.status === "installed-only" ? "이 범위의 업무 연결 보고가 없어요. 설치 정보와 실제 연결 목록은 별도로 확인합니다."
-      : beforeConnection() ? `선택한 업무의 Claude 연결을 자동으로 확인합니다. 처음 연결하는 폴더이거나 다시 시도하려면 ‘다시 확인’을 눌러 주세요.`
+      : beforeConnection() ? `선택한 업무의 Claude 연결을 자동으로 확인합니다. 연결에 실패하면 ‘다시 확인’으로 재시도할 수 있어요.`
       : `현재 Claude 연결에서 ${names[kind]} 목록을 전달받지 못했어요. 항목이 없다는 뜻은 아닙니다.`;
     const notes = [...(data?.warnings || [])];
     if (kind === "skills" && data?.installed?.diagnostics?.summary && !["ready", "metadata_read"].includes(data.installed.diagnostics.code)) notes.push(data.installed.diagnostics.summary);
@@ -352,34 +355,54 @@ globalThis.WorkspaceCapabilities = (() => {
       summary.append(el("span", "숫자는 선택한 업무의 Claude 연결이 보고한 항목 수예요. ‘CLI 미제공’은 0개라는 뜻이 아닙니다. 실행 기능 목록은 첫 실제 요청 후 제공될 수 있어요.", "capability-count-note"));
     }
   }
-  async function refresh() {
-    clearTimeout(refreshTimer);
-    syncFolders();
-    const ticket = ++generation, key = contextKey();
+  // Selection changes share one debounce; stale fetches are detached immediately.
+  // Disk discovery is bounded by the server and tab changes reuse this single payload.
+  function selectionChanged() {
+    clearTimeout(autoTimer); clearTimeout(refreshTimer); clearTimeout(selectionTimer);
+    generation++;
     if (controller) controller.abort();
-    controller = new AbortController(); loading = true;
+    refreshPending = null; data = null; loading = true; render();
+    selectionTimer = setTimeout(() => { selectionTimer = null; void refresh(); }, 200);
+  }
+  function refresh({force=false} = {}) {
+    clearTimeout(refreshTimer); clearTimeout(selectionTimer); selectionTimer = null;
+    syncFolders();
+    const key = contextKey();
+    if (!force && refreshPending?.key === key) return refreshPending.promise;
+    const request = {key, ticket:++generation};
+    if (controller) controller.abort();
+    controller = new AbortController(); request.controller = controller; loading = true;
     $("capabilities-refresh").disabled = true; statusLine();
-    if (scope === "folder" && !selectedFolder) {
-      data = null; loading = false; $("capabilities-refresh").disabled = false; render(); return;
-    }
-    try {
-      let query = `?scope=${scope}`;
-      if (scope === "folder") query += `&workspace=${encodeURIComponent(selectedFolder)}` + (selectedSession ? `&id=${encodeURIComponent(selectedSession.id)}` : "");
-      else if (commonSession) query += `&id=${encodeURIComponent(commonSession.id)}`;
-      const response = await api("/api/capabilities" + query, undefined, controller.signal);
-      if (!opened || ticket !== generation || contextKey() !== key) return;
-      data = response; loading = false; render(); autoPrepare();
-    } catch (err) {
-      if (err.name === "AbortError" || ticket !== generation || !opened) return;
-      data = null; loading = false; render();
-      $("capabilities-status").textContent = "목록을 불러오지 못했어요. 새로고침으로 다시 확인해 주세요.";
-      $("capabilities-warning").textContent = err.message;
-      $("capabilities-warning").hidden = false;
-    } finally {
-      if (ticket === generation) { loading = false; $("capabilities-refresh").disabled = false; }
-    }
+    request.promise = (async () => {
+      if (scope === "folder" && !selectedFolder) {
+        data = null; loading = false; $("capabilities-refresh").disabled = false; render(); return;
+      }
+      try {
+        let query = `?scope=${scope}`;
+        if (scope === "folder") query += `&workspace=${encodeURIComponent(selectedFolder)}` + (selectedSession ? `&id=${encodeURIComponent(selectedSession.id)}` : "");
+        else if (commonSession) query += `&id=${encodeURIComponent(commonSession.id)}`;
+        const response = await api("/api/capabilities" + query, undefined, request.controller.signal);
+        if (!opened || request.ticket !== generation || contextKey() !== key) return;
+        data = response; loading = false; render(); autoPrepare();
+      } catch (err) {
+        if (err.name === "AbortError" || request.ticket !== generation || !opened) return;
+        data = null; loading = false; render();
+        $("capabilities-status").textContent = "목록을 불러오지 못했어요. 새로고침으로 다시 확인해 주세요.";
+        $("capabilities-warning").textContent = err.message;
+        $("capabilities-warning").hidden = false;
+      } finally {
+        if (request.ticket === generation) { loading = false; $("capabilities-refresh").disabled = false; }
+        if (refreshPending === request) refreshPending = null;
+      }
+    })();
+    refreshPending = request;
+    // Also clear synchronous empty-context completions after assigning the slot.
+    request.promise.then(() => { if (refreshPending === request) refreshPending = null; });
+    return request.promise;
   }
   function open() {
+    if(globalThis.WorkspaceModes?.isChat())return;
+    if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     globalThis.WorkspaceStream?.suspend();
     opened = true; app().classList.add("catalog-open");globalThis.WorkspaceLayout?.refresh();
     // Stop only the hidden detail reader; the selected task and event poll continue.
@@ -396,7 +419,8 @@ globalThis.WorkspaceCapabilities = (() => {
   function close() {
     clearTimeout(autoTimer);
     if (!opened) return;
-    opened = false; generation++; loading = false;
+    opened = false; generation++; loading = false; refreshPending = null;
+    clearTimeout(selectionTimer); selectionTimer = null;
     if (controller) controller.abort();
     clearTimeout(refreshTimer);
     app().classList.remove("catalog-open");globalThis.WorkspaceLayout?.refresh();
@@ -407,27 +431,29 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   async function prepareCatalog({automatic=false} = {}) {
     if(preparing||!runtimeSession()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
-    const context={key:contextKey(),id:runtimeSession().id};preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
-    const current=()=>opened&&!appClosed&&contextKey()===context.key;
+    const context={key:contextKey(),id:runtimeSession().id};
+    attempted.set(context.id, Date.now());
+    while (attempted.size > 16) attempted.delete(attempted.keys().next().value);
+    preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
+    const current=()=>opened&&!appClosed&&contextKey()===context.key&&(!automatic||kind!=="skills");
     try {
       const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);
       if(!current())return;
+      if(["starting","running","approval","question"].includes(item.state) || item.connection?.connected===true){
+        await refresh({force:true});if(!automatic)toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
+      }
+      // Selecting this catalog context authorizes preparing its folder settings.
+      // This trust decision does not change tool permissions or send an AI request.
       if(!item.trusted){
-        if(automatic){context.error="처음 연결하는 폴더예요. ‘다시 확인’을 눌러 이 폴더의 설정·후크·MCP 실행을 확인해 주세요.";return;}
-        const accepted=await confirmAction({title:"이 업무 폴더의 Claude 연결",message:`${item.workspace}\n이 폴더의 Claude 설정·후크·MCP를 실행해 목록을 확인합니다. AI 질문은 보내지 않습니다.`,confirmLabel:"이 폴더 연결"});
-        if(!accepted||!current())return;
         await api('/api/trust',{id:context.id,trusted:true});
         if(!current())return;
       }
-      if(["starting","running","approval","question"].includes(item.state) || item.connection?.connected===true){
-        await refresh();if(!automatic)toast("현재 업무의 연결 목록을 갱신했어요. 진행 중인 요청은 유지합니다.");return;
-      }
-      context.promise=(active?.id===context.id ? globalThis.WorkspaceComposer?.waitForPreparation?.() || globalThis.WorkspaceInlineControls?.waitForPreparation?.() : null) || api('/api/connect',{id:context.id,...(automatic?{automatic:true}:{})});
+      context.promise=(active?.id===context.id ? globalThis.WorkspaceComposer?.waitForPreparation?.() || globalThis.WorkspaceInlineControls?.waitForPreparation?.() : null) || api('/api/connect',{id:context.id,catalog:true,...(automatic?{automatic:true}:{})});
       const response=await context.promise;
-      if(!current())return;
       sessions=sessions.map(row=>row.id===context.id?{...row,connectionState:"live"}:row);
+      if(!current())return;
       if(active?.id===context.id){active.trusted=true;active.connection=response.connection;renderConnection(response.connection);}
-      await refresh();
+      await refresh({force:true});
       if(current()&&!automatic)toast("연결 목록을 확인했어요. 실행 기능 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
     }catch(err){if(current()){$("capabilities-status").textContent=err.message;if(!automatic)toast(err.message);context.error=err.message;}}
     finally{if(preparing===context){preparing=null;if(opened){statusLine();if(context.error&&current())$("capabilities-status").textContent=context.error;if(!current())autoPrepare();}globalThis.WorkspaceConnectionRestart?.refreshControls();}}
@@ -436,14 +462,14 @@ globalThis.WorkspaceCapabilities = (() => {
     if (!opened) return;
     const previous = contextKey();
     syncFolders();
-    if (contextKey() !== previous) { data = null; render(); refresh(); return; }
+    if (contextKey() !== previous) { selectionChanged(); return; }
     statusLine();
     if (reload && active?.id === runtimeSession()?.id) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 100); }
   }
   $("capabilities-scope-select").onchange = () => {
     scope = $("capabilities-scope-select").value === "folder" ? "folder" : "common";
     syncFolders(scope === "folder");
-    data = null; render(); refresh();
+    selectionChanged();
   };
   $("capabilities-folder").onchange = () => {
     if (!opened) return;
@@ -453,7 +479,7 @@ globalThis.WorkspaceCapabilities = (() => {
       commonSession = {id:item.id, title:item.title, workspace:item.workspace};
       commonExplicit = true;
     } else selectFolder($("capabilities-folder").value);
-    data = null; render(); return refresh();
+    selectionChanged();
   };
   $("capabilities-manage").onclick = () => globalThis.WorkspaceCustomizations?.open("skills",runtimeSession()?.id);
   $("capabilities-open").onclick = open;

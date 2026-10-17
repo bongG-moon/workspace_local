@@ -115,6 +115,40 @@ class HtmlWorkspacePreviewTests(unittest.TestCase):
         for value in ('relative.png', 'image/svg', 'text/html;base64'):
             self.assertNotIn(value, preview)
 
+    def test_fixed_slide_has_bounded_numeric_fit_hint_without_executable_content(self):
+        preview = render('<style>*{box-sizing:border-box}.slide{width:1920px;height:1080px;padding:56px 76px}</style>'
+                         '<section class="slide"><h1>카드 보고서</h1></section>')
+        self.assertIn('<meta name="ax-preview-width" content="1952">', preview)
+        self.assertIn('width:1920px', preview)
+        self.assertIn("script-src &#x27;none&#x27;", preview)
+        self.assertNotIn('<script', preview)
+        self.assertLess(preview.index('Content-Security-Policy'), preview.index('ax-preview-width'))
+
+    def test_fixed_content_box_padding_and_borders_fit_without_overcounting_border_box(self):
+        source = '<style>.slide{width:1920px;padding:40px 76px;border:2px solid gray}</style><div class="slide">보고서</div>'
+        self.assertIn('content="2108"', render(source))
+        self.assertIn('content="1952"', render('<style>*{box-sizing:border-box}</style>'+source))
+
+    def test_responsive_and_conditional_layouts_do_not_get_a_fixed_viewport(self):
+        for css in ('.slide{max-width:1920px;width:100%}', '.slide{width:1920px;max-width:100%}',
+                    '.slide{width:1920px}@media(max-width:900px){.slide{width:100%}}',
+                    '@media(min-width:1920px){.slide{width:1920px}}',
+                    '@media print{.slide{width:1920px}}',
+                    '.unused{width:9000px}', '.slide::after{content:"width:9999px"}'):
+            with self.subTest(css=css):
+                self.assertNotIn('ax-preview-width', render('<style>'+css+'</style><main class="slide">보고서</main>'))
+
+    def test_fit_hint_ignores_source_metadata_code_strings_and_extreme_widths(self):
+        for content in ('<meta name="ax-preview-width" content="99999"><p>본문</p>',
+                        '<pre>.slide{width:1920px}</pre><div class="slide">본문</div>',
+                        '<style>.slide{content:";width:1920px"}</style><div class="slide">본문</div>',
+                        '<div style="width:999999999px">본문</div>',
+                        '<div style="width:300px">본문</div>'):
+            with self.subTest(content=content):
+                self.assertNotIn('ax-preview-width', render(content))
+        self.assertIn('content="1312"', render('<main style="width:1280px">본문</main>'))
+        self.assertIn('content="992"', render('<style>.slide{width:1920px;max-width:960px}</style><div class="slide">본문</div>'))
+
     @unittest.skipUnless(CORE is not None, CORE_SKIP)
     def test_picker_has_static_cards_without_active_content(self):
         preview = render(picker_html())

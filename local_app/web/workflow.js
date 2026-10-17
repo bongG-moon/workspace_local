@@ -95,7 +95,7 @@ globalThis.WorkspaceWorkflow = (() => {
   }
   async function refresh() {
     const overviewRead=refreshOverview();
-    if (!active || appClosed) return overviewRead;
+    if (!active || appClosed || globalThis.WorkspaceModes?.isChat()) return overviewRead;
     const context=capture(),ticket=++readGeneration;if(controller)controller.abort();controller=new AbortController();
     try {const value=await api(`/api/dispatch?id=${encodeURIComponent(context.id)}`,undefined,controller.signal);if(ticket===readGeneration)apply(value,context);}
     catch(err){if(err.name!=="AbortError"&&current(context)&&$("workflow-dialog").open)$("workflow-message").textContent=err.message;}
@@ -215,6 +215,7 @@ globalThis.WorkspaceWorkflow = (() => {
     return action==="steer"?"현재 요청을 중지하고 이어갈 요청을 등록했습니다.":busy()?"현재 요청이 정상 완료되면 순서대로 자동 실행합니다.":"요청을 대기에 추가했습니다. 순서대로 자동 실행합니다.";
   }
   async function send(action) {
+    if(globalThis.WorkspaceModes?.isChat())return;
     if (!active || locked() || sending || choiceSubmission || appClosed || stopBlocked() || globalThis.WorkspaceConnectionRestart?.isCurrent() || globalThis.WorkspaceAttachments?.isUploading()) return;
     if(!active.trusted)return chooseFolder(true);
     const text=$("prompt").value,files=[...attachments];if(!text.trim())return $("prompt").focus();
@@ -287,6 +288,7 @@ globalThis.WorkspaceWorkflow = (() => {
     updateSchedulePreview();
   }
   function openEditor(kind,item=null) {
+    if(globalThis.WorkspaceModes?.isChat())return;
     if(!active||locked()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     if(!active.trusted){chooseFolder(true);$("folder-form").dataset.afterTrust="schedule";return;}
     editor={...capture(),kind,item,attachments:[...(item?.attachments||attachments)]};

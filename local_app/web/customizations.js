@@ -7,6 +7,10 @@ globalThis.WorkspaceCustomizations = (() => {
   const labels = {on:"사용", "name-only":"이름만 제공", "user-invocable-only":"직접 호출만", off:"사용 안 함"};
   const inheritLabels = {local:"공통·기존 설정 따르기", user:"스킬 기본 설정 따르기"};
   function notice(text) { $("customizations-status").textContent = text; }
+  function catalogNotice(current) {
+    return (current.data?.notice || "")+(current.data?.limited ? " 일부 설치 정보는 확인하지 못했어요." : "")
+      +(current.pendingApply ? " 저장한 변경은 이 연결에 아직 적용하지 않았어요. ‘저장한 설정 적용’으로 재연결할 수 있어요." : "");
+  }
   function controls() {
     const scope = view?.scope || "local";
     $("customizations-inherit-title").textContent = inheritLabels[scope];
@@ -35,7 +39,7 @@ globalThis.WorkspaceCustomizations = (() => {
       const card = el("article", null, "customization-row"), text = el("div");
       text.append(el("strong", row.name));
       if (row.description) text.append(el("p", row.description, "composer-note"));
-      if (kind === "skills") text.append(el("small", `현재 설정: ${labels[row.visibility] || row.visibility} · ${row.source === "user" ? "개인 스킬" : "프로젝트 스킬"}`));
+      if (kind === "skills") text.append(el("small", `저장된 스킬 설정: ${labels[row.visibility] || row.visibility} · ${row.source === "user" ? "개인 스킬" : "프로젝트 스킬"}`));
       else text.append(el("small", `저장된 업무 설정: ${row.enabled ? "사용" : "사용 안 함"}`));
       if (row.locked) text.append(el("small", row.reason));
       const select = el("select"); select.setAttribute("aria-label", row.name+" 사용 상태");
@@ -64,10 +68,11 @@ globalThis.WorkspaceCustomizations = (() => {
     try {
       const data = await api(`/api/customizations?id=${encodeURIComponent(current.id)}&scope=${current.scope}`, undefined, controller.signal);
       if (view !== current || ticket !== sequence || !dialog.open) return;
-      current.data=data; render();notice(data.notice+(data.limited ? " 일부 설치 정보는 확인하지 못했어요." : ""));
+      current.data=data; render();notice(catalogNotice(current));
     } catch (err) {if (view===current && ticket===sequence && err.name!=="AbortError")notice(err.message);}
   }
   async function open(kind="skills", id=active?.id) {
+    if(globalThis.WorkspaceModes?.isChat())return;
     if (changing || appClosed) return;
     if (!id) {toast("먼저 설정을 적용할 업무를 선택해 주세요.");return;}
     for(const pendingId of pendingApplications)if(pendingId!==id&&pendingId!==active?.id&&!sessions.some(row=>row.id===pendingId))pendingApplications.delete(pendingId);
@@ -87,7 +92,8 @@ globalThis.WorkspaceCustomizations = (() => {
       if (!item.trusted) {notice("이 업무의 폴더 확인을 먼저 완료한 뒤 설정을 변경해 주세요.");return;}
       if (current.scope === "user") {
         const accepted=await confirmAction({title:"사용자 공통 설정 변경",message:"같은 Claude 설정을 사용하는 다른 업무와 터미널에도 영향을 줍니다. 이 범위에 저장할까요?",confirmLabel:"공통 설정에 저장"});
-        if (!accepted || view!==current || !dialog.open) return;
+        if (view!==current || !dialog.open) return;
+        if (!accepted) {notice("설정을 변경하지 않았어요.");return;}
       }
       const result=await api('/api/customizations',{id:current.id,scope:current.scope,kind:current.kind,
         name:row.name,value:current.kind==="plugins" ? value==="on" : value==="inherit" ? null : value,
@@ -129,6 +135,6 @@ globalThis.WorkspaceCustomizations = (() => {
   $("customizations-refresh").onclick=refresh;
   $("customizations-close").onclick=()=>dialog.close();
   dialog.addEventListener("close",()=>{if(dialog.open)return;sequence++;controller?.abort();view=null;list.replaceChildren();});
-  function connectionRestarted(id){pendingApplications.delete(id);if(view?.id===id){view.pendingApply=false;controls();}}
+  function connectionRestarted(id){pendingApplications.delete(id);if(view?.id===id){view.pendingApply=false;controls();if(view.data)notice(catalogNotice(view));}}
   return {open,handleCommand,connectionRestarted};
 })();

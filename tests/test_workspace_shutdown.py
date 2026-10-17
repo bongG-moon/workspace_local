@@ -6,7 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -102,6 +102,22 @@ class ShutdownTests(unittest.TestCase):
         self.assertFalse(self.thread.is_alive())
         self.assertTrue(self.app.close())
         bridge.close.assert_called_once()
+
+    def test_late_owned_callback_after_close_does_not_recreate_history_or_queue(self):
+        item = self.app.get(self.sid)
+        bridge = Mock(closed=False)
+        bridge.close.return_value = True
+        item['bridge'] = bridge
+        self.assertTrue(self.app.close())
+        sequence = item['seq']
+        with patch.object(self.app, 'save') as save, patch.object(self.app.dispatch, 'observe') as observe:
+            self.app._emit_bridge(self.sid, bridge, 'assistant', {'text': 'late process output'})
+            self.app._emit_bridge(self.sid, bridge, 'status', {'state': 'stopped'})
+            self.app.emit(self.sid, 'error', {'message': 'late worker callback'})
+        save.assert_not_called()
+        observe.assert_not_called()
+        self.assertEqual(sequence, item['seq'])
+        self.assertEqual([], item['messages'])
 
     def test_quit_does_not_ack_unfinished_update_launcher_cleanup(self):
         self.app.app_updates.close = Mock(side_effect=[False, False, True, True])

@@ -79,3 +79,430 @@
 .top-actions .appearance-toggle>.icon{width:20px;height:20px}
 
 @media(forced-colors:active){:root[data-theme]{color-scheme:light dark;--accent:Highlight;--accent-ink:LinkText;--ink:CanvasText;--muted:CanvasText;--surface:Canvas;--surface-raised:Canvas;--line:ButtonBorder}}
+/* A2: the familiar side panels frame a quieter neutral conversation canvas. */
+:root{--chat-canvas:#fff;--chat-toolbar:#fafbfc;--chat-composer:#fcfdff;--chat-rule:#d8dde6;--chat-bubble:#f0f1f8}
+:root[data-theme="dark"]{--chat-canvas:#191d26;--chat-toolbar:#202530;--chat-composer:#262c39;--chat-rule:#444c5d;--chat-bubble:#343b58}
+.app>main{background:var(--chat-canvas)}
+.app .topbar{background:var(--chat-toolbar);border-bottom:1px solid var(--chat-rule)}
+.app .work-area{background:var(--chat-canvas)}
+.app .composer{background:var(--chat-composer);border:1px solid var(--chat-rule);box-shadow:0 3px 14px #1c304208}
+.app .message.user{background:var(--chat-bubble);border-color:var(--chat-rule)}
+.mode-switch{display:flex;align-items:stretch;gap:4px;padding:4px;margin:0 0 12px;border:1px solid var(--theme-line,#dce1ea);border-radius:12px;background:var(--theme-surface,#eef1f7);flex:none}
+.mode-switch button{display:flex;justify-content:center;align-items:center;gap:6px;min-height:34px;min-width:0;flex:1;border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:6px}
+.mode-switch button[aria-pressed=true]{background:var(--theme-surface-hover,#fff);color:var(--accent-ink);box-shadow:0 1px 4px #2832470c;font-weight:650}
+.mode-switch .icon{width:16px;height:16px;flex:none}
+.mode-state{display:grid;place-items:center;min-width:16px;height:16px;border-radius:5px;font-size:10px;background:var(--theme-tint,#e1e4f5);color:var(--accent-ink)}
+.mode-state.needs-response{background:var(--theme-warning-tint,#f4e9ce);color:var(--theme-warning,#805f2d)}
+.mode-state[hidden]{display:none}
+.mode-switch button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* One reading scale across navigation, folders and conversations. */
+.sidebar{--sidebar-text-size:13px;--sidebar-text-line:20px;--sidebar-row-height:36px}
+.sidebar .nav-button,.sidebar .palette-launcher,.sidebar .session-search input{font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:400}
+.sidebar .nav-button{min-height:var(--sidebar-row-height);padding:7px 10px;gap:9px;border-radius:8px}
+.sidebar .nav-button[aria-current=page]{font-weight:500}
+.sidebar .nav-button .icon,.sidebar .palette-launcher .icon,.sidebar .session-search .icon{width:16px;height:16px;stroke-width:1.65}
+.sidebar .session-search{min-height:36px;padding:7px 10px;gap:9px;border-radius:9px}
+.sidebar .sidebar-label{margin:18px 10px 6px;font-size:12px;line-height:18px;font-weight:550;letter-spacing:.15px}
+.sidebar .task-group-create{font-size:12px;font-weight:450;gap:6px}
+.sidebar .task-group-create .icon{width:15px;height:15px}
+.sidebar .session-list .session-row{grid-template-columns:12px minmax(0,1fr);min-height:var(--sidebar-row-height);margin:1px 0;border-radius:8px}
+.sidebar .session-list .session{min-height:var(--sidebar-row-height);padding:8px;margin:0;gap:6px;border-radius:8px}
+.sidebar .session-list .session-title{font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:400;letter-spacing:0}
+.sidebar .session-list .session.active .session-title{font-weight:500}
+.sidebar .session-list .session-row.grouped-session{margin-left:28px}
+.sidebar .task-group-toggle{min-height:var(--sidebar-row-height);font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:500;gap:7px;padding:7px 4px}
+.sidebar .task-folder-icon{width:16px;height:16px}
+.sidebar .task-group-count{font-size:11px;font-weight:400}
+.sidebar .task-group-menu{font-size:16px}
+.sidebar .task-group-header{margin:8px 0 2px;min-height:var(--sidebar-row-height)}
+.sidebar .task-group-header:first-child{margin-top:0}
+/* Hidden row actions must not consume the title's reading width. Focus reveals
+   the same actions as hover; touch screens keep them visible. */
+.sidebar .session-list .session-row>:is(.session-rename,.session-pin,.session-remove){position:absolute;z-index:1;top:50%;transform:translateY(-50%);width:24px;height:28px;min-height:0;padding:4px;border-radius:6px;opacity:0;pointer-events:none}
+.sidebar .session-list .session-rename{right:54px}
+.sidebar .session-list .session-pin{right:28px}
+.sidebar .session-list .session-remove{right:2px}
+.sidebar .session-list .session-row:is(:hover,:focus-within)>:is(.session-rename,.session-pin,.session-remove),.sidebar .session-list .session-pin[aria-pressed=true]{opacity:1;pointer-events:auto}
+.sidebar .session-list .session-row:has(>:where(.session-pin[aria-pressed=true]))>.session{padding-right:56px}
+.sidebar .session-list .session-row:is(:hover,:focus-within)>.session{padding-right:82px}
+@media(hover:none){.sidebar .session-list .session-row>.session{padding-right:82px}.sidebar .session-list .session-row>:is(.session-rename,.session-pin,.session-remove){opacity:1;pointer-events:auto}}
+.session-row{grid-template-columns:20px minmax(0,1fr) 26px 26px 26px}
+.session-rename{display:grid;place-items:center;height:28px;width:23px;min-width:0;min-height:0;padding:3px;border:0;border-radius:6px;background:transparent;color:var(--muted);opacity:0;cursor:pointer}
+.session-rename .icon{height:15px;width:15px}
+.session-row:hover .session-rename,.session-row:focus-within .session-rename{opacity:1}
+.session-rename:hover{background:var(--theme-surface-hover,#dfe3f4);color:var(--accent-ink)}
+.session-rename:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.sidebar-collapsed .mode-switch{flex-direction:column;border:0;background:transparent;padding:0;gap:4px;width:42px}
+.sidebar-collapsed .mode-switch button{position:relative;min-height:36px;width:42px;flex:none}
+.sidebar-collapsed .mode-switch button>span{display:none}
+.sidebar-collapsed .mode-state{position:absolute;right:0;top:0;font-size:9px;min-width:13px;height:13px}
+.app.chat-mode{--inspector-width:0px}
+.app.chat-mode .inspector,.app.chat-mode #materials-button,.app.chat-mode #workspace-button,.app.chat-mode #workspace-summary,
+.app.chat-mode #capabilities-open,.app.chat-mode #schedule-overview-open,.app.chat-mode #task-group-create,
+.app.chat-mode #prompt-shortcuts,.app.chat-mode .work-home-only,
+.app.chat-mode #branch-open,.app.chat-mode #branch-origin,.app.chat-mode #imported-context,.app.chat-mode #progress-view,
+.app.chat-mode #verification-status,.app.chat-mode #workspace-choice,.app.chat-mode .workflow-toolbar,.app.chat-mode #followup-actions,
+.app.chat-mode #attach-path,.app.chat-mode .composer-trigger-hints,.app.chat-mode #composer-effort,.app.chat-mode #composer-permission,
+.app.chat-mode #tool-activity-open,.app.chat-mode #tool-activity-badge{display:none!important}
+.app.chat-mode .composer-input-hints{justify-content:flex-end}
+
+.chat-home{display:none}
+.app.chat-mode .chat-home{display:block}
+.app.chat-mode .welcome{max-width:864px;padding:34px 32px 24px}
+.app.chat-mode:not(.task-open) .composer-wrap{max-width:864px;padding-inline:32px}
+.app.chat-mode .chat-home-hero{position:relative;isolation:isolate;text-align:center;padding:4px 24px 27px;margin-bottom:16px}
+.app.chat-mode .chat-home-hero::before{content:"";position:absolute;z-index:-1;inset:-15px 6% -8px;background:radial-gradient(ellipse at 50% 20%,#7773d414,transparent 68%);pointer-events:none}
+.app.chat-mode .chat-home-mark{display:grid;place-items:center;width:48px;height:48px;margin:0 auto 17px;border:1px solid #dedcf3;border-radius:16px;background:linear-gradient(145deg,#f7f6ff,#ecebfa);color:var(--accent-ink);box-shadow:0 6px 18px #7773d411,inset 0 1px 0 #fff}
+.app.chat-mode .chat-home-mark .icon{width:29px;height:29px;stroke-width:1.4}
+.app.chat-mode .chat-home-eyebrow{margin:0 0 8px;color:var(--accent-ink);font-size:11px;font-weight:500;letter-spacing:.35px}
+.app.chat-mode .chat-home-hero h2{margin:0 0 12px;font-size:32px;line-height:1.4;font-weight:600;letter-spacing:-1.25px;color:var(--ink)}
+.app.chat-mode .chat-home-description{margin:0;color:var(--muted);font-size:13px;line-height:1.8;word-break:keep-all}
+.app.chat-mode .chat-starter-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}
+.app.chat-mode .chat-starter-heading h3{margin:0;font-size:12px;font-weight:550;color:var(--ink)}
+.app.chat-mode .chat-starter-heading>span{font-size:10px;color:var(--muted)}
+.app.chat-mode .chat-starters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.app.chat-mode .chat-starter{position:relative;display:flex;flex-direction:column;align-items:flex-start;min-width:0;gap:6px;min-height:132px;padding:16px 14px 14px;border:1px solid var(--chat-rule);border-radius:15px;background:linear-gradient(145deg,var(--chat-composer),var(--chat-toolbar));color:var(--ink);text-align:left;box-shadow:0 2px 4px #26314b03;transition:border-color .15s,background-color .15s,box-shadow .15s;cursor:pointer}
+.app.chat-mode .chat-starter-icon{display:grid;place-items:center;width:29px;height:29px;margin-bottom:5px;border-radius:9px;color:var(--accent-ink);background:var(--accent-tint)}
+.app.chat-mode .chat-starter-icon .icon{width:17px;height:17px;stroke-width:1.6}
+.app.chat-mode .chat-starter strong{font-size:13px;line-height:1.5;font-weight:550;letter-spacing:-.2px}
+.app.chat-mode .chat-starter>span:not(.chat-starter-icon){font-size:10.5px;line-height:1.6;color:var(--muted);word-break:keep-all}
+.app.chat-mode .chat-starter-arrow{position:absolute;right:14px;top:20px;width:14px;height:14px;color:var(--muted);opacity:.7}
+.app.chat-mode .chat-starter:hover{border-color:var(--theme-line-accent,#b8b7dc);box-shadow:0 4px 14px #5e60a312}
+.app.chat-mode .chat-starter:hover .chat-starter-arrow{color:var(--accent-ink);opacity:1}
+.app.chat-mode .chat-starter:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.app.chat-mode .recent-heading{margin:28px 0 12px}
+.app.chat-mode .recent-heading h3{font-size:12px;font-weight:550}
+.app.chat-mode .recent-heading .text-button{padding:0;font-size:10px}
+.app.chat-mode .home-recents{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.app.chat-mode .home-recents .recent-row{position:relative;display:block;min-width:0;margin:0;padding:0;border:1px solid var(--chat-rule);border-radius:13px;background:var(--chat-canvas);transition:border-color .15s}
+.app.chat-mode .home-recents .recent-card{min-height:109px;padding:13px 15px 36px;border:0;border-radius:12px;box-shadow:none;background:transparent;gap:5px 8px;grid-template-columns:minmax(0,1fr);color:var(--ink)}
+.app.chat-mode .home-recents .recent-card:hover{background:var(--chat-toolbar)}
+.app.chat-mode .home-recents .recent-kicker{display:none}
+.app.chat-mode .home-recents .recent-card>strong{grid-row:1;font-size:12px;line-height:1.6;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app.chat-mode .home-recents .recent-meta{grid-row:2;font-size:10px}
+.app.chat-mode .home-recents .recent-status{position:absolute;left:15px;bottom:12px;padding:0;background:transparent;font-size:10px;color:var(--muted)}
+.app.chat-mode .home-recents .session-drag{display:none}
+.app.chat-mode .home-recents .recent-row>:is(.session-rename,.session-pin,.session-remove){position:absolute;bottom:7px;height:25px;width:25px;padding:4px;border-radius:6px;opacity:0;pointer-events:none}
+.app.chat-mode .home-recents .session-rename{right:62px}
+.app.chat-mode .home-recents .session-pin{right:34px}
+.app.chat-mode .home-recents .session-remove{right:6px}
+.app.chat-mode .home-recents .recent-row:is(:hover,:focus-within)>:is(.session-rename,.session-pin,.session-remove),.app.chat-mode .home-recents .session-pin[aria-pressed=true]{opacity:1;pointer-events:auto}
+.app.chat-mode .chat-recents-empty{grid-column:1/-1;display:flex;align-items:center;gap:12px;min-height:78px;padding:17px 20px;border:1px dashed var(--chat-rule);border-radius:14px;background:var(--chat-toolbar)}
+.app.chat-mode .chat-recents-empty-mark{display:grid;place-items:center;width:34px;height:31px;flex:none;border:1px solid var(--chat-rule);border-radius:10px 10px 10px 3px;color:var(--muted);font-size:18px;line-height:1;letter-spacing:2px;background:var(--chat-canvas)}
+.app.chat-mode .chat-recents-empty strong{font-size:11px;font-weight:500;color:var(--ink)}
+.app.chat-mode .chat-recents-empty p{font-size:10px;line-height:1.6;color:var(--muted);margin:4px 0 0}
+:root[data-theme="dark"] .app.chat-mode .chat-home-mark{background:linear-gradient(145deg,#34334d,#282c3e);border-color:#4a4666;box-shadow:0 6px 18px #0002,inset 0 1px 0 #ffffff06}
+:root[data-theme="dark"] .app.chat-mode .chat-home-hero::before{background:radial-gradient(ellipse at 50% 20%,#aca4f516,transparent 68%)}
+@media(max-width:1120px){.app.chat-mode .chat-starters{grid-template-columns:repeat(2,minmax(0,1fr))}.app.chat-mode .chat-starter{min-height:106px;padding:14px 15px 14px 57px}.app.chat-mode .chat-starter-icon{position:absolute;left:15px;top:14px}.app.chat-mode .chat-starter-arrow{display:none}.app.chat-mode .chat-starter strong{margin-top:1px}}
+@media(max-height:820px){.app.chat-mode .welcome{padding-top:22px}.app.chat-mode .chat-home-hero{padding-bottom:16px;margin-bottom:9px}.app.chat-mode .chat-home-mark{width:39px;height:39px;margin-bottom:10px;border-radius:13px}.app.chat-mode .chat-home-mark .icon{width:24px;height:24px}.app.chat-mode .chat-home-hero h2{font-size:27px;margin-bottom:8px}.app.chat-mode .chat-starter{min-height:118px}.app.chat-mode .recent-heading{margin-top:22px}}
+@media(max-width:700px){.app.chat-mode .welcome{padding:24px 18px 16px}.app.chat-mode:not(.task-open) .composer-wrap{padding-inline:18px}.app.chat-mode .chat-home-hero{padding-inline:0}.app.chat-mode .chat-home-hero h2{font-size:27px}.app.chat-mode .chat-home-description{font-size:12px}.app.chat-mode .chat-starter{padding:13px;min-height:132px}.app.chat-mode .chat-starter-icon{position:static;margin-bottom:4px}.app.chat-mode .chat-starter strong{font-size:12px}.app.chat-mode .chat-starter>span:not(.chat-starter-icon){font-size:10px}.app.chat-mode .chat-starter-heading>span{font-size:9px}.app.chat-mode .home-recents{grid-template-columns:1fr}.app.chat-mode .home-recents .recent-card{min-height:101px}.app.chat-mode .chat-recents-empty{padding:14px 12px}.app.chat-mode .chat-recents-empty p{max-width:230px}}
+@media(hover:none){.app.chat-mode .home-recents .recent-row>:is(.session-rename,.session-pin,.session-remove){opacity:1;pointer-events:auto}}
+@media(prefers-reduced-motion:reduce){.app.chat-mode .chat-starter,.app.chat-mode .home-recents .recent-row{transition:none}}
+@media(forced-colors:active){.app.chat-mode .chat-home-hero::before{display:none}.app.chat-mode .chat-home-mark,.app.chat-mode .chat-starter,.app.chat-mode .chat-recents-empty,.app.chat-mode .home-recents .recent-row{background:Canvas;border:1px solid ButtonBorder;box-shadow:none}.app.chat-mode .chat-starter-icon{background:Canvas;color:CanvasText}}
+.app.chat-mode .conversation-empty{color:var(--muted)}
+body:has(.app.chat-mode) #settings-dialog .settings-section:has(#permission-mode-select),
+body:has(.app.chat-mode) #settings-dialog .settings-section:has(#model-select),
+body:has(.app.chat-mode) #settings-dialog .advanced-settings{display:none}
+@media(hover:none){.session-rename{opacity:1}}
+@media(max-width:700px){.app.chat-mode{grid-template-columns:60px minmax(0,1fr) 0px}}
+.attachment-read-heading{margin:10px 0 0;padding:9px 0 0;border-top:1px solid var(--chat-rule);font-size:10px;font-weight:550;color:var(--muted);text-align:left}
+.attachment-read-notices{list-style:none;margin:2px 0 0;padding:0;font-size:11px;line-height:1.65;color:var(--muted);text-align:left}
+.attachment-read-notices li{display:flex;flex-wrap:wrap;gap:4px 8px;margin:3px 0;overflow-wrap:anywhere}
+.attachment-read-notices strong{font-weight:550}.attachment-read-notices li[data-status=partial],.attachment-read-notices li[data-status=error],.attachment-read-notices li[data-status=unsupported]{color:var(--theme-warning,#805f2d)}
+.chat-cleanup-note{font-size:12px;line-height:1.7;padding:10px 24px;margin:0;background:var(--theme-warning-tint,#f5f0e6);color:var(--theme-warning,#805f2d);border-bottom:1px solid var(--chat-rule)}
+.chat-cleanup-note[hidden]{display:none}
+
+/* A consistent reading rhythm for app dialogs, separate from chat typography.
+   Specialized previews keep their own scroll regions and content formatting. */
+dialog{font-family:inherit;font-size:13px;line-height:1.65;border-color:var(--line);box-shadow:0 18px 64px var(--theme-shadow-a43,#30384b2b)}
+dialog:not(.app-update-dialog):not(.upgrade-dialog) :is(.dialog-head,.customizations-header,.shortcuts-head,.path-picker-head) h2,
+dialog:is(.folder-dialog,.action-dialog)>h2,
+dialog:is(.folder-dialog,#rename-dialog,#path-dialog)>form>h2{font-size:20px;font-weight:600;line-height:1.45;letter-spacing:-.4px;overflow-wrap:anywhere}
+dialog :is(.dialog-head,.customizations-header,.shortcuts-head,.path-picker-head) h2{margin:0}
+dialog .dialog-head .eyebrow+h2{margin-top:5px}
+dialog:is(#rename-dialog,#path-dialog)>form>h2{margin:0 0 8px}
+dialog:is(.folder-dialog,.action-dialog)>h2,
+dialog.folder-dialog>form>h2{margin:16px 0 8px}
+dialog>p,dialog>form>p{line-height:1.75;letter-spacing:0}
+dialog .dialog-head,.customizations-header,.path-picker-head{gap:16px}
+dialog :is(.dialog-head,.customizations-header,.shortcuts-heading,.path-picker-head)>div{min-width:0}
+dialog .icon-button{width:32px;height:32px;border-radius:9px;align-self:center}
+dialog .icon-button>.icon{width:18px;height:18px;display:block;stroke-width:1.7}
+dialog .dialog-symbol{width:38px;height:38px;border-radius:12px;box-shadow:none;background:var(--accent-tint);color:var(--accent-ink);border-color:transparent}
+dialog .dialog-actions{align-items:center;gap:10px;margin-top:22px;padding-top:16px;flex-wrap:wrap}
+dialog .dialog-actions :is(.quiet-button,.send-button){min-height:38px;font-size:13px;padding:9px 14px;box-shadow:none}
+dialog .dialog-actions .quiet-button{border-color:var(--line)}
+dialog .archived-task button{word-break:keep-all}
+dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1.5}
+#settings-dialog>.dialog-head,#help-dialog>.dialog-head{padding:22px 26px 18px}
+.customizations-header{padding:22px 26px 18px}
+#settings-dialog>.dialog-head h2,#help-dialog>.dialog-head h2{font-size:20px}
+/* Import headers/footer cannot shrink, but the two-column preview must collapse
+   in a narrow window instead of creating a hidden horizontal scroller. */
+@media(max-width:600px){
+  dialog:not(.app-update-dialog):not(.upgrade-dialog) :is(.dialog-head,.customizations-header,.shortcuts-head,.path-picker-head) h2,
+  dialog:is(.folder-dialog,.action-dialog)>h2,
+  dialog:is(.folder-dialog,#rename-dialog,#path-dialog)>form>h2{font-size:18px;letter-spacing:-.3px}
+  #settings-dialog>.dialog-head,#help-dialog>.dialog-head,.customizations-header{padding:18px}
+  #settings-dialog>.dialog-head h2,#help-dialog>.dialog-head h2{font-size:18px}
+  .import-columns{grid-template-columns:minmax(0,1fr);gap:16px}
+  .import-search input{min-width:0;flex-basis:100%}
+  dialog.path-picker .path-picker-layout{grid-template-rows:auto minmax(0,1fr)}
+  dialog.path-picker .path-picker-shortcuts{align-items:center}
+  dialog .dialog-actions{gap:8px}
+}
+@media(forced-colors:active){dialog{box-shadow:none;border-color:ButtonBorder}dialog .dialog-symbol{background:Canvas;color:CanvasText;border-color:ButtonBorder}}
+
+/* Keep navigation compact so the task list gets the available height. */
+.sidebar .primary-nav{margin:8px 0 6px}
+.sidebar .sidebar-label{margin-top:12px}
+.sidebar .sidebar-footer{gap:6px;padding-top:8px}
+.sidebar-footer-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 6px;width:100%;min-width:0}
+.sidebar .sidebar-footer-actions .nav-button{grid-column:auto;min-width:0;gap:7px;padding:7px 8px;white-space:nowrap}
+.sidebar .sidebar-footer-actions .nav-button .icon{flex:none}
+.app.chat-mode .sidebar .primary-nav{display:none}
+.app.chat-mode .sidebar .session-search{margin-top:10px}
+.app.chat-mode .sidebar-footer-actions #help{grid-column:1/-1}
+.sidebar-collapsed .sidebar .sidebar-footer{gap:6px}
+.sidebar-collapsed .sidebar-footer-actions{grid-template-columns:42px;gap:3px}
+.sidebar-collapsed .sidebar .sidebar-footer-actions .nav-button{grid-column:1;width:42px;padding:9px;justify-content:center}
+.sidebar .brand:hover .brand-name{color:var(--accent-ink)}
+.sidebar .brand:focus-visible{border-radius:10px;outline:2px solid var(--accent);outline-offset:4px}
+.sidebar .task-group-overflow{margin-left:28px}
+.sidebar .task-group-more{font-size:12px;line-height:20px;min-height:32px;padding:5px 12px 5px 20px}
+.sidebar .task-group-more-count{font-size:11px}
+
+/* Header actions keep the title's visual weight and share the list's pin shape. */
+.title-row :is(#task-title,#task-pin){width:32px;height:32px;border-radius:9px}
+.title-row #task-title>.icon,.title-row #task-pin>.session-pin-icon{width:19px;height:19px}
+.title-row #task-title>.icon{stroke-width:1.8}
+:is(.session-pin,#task-pin)[aria-pressed=true] .session-pin-icon{mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 3h8l-1 6 4 4v2H5v-2l4-4-1-6Z' fill='black' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M12 15v6' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E")}
+
+/* Panel chrome shares one scale across the left, center, and right headers. */
+.app{--header-action-size:32px;--header-icon-size:18px}
+.sidebar #sidebar-toggle,.top-actions>.icon-button,.inspector-actions>.icon-button{width:var(--header-action-size);height:var(--header-action-size);padding:0;display:inline-grid;place-items:center;flex:none}
+.sidebar #sidebar-toggle>.icon,.top-actions>.icon-button>.icon,.inspector-actions>.icon-button>.icon{width:var(--header-icon-size);height:var(--header-icon-size);stroke-width:1.7;flex:none}
+.title-row #chat-title{min-width:0;max-width:min(100%,440px);flex:0 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title-row .branch-launch{flex:none;white-space:nowrap}
+.sidebar .session-list .session-title{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:700px){.topbar .top-actions{max-width:100%;flex-wrap:wrap;justify-content:flex-end}}
+
+/* Result files use compact metadata and a predictable action grid. */
+.inspector .inspector-tabs{gap:4px;padding:4px;border:1px solid var(--line);border-radius:11px;background:var(--theme-surface,#e9edf5);box-shadow:none}
+.inspector .inspector-tab{min-height:34px;padding:7px 6px;border-radius:8px;font-weight:500}
+.inspector .inspector-tab[aria-selected=true]{border-color:var(--line);background:var(--theme-surface-raised,#fafbff);box-shadow:0 1px 3px #0000000a}
+.inspector .inspector-panel{margin-top:18px}
+#results-panel .result-intro{padding:0 0 12px}
+#results-panel .result-intro h2{font-size:13px;line-height:1.5;font-weight:600;margin:0 0 5px}
+#results-panel .result-intro p{font-size:11px;line-height:1.65;color:var(--muted)}
+#results-panel .changes-launch{min-height:34px;margin:0 0 12px;padding:7px 10px;font-size:11px;font-weight:500;line-height:18px;border-radius:9px;box-shadow:none}
+.results-list{gap:10px}
+.result-card{min-width:0;padding:14px;border-radius:12px;border-color:var(--line);background:var(--theme-surface-raised,#f9faff);box-shadow:none}
+.result-file-heading{display:flex;align-items:flex-start;gap:10px;min-width:0}
+.result-file-type{display:grid;place-items:center;flex:none;width:38px;min-height:36px;padding:3px;border:1px solid var(--line);border-radius:9px;background:var(--accent-tint);color:var(--accent-ink);font-size:9px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.result-file-heading .result-file-name{min-width:0;flex:1;font-size:13px;line-height:1.6;font-weight:550;margin:0;padding-top:1px;overflow-wrap:anywhere}
+.result-meta-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:5px 8px;margin-top:10px}
+.result-meta-row .result-change{margin:0;padding:3px 6px;border-radius:5px;font-size:10px;font-weight:500;line-height:1.4;background:var(--accent-tint);color:var(--accent-ink)}
+.result-meta-row .result-meta{margin:0;font-size:10px;line-height:1.4;color:var(--muted)}
+.result-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:12px}
+.result-card .result-actions>button{display:flex;align-items:center;justify-content:center;min-width:0;min-height:34px;margin:0;padding:7px 5px;border:1px solid var(--line);border-radius:8px;background:transparent;box-shadow:none;font-family:inherit;font-size:11px;font-weight:500;line-height:1.5;text-align:center;white-space:normal;word-break:keep-all;color:var(--ink)}
+.result-card .result-actions>.quiet-button{background:var(--accent-tint);border-color:transparent;color:var(--accent-ink)}
+.result-card .result-actions>button:hover:not(:disabled){background:var(--theme-surface-hover,#e8ebf4);border-color:var(--line);box-shadow:none;color:var(--accent-ink)}
+.result-card .external-file-note{margin:12px 0 0;padding-top:10px;border-top:1px solid var(--line)}
+.results-list>.result-observation{margin:2px 1px;font-size:10px;line-height:1.7;color:var(--muted)}
+/* Preview actions differ in emphasis, never in type size or baseline. */
+.preview-dialog:not(.html-preview-dialog){padding:24px;border-radius:18px}
+#preview-dialog .dialog-head{align-items:flex-start;gap:16px;margin-bottom:0}
+#preview-dialog .dialog-head h2{min-width:0;margin:0;font-size:18px;font-weight:600;line-height:1.5;letter-spacing:-.25px;overflow-wrap:anywhere}
+#preview-dialog .dialog-head .icon-button{align-self:flex-start;flex:none}
+.preview-dialog .preview-file-actions{gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.preview-dialog .preview-file-actions>button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;max-width:100%;padding:7px 12px;border-width:1px;border-style:solid;border-radius:9px;box-shadow:none;font-family:inherit;font-size:13px;font-weight:500;line-height:20px;white-space:normal;word-break:keep-all}
+.preview-dialog .preview-file-actions>.quiet-button{border-color:var(--line)}
+.preview-dialog .preview-file-actions>.text-button{border-color:transparent}
+.preview-dialog[data-preview-kind=external]{width:min(680px,calc(100vw - 32px))}
+.preview-dialog[data-preview-kind=external] #preview-content{margin:18px 0 0;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--theme-surface,#f0f2f7)}
+.preview-dialog[data-preview-kind=external] #preview-content>p{margin:0;font-size:13px;line-height:1.75;color:var(--muted)}
+@media(max-width:600px){.preview-dialog:not(.html-preview-dialog){padding:18px}.preview-dialog .preview-file-actions>button{padding-inline:10px}#preview-dialog .dialog-head h2{font-size:16px}}
+@media(forced-colors:active){.result-card,.result-actions>button,.result-file-type{border-color:ButtonBorder}.result-actions>.quiet-button{background:Highlight;color:HighlightText}}
+
+/* Standard form controls share a scale; compact lists and icon-only actions keep theirs. */
+:root{--control-height:36px;--control-font-size:13px;--control-line-height:20px;--control-radius:9px}
+#settings-dialog .dialog-scroll-body{padding:18px 22px 22px}
+#settings-dialog .settings-section{margin:0 0 12px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--theme-surface-raised,#f8faff)}
+#settings-dialog .settings-heading{align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+#settings-dialog .settings-section h3{font-size:14px;font-weight:600;line-height:21px;margin:0 0 6px}
+#settings-dialog .settings-heading h3{margin:0}
+#settings-dialog .settings-section>p{font-size:12px;line-height:1.7;margin:6px 0 12px}
+#settings-dialog :is(.quiet-button,.text-button){display:inline-flex;justify-content:center;align-items:center;gap:7px;min-width:0;min-height:var(--control-height);height:var(--control-height);max-width:100%;padding:7px 11px;margin:0;border:1px solid var(--line);border-radius:var(--control-radius);background:var(--theme-surface,#f2f4f9);color:var(--ink);box-shadow:none;font-family:inherit;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);white-space:nowrap}
+#settings-dialog :is(.quiet-button,.text-button):hover:not(:disabled){background:var(--theme-surface-hover,#e9edf5);color:var(--accent-ink)}
+#settings-dialog :is(.quiet-button,.text-button)>.icon{width:16px;height:16px;flex:none;stroke-width:1.7}
+#settings-dialog :is(select,input:not([type=checkbox]):not([type=radio])){min-width:0;min-height:var(--control-height);height:var(--control-height);padding:7px 11px;border:1px solid var(--line);border-radius:var(--control-radius);background:var(--theme-surface,#f2f4f9);color:var(--ink);font-family:inherit;font-size:var(--control-font-size);font-weight:400;line-height:var(--control-line-height)}
+#settings-dialog .settings-section label{font-size:12px;line-height:20px;margin:12px 0 6px}
+#settings-dialog .settings-inline{gap:8px;flex-wrap:wrap;margin-top:10px;min-width:0}
+#settings-dialog .settings-control-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;gap:8px}
+#settings-dialog .settings-control-grid>button{width:100%}
+#settings-dialog .input-row{align-items:center;gap:8px}
+#settings-dialog .input-row>button{flex:none;min-width:56px}
+#settings-dialog .connection-restart-setting{display:block;margin:10px 0}
+#settings-dialog .connection-restart-setting>p{font-size:11px;line-height:1.7;margin:10px 0 0}
+#settings-dialog .settings-control-note{font-size:11px;line-height:1.65;overflow-wrap:anywhere}
+#settings-dialog .settings-control-note:empty,#settings-dialog #model-message:empty,#settings-dialog #permission-mode-message:empty{display:none}
+#settings-dialog .settings-heading .settings-control-note{margin:0}
+#settings-dialog .settings-status{padding:10px 12px;font-size:12px;line-height:1.7;background:var(--theme-surface,#edf0f7);border-radius:9px}
+#settings-dialog .appearance-options{max-width:none;display:grid;grid-template-columns:minmax(60px,1fr) minmax(140px,240px);align-items:center;gap:12px;margin-top:12px}
+#settings-dialog .appearance-options>label{margin:0}
+#settings-dialog .settings-explainer{margin-top:10px;font-size:12px;line-height:1.7}
+#settings-dialog :is(.settings-explainer,.settings-detail)>summary{cursor:pointer;padding:7px 0;color:var(--muted);font-size:12px;font-weight:500;line-height:20px}
+#settings-dialog .settings-explainer>p{font-size:12px;line-height:1.75;margin:8px 0;color:var(--muted)}
+#settings-dialog .settings-explainer[open]{padding-bottom:2px}
+#settings-dialog .settings-detail{margin-top:8px}
+#settings-dialog .runtime-info{font-family:inherit;line-height:1.7}
+#settings-dialog .advanced-settings{padding:0 4px 14px}
+#settings-dialog .notification-options{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px}
+#settings-dialog .notification-options>label{display:flex;align-items:center;gap:6px;margin:0;font-size:12px}
+#settings-dialog .notification-options input{flex:none;margin:0}
+#settings-dialog .settings-footer{gap:8px;flex-wrap:wrap;padding-top:14px}
+#settings-dialog .settings-footer>a{margin-right:auto;font-size:12px}
+#settings-dialog #quit{color:var(--theme-danger,#a3515d)}
+#settings-dialog #window-behavior-note{display:block;text-align:left;font-size:11px;line-height:1.7;margin:0 4px 14px}
+.title-row #branch-open{display:inline-flex;align-items:center;justify-content:center;flex:none;gap:6px;height:32px;min-height:32px;margin-left:4px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--theme-surface,#f2f4f9);box-shadow:none;color:var(--muted);font-size:12px;font-weight:500;line-height:20px;white-space:nowrap}
+.title-row #branch-open:hover:not(:disabled){background:var(--accent-tint);border-color:var(--theme-line-accent,#b8b4df);color:var(--accent-ink)}
+.title-row #branch-open>span{font-size:14px;line-height:1}
+.runtime-custom-row input{border:1px solid var(--line);border-radius:var(--control-radius);background:var(--surface);color:var(--ink);font-family:inherit}
+.composer-controls-panel .runtime-custom-row :is(input,button){min-height:var(--control-height);height:var(--control-height);padding:7px 10px;font-size:12px;line-height:var(--control-line-height);border-radius:var(--control-radius);box-shadow:none}
+@media(max-width:420px){#settings-dialog .dialog-scroll-body{padding:12px 14px 16px}#settings-dialog .settings-section{padding:14px}#settings-dialog .settings-control-grid{grid-template-columns:1fr}#settings-dialog .appearance-options{grid-template-columns:1fr;gap:6px}.title-row #branch-open{padding-inline:8px;margin-left:0}}
+@media(forced-colors:active){#settings-dialog .settings-section,#settings-dialog :is(.quiet-button,.text-button,select,input),.title-row #branch-open{border-color:ButtonBorder}}
+
+/* Related dialogs use the same form/action scale without changing list or tab density. */
+#customizations-dialog :is(select,input){min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-family:inherit;font-size:var(--control-font-size);line-height:var(--control-line-height);border-radius:var(--control-radius)}
+.customizations-dialog .customizations-scope-row button{min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);border-radius:var(--control-radius);box-shadow:none}
+.schedule-overview-controls>label{margin:0}
+/* Explicit dialog scope beats legacy component/footer variants. */
+dialog :is(.dialog-actions,.branch-actions,.path-picker-actions,.attachment-storage-actions)>:is(.quiet-button,.text-button,.send-button,.primary){display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--control-height);padding:7px 12px;border-width:1px;border-style:solid;border-radius:var(--control-radius);font-family:inherit;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);box-shadow:none}
+dialog :is(.branch-actions,.attachment-storage-actions)>.primary{border-color:transparent}
+dialog .path-picker-actions>.text-button{border-color:transparent}
+
+/* Let the native-picker fallback remain readable beside the main file actions. */
+dialog .path-picker-actions>.text-button{max-width:none;white-space:nowrap;word-break:keep-all}
+@media(max-width:420px){dialog .path-picker-actions{flex-wrap:wrap}dialog .path-picker-actions>.text-button{flex:1 0 100%;justify-content:flex-start;padding-inline:0}}
+
+@media(max-width:420px){.schedule-window-row{grid-template-columns:1fr}}
+
+/* Dialog search and path controls share the approved compact form scale. */
+#customizations-dialog input#customizations-search,
+#archived-tasks-dialog input#archived-tasks-query,
+#input-history-dialog input#input-history-search,
+dialog.path-picker .path-picker-main>input{
+ box-sizing:border-box;min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-size:var(--control-font-size);line-height:var(--control-line-height);border-radius:10px;
+}
+.shortcuts-dialog .shortcuts-search{box-sizing:border-box;height:var(--control-height);min-height:var(--control-height);border-radius:10px;box-shadow:none}
+.shortcuts-dialog input#shortcuts-search{box-sizing:border-box;height:calc(var(--control-height) - 2px);min-height:calc(var(--control-height) - 2px);padding:7px 0;font-size:var(--control-font-size);line-height:var(--control-line-height)}
+dialog.path-picker .path-picker-location input,
+dialog.path-picker .path-picker-location .quiet-button{
+ box-sizing:border-box;min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-size:var(--control-font-size);line-height:var(--control-line-height);border-radius:10px;box-shadow:none;
+}
+.archived-tasks-footer button,.schedule-overview-pagination .quiet-button{
+ box-sizing:border-box;min-height:34px;height:34px;padding:6px 12px;font-size:12px;line-height:var(--control-line-height);font-weight:500;border-radius:var(--control-radius);box-shadow:none;
+}
+@media(max-width:560px){
+ #input-history-dialog{padding:18px}
+ #input-history-dialog h2{font-size:18px;font-weight:600;line-height:1.45}
+}
+
+/* Keep the divider outside the scrolling inspector so its full edge is usable. */
+.app{position:relative}
+.inspector-resizer{position:absolute;inset-block:0;right:calc(var(--inspector-width) - 10px);width:10px;z-index:12;cursor:col-resize;touch-action:none;user-select:none;outline:none}
+.inspector-resizer::before{content:"";position:absolute;inset-block:0;left:0;width:2px;background:transparent;transition:background .12s}
+.inspector-resizer:hover::before,.inspector-resizer:focus-visible::before,.inspector-resizing .inspector-resizer::before{background:var(--accent-ink)}
+.inspector-resizer:focus-visible::before{width:4px}
+.app.inspector-resizing,.app.inspector-resizing *{cursor:col-resize!important;user-select:none!important}
+@media not all and (max-width:1100px){.app:not(.inspector-collapsed):not(.catalog-open):not(.chat-mode){--inspector-width:var(--inspector-resized-width,292px)}}
+@media(max-width:1100px){.inspector-resizer{display:none}}
+@media(prefers-reduced-motion:reduce){.inspector-resizer::before{transition:none}}
+@media(forced-colors:active){.inspector-resizer:hover::before,.inspector-resizer:focus-visible::before,.inspector-resizing .inspector-resizer::before{background:Highlight}}
+
+/* Keep task controls on the utility row's centerline, with the folder below the title. */
+.app>main{container:workspace-main / inline-size}
+.topbar{min-height:68px}
+.topbar .title-copy{position:relative;flex:0 1 auto;min-width:0;max-width:440px}
+.topbar .title-copy #chat-title{max-width:100%}
+.topbar .title-copy .workspace-summary{position:absolute;top:calc(100% + 1px);left:0;width:100%;padding:0;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.topbar .title-row>:is(#task-title,#task-pin,#branch-open){flex:none}
+.topbar .top-actions>:is(.icon-button,.attention-button,.pill){box-sizing:border-box;height:32px;min-height:32px;display:inline-flex;align-items:center;justify-content:center}
+.topbar .top-actions>:is(.attention-button,.pill){padding-block:0;line-height:20px;white-space:nowrap}
+/* Respond to available conversation width, including a widened results panel. */
+@container workspace-main (max-width:760px){
+ .topbar{flex-wrap:wrap;gap:12px;padding:12px 16px}
+ .topbar-context{flex:1 0 100%;min-width:0}
+ .app.task-open:not(.chat-mode):not(.catalog-open) .topbar-context{padding-bottom:18px}
+ .topbar .title-row{gap:6px}
+ .topbar .top-actions{width:100%;max-width:100%;margin-left:0;flex-wrap:wrap;justify-content:flex-end;gap:6px}
+ .topbar .top-actions .pill{min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+}
+/* The reading scale applies to both sent and received conversation messages. */
+#conversation .message{font-size:13px;line-height:25px}
+
+/* File-result summaries stay compact without changing shared attachment previews. */
+#conversation .run-results{margin:8px 0 12px;padding:10px 12px;border-radius:12px;line-height:20px}
+#conversation .run-results-label{line-height:18px;margin-bottom:6px}
+#conversation .run-results>.rich-files{margin:0;gap:6px}
+#conversation .run-results .rich-file-chip{min-width:0;min-height:32px;padding:5px 10px;border-radius:8px;font-size:12px;line-height:20px;white-space:normal;overflow-wrap:anywhere}
+#conversation .run-results .rich-image{margin:0}
+
+/* Compact source-file rows while preserving full filenames and a comfortable hit area. */
+#files>.file{min-height:44px;padding:7px 3px;gap:8px}
+#files .file-name{font-size:13px;line-height:20px}
+#files .file-extension{flex-basis:34px;width:34px;min-height:28px;height:28px;border-radius:7px;line-height:16px}
+
+/* Automatic/native focus is functional, but is not keyboard navigation.
+   The script enables existing focus rings immediately on Tab/navigation keys.
+   Without the script, the original accessible :focus-visible styling remains. */
+:root[data-focus-navigation="pointer"] :focus-visible{outline:none!important}
+:root[data-focus-navigation="pointer"] .session-row:focus-within:not(.dragging),
+:root[data-focus-navigation="pointer"] .session-search:has(input:focus-visible),
+:root[data-focus-navigation="pointer"] .shortcuts-search:has(input:focus-visible){outline:none!important}
+:root[data-focus-navigation="pointer"] .runtime-option:focus-visible:not(:hover):not([aria-pressed="true"]){background:transparent}
+:root[data-focus-navigation="pointer"] .app:not(.inspector-resizing) .inspector-resizer:focus-visible:not(:hover)::before{background:transparent;width:2px}
+:root[data-focus-navigation="pointer"] .inspector-resizer:focus-visible:hover::before{width:2px}
+
+/* Mini mode changes presentation only; task state and approval UI stay live. */
+.top-actions .mini-mode-toggle{display:inline-grid;place-items:center;flex:none;width:32px;height:32px;min-height:32px;padding:0;border:1px solid var(--theme-line,#dce0ec);border-radius:10px;background:var(--theme-surface,#f2f3fa);color:var(--accent-ink);box-shadow:none}
+.top-actions .mini-mode-toggle>.icon{width:var(--header-icon-size,18px);height:var(--header-icon-size,18px)}
+.top-actions .mini-mode-toggle[aria-pressed="true"]{color:var(--accent-ink);border-color:var(--theme-line-accent,#b8b7dc);background:var(--accent-tint)}
+.mini-welcome,.mini-chat-copy{display:none}
+.app.mini-mode{--inspector-width:0px}
+.app.mini-mode .inspector,.app.mini-mode #inspector-resizer,
+.app.mini-mode .primary-nav,.app.mini-mode .sidebar-footer,.app.mini-mode .brand-type small,
+.app.mini-mode #task-title,.app.mini-mode #task-pin,.app.mini-mode #branch-open,.app.mini-mode #workspace-summary,
+.app.mini-mode #connection-badge,.app.mini-mode #restart-connection,.app.mini-mode #materials-button,.app.mini-mode #workspace-button,
+.app.mini-mode .workflow-toolbar,.app.mini-mode .attachment-tools,.app.mini-mode .composer-runtime-controls,.app.mini-mode .composer-trigger-hints{display:none!important}
+.app.mini-mode .topbar{min-height:64px;padding-top:14px;padding-bottom:14px;align-items:center}
+.app.mini-mode .topbar-context{padding-bottom:0!important}
+.app.mini-mode .title-row{min-height:32px;align-items:center}
+.app.mini-mode .title-copy{padding-bottom:0}
+.app.mini-mode .top-actions{gap:8px;align-items:center}
+.app.mini-mode .sidebar{gap:12px}
+.app.mini-mode .sidebar-head{min-height:48px}
+.app.mini-mode .session-list{padding-bottom:12px}
+.app.mini-mode #welcome{max-width:720px;width:100%;margin:auto;padding:56px 28px 32px}
+.app.mini-mode #welcome>:not(.mini-welcome){display:none!important}
+.app.mini-mode .mini-welcome{display:flex;flex-direction:column;align-items:center;text-align:center}
+.mini-welcome-mark{display:grid;place-items:center;width:44px;height:44px;margin-bottom:20px;border:1px solid var(--theme-line,#dce0ec);border-radius:14px;background:var(--accent-tint);color:var(--accent-ink)}
+.mini-welcome-mark .icon{width:27px;height:27px}
+.app.mini-mode .mini-welcome h2{margin:0 0 12px;font-size:24px;line-height:1.5;letter-spacing:-.7px;font-weight:600}
+.app.mini-mode .mini-welcome p{margin:0;color:var(--muted);font-size:13px;line-height:22px;word-break:keep-all}
+.app.mini-mode .mini-welcome small{margin-top:10px;color:var(--muted);font-size:11px;line-height:20px;word-break:keep-all}
+.app.mini-mode.chat-mode .mini-work-copy{display:none}
+.app.mini-mode.chat-mode .mini-chat-copy{display:block}
+.app.mini-mode .composer-wrap{padding-top:10px;padding-bottom:14px}
+.app.mini-mode:not(.task-open) .composer-wrap{max-width:none;width:100%}
+.app.mini-mode .composer{padding:12px 14px;border-radius:18px}
+.app.mini-mode #prompt{min-height:54px;font-size:13px;line-height:25px}
+.app.mini-mode .composer-input-hints{justify-content:flex-start;margin-top:4px}
+.app.mini-mode .composer-shortcut-note{font-size:10px}
+.app.mini-mode .composer-tools{margin-top:4px;min-height:32px;justify-content:flex-end}
+.app.mini-mode .composer-tools:has(#send[hidden]){display:none}
+.app.mini-mode .composer-tools>.send-tools{margin-left:auto}
+.app.mini-mode .send-tools .send-button{height:32px;min-height:32px;padding:0 12px;gap:7px;font-size:12px;border-radius:10px}
+.app.mini-mode .send-tools .send-button .icon{width:16px;height:16px}
+@media(max-width:700px){.app.mini-mode .topbar{padding:12px 16px}.app.mini-mode .top-actions{gap:6px}.app.mini-mode #welcome{padding:40px 18px 24px}.app.mini-mode .mini-welcome h2{font-size:21px}.app.mini-mode .composer-wrap{padding:8px 12px 12px}}

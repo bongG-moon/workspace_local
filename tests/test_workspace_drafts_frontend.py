@@ -54,6 +54,20 @@ class DraftFrontendTests(unittest.TestCase):
         map.set('home',{text:'one',attachments:[]});const first=service.flush();map.set('home',{text:'two',attachments:[]});
         const second=service.flush();assert.equal(count,1);reply({revision:1});await Promise.all([first,second]);assert.equal(count,2);assert.equal(service.hasPending(),false);""")
 
+    def test_deleted_draft_ignores_late_success_or_failure_without_blocking_other_drafts(self):
+        for fails in (False, True):
+            with self.subTest(fails=fails):
+                self.run_case("""await service.load();let resolve,reject;const sent=[];
+                setApi((path,body)=>{sent.push(body.id);return body.id==='gone'?new Promise((r,j)=>{resolve=r;reject=j}):Promise.resolve({revision:1});});
+                map.set('gone',{text:'delete this',attachments:[]});map.set('keep',{text:'preserve this',attachments:[]});
+                const flight=service.flush();service.forget('gone');
+                """ + ("reject(Error('unknown session'));" if fails else "resolve({revision:9});") + """
+                await flight;assert.equal(map.has('gone'),false);assert.equal(map.get('keep').text,'preserve this');
+                assert.equal(sent.join(','),'gone,keep');assert.equal(service.hasPending(),false);assert.equal(node.hidden,true);
+                assert.equal(service.allowStashRestore('gone'),true);map.set('gone',{text:'late edit',attachments:[]});
+                await service.flush();assert.equal(map.has('gone'),false);assert.equal(sent.length,2);
+                """)
+
     def test_restored_stash_and_empty_draft_do_not_auto_send(self):
         self.run_case("""setRows([{id:'home',revision:2,draft:null,stash:{text:'saved',attachments:['a'],selectionStart:0,selectionEnd:2}}]);
         await service.load();assert.equal(map.get('home').text,'');assert.equal(getStashes()[0].text,'saved');assert.equal(requests.length,0);""")

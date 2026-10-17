@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('bundle', type=Path)
 args = parser.parse_args()
 bundle = args.bundle.resolve(strict=True)
-trial = Path(tempfile.mkdtemp(prefix='workspace-0.23.7-extracted-', dir=ROOT / 'build'))
+version = re.search(r'^WORKSPACE_VERSION = "([^"]+)"',
+                    (ROOT / 'local_app/server.py').read_text(encoding='utf-8'),
+                    re.MULTILINE).group(1)
+trial = Path(tempfile.mkdtemp(prefix=f'workspace-{version}-extracted-', dir=ROOT / 'build'))
 with zipfile.ZipFile(bundle) as archive:
     for member in archive.infolist():
         name = member.filename.replace('\\', '/')
@@ -71,7 +75,7 @@ with log_path.open('wb') as log:
         origin = address.scheme + '://' + address.netloc
         token = parse_qs(address.fragment)['token'][0]
         boot = request('/api/bootstrap')
-        assert boot['workspaceVersion'] == '0.23.7' and boot['demo'] is True
+        assert boot['workspaceVersion'] == version and boot['demo'] is True
         assert Path(boot['appRoot']).resolve() == payload.resolve()
         assert boot['sessions'] == []
         checks.append('fresh extracted entry point, version and empty isolated state')
@@ -116,9 +120,9 @@ with log_path.open('wb') as log:
                 process.terminate()
                 process.wait(timeout=10)
 
-report = {'success': True, 'bundle': bundle.name,
+report = {'success': True, 'version': version, 'bundle': bundle.name,
           'sha256': hashlib.sha256(bundle.read_bytes()).hexdigest(),
           'extractedRoot': str(payload), 'checks': checks}
-report_path = ROOT / 'build/qa-workspace-0.23.7-bundle.json'
+report_path = ROOT / f'build/qa-workspace-{version}-bundle.json'
 report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 print(json.dumps(report, ensure_ascii=False, indent=2))

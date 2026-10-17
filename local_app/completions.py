@@ -35,7 +35,7 @@ REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
     '.cfg', '.conf', '.properties', '.log', '.ipynb', '.r', '.rmd',
     '.rb', '.php', '.vue', '.svelte', '.swift', '.kt', '.kts', '.dart',
     '.lua', '.pl', '.ex', '.exs', '.fs', '.fsx', '.vb', '.vbs', '.tex',
-    '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe',
+    '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe', '.markdown',
 }) | ARCHIVE_FILE_TYPES
 _COMMAND = re.compile(r'[\w][\w.:-]{0,199}', re.UNICODE)
 _COMMAND_DIRECTORY = re.compile(r'[\w.][\w.-]*', re.UNICODE)

@@ -11,24 +11,40 @@ Element.prototype.removeAttribute=function(name){delete this.attributes[name];};
 context.flush=()=>new Promise(resolve=>setImmediate(resolve));
 context.flatText=function flatText(node){return [node.textContent||'',...(node.children||[]).map(flatText)].join(' ');};
 vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'palette.js'});
-context.installLayout=(width=640)=>{
-  const listeners=new Map(),originalClosest=Element.prototype.closest;
+context.installLayout=(width=640,saved=null)=>{
+  const listeners=new Map(),windowListeners=new Map(),frames=new Map(),originalClosest=Element.prototype.closest;
+  const request=context.api;context.layoutRequests=[];
+  context.api=(path,value,...args)=>{
+    if(path!=='/api/layout')return request(path,value,...args);
+    assert.deepEqual(Object.keys(value).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);
+    context.layoutRequests.push(JSON.parse(JSON.stringify(value)));return Promise.resolve(value);
+  };
+  let nextFrame=1;
   Element.prototype.getAttribute=function(name){return this.attributes[name]??null;};
   Element.prototype.addEventListener=function(name,fn){this.events??=new Map();this.events.set(name,fn);};
   Element.prototype.contains=function(node){for(let item=node;item;item=item.parent)if(item===this)return true;return false;};
   Element.prototype.querySelectorAll=function(){return [...nodes.values()].filter(node=>node!==this&&this.contains(node));};
   Element.prototype.closest=function(selector){if(selector==='[hidden],[inert]'){for(let node=this;node;node=node.parent)if(node.hidden||node.inert)return node;return null;}return originalClosest.call(this,selector);};
   Element.prototype.getClientRects=function(){return this.closest('[hidden],[inert]')?[]:[{}];};
+  Element.prototype.getBoundingClientRect=function(){return {width:this===get('sidebar-panel')?(get('.app').classList.contains('sidebar-collapsed')?68:248):(this.clientWidth||0)};};
   Element.prototype.focus=function(){context.document.activeElement=this;for(const fn of listeners.get('focusin')||[])fn({target:this});};
   context.document.querySelector=selector=>selector==='dialog[open]'?[...nodes.values()].find(node=>node.open):get(selector);
   context.document.addEventListener=(name,fn)=>{if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(fn);};
-  context.layoutWrites=[];context.localStorage={getItem:()=>null,setItem:(_,value)=>context.layoutWrites.push(value)};
+  context.window=context;context.addEventListener=(name,fn)=>{if(!windowListeners.has(name))windowListeners.set(name,[]);windowListeners.get(name).push(fn);};
+  context.requestAnimationFrame=fn=>{const id=nextFrame++;frames.set(id,fn);return id;};
+  context.cancelAnimationFrame=id=>frames.delete(id);
+  context.layoutWrites=[];context.localStorage={getItem:key=>{assert.equal(key,'workspace.layout.v1');return saved;},
+    setItem:(key,value)=>{assert.equal(key,'workspace.layout.v1');context.layoutWrites.push(value);}};
   context.matchMedia=query=>({matches:width<=Number(query.match(/\d+/)[0]),addEventListener(){}});
-  get('main').append(get('prompt'),get('materials-button'));
+  get('.app').clientWidth=width;get('.app').append(get('main'),get('sidebar-panel'),get('inspector-resizer'),get('inspector-panel'));
+  get('main').append(get('prompt'),get('materials-button'),get('mini-mode-toggle'));
   get('sidebar-panel').append(get('sidebar-toggle'),get('palette-open'));
-  get('inspector-panel').append(get('close-materials'));
+  get('inspector-panel').append(get('close-materials'),get('source-panel'),get('results-panel'));
   get('composer-controls-panel').hidden=get('composer-suggestions').hidden=true;
-  for(const node of nodes.values()){node.inert=false;node.tabIndex=0;}
+  for(const node of nodes.values()){
+    node.inert=false;node.tabIndex=0;
+    const styles=new Map();node.style={getPropertyValue:key=>styles.get(key)||'',setProperty:(key,value)=>styles.set(key,value)};
+  }
   vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'layout.js'});
 };
 const scenario=process.argv[3];
@@ -119,7 +135,8 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           $('palette-search').value='단축키';$('palette-search').oninput();
           await find('shortcuts').onclick();
           assert.equal($('palette-dialog').open,false);assert.equal($('shortcuts-dialog').open,true);
-          assert.equal(document.activeElement,$('shortcuts-search'));
+          assert.equal(document.activeElement,$('shortcuts-title'));
+          $('shortcuts-search').focus();
           $('shortcuts-search').value='없는단축키';
           const close=keyEvent('Escape');$('shortcuts-search').onkeydown(close);
           assert.equal(close.defaultPrevented,true);assert.equal(close.stopped,true);
@@ -195,6 +212,38 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           WorkspacePalette.open();await find('effort').onclick();
           assert.equal(JSON.stringify(WorkspaceLayout.snapshot().preferences),before);assert.equal(layoutWrites.length,writes);
         })()""")
+
+    def test_results_action_exits_mini_and_opens_requested_panel_without_changing_task_or_draft(self):
+        for width in [640, 1000, 1440]:
+            with self.subTest(width=width):
+                self.run_case("const layoutWidth=" + str(width) + ";" + r"""(async()=>{
+                  installLayout(layoutWidth,JSON.stringify({miniMode:true,sidebarCollapsed:true,inspectorCollapsed:true,inspectorWidth:430}));
+                  assert.equal(WorkspaceLayout.snapshot().miniMode,true);assert.equal($('inspector-panel').hidden,true);
+                  const task=active;active.state='running';$('prompt').value='보내지 않은 후속 요청';
+                  $('prompt').selectionStart=3;$('prompt').selectionEnd=9;attachments=['report.csv'];$('prompt').focus();
+                  WorkspacePalette.open();$('palette-search').value='결과';$('palette-search').oninput();
+                  assert.ok(find('results'));await find('results').onclick();
+                  const state=WorkspaceLayout.snapshot();
+                  assert.equal($('palette-dialog').open,false);assert.equal(state.miniMode,false);
+                  assert.equal($('mini-mode-toggle').getAttribute('aria-pressed'),'false');
+                  assert.equal(state.inspectorVisible,true);assert.equal($('inspector-panel').hidden,false);assert.equal($('inspector-panel').inert,false);
+                  assert.equal($('results-panel').hidden,false);assert.equal($('source-panel').hidden,true);
+                  assert.equal($('results-tab').getAttribute('aria-selected'),'true');
+                  assert.equal(state.preferences.sidebarCollapsed,true);assert.equal(state.preferences.inspectorWidth,430);
+                  assert.equal(state.inspectorOverlay,layoutWidth<=1100);
+                  if(layoutWidth<=1100){
+                    assert.equal(document.activeElement,$('close-materials'));assert.equal(state.preferences.inspectorCollapsed,true);
+                    assert.equal($('inspector-panel').getAttribute('aria-modal'),'true');
+                  }else{
+                    assert.equal(state.preferences.inspectorCollapsed,false);assert.equal($('inspector-resizer').hidden,false);
+                    assert.equal($('inspector-resizer').getAttribute('aria-valuenow'),'430');
+                  }
+                  assert.equal(active,task);assert.equal(active.state,'running');assert.equal($('prompt').value,'보내지 않은 후속 요청');
+                  assert.equal($('prompt').selectionStart,3);assert.equal($('prompt').selectionEnd,9);
+                  assert.deepEqual(attachments,['report.csv']);assert.equal(calls.length,0);
+                  await flush();assert.equal(layoutRequests.length,layoutWidth<=1100?1:2);
+                  assert.equal(layoutRequests.at(-1).miniMode,false);assert.equal(layoutRequests.at(-1).inspectorWidth,430);
+                })()""")
 
 
 if __name__ == '__main__':

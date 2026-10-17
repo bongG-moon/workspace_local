@@ -282,6 +282,75 @@ class AttachmentStore:
                     raise
             return len(changed)
 
+    def owner(self, path):
+        """Return only an ownership record, never infer from a path prefix."""
+        if not isinstance(path, (str, Path)):
+            return None
+        key = self._key(path)
+        if not key.startswith(self._key(self.root) + os.sep):
+            return None
+        with self.lock:
+            self._load()
+            relative = self._record_keys.get(key)
+            return relative.split('/')[0] if relative in self._records else None
+
+    def owned_paths(self, sid, paths):
+        """General chat reads only unchanged copies uploaded for this chat."""
+        sid = str(uuid.UUID(sid))
+        with self.lock:
+            self._load()
+            if self._manifest_warning:
+                raise ValueError('첨부 사본의 소유 기록을 확인하지 못했습니다. 파일을 다시 첨부해 주세요.')
+            result = []
+            for path in paths:
+                relative = self._record_keys.get(self._key(path))
+                record = self._records.get(relative)
+                if not record or not relative.startswith(sid + '/'):
+                    raise ValueError('일반 대화에는 이 대화에서 직접 첨부한 파일만 사용할 수 있어요. 파일 첨부로 다시 선택해 주세요.')
+                target = safe(self.root / relative)
+                if self._identity(target) != record['identity']:
+                    raise ValueError('첨부 사본이 변경되었습니다. 원본 파일을 다시 첨부해 주세요.')
+                result.append(str(target.absolute()))
+            return list(dict.fromkeys(result))
+
+    def delete_session(self, sid):
+        """Explicit chat deletion may reclaim used copies, within provenance."""
+        sid = str(uuid.UUID(sid))
+        with self.lock:
+            self._load()
+            if self._manifest_warning:
+                raise ValueError('첨부 소유 기록을 확인하지 못해 대화 파일 정리를 보류했어요.')
+            bucket = safe(self.root / sid)
+            if any(path.is_relative_to(bucket) for path in self._inflight):
+                raise ValueError('첨부 전송 중인 파일은 전송 종료 후 정리합니다.')
+            relatives = [key for key in self._records if key.startswith(sid + '/')]
+            try:
+                for relative in relatives:
+                    target = safe(self.root / relative)
+                    record = self._records[relative]
+                    if target.exists():
+                        if self._identity(target) != record['identity']:
+                            raise ValueError('첨부 사본이 변경되어 삭제하지 않았습니다. 저장 공간을 확인해 주세요.')
+                        target.unlink()
+                    entry = self._entries.pop(relative, None)
+                    if entry:
+                        self._used_bytes -= entry['size']
+                    self._records.pop(relative, None)
+                    self._record_keys.pop(self._key(target), None)
+                    self._metadata_dirty = True
+                    try:
+                        safe(target.parent).rmdir()
+                    except FileNotFoundError:
+                        pass
+                # Unknown files or directories are never recursively removed.
+                if bucket.exists():
+                    for child in bucket.iterdir():
+                        safe(child).rmdir()
+                    bucket.rmdir()
+            finally:
+                if self._metadata_dirty:
+                    self._write_index()
+
     def _status(self, protected_paths, now):
         protected = {self._key(path) for path in protected_paths if isinstance(path, (str, Path))}
         totals = {'usedBytes': self._used_bytes, 'maxBytes': MAX_STORAGE,

@@ -95,7 +95,8 @@ class QuitConfirmationTests(unittest.TestCase):
     def test_confirmed_quit_releases_an_inflight_connection_waiter_before_draining(self):
         entered, release = threading.Event(), threading.Event()
         self.releases.append(release)
-        def connect(sid):
+        def connect(sid, **options):
+            self.assertEqual({'_catalog': False, '_offer_replacement': True, '_replacement_token': None}, options)
             entered.set()
             release.wait(3)
             return {'ok': True}

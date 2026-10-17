@@ -65,6 +65,7 @@ globalThis.WorkspaceProductivityActions = (() => {
     if(files.length) selectFile(files[0], run, ticket);
   }
   async function openChanges() {
+    if(globalThis.WorkspaceModes?.isChat())return;
     if(!active || appClosed) return;
     close(); priorFocus = document.activeElement; context = active.id; const ticket = ++generation;
     $("changes-empty").hidden = false; $("changes-empty").textContent = "변경 기록을 불러오고 있어요…";
@@ -82,6 +83,7 @@ globalThis.WorkspaceProductivityActions = (() => {
     } catch(e) { if(current(ticket)) $("changes-empty").textContent = e.message; }
   }
   async function openBranch() {
+    if(globalThis.WorkspaceModes?.isChat())return;
     if(!canBranch()) return;
     close(); priorFocus = document.activeElement; context = active.id; const ticket = ++generation;
     $("branch-source-title").textContent = active.title;

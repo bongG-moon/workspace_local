@@ -76,8 +76,9 @@ class AppearanceTests(unittest.TestCase):
                 html = request('/', auth=False)[1].decode()
                 self.assertIn('data-appearance="dark" data-theme="dark"', html)
                 self.assertLess(html.index('/appearance.js'), html.index('/app.css'))
+                self.assertLess(html.index('/focus-navigation.js'), html.index('/app.css'))
                 self.assertGreater(html.index('/appearance.css'), html.index('/app.css'))
-                for asset in ('appearance.js', 'appearance.css'):
+                for asset in ('appearance.js', 'appearance.css', 'focus-navigation.js'):
                     self.assertEqual(200, request('/'+asset, auth=False)[0])
             finally:
                 app._desktop_window = None

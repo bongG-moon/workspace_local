@@ -2,7 +2,7 @@
 
 // One debounced writer, no interval or worker. Only changed task rows cross HTTP.
 globalThis.WorkspaceDraftPersistence=(()=>{
-  const dirty=new Set(),touched=new Set(),revisions=new Map(),saved=new Map();
+  const dirty=new Set(),touched=new Set(),revisions=new Map(),saved=new Map(),forgotten=new Set();
   let map,hooks,ready=false,restoring=false,timer=null,deadline=null,flight=null,lastError="",savedSelected="home";
   const clone=value=>value?{text:value.text||"",attachments:[...(value.attachments||[])]}:null;
   function message(value){
@@ -16,9 +16,9 @@ globalThis.WorkspaceDraftPersistence=(()=>{
     clearTimeout(timer);timer=setTimeout(()=>{void flush(false).catch(()=>{});},800);
     if(!deadline)deadline=setTimeout(()=>{void flush(false).catch(()=>{});},5000);
   }
-  function changed(id){if(restoring)return;touched.add(id);dirty.add(id);schedule();}
+  function changed(id){if(restoring||forgotten.has(id))return;touched.add(id);dirty.add(id);schedule();}
   class DraftMap extends Map{
-    set(id,value){super.set(id,clone(value));changed(id);return this;}
+    set(id,value){if(forgotten.has(id))return this;super.set(id,clone(value));changed(id);return this;}
     delete(id){const existed=super.delete(id);changed(id);return existed;}
     clear(){for(const id of this.keys())this.delete(id);}
   }
@@ -28,15 +28,17 @@ globalThis.WorkspaceDraftPersistence=(()=>{
   }
   async function drain(){
     for(const id of [...dirty]){
+      if(forgotten.has(id))continue;
       const value=body(id),signature=JSON.stringify(value);
       dirty.delete(id);
       if(saved.get(id)===signature&&savedSelected===(hooks.selected()||"home"))continue;
       try{
         const selected=hooks.selected()||"home";
         const result=await hooks.api("/api/drafts",{id,revision:revisions.get(id)||0,...value,selectedId:selected});
+        if(forgotten.has(id))continue;
         if(!Number.isInteger(result.revision))throw Error("초안 저장을 확인하지 못했어요. 입력은 화면에 유지됩니다.");
         revisions.set(id,result.revision);saved.set(id,signature);savedSelected=selected;message("");
-      }catch(error){dirty.add(id);message(error.message||"초안을 저장하지 못했어요. 입력은 화면에 유지됩니다.");throw error;}
+      }catch(error){if(forgotten.has(id))continue;dirty.add(id);message(error.message||"초안을 저장하지 못했어요. 입력은 화면에 유지됩니다.");throw error;}
     }
   }
   async function flush(settle=true){
@@ -77,6 +79,7 @@ globalThis.WorkspaceDraftPersistence=(()=>{
     return !touched.has(id)||hooks.stashes().some(row=>row.id===id);
   }
   const keepForRecovery=(id,draft)=>!!draft?.text||!!draft?.attachments?.length||dirty.has(id)||!ready;
-  return {createMap:()=>map=new DraftMap(),attach,load,flush,changed,allowStashRestore,keepForRecovery,
+  function forget(id){forgotten.add(id);dirty.delete(id);touched.delete(id);revisions.delete(id);saved.delete(id);map.delete(id);}
+  return {createMap:()=>map=new DraftMap(),attach,load,flush,changed,forget,allowStashRestore,keepForRecovery,
     hasPending:()=>dirty.size>0||!!flight,isReady:()=>ready};
 })();

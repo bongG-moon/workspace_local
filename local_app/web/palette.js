@@ -62,11 +62,11 @@ globalThis.WorkspacePalette = (() => {
     if(!dialog.open)return;
     const query=normalized(input.value),terms=query.split(/\s+/).filter(Boolean);
     const matches=row=>terms.every(term=>normalized(`${row.label} ${row.detail} ${row.keywords||""}`).includes(term));
-    const available=commands.map(row=>({...row,disabled:!!row.enabled&&!row.enabled(),...(row.enabled?{sessionContext:active?.id}:{}),category:"기능"})).filter(matches);
-    const metadata=sessions.slice(0,MAX_TASKS),tasks=[];
+    const available=commands.filter(row=>!globalThis.WorkspaceModes?.isChat()||["new","inbox","tasks","settings","shortcuts","help"].includes(row.id)).map(row=>globalThis.WorkspaceModes?.isChat()&&row.id==="new"?{...row,label:"새 대화 시작",detail:"폴더 선택 없이 질문하기"}:globalThis.WorkspaceModes?.isChat()&&row.id==="tasks"?{...row,label:"전체 대화 보기",detail:"대화 이름으로 찾기"}:row).map(row=>({...row,disabled:!!row.enabled&&!row.enabled(),...(row.enabled?{sessionContext:active?.id}:{}),category:"기능"})).filter(matches);
+    const metadata=visibleSessions().slice(0,MAX_TASKS),tasks=[];
     for(const task of metadata){
       if(!task||typeof task.id!=="string")continue;
-      const row={id:"task:"+task.id,label:task.title||"업무",detail:task.workspace||"",keywords:task.pinned?"고정 pinned":"",glyph:task.pinned?"⌖":"▱",category:"업무",current:task.id===active?.id,run:()=>selectSession(task.id)};
+      const row={id:"task:"+task.id,label:task.title||"업무",detail:globalThis.WorkspaceModes?.isChat()?"일반 대화":task.workspace||"",keywords:task.pinned?"고정 pinned":"",glyph:task.pinned?"⌖":"▱",category:globalThis.WorkspaceModes?.isChat()?"대화":"업무",current:task.id===active?.id,run:()=>selectSession(task.id)};
       if(matches(row)){tasks.push(row);if(tasks.length===MAX_RESULTS)break;}
     }
     const next=query?[...tasks,...available].slice(0,MAX_RESULTS):[...available,...tasks.slice(0,8)].slice(0,MAX_RESULTS);
@@ -112,7 +112,7 @@ globalThis.WorkspacePalette = (() => {
   input.oninput=()=>{if(!composing)refresh();};input.oncompositionstart=()=>{composing=true;};input.oncompositionend=()=>{composing=false;refresh();};
   dialog.oncancel=event=>{event.preventDefault();close();};
   dialog.onclose=()=>{results=[];selected=-1;renderKey="";list.replaceChildren();input.removeAttribute?.("aria-activedescendant");};
-  $("palette-open").onclick=open;$("palette-close").onclick=()=>close();
+  $("palette-close").onclick=()=>close();
   document.addEventListener("keydown",keydown);
   return {open,close,refresh,keydown};
 })();

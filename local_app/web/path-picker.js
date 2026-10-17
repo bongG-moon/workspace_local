@@ -12,7 +12,7 @@ globalThis.WorkspacePathPicker = (() => {
     const head=node("div",null,"path-picker-head"),heading=node("div");
     heading.append(node("span","내 PC의 자료","eyebrow"));
     const title=node("h2");title.id="path-picker-title";heading.append(title);
-    const close=button("×","icon-button",()=>finish([]));close.setAttribute("aria-label","선택 창 닫기");head.append(heading,close);
+    const close=button(null,"icon-button",()=>finish([]));close.innerHTML='<svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>';close.setAttribute("aria-label","선택 창 닫기");head.append(heading,close);
     const layout=node("div",null,"path-picker-layout"),sidebar=node("nav",null,"path-picker-shortcuts");sidebar.setAttribute("aria-label","자주 쓰는 위치");
     const main=node("section",null,"path-picker-main"),pathForm=node("form",null,"path-picker-location"),up=button("↑","quiet-button",()=>load(view?.parent));up.setAttribute("aria-label","상위 폴더로 이동");
     const path=node("input");path.type="text";path.autocomplete="off";path.spellcheck=false;path.placeholder="폴더 경로 입력";path.setAttribute("aria-label","폴더 전체 경로");

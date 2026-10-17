@@ -31,7 +31,7 @@ def replacement_candidate(app, target):
                 or item.get('branch', {}).get('status') == 'pending'
                 or any(item.get(key) for key in ('_connecting', '_restarting', '_modelUpdating',
                     '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_stopAdmission',
-                    '_removingFromList', '_capacityReservation', '_idleReleasing', '_controlRestore'))
+                    '_removingFromList', '_deleting', '_chatPreparing', '_capacityReservation', '_idleReleasing', '_controlRestore'))
                 or item['id'] in app.dispatch.steering
                 or any(getattr(bridge, key, False) for key in ('stopping', '_control_active',
                     '_control_waiters', 'descendant_cleanup_uncertain'))):
@@ -74,23 +74,27 @@ def idle_candidate(app, target):
     selected = None
     for item in app.sessions.values():
         bridge = item.get('bridge')
+        unused_catalog = bool(getattr(bridge, '_workspace_catalog_only', False)
+            and item.get('state') == 'idle' and not getattr(bridge, 'resume_id', None)
+            and not item.get('messages') and not item.get('lastRunId'))
         if (item is target or bridge is None or bridge.closed
                 or item.get('state') not in {'idle', 'done'}
-                or item.get('state') == 'idle' and not getattr(bridge, 'resume_id', None)
+                or item.get('state') == 'idle' and not getattr(bridge, 'resume_id', None) and not unused_catalog
                 or item.get('branch', {}).get('status') == 'pending'
                 or not getattr(bridge, '_initialized', False)
                 or any(item.get(key) for key in ('requests', 'choice', '_connecting', '_restarting',
                     '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim',
-                    '_stopAdmission', '_removingFromList', '_capacityReservation', '_idleReleasing',
+                    '_stopAdmission', '_removingFromList', '_deleting', '_chatPreparing', '_capacityReservation', '_idleReleasing',
                     '_controlRestore', '_needsControlRestore', '_idleReleaseFailed'))
                 or item['id'] in app.dispatch.steering
                 or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
                     '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain'))):
             continue
-        try:
-            uuid.UUID(str(getattr(bridge, 'session_id', None)))
-        except (ValueError, TypeError):
-            continue  # Never retire a conversation that cannot be resumed exactly.
+        if not unused_catalog:
+            try:
+                uuid.UUID(str(getattr(bridge, 'session_id', None)))
+            except (ValueError, TypeError):
+                continue  # Never retire a conversation that cannot be resumed exactly.
         queue = app.dispatch.queue.snapshot(item['id'])
         if (app.dispatch.error or queue.get('warning') or any(row['status'] in
                 {'queued', 'dispatching', 'submitted', 'needs_review'} for row in queue['queue'])):
@@ -109,8 +113,9 @@ def _prepare_release(app, candidate, owner, *, explicit=False):
                      or candidate.get('messages') or candidate.get('state') != 'idle')
     app._capture_control_baselines(candidate, old)
     actual = old.model_state()
-    candidate['_idleRestoreControls'] = {name: actual[name] for name in
-        ('model', 'effort', 'permissionMode') if isinstance(actual.get(name), str) and actual[name]}
+    controls = ('model', 'effort') if candidate.get('kind') == 'chat' else ('model', 'effort', 'permissionMode')
+    candidate['_idleRestoreControls'] = {name: actual[name] for name in controls
+        if isinstance(actual.get(name), str) and actual[name]}
     if explicit:
         app.dispatch.manual_stop(candidate['id'])
         candidate['bridge'] = None
@@ -218,7 +223,7 @@ def _preflight(app, item, mode, args, kwargs):
             raise ValueError('요청은 1~32,000자로 입력해 주세요.')
         if not isinstance(attachments, list) or len(attachments) > 12:
             raise ValueError('파일은 한 번에 12개까지 선택할 수 있습니다.')
-        app.validate_attachments(attachments)
+        app.validate_session_attachments(item, attachments)
         app._validate_choice_claim(item, kwargs.get('_choice_claim'))
     trusted = (mode == 'send' and (kwargs.get('trusted') is True or len(args) > 2 and args[2] is True))
     if not item.get('trusted') and not trusted:
@@ -226,6 +231,13 @@ def _preflight(app, item, mode, args, kwargs):
     app._check_import_context(item)
     from .server import workspace_folder
     workspace_folder(item)
+    if item.get('kind') == 'chat':
+        app.chat_runtime_options(item)
+        if not app.demo:
+            from .bridge import chat_runtime_capability
+            capability = chat_runtime_capability(app.info)
+            if not capability['available']:
+                raise ValueError(capability['reason'])
     if app.error:
         raise ValueError(app.error)
 
@@ -242,7 +254,7 @@ def connection_slot(app, sid, *, mode='dispatch', args=(), kwargs=None, offer_re
                    if offer_replacement or replacement_token is not None else None)
     with app.lock:
         item = app.sessions.get(sid)
-        if item is None:
+        if item is None or item.get('_deleting') or sid in app.chat_spaces.pending:
             app.get(sid)  # Keep the normal not-found validation and HTTP error.
         approved = None
         if replacement_token is not None:

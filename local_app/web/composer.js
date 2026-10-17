@@ -14,6 +14,7 @@ globalThis.WorkspaceComposer = (() => {
   }
 
   function trigger() {
+    if(globalThis.WorkspaceModes?.isChat())return null;
     if (sending || choiceSubmission || appClosed || composing || input.readOnly) return null;
     const value = input.value, cursor = typeof input.selectionStart === "number" ? input.selectionStart : value.length;
     if (typeof input.selectionEnd === "number" && input.selectionEnd !== cursor) return null;

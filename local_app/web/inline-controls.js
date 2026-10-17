@@ -67,6 +67,7 @@ globalThis.WorkspaceInlineControls = (() => {
   const context = () => ({id:active?.id || null, selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
+  const chatMode = () => globalThis.WorkspaceModes?.isChat() === true;
   const stopBlocked = () => !!globalThis.WorkspaceStop?.blocked();
   const blocked = (kind="model") => kind==="permission" ? permissionConnectionLocked() : connectionLocked();
   function close({focus=false} = {}) {
@@ -83,7 +84,8 @@ globalThis.WorkspaceInlineControls = (() => {
     const info=active?.connection||{};
     if(kind==="permission")return value===null?!info.permissionModeOverride:permissionOptionValue(info.permissionMode||info.permissionModeOverride)===value;
     if(kind==="effort")return value===null?!info.effortOverride:(info.effortSupport==="confirmed"?info.effort:info.effortOverride||info.effort)===value;
-    return value===null?!active?.modelOverride:(active?.modelOverride||info.modelOverride||info.model)===value;
+    const override=active?.modelOverride || info.modelOverride;
+    return value===null?!override:override===value;
   }
   function optionSignature() {
     const info=active?.connection||{};
@@ -95,7 +97,7 @@ globalThis.WorkspaceInlineControls = (() => {
     const model = active?.modelOverride || info.modelOverride || info.model;
     const effort = info.effortOverride && info.effortSupport !== "confirmed" ? `요청 ${info.effortOverride}` : info.effort || (info.effortOverride ? `요청 ${info.effortOverride}` : active ? "미확인" : "기존 설정");
     const permission = info.permissionModeChangePending===true&&!info.permissionMode ? "변경 확인 중" : info.permissionModeLabel || named(permissionOptions(), permissionOptionValue(info.permissionMode || info.permissionModeOverride)) || "기존 설정";
-    const values = {model:named(modelOptions(),model) || "기존 설정", effort, permission};
+    const values = {model:named(modelOptions(),model) || (chatMode()?"Claude 기본":"기존 설정"), effort, permission};
     for (const [kind,button] of Object.entries(buttons)) {
       button.querySelector("strong").textContent = values[kind]; button.title = titles[kind] + ": " + values[kind];
       button.disabled = appClosed || pending || (active && blocked(kind));
@@ -123,9 +125,9 @@ globalThis.WorkspaceInlineControls = (() => {
     if(same(notice)&&notice.pendingPermission&&info.permissionModeChangePending!==true)notice=null;
     const node = $("composer-control-status"), visibleNotice = same(notice) ? notice : null;
     const changing = modelChanging || permissionChanging || info.permissionModeChangePending===true || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
-    const restoreText = restore ? (issue?.message || "이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.") : "";
-    const text = stopBlocked() ? "중지 상태를 확인한 뒤 모델·Effort·승인 모드를 바꿀 수 있어요." : connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
-      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? info.capabilities?.setPermissionModeWhileRunning===true ? "작업 중에도 승인 모드는 바꿀 수 있어요. 모델·Effort는 요청이 끝난 뒤 변경할 수 있어요." : "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
+    const restoreText = restore ? (issue?.message || (chatMode()?"이전 모델을 적용하지 못했어요. 사용할 모델을 확인해 주세요.":"이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.")) : "";
+    const text = stopBlocked() ? (chatMode()?"답변 중지가 끝나면 모델을 바꿀 수 있어요.":"중지 상태를 확인한 뒤 모델·Effort·승인 모드를 바꿀 수 있어요.") : connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
+      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? chatMode()?"답변이 끝나면 다음 질문에 사용할 모델을 바꿀 수 있어요.":info.capabilities?.setPermissionModeWhileRunning===true ? "작업 중에도 승인 모드는 바꿀 수 있어요. 모델·Effort는 요청이 끝난 뒤 변경할 수 있어요." : "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
     node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || visibleNotice?.isError) && !changing));
     if (restore && !changing && !connectionPreparing) {
       const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
@@ -159,10 +161,10 @@ globalThis.WorkspaceInlineControls = (() => {
     const info = active.connection || {};
     if (view.kind === "model") {
       const can = info.capabilities?.setModel === true;
-      message(can ? "선택하면 이 업무 연결에 적용해요. 개인 기본 설정은 유지됩니다." : "현재 연결에서 모델 변경을 제공하지 않아요. 기존 모델을 사용합니다.");
-      option(null, "기존 설정 사용", "이 업무에서 처음 확인한 모델로 돌아갑니다.", !active.modelOverride, can);
+      message(can ? (chatMode()?"이 대화에만 적용해요. Claude Code의 기본 모델 설정은 유지됩니다.":"선택하면 이 업무 연결에 적용해요. 개인 기본 설정은 유지됩니다.") : "현재 연결에서 모델 변경을 제공하지 않아요. 기존 모델을 사용합니다.");
+      option(null, "기존 설정 사용", chatMode()?"이 대화 연결에서 처음 확인한 기본 모델로 돌아갑니다.":"이 업무에서 처음 확인한 모델로 돌아갑니다.", selectedOption("model",null), can);
       for (const row of modelOptions()) option(row.value,row.displayName || row.value,row.description || row.value,
-        (active.modelOverride || info.model) === row.value,can);
+        selectedOption("model",row.value),can);
       if (can) {
         const box = el("div",null,"runtime-custom"), label = el("label","모델 이름 직접 입력"); label.setAttribute("for","inline-model-name");
         const row = el("div",null,"runtime-custom-row"), input = el("input"), applyButton = el("button","적용","quiet-button");
@@ -223,8 +225,22 @@ globalThis.WorkspaceInlineControls = (() => {
     return same(source) && active?.connection?.connected === true;
   }
   async function open(kind, intent={}) {
+    if(chatMode() && kind!=="model")return;
+    // A model choice is explicit intent to prepare this chat, without sending
+    // a question. Share lazy creation and keep drafts/attachments in that chat.
+    if(chatMode() && !active){
+      if(appClosed || pending || connectionPreparing || sending)return;
+      const source=context();pending=true;connectionPreparing=true;setStatus("idle");
+      try{
+        const created=await globalThis.WorkspaceModes.ensureChat();
+        if(!created || !chatMode() || active?.id!==created.id || appClosed)return;
+      }catch(err){const failedAt=err.chatCreationContext || source;if(same(failedAt))status(err.message,true,failedAt);return;}
+      finally{pending=false;connectionPreparing=false;setStatus(active?.state || "idle");}
+    }
     if (view?.kind === kind && !intent.commandDraft && !intent.cycle) return close({focus:true});
     if (appClosed || pending || (active && blocked(kind))) return;
+    // Explicit advanced commands need their visible anchor in the full view.
+    if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     globalThis.WorkspaceComposer?.close(); view = {...context(),kind,...intent}; panel.hidden = false; notice = null; render();
     const opened = view;
     $("runtime-panel-title").textContent = titles[kind];
@@ -271,7 +287,7 @@ globalThis.WorkspaceInlineControls = (() => {
         status(source.kind === "effort" ? (value === null ? result.response?.alreadyInherited ? "Effort auto · 기존 설정을 이미 상속하고 있어요." : "Effort auto · 이 연결에서 변경 전 확인한 수준으로 복원했어요." : confirmedEffort && actualEffort
             ? actualEffort === value ? `Effort ${actualEffort} 적용을 확인했어요.` : `Effort 요청 ${value} · 실제 적용 ${actualEffort} (모델·회사 정책 제한)`
             : `Effort ${value} 요청을 반영했어요. 실제 적용 수준은 확인하지 못했습니다.`)
-          : source.kind === "model" ? "모델 변경을 확인했어요. 이 업무 연결에만 적용합니다." : result.response?.reconnectRequired ? "다음 요청부터 기존 승인 설정을 사용합니다." : "승인 모드 변경을 확인했어요. 이 연결에만 적용합니다.",false,source);
+          : source.kind === "model" ? (chatMode()?"모델을 변경했어요. 다음 질문부터 이 대화에 적용합니다.":"모델 변경을 확인했어요. 이 업무 연결에만 적용합니다.") : result.response?.reconnectRequired ? "다음 요청부터 기존 승인 설정을 사용합니다." : "승인 모드 변경을 확인했어요. 이 연결에만 적용합니다.",false,source);
       } else if (result?.error) { failure(result.error); status(result.error,true,source); }
       return result;
     } finally {
@@ -322,8 +338,10 @@ globalThis.WorkspaceInlineControls = (() => {
     await apply(current === 'bypassPermissions' ? cycle[0] : cycle[(cycle.indexOf(current) + 1) % cycle.length],source);
   }
   async function cyclePermission() {
+    if(globalThis.WorkspaceModes?.isChat())return;
     const source = {...context(),kind:"permission",cycle:true};
     if (!active || blocked("permission") || pending) return;
+    if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     if (!active.trusted || active.connection?.connected !== true) {
       const opened = await open("permission",{cycle:true});
       if (!opened || view !== opened || !same(source) || active?.connection?.connected !== true || !active.trusted) return;
@@ -336,6 +354,7 @@ globalThis.WorkspaceInlineControls = (() => {
         && !event.isComposing && event.keyCode !== 229 && document.activeElement === $("prompt") && view && !panel.hidden) {
       event.preventDefault(); close(); return true;
     }
+    if (chatMode()) return false;
     if (event.key !== "Tab" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.keyCode === 229
         || document.activeElement !== $("prompt") || !active || $("prompt").readOnly || blocked("permission")) return false;
     event.preventDefault();

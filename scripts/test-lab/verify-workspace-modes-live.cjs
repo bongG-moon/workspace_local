@@ -1,0 +1,34 @@
+/* Run after serve-workspace-modes-fixture.py. Real API/files; synthetic AI. */
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {chromium}=require('playwright');
+const folder=path.resolve(process.argv[2]||''),runtime=JSON.parse(fs.readFileSync(path.join(folder,'runtime.json'),'utf8'));
+(async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.WORKSPACE_BROWSER||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
+ try{const page=await browser.newPage({viewport:{width:1500,height:980}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(runtime.url);await page.locator('#sessions .session').first().waitFor();
+ await page.locator('#mode-chat').click();assert.equal(await page.locator('#sessions .session').count(),0);
+ await page.locator('#chat-file-input').setInputFiles(runtime.original);
+ await page.waitForFunction(()=>document.querySelector('#attachments').textContent.includes('original.txt'));
+ const owner=await page.evaluate(()=>({id:active.id,workspace:active.workspace,kind:active.kind,attachments:[...attachments]}));
+ assert.equal(owner.kind,'chat');assert.ok(fs.existsSync(owner.workspace));assert.notEqual(owner.attachments[0],runtime.original);assert.ok(fs.existsSync(owner.attachments[0]));
+ await page.locator('#prompt').fill('첨부한 자료의 목표와 실적을 알려줘.');await page.locator('#prompt').press('Enter');
+ await page.locator('.message.assistant').waitFor();await page.locator('.attachment-read-notices').waitFor();
+ assert.match(await page.locator('.attachment-read-notices').textContent(),/original.txt/);
+ assert.match(await page.locator('.attachment-read-notices').textContent(),/자/);
+ const data=await page.evaluate(()=>api('/api/session?id='+encodeURIComponent(active.id)));
+ assert.equal(data.messages.find(m=>m.role==='user').attachmentReads[0].status,'read');
+ assert.equal(await page.locator('#error-banner').isVisible(),false);
+ await page.locator('#toast').waitFor({state:'hidden'});await page.screenshot({path:path.join(folder,'chat-with-file.png')});
+ await page.locator('#mode-work').click();assert.equal(await page.locator('#sessions .session').count(),1);
+ await page.locator('#mode-chat').click();await page.locator('.attachment-read-notices').waitFor();
+ assert.ok(fs.existsSync(owner.workspace));
+ await page.locator(`#sessions [data-session-id="${owner.id}"] .session-remove`).click();await page.locator('#action-confirm').click();
+ await page.locator(`#sessions [data-session-id="${owner.id}"]`).waitFor({state:'detached'});
+ assert.equal(fs.existsSync(owner.workspace),false,'Owned runtime removed');assert.equal(fs.existsSync(owner.attachments[0]),false,'App copy removed');assert.ok(fs.existsSync(runtime.original),'Original retained');
+ const stored=await page.evaluate(()=>api('/api/drafts'));assert.ok(!stored.entries.some(row=>row.id===owner.id));
+ await page.locator('#mode-work').click();assert.equal(await page.locator('#sessions .session').count(),1,'Work list preserved');
+ assert.ok(fs.existsSync(path.join(folder,'workspace')),'Work folder retained');
+ assert.deepEqual(errors,[]);
+ const result={passed:true,mode:'real HTTP and filesystem, synthetic AI',checks:['real general chat creation','uploaded app copy','bounded text read scope shown and restored','background mode navigation','conversation deletion removes runtime and attachment copy','original and existing workspace preserved','draft removed'],pageErrors:errors};
+ fs.writeFileSync(path.join(folder,'live-checks.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

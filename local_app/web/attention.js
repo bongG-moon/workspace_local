@@ -55,6 +55,11 @@ globalThis.WorkspaceAttention = (() => {
     notificationSettings(); if(changed)renderSessions();
   }
   function apply(snapshot) {
+    if(Array.isArray(snapshot.sessions)){
+      const states=new Map(snapshot.sessions.filter(row=>row&&typeof row.id==="string").map(row=>[row.id,row]));let changed=false;
+      for(const row of sessions){const next=states.get(row.id);if(next&&typeof next.state==="string"&&row.state!==next.state){row.state=next.state;changed=true;}}
+      if(changed)renderSessions();
+    }
     globalThis.WorkspaceDesktop?.apply(snapshot.desktop,snapshot);
     if(!globalThis.WorkspaceUpgrade?.isLocked())globalThis.WorkspaceDesktop?.follow(snapshot.navigation);
     setWindowTitle(snapshot.windowTitle);

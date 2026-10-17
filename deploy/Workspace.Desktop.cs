@@ -186,6 +186,7 @@ internal sealed class DesktopWindow : Form
     private WorkspaceNotificationCard notificationCard;
     private string appearance;
     private bool darkAppearance, highContrastAppearance;
+    private bool zoomFeedbackPending, zoomFeedbackRunning, zoomFeedbackVisible;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr window, int command);
@@ -358,6 +359,40 @@ internal sealed class DesktopWindow : Form
         }));
     }
 
+    // The WebView controller owns browser zoom, independently of Windows DPI.
+    // Publish only its actual factor through this fixed, one-way page call.
+    // No web-to-native bridge, devicePixelRatio guess, polling or extra process.
+    private async void PublishZoomFeedback(bool visible)
+    {
+        zoomFeedbackPending = true;
+        zoomFeedbackVisible = zoomFeedbackVisible || visible;
+        if (zoomFeedbackRunning) return;
+        zoomFeedbackRunning = true;
+        try
+        {
+            while (zoomFeedbackPending && !exiting && !IsDisposed)
+            {
+                bool show = zoomFeedbackVisible;
+                zoomFeedbackPending = zoomFeedbackVisible = false;
+                var current = view;
+                if (current == null || current.IsDisposed || current.CoreWebView2 == null) continue;
+                var core = current.CoreWebView2;
+                Uri source;
+                if (!Uri.TryCreate(core.Source, UriKind.Absolute, out source) ||
+                    !SameOrigin(core.Source) || source.AbsolutePath != "/") continue;
+                var payload = new JavaScriptSerializer().Serialize(new { factor = current.ZoomFactor, visible = show });
+                try
+                {
+                    await core.ExecuteScriptAsync("(function(){var feedback=globalThis.WorkspaceZoomFeedback;" +
+                        "if(feedback&&typeof feedback.update==='function')feedback.update(" + payload + ");})()");
+                }
+                catch { /* Closing/recovering a WebView must never break zoom or input. */ }
+            }
+        }
+        catch { /* Native recovery may invalidate the controller between events. */ }
+        finally { zoomFeedbackRunning = false; }
+    }
+
     private async Task InitializeView()
     {
         if (initializing || exiting) return;
@@ -376,6 +411,7 @@ internal sealed class DesktopWindow : Form
             await view.EnsureCoreWebView2Async(environment);
             if (exiting) return;
             var core = view.CoreWebView2;
+            view.ZoomFactorChanged += delegate { PublishZoomFeedback(true); };
             ApplyAppearance();
             core.Settings.IsStatusBarEnabled = false;
             core.Settings.AreDevToolsEnabled = false;
@@ -433,6 +469,7 @@ internal sealed class DesktopWindow : Form
                 if (!e.IsSuccess) { DesktopProgram.Emit(new { type = "navigation_failed", code = (int)e.WebErrorStatus }); ShowRecovery(); return; }
                 if (recovery != null) { Controls.Remove(recovery); recovery.Dispose(); recovery = null; }
                 view.BringToFront();
+                PublishZoomFeedback(false);
                 DesktopProgram.Emit(new { type = "loaded" });
             };
             // Ready is deliberately BEFORE navigation completes: Python starts

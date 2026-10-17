@@ -33,7 +33,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
             "clearTimeout(id){updateTimers.delete(id);},",
         ).replace(
             "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,",
-            "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,updateTimers,startupRequests,"
+            "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,TextEncoder,updateTimers,startupRequests,"
             "addEventListener:(name,fn)=>updateWindowEvents.set(name,fn),"
             "removeEventListener:(name,fn)=>{if(updateWindowEvents.get(name)===fn)updateWindowEvents.delete(name);},"
             "fireUpdateWindow:name=>updateWindowEvents.get(name)?.(),fireUpdateEvent:name=>updateEvents.get(name)?.(),"
@@ -47,13 +47,14 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
             + ":({sessions:[],demo:false,appUpdate:" + json.dumps(initial) + ",appUpdateWarning:" + json.dumps(warning) + "})};},",
         ).replace(
             "querySelector:selector=>get(selector),querySelectorAll:()=>[],addEventListener(){}},",
-            "querySelector:selector=>get(selector),querySelectorAll:selector=>selector==='dialog[open]'?[...nodes.values()].filter(node=>node.open):[],"
+            "querySelector:selector=>selector.startsWith('dialog[open]')?[...nodes.entries()].find(([id,node])=>node.open&&(!selector.includes(':not')||id!=='app-update-dialog'))?.[1]||null:get(selector),querySelectorAll:selector=>selector==='dialog[open]'?[...nodes.values()].filter(node=>node.open):[],"
             "addEventListener:(name,fn)=>updateEvents.set(name,fn),"
             "removeEventListener:(name,fn)=>{if(updateEvents.get(name)===fn)updateEvents.delete(name);}},",
         ).replace(
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'app-updates.js'});\n"
-            "context.WorkspaceStartupHealth={attach(){},bootstrapReady:async()=>{"
+            "vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'upgrade-handoff.js'});\n"
+            "context.WorkspaceStartupHealth={attach(){},snapshot:()=>({missing:[]}),bootstrapReady:async()=>{"
             "context.updaterReadyAtBootstrap=['app-update-check','app-update-sidebar-badge','app-update-notes-open','app-update-install']"
             ".every(id=>typeof get(id).onclick==='function');},bootstrapFailed(){}};\n"
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});\n"
@@ -62,7 +63,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         javascript = "const available=" + json.dumps(AVAILABLE) + ";const current=" + json.dumps(CURRENT) + ";" + javascript
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), javascript,
-             str(ROOT / "local_app/web/app-updates.js")],
+             str(ROOT / "local_app/web/app-updates.js"), str(ROOT / "local_app/web/upgrade-handoff.js")],
             input=harness, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -80,7 +81,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal($('app-update-sidebar-badge').attributes['aria-label'],'새 버전 0.22.1 업데이트');
           assert.equal($('app-update-dialog').open,true);
           assert.equal($('app-update-notes').textContent,available.release.notes);
-          assert.equal($('app-update-install').textContent,'업데이트하기');
+          assert.equal($('app-update-install').textContent,'업데이트하고 다시 시작');
           assert.equal($('app-update-dismiss').textContent,'다음에 하기');
           assert.equal(document.activeElement,$('app-update-dismiss'));
           assert.equal(JSON.stringify(startupRequests),JSON.stringify([{action:'startup'}]));
@@ -392,15 +393,18 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal($('app-update-dialog').open,false);assert.equal($('settings-dialog').open,false);
         })()""", AVAILABLE)
 
-    def test_own_launch_closes_settings_for_existing_handoff_but_passive_launch_does_not(self):
+    def test_explicit_launch_keeps_progress_and_passive_launch_never_yields_dialog(self):
         self.run_case(r"""(async()=>{
           openSettings();$('app-update-notes-open').onclick();
           WorkspaceAppUpdates.observe({...available,status:'launching'});
           assert.equal($('settings-dialog').open,true);assert.equal($('app-update-dialog').open,true);
+          assert.equal(WorkspaceAppUpdates.canYieldForHandoff(),false);
           WorkspaceAppUpdates.observe(available);api=async()=>({...available,status:'launching'});
           await $('app-update-install').onclick();
-          assert.equal($('settings-dialog').open,false);assert.equal($('app-update-dialog').open,false);
-          assert.equal(appClosed,false);
+          assert.equal($('settings-dialog').open,false);assert.equal($('app-update-dialog').open,true);
+          assert.equal($('app-update-dialog').dataset.progress,'true');
+          assert.equal($('app-update-dismiss').textContent,'작업으로 돌아가기');
+          assert.equal(WorkspaceAppUpdates.canYieldForHandoff(),true);assert.equal(appClosed,false);
         })()""", AVAILABLE)
 
     def test_confirmed_download_failure_allows_only_explicit_retry(self):
@@ -413,21 +417,84 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           assert.equal(updateTimers.size,1);await $('app-update-install').onclick();assert.equal(calls.length,2);
         })()""", AVAILABLE)
 
-    def test_waiting_handoff_closes_dialogs_only_once_per_explicit_install(self):
+    def test_progress_transfers_to_capture_in_same_turn_and_preserves_drafts(self):
         self.run_case(r"""(async()=>{
-          openSettings();$('app-update-notes-open').onclick();
-          api=async()=>({...available,status:'ready',progress:100});
+          $('prompt').value='보관할 초안';attachments=['keep.csv'];
+          openSettings();$('app-update-notes-open').onclick();api=async()=>({...available,status:'ready',progress:100});
           await $('app-update-install').onclick();
-          assert.equal($('settings-dialog').open,false);assert.equal($('app-update-dialog').open,false);
-          openSettings();$('app-update-notes-open').onclick();
-          api=async()=>({...available,status:'launching',progress:100});await runUpdateTimer();
-          assert.equal($('settings-dialog').open,true);assert.equal($('app-update-dialog').open,true);
-          assert.equal(document.activeElement,$('app-update-close'));
-          WorkspaceAppUpdates.observe({...available,status:'error',error:'전환을 취소했어요.'});
-          assert.equal($('app-update-install').disabled,false);
-          await $('app-update-install').onclick();
-          assert.equal($('settings-dialog').open,false);assert.equal($('app-update-dialog').open,false);
+          assert.equal($('settings-dialog').open,false);assert.equal($('app-update-dialog').open,true);
+          const id='a'.repeat(32),calls=[];
+          api=async(path,data)=>{calls.push({path,data});assert.equal($('app-update-dialog').open,false);
+            assert.equal($('upgrade-dialog').open,true);
+            return {ok:true,upgrade:{requestId:id,targetVersion:'0.22.1',stage:'captured',revision:2}};};
+          await WorkspaceUpgrade.observe({requestId:id,targetVersion:'0.22.1',stage:'capture',revision:1},{});
+          assert.equal(calls.length,1);assert.equal(calls[0].data.action,'capture');
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('app-update-activity').hidden,true);
+          assert.match($('upgrade-detail').textContent,/보관했어요/);
+          assert.equal($('prompt').value,'보관할 초안');assert.deepEqual(attachments,['keep.csv']);
+          await WorkspaceUpgrade.observe({requestId:id,targetVersion:'0.22.1',stage:'committing',revision:3},{});
+          assert.equal($('upgrade-title').textContent,'새 버전으로 다시 시작합니다');
+          assert.equal($('upgrade-cancel').disabled,true);
         })()""", AVAILABLE)
+
+    def test_return_to_work_retains_status_without_cancelling_update(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'ready',progress:100});await $('app-update-install').onclick();
+          const id='a'.repeat(32);WorkspaceAppUpdates.observe({...available,status:'launching',progress:100});
+          await WorkspaceUpgrade.observe({requestId:id,targetVersion:'0.22.1',stage:'waiting',revision:1},{});
+          assert.equal($('app-update-dialog').open,true);assert.match($('app-update-dialog-status').textContent,/진행 중인 업무/);
+          assert.equal($('app-update-dialog-progress-wrap').hidden,true);
+          const calls=[];api=async(path,data)=>{calls.push(data);return {...available,status:'launching'};};
+          $('app-update-dismiss').onclick();
+          assert.equal($('app-update-activity').hidden,false);assert.match($('app-update-activity-detail').textContent,/완료 후 다시 시작/);
+          assert.equal(WorkspaceUpgrade.isLocked(),false);assert.equal(calls.length,0);
+          $('app-update-activity-open').onclick();assert.equal($('app-update-dialog').open,true);
+          assert.equal($('app-update-activity').hidden,true);assert.equal(calls.length,0);
+        })()""", AVAILABLE)
+
+    def test_cancel_after_progress_transfer_restores_accessible_sidebar_opener(self):
+        self.run_case(r"""(async()=>{
+          $('app-update-dismiss').onclick();$('app-update-sidebar-badge').focus();$('app-update-sidebar-badge').onclick();
+          api=async()=>({...available,status:'ready'});await $('app-update-install').onclick();
+          const id='d'.repeat(32);
+          api=async(path,data)=>({ok:true,upgrade:{requestId:id,targetVersion:'0.22.1',
+            stage:data.action==='capture'?'captured':'cancelled',revision:data.action==='capture'?2:3}});
+          await WorkspaceUpgrade.observe({requestId:id,targetVersion:'0.22.1',stage:'capture',revision:1},{});
+          assert.equal($('upgrade-dialog').open,true);await WorkspaceUpgrade.cancel();
+          assert.equal($('upgrade-dialog').open,false);assert.equal(document.activeElement,$('app-update-sidebar-badge'));
+        })()""", AVAILABLE)
+
+    def test_updater_owned_dialog_does_not_bypass_another_human_dialog(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'ready'});await $('app-update-install').onclick();
+          showDialog('action-dialog');let calls=0;api=async()=>{calls++;};
+          await WorkspaceUpgrade.observe({requestId:'b'.repeat(32),targetVersion:'0.22.1',stage:'capture',revision:1},{});
+          assert.equal(calls,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
+          assert.equal($('action-dialog').open,true);assert.equal($('app-update-dialog').open,true);
+        })()""", AVAILABLE)
+
+    def test_new_settings_opened_during_waiting_is_not_closed_by_later_polls(self):
+        self.run_case(r"""(async()=>{
+          openSettings();$('app-update-notes-open').onclick();api=async()=>({...available,status:'ready'});
+          await $('app-update-install').onclick();$('app-update-dismiss').onclick();openSettings();
+          WorkspaceAppUpdates.observe({...available,status:'launching'});
+          assert.equal($('settings-dialog').open,true);assert.equal($('app-update-dialog').open,false);
+        })()""", AVAILABLE)
+
+    def test_update_completed_only_after_restore_ack_and_known_version_transition(self):
+        self.run_case(r"""(async()=>{
+          const notices=[];toast=message=>notices.push(message);
+          const restore={requestId:'c'.repeat(32),sourceVersion:'0.22.0',targetVersion:'0.22.1',snapshot:{sessionId:null,drafts:[]}};
+          let ack;api=()=>new Promise(resolve=>ack=resolve);
+          const restoring=WorkspaceUpgrade.bootstrap({upgradeRestore:restore});
+          for(let i=0;i<12;i++)await Promise.resolve();assert.equal(notices.length,0);
+          ack({ok:true});await restoring;
+          assert.equal(notices.length,1);assert.match(notices[0],/0.22.1 업데이트를 마쳤어요/);
+          assert.equal(WorkspaceAppUpdates.completed({...restore,sourceVersion:undefined}),false);
+          assert.equal(WorkspaceAppUpdates.completed({...restore,sourceVersion:'0.22.1'}),false);
+          assert.equal(WorkspaceAppUpdates.completed({...restore,executionMode:'administrator'}),false);
+          assert.equal(notices.length,1);
+        })()""")
 
     def test_uncertain_install_reply_requires_status_read_before_an_explicit_retry(self):
         self.run_case(r"""(async()=>{
@@ -444,14 +511,14 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           const notices=[];toast=message=>notices.push(message);
           openSettings();$('app-update-notes-open').onclick();api=async()=>({...available,status:'ready'});
-          await $('app-update-install').onclick();assert.equal($('settings-dialog').open,false);
+          await $('app-update-install').onclick();assert.equal($('settings-dialog').open,false);$('app-update-dismiss').onclick();
           const failure={...available,status:'error',error:'새 버전 전환을 취소했습니다.'};
           api=async()=>failure;await runUpdateTimer();
           assert.equal(notices.length,1);assert.match(notices[0],/설정의 ‘앱 업데이트’/);
           assert.match(notices[0],/다시 시도/);assert.equal($('app-update-install').disabled,false);
           WorkspaceAppUpdates.observe(failure);assert.equal(notices.length,1);assert.equal(updateTimers.size,0);
           openSettings();$('app-update-notes-open').onclick();api=async()=>({...available,status:'launching'});
-          await $('app-update-install').onclick();api=async()=>failure;await runUpdateTimer();
+          await $('app-update-install').onclick();$('app-update-dismiss').onclick();api=async()=>failure;await runUpdateTimer();
           assert.equal(notices.length,2);assert.notEqual($('app-update-dialog').open,true);
           assert.equal(updateTimers.size,0);
         })()""", AVAILABLE)
@@ -520,7 +587,8 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.assertIsNotNone(settings)
         self.assertNotIn('app-update-sidebar-badge', settings.group())
         self.assertLess(button.start(), settings.start())
-        self.assertEqual('', page[button.end():settings.start()].strip())
+        self.assertEqual('<div class="sidebar-footer-actions" role="group" aria-label="앱 메뉴">',
+                         page[button.end():settings.start()].strip())
         self.assertRegex(page[:button.start()], r'<div class="sidebar-footer">\s*$')
         self.assertIn('id="app-update-settings-badge"', page)
 

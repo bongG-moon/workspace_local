@@ -12,6 +12,7 @@ globalThis.WorkspaceAppUpdates = (() => {
   let snapshot={currentVersion:"",status:"idle",autoCheck:true,lastChecked:null,release:null,progress:null,error:null,canInstall:false};
   let localError="",startupWarning="",returnFocus=null,installSubmitted=false,installUncertain=false,closingForHandoff=false,handoffDialogsClosed=false;
   let installFailureNotified=false,startupOfferDone=false,offerTimer=null,startupReady=false,lastStartupSequence=0;
+  let handoff=null,handoffLocked=false;
 
   function newer(version,current){
     if(!stableVersion(version)||!stableVersion(current))return false;
@@ -70,7 +71,9 @@ globalThis.WorkspaceAppUpdates = (() => {
     if(snapshot.status==="checking")return "새 버전이 있는지 확인하고 있어요.";
     if(snapshot.status==="downloading")return "업데이트를 다운로드하고 있어요. 현재 업무를 계속할 수 있습니다.";
     if(snapshot.status==="ready")return "다운로드를 마쳤어요. 안전하게 전환할 준비를 하고 있습니다.";
-    if(snapshot.status==="launching")return "현재 업무를 마친 뒤 새 버전으로 전환합니다.";
+    if(snapshot.status==="launching")return handoff?.stage==="waiting"
+      ?"진행 중인 업무와 응답을 마치면 자동으로 다시 시작해요. 작업을 계속할 수 있습니다."
+      :"새 버전으로 다시 시작할 준비를 하고 있어요. 잠시만 기다려 주세요.";
     if(snapshot.release)return `새 버전 ${snapshot.release.version}을 사용할 수 있어요.`;
     if(snapshot.status==="current")return "최신 버전을 사용하고 있어요.";
     if(!snapshot.autoCheck)return "자동 확인이 꺼져 있어요. 필요할 때 직접 확인할 수 있습니다.";
@@ -79,8 +82,10 @@ globalThis.WorkspaceAppUpdates = (() => {
   function render(){
     if(!$("app-update-status"))return;
     const release=snapshot.release,available=!!release,label=message(),isBusy=busy();
-    const sidebarButton=$("app-update-sidebar-badge"),sidebarLabel=release?`새 버전 ${release.version} 업데이트`:"새 버전 업데이트";
+    const transferring=installSubmitted&&(transfers.has(snapshot.status)||pending)&&!installUncertain;
+    const sidebarButton=$("app-update-sidebar-badge"),sidebarLabel=release?`${transferring?"업데이트 진행 중 ·":"새 버전"} ${release.version}${transferring?"":" 업데이트"}`:"새 버전 업데이트";
     sidebarButton.hidden=!available;sidebarButton.disabled=!available;
+    sidebarButton.dataset.state=transferring?"updating":"available";
     sidebarButton.setAttribute("aria-label",sidebarLabel);sidebarButton.setAttribute("title",sidebarLabel);
     sidebarButton.setAttribute("aria-expanded",String($("app-update-dialog").open===true));
     $("app-update-settings-badge").hidden=!available;
@@ -97,15 +102,18 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-warning").textContent=startupWarning;$("app-update-warning").hidden=!startupWarning;
     $("app-update-section").dataset.state=localError?"error":snapshot.status;
     $("app-update-dialog").dataset.state=localError?"error":snapshot.status;
-    $("app-update-title").textContent=release?.title||"앱 업데이트";
+    $("app-update-title").textContent=transferring?"업데이트하고 있어요":release?.title||"앱 업데이트";
+    $("app-update-dialog").dataset.progress=String(transferring);
+    $("app-update-eyebrow").textContent=transferring?"APP UPDATE":"WHAT’S NEW";
     $("app-update-release-meta").textContent=release?`버전 ${release.version} · ${release.publishedAt?dateText(release.publishedAt):"게시일 확인 필요"}`:"";
     $("app-update-notes").textContent=release?.notes||"업데이트 내용을 확인하고 있어요.";
     $("app-update-release-link").hidden=!release?.url;
     $("app-update-release-link").setAttribute("href",release?.url||"#");
     $("app-update-install").hidden=!available;
     $("app-update-install").disabled=!available||!snapshot.canInstall||isBusy||installSubmitted||installUncertain;
-    $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"전환 준비 중…":"업데이트하기";
-    $("app-update-dismiss").textContent="다음에 하기";
+    $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"다시 시작 준비 중…":installSubmitted&&pending?"업데이트 요청 중…":"업데이트하고 다시 시작";
+    $("app-update-dismiss").textContent=transferring?"작업으로 돌아가기":"다음에 하기";
+    $("app-update-dismiss").title=transferring?"이 창만 닫습니다. 업데이트는 계속됩니다.":"";
     $("app-update-install-note").hidden=!available||snapshot.canInstall||transfers.has(snapshot.status);
     const failed=!!localError||snapshot.status==="error";
     $("app-update-retry").hidden=!failed;$("app-update-dialog-retry").hidden=!failed;
@@ -117,14 +125,46 @@ globalThis.WorkspaceAppUpdates = (() => {
       if(snapshot.progress==null)progress.removeAttribute("value");else progress.value=snapshot.progress;
       $(prefix+"-progress-label").textContent=snapshot.progress==null?"다운로드 준비 중":`다운로드 ${Math.round(snapshot.progress)}%`;
     }
+    const stage=downloading?0:["ready","launching"].includes(snapshot.status)?1:-1;
+    $("app-update-stages").hidden=!transferring;
+    for(let index=0;index<3;index++){
+      const item=$("app-update-step-"+index);
+      item.dataset.state=index<stage?"done":index===stage?"active":"pending";
+      if(index===stage)item.setAttribute("aria-current","step");else item.removeAttribute("aria-current");
+    }
+    $("app-update-activity").hidden=!transferring||$("app-update-dialog").open===true||handoffLocked;
+    $("app-update-activity-title").textContent=handoff?.stage==="waiting"?"업무가 끝나면 업데이트해요":"업데이트 진행 중";
+    $("app-update-activity-detail").textContent=downloading
+      ?snapshot.progress==null?"새 버전을 다운로드하고 있어요":`새 버전 다운로드 · ${Math.round(snapshot.progress)}%`
+      :handoff?.stage==="waiting"?"작업을 계속할 수 있어요. 완료 후 다시 시작합니다.":"새 버전으로 다시 시작할 준비를 하고 있어요";
   }
   function closeForHandoff(){
     if(!installSubmitted||handoffDialogsClosed||!["ready","launching"].includes(snapshot.status)||closingForHandoff)return;
     handoffDialogsClosed=true;
     closingForHandoff=true;
-    if($("app-update-dialog").open)$("app-update-dialog").close();
+    // Settings may be underneath the release dialog. Close that owned layer
+    // once, but retain progress until capture can replace it in the same tick.
     if($("settings-dialog").open)$("settings-dialog").close();
     closingForHandoff=false;
+  }
+  function canYieldForHandoff(value){
+    return installSubmitted&&!installUncertain&&["ready","launching"].includes(snapshot.status)
+      &&(!value||value.targetVersion===snapshot.release?.version);
+  }
+  function handoffStarting(value){
+    if(!canYieldForHandoff(value))return;
+    const owner=returnFocus?.closest?.("dialog");
+    const target=returnFocus?.isConnected&&!returnFocus.disabled&&!returnFocus.hidden&&(!owner||owner.open)
+      ?returnFocus:$("settings-open");
+    handoffLocked=true;closingForHandoff=true;
+    if($("app-update-dialog").open)$("app-update-dialog").close();
+    closingForHandoff=false;render();return target;
+  }
+  function handoffChanged(value,locked){handoff=value;handoffLocked=locked;render();}
+  function completed(value){
+    if(!value||!newer(value.targetVersion,value.sourceVersion)||value.executionMode)return false;
+    hooks?.notify?.(`AX Workspace ${value.targetVersion} 업데이트를 마쳤어요. 작성 중이던 내용을 이어서 사용할 수 있습니다.`);
+    return true;
   }
   function notifyInstallFailure(message){
     if(!installSubmitted||installFailureNotified||$("settings-dialog").open||$("app-update-dialog").open)return;
@@ -179,7 +219,7 @@ globalThis.WorkspaceAppUpdates = (() => {
   function check(){return request(installUncertain?undefined:{action:"check"});}
   async function install(){
     if(busy()||installSubmitted||installUncertain||!snapshot.canInstall||!snapshot.release)return false;
-    installSubmitted=true;handoffDialogsClosed=false;installFailureNotified=false;
+    installSubmitted=true;handoffDialogsClosed=false;installFailureNotified=false;handoff=null;handoffLocked=false;
     const ok=await request({action:"install",version:snapshot.release.version});
     // An ambiguous reply is resolved by local status reads, never an automatic
     // second install. Errors with a confirmed server state allow an explicit retry.
@@ -193,6 +233,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-dialog").dataset.offer=automatic?"startup":"manual";
     if($("app-update-offer-intro"))$("app-update-offer-intro").hidden=!automatic;
     if(!$("app-update-dialog").open)hooks.openDialog("app-update-dialog");
+    render();
     $("app-update-sidebar-badge").setAttribute("aria-expanded","true");
     $(automatic?"app-update-dismiss":"app-update-close").focus();schedule(!automatic);
   }
@@ -201,13 +242,14 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError?read():check();
     $("app-update-auto").onchange=()=>request({action:"configure",autoCheck:$("app-update-auto").checked});
     $("app-update-sidebar-badge").onclick=$("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
+    $("app-update-activity-open").onclick=()=>openNotes();
     $("app-update-close").onclick=$("app-update-dismiss").onclick=()=>$("app-update-dialog").close();
     $("app-update-dialog").oncancel=event=>{event.preventDefault();$("app-update-dialog").close();};
     $("app-update-dialog").onclose=()=>{
       $("app-update-sidebar-badge").setAttribute("aria-expanded","false");
       const target=returnFocus?.hidden?$("settings-open"):returnFocus,owner=target?.closest?.("dialog");
       if(!closingForHandoff&&target?.isConnected&&!target.disabled&&(!owner||owner.open))target.focus();
-      returnFocus=null;schedule();
+      returnFocus=null;render();schedule();
     };
     document.addEventListener("visibilitychange",wake);
     document.addEventListener("close",contextChanged,true);
@@ -222,6 +264,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     if(snapshot.autoCheck)void request({action:"startup"});else{startupReady=true;schedule();}
   }
   return {attach:value=>{hooks=value;if(!bound){bind();bound=true;}},start,observe,contextChanged,
+    canYieldForHandoff,handoffStarting,handoffChanged,completed,
     settingsOpened:()=>{render();schedule(true);},settingsClosed:()=>schedule(),
     stop:()=>{stopped=true;clearTimeout(timer);clearTimeout(offerTimer);timer=offerTimer=null;
       document.removeEventListener?.("visibilitychange",wake);document.removeEventListener?.("close",contextChanged,true);

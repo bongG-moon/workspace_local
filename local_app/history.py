@@ -13,7 +13,7 @@ import uuid
 from .executions import normalize_executions, safe_run_id
 from .tool_activity import normalize_activities
 
-KEYS = ('id','title','workspace','created','updated','pinned','sessionId')
+KEYS = ('id','title','workspace','created','updated','pinned','sessionId','kind','runtimeProfile')
 MAX_SESSIONS = 500
 MAX_ARCHIVED_SESSIONS = 10000
 MAX_STORED_SESSIONS = MAX_SESSIONS + MAX_ARCHIVED_SESSIONS
@@ -48,6 +48,10 @@ def row(item):
     if sid != item['id']:
         raise ValueError('대화 ID를 확인하지 못했습니다.')
     result = {key:item.get(key) for key in KEYS}
+    result['kind'] = item.get('kind', 'work')
+    result['runtimeProfile'] = item.get('runtimeProfile', 'chat-v1' if result['kind'] == 'chat' else 'work')
+    if result['kind'] not in {'chat', 'work'} or result['runtimeProfile'] != ('chat-v1' if result['kind'] == 'chat' else 'work'):
+        raise ValueError('대화 종류와 실행 범위를 확인하지 못했습니다.')
     for key, maximum in (('title',200),('workspace',8192)):
         if not isinstance(result[key], str) or len(result[key]) > maximum:
             raise ValueError('대화 정보의 형식을 확인해 주세요.')
@@ -74,6 +78,9 @@ def row(item):
             clean['runId'] = run_id
         if message.get('role') == 'user' and isinstance(message.get('files'),list):
             clean['files'] = [value[:4096] for value in message['files'][:12] if isinstance(value,str)]
+        if message.get('role') == 'user' and isinstance(message.get('attachmentReads'), list):
+            clean['attachmentReads'] = [{key: str(value.get(key, ''))[:1000] for key in ('name', 'status', 'message')}
+                                       for value in message['attachmentReads'][:12] if isinstance(value, dict)]
         if (message.get('role') == 'user' and isinstance(message.get('requestId'), str)
                 and len(message['requestId']) == 32 and all(c in '0123456789abcdef' for c in message['requestId'])):
             clean['requestId'] = message['requestId']
@@ -149,6 +156,9 @@ class HistoryStore:
             value = row(read(self.root/'history-sessions'/(sid+'.json'), 8*1024*1024))
             if value['id'] != sid:
                 raise ValueError('대화 파일과 목록이 다릅니다.')
+            if (value['kind'] != item.get('kind', 'work')
+                    or value['runtimeProfile'] != item.get('runtimeProfile', 'work')):
+                raise ValueError('대화 종류가 저장 목록과 달라 연결하지 않았습니다.')
             if item.pop('_historyIndexOnly', False):
                 # Bodies are authoritative if a crash happened between the body
                 # and index atomic writes. Do not override live metadata on LRU

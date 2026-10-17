@@ -72,6 +72,31 @@ class UpgradeTransferTests(unittest.TestCase):
         self.assertEqual(1, sum(bool(data and data.get('action') == 'commit') for _, data in client.calls))
         self.assertEqual(2, sum(path.startswith('/api/upgrade?') for path, _ in client.calls))
 
+    def test_progress_appears_before_commit_and_waits_through_shutdown(self):
+        client = FakeClient(stages=['waiting', 'capture', 'captured'])
+        phases = []
+        original = client.request
+        def request(path, data=None, **kwargs):
+            if path == '/api/upgrade' and data and data.get('action') == 'commit':
+                self.assertEqual(['preparing'], phases)
+            return original(path, data, **kwargs)
+        client.request = request
+        self.assertEqual('closed', self.transfer(client, on_phase=phases.append))
+        self.assertEqual(['preparing', 'restarting'], phases)
+
+    def test_progress_failure_never_closes_the_old_app(self):
+        client = FakeClient()
+        with self.assertRaises(OSError):
+            self.transfer(client, on_phase=Mock(side_effect=OSError('native card unavailable')))
+        self.assertFalse(any(data and data.get('action') == 'commit' for _, data in client.calls))
+        self.assertEqual('cancel', client.calls[-1][1]['action'])
+
+    def test_no_progress_popup_while_busy_or_cancelled(self):
+        for stages in (['waiting'], ['cancelled'], ['capture', 'cancelled']):
+            phases = Mock()
+            self.transfer(FakeClient(stages=stages), on_phase=phases)
+            phases.assert_not_called()
+
     def test_same_and_newer_versions_reuse_without_quit(self):
         for current in ('0.21.5', '0.22.0'):
             client = FakeClient(); client.health['workspaceVersion'] = current
@@ -117,7 +142,9 @@ class UpgradeTransferTests(unittest.TestCase):
                 return 409, snapshot('waiting')
             return original(path, data, **kwargs)
         client.request = request
-        self.assertEqual('closed', self.transfer(client))
+        phases = []
+        self.assertEqual('closed', self.transfer(client, on_phase=phases.append))
+        self.assertEqual(['preparing', 'waiting', 'preparing', 'restarting'], phases)
 
     def test_timeout_cancels_prepared_transition(self):
         client = FakeClient(stages=['waiting'])
@@ -300,6 +327,8 @@ class UpgradeBoundaryTests(unittest.TestCase):
             args, kwargs = popen.call_args
             self.assertIn(str(python), args[0]); self.assertIn(str(Path(raw)), args[0])
             self.assertNotIn('shell', kwargs); self.assertIn('-Demo', args[0])
+            request_index = args[0].index('-ExecutionRequestId')
+            self.assertRegex(args[0][request_index + 1], r'^[a-f0-9]{32}$')
             popen.return_value.wait.assert_called_once_with(timeout=90)
             popen.return_value.kill.assert_not_called()
 
@@ -325,6 +354,15 @@ class UpgradeBoundaryTests(unittest.TestCase):
                 with self.assertRaises(upgrade.HandoffError):
                     upgrade.launch(Path(raw), str(python), popen=Mock(return_value=process))
             process.kill.assert_not_called()
+
+    def test_launcher_already_explained_failure_is_not_success(self):
+        with tempfile.TemporaryDirectory() as raw:
+            python = Path(raw) / 'python.exe'; python.write_bytes(b'fixture')
+            process = Mock()
+            process.wait.return_value = 20
+            with patch.object(upgrade, 'powershell_path', return_value='C:/Windows/PowerShell.exe'):
+                with self.assertRaises(upgrade.LauncherExplainedError):
+                    upgrade.launch(Path(raw), str(python), popen=Mock(return_value=process))
 
     def test_failed_launcher_termination_preserves_handle_and_reports_unconfirmed_cleanup(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -408,6 +446,112 @@ class UpgradeBoundaryTests(unittest.TestCase):
             self.assertEqual([], destinations)
         finally:
             server.shutdown(); server.server_close(); worker.join()
+
+
+class ReplacementReadinessTests(unittest.TestCase):
+    def wait(self, snapshots, *, token='c' * 43, no_browser=False):
+        values = list(snapshots)
+        clock = [0.]
+        client = Mock()
+        def response(*args, **kwargs):
+            value = values.pop(0) if len(values) > 1 else values[0]
+            if isinstance(value, Exception):
+                raise value
+            return 200, value
+        client.request.side_effect = response
+        def sleep(delay):
+            clock[0] += delay
+        with patch.object(upgrade, 'endpoint', return_value=('http://127.0.0.1:32123', token)):
+            return upgrade.wait_replacement('unused', previous_token=TOKEN, demo=False,
+                target_version='0.23.26', execution_mode='normal', no_browser=no_browser,
+                client_factory=Mock(return_value=client), clock=lambda: clock[0], sleep=sleep, timeout=2)
+
+    def ready(self, state='ready', **changes):
+        return {**health(version='0.23.26'), 'executionMode': 'normal',
+                'window': {'startupState': state, 'launchId': 'd' * 32}, **changes}
+
+    def test_delayed_frontend_readiness_keeps_waiting(self):
+        self.assertTrue(self.wait([URLError('starting'), self.ready('pending'), self.ready()]))
+
+    def test_runtime_or_backend_ready_is_not_interactive_success(self):
+        for value in (self.ready('pending'), self.ready(window={}), self.ready(window={'startupState': 'ready'})):
+            with self.assertRaises(upgrade.HandoffError):
+                self.wait([value])
+
+    def test_failed_startup_and_wrong_app_never_report_success(self):
+        for change in ({'application': 'other'}, {'workspaceVersion': '0.23.25'}, {'demo': True},
+                       {'executionMode': 'administrator'}, {'closing': True}):
+            with self.assertRaises(upgrade.HandoffError):
+                self.wait([self.ready(**change)])
+        with self.assertRaisesRegex(upgrade.HandoffError, '준비하지 못했습니다'):
+            self.wait([self.ready('failed')])
+
+    def test_old_runtime_token_never_counts_as_new_app(self):
+        with self.assertRaises(upgrade.HandoffError):
+            self.wait([self.ready()], token=TOKEN)
+
+    def test_no_browser_waits_for_authenticated_backend_only(self):
+        self.assertTrue(self.wait([self.ready('pending')], no_browser=True))
+
+
+class CoordinatorProgressTests(unittest.TestCase):
+    def run_main(self, state, *, outcome='closed', launch_error=None, readiness_error=None, no_browser=False):
+        progress = Mock()
+        arguments = ['upgrade', '--state', str(state), '--python', sys.executable, '--request-id', RID]
+        if no_browser:
+            arguments.append('--no-browser')
+        with patch.object(sys, 'argv', arguments), \
+                patch('local_app.startup.verify_process', return_value='normal'), \
+                patch('local_app.update_progress.UpdateProgress', return_value=progress) as factory, \
+                patch.object(upgrade, 'preflight'), \
+                patch.object(upgrade, 'endpoint', return_value=('http://127.0.0.1:12345', TOKEN)), \
+                patch.object(upgrade, 'transfer', return_value=outcome), \
+                patch.object(upgrade, 'launch', side_effect=launch_error) as launch, \
+                patch.object(upgrade, 'wait_replacement', side_effect=readiness_error) as ready, \
+                patch.object(upgrade, 'run_helper') as helper:
+            result = upgrade.main()
+        return result, progress, factory, launch, ready, helper
+
+    def test_success_closes_card_only_after_readiness(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result, card, _, launch, ready, helper = self.run_main(Path(raw))
+            self.assertEqual(0, result)
+            card.phase.assert_called_once_with('opening')
+            launch.assert_called_once(); ready.assert_called_once(); card.close.assert_called_once()
+            helper.assert_not_called()
+            self.assertEqual('restarted', json.loads((Path(raw) / 'upgrade-last-result.json').read_text())['status'])
+
+    def test_failed_launch_or_screen_readiness_closes_card_and_explains(self):
+        for kind in ('launch_error', 'readiness_error'):
+            with tempfile.TemporaryDirectory() as raw:
+                result, card, _, _, _, helper = self.run_main(Path(raw), **{kind: upgrade.HandoffError('fixture')})
+                self.assertEqual(39, result)
+                self.assertGreaterEqual(card.close.call_count, 1)
+                helper.assert_called_once_with('Show-WorkspaceUpgradeFailure')
+                self.assertEqual('failed', json.loads((Path(raw) / 'upgrade-last-result.json').read_text())['status'])
+
+    def test_cancelled_transfer_never_launches_and_cleans_up(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result, card, _, launch, ready, helper = self.run_main(Path(raw), outcome='cancelled')
+            self.assertEqual(0, result)
+            launch.assert_not_called(); ready.assert_not_called(); helper.assert_not_called()
+            card.close.assert_called_once()
+
+    def test_no_browser_disables_native_card_and_failure_dialog(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result, _, factory, _, _, helper = self.run_main(Path(raw), no_browser=True,
+                launch_error=upgrade.HandoffError('fixture'))
+            self.assertEqual(39, result)
+            self.assertFalse(factory.call_args.kwargs['enabled'])
+            helper.assert_not_called()
+
+    def test_explained_launcher_failure_never_opens_second_error_dialog(self):
+        with tempfile.TemporaryDirectory() as raw:
+            result, card, _, _, ready, helper = self.run_main(Path(raw),
+                launch_error=upgrade.LauncherExplainedError('fixture'))
+            self.assertEqual(39, result)
+            card.close.assert_called_once()
+            ready.assert_not_called(); helper.assert_not_called()
 
 
 if __name__ == '__main__':

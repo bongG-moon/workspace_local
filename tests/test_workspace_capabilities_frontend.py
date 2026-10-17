@@ -31,6 +31,10 @@ for (const type of ['skills', 'tools', 'mcp', 'commands']) {
   get(`capabilities-${type}-tab`).append(count);
 }
 get('capabilities-summary').hidden = true;
+// Selection refresh timers run on the next event-loop turn; process timers stay
+// dormant unless a scenario installs an explicit fake clock.
+context.setTimeout = (fn, delay) => delay === 200 ? setImmediate(fn) : 1;
+context.clearTimeout = handle => { if (handle !== 1) clearImmediate(handle); };
 context.flush = () => new Promise(resolve => setImmediate(resolve));
 context.flatText = function flatText(node) {
   return [node.textContent || '', ...(node.children || []).map(flatText)].join(' ');
@@ -80,19 +84,25 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           WorkspaceCapabilities.close();await tick();assert.equal(connects,1);
         })()""")
 
-    def test_auto_connection_never_trusts_a_folder_or_interrupts_work(self):
+    def test_auto_connection_authorizes_only_selected_folder_without_prompt_or_request(self):
         self.run_case(r"""(async()=>{
-          let callback,connects=0,trusts=0;
+          let callback;const calls=[];
           globalThis.setTimeout=fn=>{callback=fn;return 1;};globalThis.clearTimeout=()=>{callback=null;};
-          api=async(path)=>{
+          confirmAction=async()=>{throw Error('Catalog selection already authorizes connection');};
+          $('prompt').value='유지할 질문';attachments=['keep.csv'];
+          api=async(path,body)=>{
+            calls.push({path,body});
             if(path.startsWith('/api/session'))return {...active,trusted:false};
-            if(path==='/api/connect')connects++;
-            if(path==='/api/trust')trusts++;
+            if(path==='/api/connect')return {connection:{connected:true}};
             return modern('A',{state:'none',status:'awaiting-runtime'});
           };
           WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();callback();await flush();await flush();
-          assert.equal(connects,0);assert.equal(trusts,0);
-          assert.match($('capabilities-status').textContent,/처음 연결/);
+          assert.deepEqual(calls.filter(row=>row.body),[
+            {path:'/api/trust',body:{id:'A',trusted:true}},
+            {path:'/api/connect',body:{id:'A',catalog:true,automatic:true}}
+          ]);
+          assert.equal($('prompt').value,'유지할 질문');assert.equal(attachments[0],'keep.csv');
+          assert.equal(active.id,'A');assert.equal(active.permissionModeOverride,undefined);
           WorkspaceCapabilities.close();
         })()""")
 
@@ -108,7 +118,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           };
           WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();
           $('capabilities-folder').value='B';await $('capabilities-folder').onchange();
-          const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();
+          for(let round=0;round<2;round++){const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();}
           assert.deepEqual(connected,['B']);WorkspaceCapabilities.close();
         })()""")
 
@@ -164,20 +174,21 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           WorkspaceCapabilities.open();await flush();
           $('capabilities-folder').value='B';await $('capabilities-folder').onchange();
           await $('capabilities-connect').onclick();
-          assert.deepEqual(calls.filter(x=>x.body),[{path:'/api/connect',body:{id:'B'}}]);
+          assert.deepEqual(calls.filter(x=>x.body),[{path:'/api/connect',body:{id:'B',catalog:true}}]);
           assert.equal(active.id,'A');assert.equal(active.state,'idle');
           assert.equal(sessions.find(x=>x.id==='B').connectionState,'live');
           assert.equal($('capabilities-connect').disabled,false);
         })()""")
 
-    def test_cancelled_untrusted_catalog_prepare_does_not_start_cli(self):
+    def test_manual_catalog_retry_authorizes_selected_folder_without_redundant_modal(self):
         self.run_case(r"""(async()=>{
-          const calls=[];confirmAction=async()=>false;
+          const calls=[];confirmAction=async()=>{throw Error('No second confirmation for catalog retry');};
           api=async(path,body)=>{calls.push({path,body});return path.startsWith('/api/session?')?
             {...active,trusted:false}:modern('A');};
           WorkspaceCapabilities.open();await flush();
           await $('capabilities-connect').onclick();
-          assert.ok(calls.every(x=>x.body===undefined));
+          assert.deepEqual(calls.filter(x=>x.body),[{path:'/api/trust',body:{id:'A',trusted:true}},
+            {path:'/api/connect',body:{id:'A',catalog:true}}]);
           assert.equal($('capabilities-connect').disabled,false);
         })()""")
 
@@ -191,6 +202,174 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           resolve({ok:true,connection:{connected:true,model:'A-model'}});await pending;
           assert.equal(active.connection.model,'B-model');
           assert.equal(WorkspaceCapabilities.isOpen(),false);
+        })()""")
+
+    def test_rapid_folder_choices_scan_and_connect_only_the_final_context(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0;const calls=[],live=new Set();
+          globalThis.setTimeout=(fn,delay)=>{timers.set(++serial,{fn,delay});return serial;};
+          globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const item of pending)item.fn();await flush();await flush();};
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B'}, {id:'C',title:'C',workspace:'C:\\fixture\\C'});
+          api=async(path,body)=>{
+            calls.push({path,body});const id=new URLSearchParams(path.split('?')[1]).get('id');
+            if(path.startsWith('/api/session'))return {id,trusted:false,state:'idle'};
+            if(path==='/api/connect'){live.add(body.id);return {connection:{connected:true}};}
+            if(path==='/api/trust')return {};
+            return modern(id,{state:live.has(id)?'live':'none',status:live.has(id)?'live':'awaiting-runtime',groups:{tools:{reported:true,items:[{name:id+'-tool'}]}}});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();
+          for(let i=0;i<20;i++){
+            $('capabilities-folder').value=i===19?'C':i%2?'A':'B';$('capabilities-folder').onchange();
+          }
+          assert.equal(calls.length,1);assert.equal(timers.size,1);
+          await tick();assert.equal(calls.length,2);assert.match(calls[1].path,/id=C$/);
+          await tick();assert.deepEqual(calls.filter(row=>row.body).map(row=>[row.path,row.body.id]),[['/api/trust','C'],['/api/connect','C']]);
+          assert.match(flatText($('capabilities-list')),/C-tool/);
+          assert.equal(timers.size,0);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_inflight_connection_finishes_before_latest_selection_prepares(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,finishA,inflight=0,peak=0;const connected=[],live=new Set();
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B'}, {id:'C',title:'C',workspace:'C:\\fixture\\C'});
+          api=async(path,body)=>{
+            const id=new URLSearchParams(path.split('?')[1]).get('id');
+            if(path.startsWith('/api/session'))return {id,trusted:true,state:'idle'};
+            if(path==='/api/connect'){
+              connected.push(body.id);inflight++;peak=Math.max(peak,inflight);
+              if(body.id==='A')await new Promise(resolve=>finishA=resolve);
+              inflight--;live.add(body.id);return {connection:{connected:true,model:body.id}};
+            }
+            return modern(id,{state:live.has(id)?'live':'none',status:live.has(id)?'live':'awaiting-runtime',groups:{tools:{reported:true,items:[{name:id+'-tool'}]}}});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
+          assert.deepEqual(connected,['A']);
+          $('capabilities-folder').value='B';$('capabilities-folder').onchange();
+          $('capabilities-folder').value='C';$('capabilities-folder').onchange();await tick();await tick();
+          assert.deepEqual(connected,['A']);assert.match(flatText($('capabilities-list')),/C-tool/);
+          finishA();await flush();await tick();
+          assert.deepEqual(connected,['A','C']);assert.equal(peak,1);assert.equal(active.id,'A');
+          assert.match(flatText($('capabilities-list')),/C-tool/);assert.doesNotMatch(flatText($('capabilities-list')),/A-tool|B-tool/);
+          assert.equal(timers.size,0);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_selection_change_during_trust_wait_does_not_start_old_cli(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,finishTrust;const connected=[];
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B'});
+          api=async(path,body)=>{
+            const id=new URLSearchParams(path.split('?')[1]).get('id');
+            if(path.startsWith('/api/session'))return {id,trusted:false,state:'idle'};
+            if(path==='/api/trust'&&body.id==='A')return new Promise(resolve=>finishTrust=resolve);
+            if(path==='/api/connect'){connected.push(body.id);return {connection:{connected:true}};}
+            return modern(id,{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
+          $('capabilities-folder').value='B';$('capabilities-folder').onchange();await tick();await tick();
+          finishTrust({});await flush();await tick();
+          assert.deepEqual(connected,['B']);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_selecting_skills_or_closing_while_lookup_pending_does_not_trust_or_connect(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,finishLookup;const writes=[];
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          api=async(path,body)=>{
+            if(body)writes.push(path);
+            if(path.startsWith('/api/session'))return new Promise(resolve=>finishLookup=resolve);
+            return modern('A',{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
+          $('capabilities-skills-tab').onclick();finishLookup({...active,trusted:false});await flush();await tick();
+          assert.deepEqual(writes,[]);assert.match($('capabilities-status').textContent,/파일에서 바로/);
+          WorkspaceCapabilities.close();WorkspaceCapabilities.open();await flush();
+          $('capabilities-folder').value='A';$('capabilities-folder').onchange();WorkspaceCapabilities.close();await tick();
+          assert.deepEqual(writes,[]);assert.equal(timers.size,0);
+        })()""")
+
+    def test_automatic_capacity_failure_does_not_loop_or_stop_work_and_manual_retry_remains(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,connects=0;const writes=[];
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          confirmAction=()=>{throw Error('Automatic capacity failure must not open replacement UI');};
+          api=async(path,body)=>{
+            if(body)writes.push({path,body});
+            if(path.startsWith('/api/session'))return {...active,trusted:true,state:'idle'};
+            if(path==='/api/connect'){connects++;if(body.automatic)throw Error('연결 한도입니다. 다시 확인해 주세요.');return {connection:{connected:true}};}
+            return modern('A',{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
+          assert.equal(connects,1);assert.match($('capabilities-status').textContent,/연결 한도/);
+          for(const type of ['mcp','commands','tools']){$('capabilities-'+type+'-tab').onclick();await tick();}
+          assert.equal(connects,1);assert.equal(timers.size,0);
+          await $('capabilities-connect').onclick();assert.equal(connects,2);
+          assert.ok(writes.every(row=>row.path==='/api/connect'));assert.equal(writes[0].body.automatic,true);
+          assert.equal(writes[1].body.automatic,undefined);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_duplicate_refreshes_share_one_inflight_read_and_live_tabs_reuse_payload(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];let finish;
+          api=(path,body,signal)=>{calls.push({path,body,signal});return new Promise(resolve=>finish=resolve);};
+          WorkspaceCapabilities.open();const first=$('capabilities-refresh').onclick(),second=$('capabilities-refresh').onclick();
+          assert.equal(first,second);assert.equal(calls.length,1);assert.equal(calls[0].signal.aborted,false);
+          finish(modern('A'));await first;await flush();
+          for(let i=0;i<30;i++)$('capabilities-'+['tools','mcp','commands','skills'][i%4]+'-tab').onclick();
+          assert.equal(calls.length,1);assert.equal($('capabilities-refresh').disabled,false);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_successful_prepare_supersedes_inflight_pre_connection_snapshot(self):
+        self.run_case(r"""(async()=>{
+          let timer,finishConnect,oldReply,oldSignal,reads=0,live=false;
+          globalThis.setTimeout=fn=>{timer=fn;return 1;};globalThis.clearTimeout=()=>{timer=null;};
+          api=async(path,body,signal)=>{
+            if(path.startsWith('/api/session'))return {...active,trusted:true,state:'idle'};
+            if(path==='/api/connect'){await new Promise(resolve=>finishConnect=resolve);live=true;return {connection:{connected:true}};}
+            reads++;
+            if(reads===2){oldSignal=signal;return new Promise(resolve=>oldReply=resolve);}
+            return modern('A',{state:live?'live':'none',status:live?'live':'awaiting-runtime',
+              groups:{tools:{reported:live,items:live?[{name:'fresh-tool'}]:[]}}});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();timer();await flush();
+          const stale=$('capabilities-refresh').onclick();assert.equal(reads,2);
+          finishConnect();await flush();await flush();
+          assert.equal(reads,3);assert.equal(oldSignal.aborted,true);
+          assert.match(flatText($('capabilities-list')),/fresh-tool/);
+          oldReply(modern('A',{state:'none',status:'awaiting-runtime',groups:{tools:{reported:false,items:[]}}}));await stale;
+          assert.match(flatText($('capabilities-list')),/fresh-tool/);
+          assert.equal($('capabilities-tools-tab').querySelector('[data-count]').textContent,'1');WorkspaceCapabilities.close();
+        })()""")
+
+    def test_general_chat_is_not_a_catalog_connection_candidate(self):
+        self.run_case(r"""(async()=>{
+          active={id:'chat',kind:'chat',title:'일반 대화',workspace:'C:\\managed-chat',state:'idle'};
+          sessions=[{...active},{id:'work',kind:'work',title:'업무',workspace:'C:\\work'}];
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('work');};
+          WorkspaceCapabilities.open();await flush();
+          assert.equal($('capabilities-folder').children.filter(row=>row.value).length,1);
+          assert.equal($('capabilities-folder').value,'work');assert.match(calls[0].path,/id=work$/);
+          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();await flush();
+          assert.equal($('capabilities-folder').children.filter(row=>row.value).length,1);
+          assert.ok(calls.every(row=>!row.path.includes('chat')&&!row.body));WorkspaceCapabilities.close();
+        })()""")
+
+    def test_busy_connection_is_reused_without_trust_changes_or_reconnect(self):
+        self.run_case(r"""(async()=>{
+          let timer;globalThis.setTimeout=fn=>{timer=fn;return 1;};globalThis.clearTimeout=()=>{timer=null;};
+          const writes=[];api=async(path,body)=>{
+            if(body)writes.push({path,body});
+            if(path.startsWith('/api/session'))return {...active,trusted:false,state:'approval'};
+            return modern('A',{state:'none',status:'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();timer();await flush();await flush();
+          assert.deepEqual(writes,[]);assert.equal(active.state,'idle');WorkspaceCapabilities.close();
         })()""")
 
     def run_case(self, javascript, *, with_progress=False):
@@ -334,6 +513,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           WorkspaceCapabilities.open();
           active={...active,id:'B',title:'업무 B',workspace:'C:\\fixture\\B'};
           WorkspaceCapabilities.open();
+          $('capabilities-folder').value='B';$('capabilities-folder').onchange();await flush();
           assert.equal(pending.length,2);assert.equal(pending[0].signal.aborted,true);
           pending[1].resolve(fixture('B'));await flush();
           assert.match(flatText($('capabilities-list')),/B-skill/);
@@ -581,8 +761,8 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           api=(path,body,signal)=>new Promise(resolve=>pending.push({path,body,signal,resolve}));
           WorkspaceCapabilities.open();const selector=$('capabilities-folder');
           assert.equal(selector.children.filter(row=>row.value).length,3);
-          selector.value='A2';selector.onchange();assert.match(pending[1].path,/scope=common&id=A2$/);
-          selector.value='B';selector.onchange();assert.match(pending[2].path,/scope=common&id=B$/);
+          selector.value='A2';selector.onchange();await flush();assert.match(pending[1].path,/scope=common&id=A2$/);
+          selector.value='B';selector.onchange();await flush();assert.match(pending[2].path,/scope=common&id=B$/);
           assert.equal(pending[0].signal.aborted,true);assert.equal(pending[1].signal.aborted,true);
           pending[2].resolve(modern('B'));await flush();pending[1].resolve(modern('A2'));pending[0].resolve(modern('A'));await flush();
           assert.match(flatText($('capabilities-list')),/B-skill/);assert.doesNotMatch(flatText($('capabilities-list')),/A-skill|A2-skill/);
@@ -595,8 +775,8 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           const pending=[];sessions.push({id:'B',title:'조회 연결',workspace:'D:\\other'});
           api=(path,body,signal)=>new Promise(resolve=>pending.push({path,signal,resolve}));
-          WorkspaceCapabilities.open();$('capabilities-folder').value='B';$('capabilities-folder').onchange();
-          sessions=sessions.filter(row=>row.id!=='B');WorkspaceCapabilities.contextChanged();
+          WorkspaceCapabilities.open();$('capabilities-folder').value='B';$('capabilities-folder').onchange();await flush();
+          sessions=sessions.filter(row=>row.id!=='B');WorkspaceCapabilities.contextChanged();await flush();
           assert.equal(pending.length,3);assert.match(pending[2].path,/id=A$/);assert.equal(pending[1].signal.aborted,true);
           pending[2].resolve(modern('A'));await flush();pending[1].resolve(modern('B'));await flush();
           assert.equal($('capabilities-folder').value,'A');assert.match(flatText($('capabilities-list')),/A-skill/);
@@ -628,7 +808,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.equal($('capabilities-folder').disabled,true);
           assert.equal($('capabilities-folder').value,'');
           assert.match($('capabilities-installed-note').textContent,/별도로 표시/);
-          $('capabilities-scope-select').value='common';$('capabilities-scope-select').onchange();
+          $('capabilities-scope-select').value='common';$('capabilities-scope-select').onchange();await flush();
           pending[1].resolve(modern(null));await flush();
           assert.equal(pending[1].path,'/api/capabilities?scope=common');
           assert.match($('capabilities-context').textContent,/공통/);
@@ -669,9 +849,9 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           sessions.push({id:'B',title:'업무 B',workspace:'C:\\fixture\\B'});
           api=(path,body,signal)=>new Promise(resolve=>pending.push({path,body,signal,resolve}));
           WorkspaceCapabilities.open();
-          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();
+          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();await flush();
           const folder=$('capabilities-folder'),option=folder.children.find(item=>item.textContent.includes('C:\\fixture\\B'));
-          folder.value=option.value;folder.onchange();
+          folder.value=option.value;folder.onchange();await flush();
           assert.equal(pending.length,3);assert.equal(pending[0].signal.aborted,true);assert.equal(pending[1].signal.aborted,true);
           pending[2].resolve(modern('B'));await flush();
           pending[1].resolve(modern('A'));pending[0].resolve(modern(null));await flush();
@@ -752,9 +932,9 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           sessions.push({id:'B',title:'업무 B',workspace:'C:\\fixture\\B'});
           api=(path,body,signal)=>new Promise(resolve=>pending.push({path,signal,resolve}));
           WorkspaceCapabilities.open();
-          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();
+          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();await flush();
           const folder=$('capabilities-folder'),option=folder.children.find(item=>item.textContent.includes('C:\\fixture\\B'));
-          folder.value=option.value;folder.onchange();
+          folder.value=option.value;folder.onchange();await flush();
           sessions=sessions.filter(item=>item.id!=='B');renderSessions();await flush();
           assert.equal(pending.length,3);assert.equal(pending[2].signal.aborted,true);assert.equal(folder.value,'');
           pending[2].resolve(modern('B'));await flush();
