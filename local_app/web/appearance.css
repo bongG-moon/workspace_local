@@ -526,3 +526,16 @@ dialog.path-picker .path-picker-location .quiet-button{
 .material-location .text-button{flex-shrink:0;font-size:12px;min-height:28px;padding:3px 5px}
 .material-location>span{flex-basis:100%;padding:0 5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;color:var(--theme-text-muted)}
 .material-list-note{font-size:12px;line-height:20px;color:var(--theme-text-muted);margin:8px 0;word-break:keep-all}
+
+/* Short, entry-only motion. No retained compositor hint, layout tween or exit delay.
+   Alternate task names restart on navigation without forcing synchronous layout.
+   Streaming updates do not touch the navigation marker. */
+@media(prefers-reduced-motion:no-preference){
+  dialog[open]{animation:workspace-dialog-enter 140ms cubic-bezier(.2,.8,.2,1)}
+  #welcome:not([hidden]),#capabilities-view:not([hidden]),#task-view:not([hidden]){animation:workspace-view-enter 120ms ease-out}
+  :is(#task-view,#welcome)[data-motion-step="b"]:not([hidden]){animation-name:workspace-view-enter-alt}
+  #source-panel:not([hidden]),#results-panel:not([hidden]){animation:workspace-view-enter 100ms ease-out}
+}
+@keyframes workspace-dialog-enter{from{opacity:.6;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes workspace-view-enter{from{opacity:.82}to{opacity:1}}
+@keyframes workspace-view-enter-alt{from{opacity:.82}to{opacity:1}}

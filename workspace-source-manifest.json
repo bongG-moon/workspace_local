@@ -162,8 +162,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "ffe1df7acf882aff6223bff5aaa0f03141719b1e0c3b46e3706edb41ae2f8a98",
-      "size": 51081
+      "sha256": "e60d50466a030c0f7b7f0cd593ec3c360cbdcad00f38ec4c35f8b115a53d112a",
+      "size": 51425
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -217,8 +217,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.27.md",
-      "sha256": "f054b1fd9739a51ae4565f1f4e4b518692a94e975f6155f663bc07334d9f0361",
-      "size": 5703
+      "sha256": "ba42b94bdc7a25ef936d7089bf5bc2f36f29d4656faabb7859bc98bb94167ff6",
+      "size": 6045
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -467,8 +467,8 @@
     },
     {
       "path": "docs/VALIDATION_0.23.27.md",
-      "sha256": "9553d39cbb3afa0837ef08d4d697c504779b1f4a5eb29ce6f08df38b36aa27bf",
-      "size": 8384
+      "sha256": "77486f0839a0f129d79e54dbffb9dd35648ab9f06df422412ad5207b5b75ae49",
+      "size": 9050
     },
     {
       "path": "docs/VALIDATION_0.23.3.md",
@@ -564,6 +564,11 @@
       "path": "docs/VALIDATION_STOP_CLASSIFICATION_2026-10-03.md",
       "sha256": "13a205630e8626b2912cf45376ef755f69e13c5c7b8ab926691e18a12034b9c3",
       "size": 4084
+    },
+    {
+      "path": "docs/VALIDATION_UI_MOTION.md",
+      "sha256": "eeaf5b4b4a184235fba4f69c11f57ab86641181d70b41e517af21b9490170b92",
+      "size": 5182
     },
     {
       "path": "docs/VALIDATION_UI_POLISH_0.23.20.md",
@@ -782,8 +787,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "c089f15ced1457d784206abb8f1edbdf1a5b78cb0cf553fdd9195839652c1668",
-      "size": 84386
+      "sha256": "863e07c428118b692bc0c3f11c088101be515f277da57d206c4d70bbc4f65e63",
+      "size": 84963
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -1147,13 +1152,13 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "78862966434d9bfc9ca52b7774dce731b4935457743a19381ce85e38e0d71951",
-      "size": 165713
+      "sha256": "f50d0e379882b4e71a72f0193893648d1b85279a060b0cdce4d921afa8170e88",
+      "size": 165889
     },
     {
       "path": "local_app/web/appearance.css",
-      "sha256": "90983fa95e3ed450aa189dc568f86936ba7109ffa0bba2280d1b15d970be481f",
-      "size": 51063
+      "sha256": "3e7a53e48362e68cadf376e7af2d8e6a0ddbc40ddd3b1041ab961f1ed13059ec",
+      "size": 52020
     },
     {
       "path": "local_app/web/appearance.js",
@@ -1496,6 +1501,11 @@
       "size": 1752
     },
     {
+      "path": "scripts/test-lab/Test-WorkspaceMotion.ps1",
+      "sha256": "12de4b6fcb80358b2c1f9cd277c4fb4b3a82eebcdc9ee72b406b12144dd6ecea",
+      "size": 2985
+    },
+    {
       "path": "scripts/test-lab/build-notification-fonts.py",
       "sha256": "637dce1c7cb9dd92e87f7441c8073699665cbdfd5ce4020dd6939958cdfb1b70",
       "size": 5078
@@ -1604,6 +1614,16 @@
       "path": "scripts/test-lab/test-notification-card.ps1",
       "sha256": "7214c75f629ace3cfbd2eaa49f6a694402cdc7bd771754be3e4fdab30b662323",
       "size": 1308
+    },
+    {
+      "path": "scripts/test-lab/test-workspace-motion.cs",
+      "sha256": "ea452287cd8c3dfba525457152d8a2071763785dc6cca14dd842f36884737487",
+      "size": 5538
+    },
+    {
+      "path": "scripts/test-lab/test-workspace-motion.js",
+      "sha256": "0e93b870f200de7bc3914f2897c50440fd1eb7d7d4ab9114b414bead7b3b78d4",
+      "size": 4274
     },
     {
       "path": "scripts/test-lab/test-workspace.py",
@@ -2224,6 +2244,11 @@
       "path": "tests/test_workspace_modes_frontend.py",
       "sha256": "a6309657bd41e3d5137afa80e913abf5957c92953479cd12380644466af80724",
       "size": 13570
+    },
+    {
+      "path": "tests/test_workspace_motion.py",
+      "sha256": "46abd6990ea776df692c7a5fae27111e40dad9ba0cbe9b5362364444622ceb89",
+      "size": 3562
     },
     {
       "path": "tests/test_workspace_native_handoff_frontend.py",
