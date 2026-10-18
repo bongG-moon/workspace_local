@@ -102,6 +102,14 @@ class PublisherCliTests(unittest.TestCase):
         self.assertEqual('fixture-private-token', self.publisher.publish.call_args.args[2])
         self.assertNotIn('fixture-private-token', output)
 
+    def test_verified_deployment_with_auxiliary_warning_returns_success_and_visible_warning(self):
+        self.publisher.publish.return_value = {"verified": True, "warnings": ["GitLab 릴리스 기록 실패 · 다시 게시해 주세요."]}
+        with patch("getpass.getpass", return_value="fixture-private-token"):
+            code, output = self.invoke(["deploy"])
+        self.assertEqual(0, code)
+        self.assertIn("GitLab 릴리스 기록 실패", output)
+        self.assertNotIn("fixture-private-token", output)
+
     def test_deploy_without_token_does_not_build(self):
         with patch('getpass.getpass', return_value=''):
             code, _ = self.invoke(['deploy'])

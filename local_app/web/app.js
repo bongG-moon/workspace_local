@@ -1120,7 +1120,7 @@ function enterShutdown(state,issues=[]){
   renderSessions();
   $("settings-dialog").close();
   globalThis.WorkspaceCapabilities?.close();
-  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
+  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceReleaseHistory?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
   if(pollController)pollController.abort();
   for(const id of ["new-chat","choose-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
   renderShutdown();
@@ -1246,6 +1246,7 @@ globalThis.WorkspaceUpgrade?.attach({
 });
 globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,signal),
   legacy:(id,runId)=>active?.id===id?(active.toolActivity||[]).filter(row=>!runId||row.runId===runId):[]});
+globalThis.WorkspaceReleaseHistory?.attach({api:(path,data,signal)=>api(path,data,signal),openDialog:id=>showDialog(id)});
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
   canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
 async function init(){try{

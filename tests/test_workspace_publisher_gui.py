@@ -491,6 +491,15 @@ class PublisherWindowTests(unittest.TestCase):
         self.assertIn("인증 없는 다운로드 검증", self.window.status.get())
         self.assertNotIn("MEMORY_ONLY", self.window.log.get("1.0", "end"))
 
+    def test_auxiliary_warnings_keep_success_visible_for_publish_and_deploy(self):
+        for action in ("publish", "deploy"):
+            publication = {"verified": True, "warnings": ["GitLab 릴리스 기록 실패 · 다시 게시해 주세요."]}
+            result = publication if action == "publish" else {"build": deepcopy(BUILD), "publication": publication}
+            self.window.done(action, result, build_identity(self.window.config()))
+            self.assertIn("배포 파일 게시 완료", self.window.status.get())
+            self.assertIn("추가 기록 경고", self.window.status.get())
+            self.assertIn("GitLab 릴리스 기록 실패", self.window.log.get("1.0", "end"))
+
     def test_changing_destination_disables_publish_until_rebuild(self):
         self.window.build_result = deepcopy(BUILD)
         self.window.build_config_identity = build_identity(self.window.config())

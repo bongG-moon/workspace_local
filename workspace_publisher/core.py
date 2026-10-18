@@ -429,8 +429,17 @@ class Publisher:
         active(cancel)
         config = normalize(config)
         self._validated_build(config, build_result)
+        bundled_history = None
+        try:
+            notes = self.release_notes()
+            if notes.get('source') == 'bundled':
+                bundled_history = notes.get('history')
+        except (OSError, ValueError, TypeError):
+            # Missing source notes must not block a verified saved-build retry.
+            pass
         return publishing.publish(config, build_result, token, token_kind=token_kind,
-                                  transport=self.transport, emit=self.emit, cancel=cancel)
+                                  transport=self.transport, emit=self.emit, cancel=cancel,
+                                  bundled_history=bundled_history)
 
     def prepare_deploy(self, config, *, build_result=None, cancel=None):
         """Reuse verified bytes on retry; build when this version has no artifact."""

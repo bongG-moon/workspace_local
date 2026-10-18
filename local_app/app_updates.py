@@ -23,7 +23,7 @@ import zipfile
 import zlib
 
 from .history import HistoryStore, read, safe
-from .update_source import CONFIG_NAME, MAX_CONFIG, GITHUB_SOURCE, UpdateSource, from_bytes
+from .update_source import CONFIG_NAME, MAX_CONFIG, GITHUB_SOURCE, GITHUB_HISTORY_API, UpdateSource, from_bytes
 
 
 REPOSITORY = 'bongG-moon/workspace_local'
@@ -97,8 +97,8 @@ def _url(value):
 
 def _download_url(value, initial):
     parsed = _url(value)
-    if initial == API_URL:
-        if value != API_URL:
+    if initial in (API_URL, GITHUB_HISTORY_API):
+        if value != initial:
             raise UpdateError()
     elif value != initial and parsed.hostname not in _CDN_HOSTS:
         raise UpdateError()
@@ -130,11 +130,11 @@ def github_download(url, *, limit, deadline, cancel, progress=None):
     """Anonymous HTTPS only; bound redirects, bytes, socket waits and elapsed time."""
     _active(cancel, deadline)
     parsed = _url(url)
-    if url != API_URL and (parsed.hostname != 'github.com' or parsed.query
+    if url not in (API_URL, GITHUB_HISTORY_API) and (parsed.hostname != 'github.com' or parsed.query
                           or not parsed.path.startswith(f'/{REPOSITORY}/releases/download/')):
         raise UpdateError()
     return _http_download(url, limit=limit, deadline=deadline, cancel=cancel, progress=progress, headers={
-        'Accept': 'application/vnd.github+json' if url == API_URL else 'application/octet-stream',
+        'Accept': 'application/vnd.github+json' if url in (API_URL, GITHUB_HISTORY_API) else 'application/octet-stream',
         'User-Agent': 'Company-Workspace-Updater',
         'X-GitHub-Api-Version': '2022-11-28',
         'Accept-Encoding': 'identity',
@@ -153,7 +153,7 @@ def source_download(source, url, *, limit, deadline, cancel, progress=None):
             raise UpdateError() from exc
     validate(url, url)
     return _http_download(url, limit=limit, deadline=deadline, cancel=cancel, progress=progress,
-        validator=validate, headers={'Accept': 'application/json' if url == source.latest_url else 'application/octet-stream',
+        validator=validate, headers={'Accept': 'application/json' if url in (source.latest_url, source.history_url) else 'application/octet-stream',
             'User-Agent': 'Company-Workspace-Updater', 'Accept-Encoding': 'identity', 'Cache-Control': 'no-cache'})
 
 

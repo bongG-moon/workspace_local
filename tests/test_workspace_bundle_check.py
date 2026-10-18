@@ -88,13 +88,17 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
     def test_current_builder_file_list_is_accepted(self):
         self.assertIn('docs/WORKSPACE_NSIS_INSTALLER.md', self.entries)
         self.assertIn('docs/WORKSPACE_ONLINE_INSTALLER.md', self.entries)
+        self.assertIn('deploy/workspace-release-notes.json', self.entries)
+        self.assertIn('local_app/release_history.py', self.entries)
         code, output = self.check()
         self.assertEqual(0, code, output)
         self.assertIn('no runtime state or credentials bundled', output)
 
     def test_missing_required_source_files_are_rejected(self):
         for relative in ('docs/WORKSPACE_NSIS_INSTALLER.md', 'docs/WORKSPACE_ONLINE_INSTALLER.md',
-                         'local_app/server.py'):
+                         'local_app/server.py', 'deploy/workspace-release-notes.json',
+                         'local_app/release_history.py', 'local_app/web/release-history.js',
+                         'local_app/web/release-history.css'):
             with self.subTest(relative=relative):
                 code, output = self.check(omit=(relative,))
                 self.assertNotEqual(0, code, output)

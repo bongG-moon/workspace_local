@@ -54,7 +54,7 @@ class PublishTokenTests(unittest.TestCase):
         self.result = release_files(self.directory)
         self.events = []
 
-    def test_access_deploy_job_headers_match_token_kind_and_all_reads_remain_anonymous(self):
+    def test_token_headers_match_and_package_reads_remain_anonymous(self):
         cases = [('auto', 'glpat-fixture-secret', 'PRIVATE-TOKEN'),
                  ('deploy', 'glpat-fixture-secret', 'PRIVATE-TOKEN'),
                  ('access', 'custom-prefix-fixture-secret', 'PRIVATE-TOKEN'),
@@ -68,12 +68,14 @@ class PublishTokenTests(unittest.TestCase):
                                  transport=registry, emit=self.events.append)
                 self.assertTrue(result['verified'])
                 writes = [kwargs for method, _, kwargs in registry.calls if method == 'PUT']
-                self.assertEqual(4, len(writes))
+                self.assertEqual(5, len(writes))
                 for values in writes:
                     self.assertEqual({expected_header: token, 'Content-Type': 'application/octet-stream'}, values['headers'])
-                for method, _, values in registry.calls:
-                    if method == 'GET':
+                for method, url, values in registry.calls:
+                    if method == 'GET' and '/packages/generic/' in url:
                         self.assertFalse(values.get('headers'))
+                    elif method == 'GET':
+                        self.assertEqual(token, values['headers'][expected_header])
                 self.assertNotIn(token, json.dumps(self.events))
                 self.assertFalse(any(token.encode() in path.read_bytes() for path in self.directory.iterdir()))
 
@@ -123,10 +125,36 @@ class PublishTokenTests(unittest.TestCase):
         self.assertIn('HTTP 404', value['message'])
         self.assertIn('숫자 프로젝트 ID', value['message'])
 
+    def test_inventory_get_preserves_pagination_and_auth_without_relaxing_write_urls(self):
+        url = 'https://gitlab.corp/company/api/v4/projects/42/packages?package_type=generic&per_page=30&page=2'
+        requests = []
+
+        class Body(io.BytesIO):
+            status, headers = 200, {}
+
+        class Opener:
+            def open(self, request, **kwargs):
+                requests.append(request)
+                return Body(b'[]')
+
+        with patch('workspace_publisher.publish.build_opener', return_value=Opener()):
+            result = HTTPSClient()('GET', url, headers={'PRIVATE-TOKEN': 'fixture-secret'})
+            self.assertEqual(result.body, b'[]')
+            self.assertEqual(requests[0].full_url, url)
+            self.assertEqual(dict(requests[0].header_items())['Private-token'], 'fixture-secret')
+            for method in ('PUT', 'POST'):
+                with self.subTest(method=method), self.assertRaises(ValueError):
+                    HTTPSClient()(method, url, data=b'{}')
+            for bad in (url.replace('/company/', '/%2e%2e/'), url + '#fragment',
+                        url.replace('https://', 'http://'), url.replace('gitlab.corp', 'user:secret@gitlab.corp')):
+                with self.subTest(url=bad), self.assertRaises(ValueError):
+                    HTTPSClient()('GET', bad)
+        self.assertEqual(len(requests), 1)
+
     def test_access_tokens_never_follow_redirects_even_to_the_same_https_origin(self):
         class Body(io.BytesIO):
             status, headers = 200, {}
-        for method in ('GET', 'PUT'):
+        for method in ('GET', 'PUT', 'POST'):
             for target in ('https://gitlab.corp/other', 'https://storage.corp/object?signature=x'):
                 def make_opener(handler):
                     class Opener:

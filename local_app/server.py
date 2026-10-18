@@ -46,7 +46,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.27"
+WORKSPACE_VERSION = "0.23.28"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -202,11 +202,16 @@ class LocalApp:
         from .upgrade_handoff import UpgradeHandoff
         self.upgrade = UpgradeHandoff(self, WORKSPACE_VERSION)
         from .app_updates import UpdateManager
+        from .release_history import HistoryManager
         from .update_source import load_source
+        bundle_root = Path(__file__).resolve().parents[1]
+        update_source = load_source(bundle_root)
         self.app_updates = UpdateManager(state, WORKSPACE_VERSION,
             demo=demo or self._injected_command, installer=self._install_app_update,
             handoff_status=lambda: self.upgrade.status(),
-            source=load_source(Path(__file__).resolve().parents[1]))
+            source=update_source)
+        self.release_history = HistoryManager(state, WORKSPACE_VERSION, bundle_root=bundle_root,
+            source=update_source, demo=demo or self._injected_command)
         self.update_warning = None
         self.retry_chat_cleanup()
 
@@ -2115,6 +2120,8 @@ class LocalApp:
             updates_closed = True
             if hasattr(self, 'app_updates'):
                 updates_closed = self.app_updates.close()
+            if hasattr(self, 'release_history'):
+                self.release_history.close()
             if hasattr(self, 'dispatch'):
                 self.dispatch.stop()
             issues = []
@@ -2268,6 +2275,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.bootstrap())
             if route.path == '/api/app-update':
                 return self.reply(app.app_updates.check())
+            if route.path == '/api/app-update-history':
+                return self.reply(app.release_history.snapshot())
             if route.path == '/api/execution-mode':
                 return self.reply({'current': app.execution_mode, 'supported': False,
                                    'state': 'idle', 'phase': 'idle', 'target': None, 'error': None})
@@ -2395,6 +2404,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),
+                      "/release-history.js": ("release-history.js", "text/javascript; charset=utf-8"),
+                      "/release-history.css": ("release-history.css", "text/css; charset=utf-8"),
                       "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
                       "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
                       "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
@@ -2630,6 +2641,10 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'install' and set(data) == {'action', 'version'}:
                 return self.reply(app.app_updates.install(data['version']))
             raise ValueError('업데이트 요청을 확인해 주세요.')
+        if route == '/api/app-update-history':
+            if set(data) != {'action', 'force'} or data['action'] != 'check' or type(data['force']) is not bool:
+                raise ValueError('업데이트 기록 요청을 확인해 주세요.')
+            return self.reply(app.release_history.check(force=data['force']))
         if route == '/api/ui-health':
             return self.reply({'ok': True, 'recorded': app.ui_health.frontend(data)})
         if route == '/api/browse-paths':

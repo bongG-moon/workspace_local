@@ -164,17 +164,18 @@ class PublishTests(unittest.TestCase):
         return publish(CONFIG, self.result, 'fixture-token', transport=self.registry,
                        emit=self.events.append, **kwargs)
 
-    def test_assets_verified_anonymously_and_channel_written_last(self):
+    def test_assets_verified_before_channel_then_auxiliary_history(self):
         result = self.publish()
         self.assertTrue(result['verified'])
         writes = [(url, values) for method, url, values in self.registry.calls if method == 'PUT']
-        self.assertEqual(4, len(writes))
-        self.assertTrue(writes[-1][0].endswith('/company-workspace-channel/0.0.0/latest.json'))
+        self.assertEqual(5, len(writes))
+        self.assertTrue(writes[-2][0].endswith('/company-workspace-channel/0.0.0/latest.json'))
+        self.assertTrue(writes[-1][0].endswith('/release-history.json'))
         self.assertEqual('fixture-token', writes[0][1]['headers']['DEPLOY-TOKEN'])
         for method, _, values in self.registry.calls:
             if method == 'GET':
                 self.assertFalse(values.get('headers'))
-        manifest = json.loads(writes[-1][1]['data'])
+        manifest = json.loads(writes[-2][1]['data'])
         self.assertEqual('stable', manifest['channel'])
         self.assertEqual(VERSION, manifest['version'])
         self.assertEqual('한국어 변경 내용', manifest['notes'])

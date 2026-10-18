@@ -135,7 +135,7 @@ class PublisherJobs:
                 if not isinstance(event, dict):
                     return
                 kind = event.get("kind", "info")
-                self._put({"job": serial, "kind": kind if kind in {"progress", "info", "error"} else "info",
+                self._put({"job": serial, "kind": kind if kind in {"progress", "info", "warning", "error"} else "info",
                            "message": public_text(event.get("message", ""), token)})
             try:
                 publisher = self.factory(self.repo_root, emit=emit)
@@ -537,7 +537,7 @@ class PublisherWindow:
     def append_log(self, message, kind="info"):
         message = public_text(message, self.token.get())
         self.log.configure(state="normal")
-        self.log.insert("end", message + "\n", kind if kind == "error" else "info")
+        self.log.insert("end", message + "\n", "error" if kind in {"error", "warning"} else "info")
         if int(self.log.index("end-1c").split(".")[0]) > 500:
             self.log.delete("1.0", "100.0")
         self.log.see("end")
@@ -697,6 +697,12 @@ class PublisherWindow:
         if action in {"publish", "deploy"}:
             message = ("소스·배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다."
                        if result.get("sourcePublication") else "배포 파일 게시 완료 · 인증 없는 다운로드 검증까지 마쳤습니다.")
+            publication = result.get("publication", result)
+            warnings = publication.get("warnings", [])
+            if warnings:
+                message += " 추가 기록 경고가 있습니다. 로그를 확인한 뒤 다시 게시하면 재시도합니다."
+                for warning in warnings:
+                    self.append_log("추가 기록 경고: " + public_text(warning), "warning")
             share = sharing_file(self.build_result)
             if share:
                 self.append_log(share)

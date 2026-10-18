@@ -29,7 +29,8 @@ globalThis.WorkspaceStartupHealth = (() => {
     "tool-activity":{file:"tool-activity.js",global:"WorkspaceToolActivity"},
     "progress-view":{file:"progress-view.js",global:"WorkspaceProgressView",buttons:["progress-open"]},
     "upgrade-handoff":{file:"upgrade-handoff.js",global:"WorkspaceUpgrade"},
-    "app-updates":{file:"app-updates.js",global:"WorkspaceAppUpdates",buttons:["app-update-check","app-update-notes-open","app-update-install"]}
+    "app-updates":{file:"app-updates.js",global:"WorkspaceAppUpdates",buttons:["app-update-check","app-update-notes-open","app-update-install"]},
+    "release-history":{file:"release-history.js",global:"WorkspaceReleaseHistory",buttons:["release-history-open","release-history-refresh"]}
   };
   const names=Object.keys(definitions), states=new Map(names.map(name=>[name,{status:"pending",reason:""}]));
   const fileNames=new Map(names.map(name=>[definitions[name].file,name]));

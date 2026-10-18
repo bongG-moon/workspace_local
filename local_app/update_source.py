@@ -19,6 +19,7 @@ CONFIG_NAME = 'workspace-update-source.json'
 MAX_CONFIG = 16 * 1024
 REPOSITORY = 'bongG-moon/workspace_local'
 GITHUB_API = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
+GITHUB_HISTORY_API = f'https://api.github.com/repos/{REPOSITORY}/releases?per_page=30&page=1'
 SOURCE_ERROR = '앱에 포함된 업데이트 서버 설정을 확인하지 못했습니다. 배포 담당자에게 문의해 주세요. 기존 앱은 계속 사용할 수 있습니다.'
 _VERSION = r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})'
 
@@ -103,6 +104,13 @@ class UpdateSource:
         return (self.registry_root + '/company-workspace-channel/0.0.0/latest.json'
                 if self.provider == 'gitlab' else GITHUB_API)
 
+    @property
+    def history_url(self):
+        if self.error:
+            raise ValueError(SOURCE_ERROR)
+        return (self.registry_root + '/company-workspace-channel/0.0.0/release-history.json'
+                if self.provider == 'gitlab' else GITHUB_HISTORY_API)
+
     def asset_url(self, version, name):
         if not isinstance(version, str) or not re.fullmatch(_VERSION, version):
             raise ValueError(SOURCE_ERROR)
@@ -114,7 +122,7 @@ class UpdateSource:
 
     def validate_initial(self, value):
         https_parts(value)
-        if value == self.latest_url:
+        if value in (self.latest_url, self.history_url):
             return value
         prefix = self.registry_root + '/company-workspace/'
         if not value.startswith(prefix):

@@ -1,0 +1,31 @@
+/* Read-only history uses the same surfaces and controls as app updates. */
+.release-history-dialog{width:min(600px,calc(100vw - 32px));max-height:calc(100dvh - 48px);padding:24px;overflow:auto;border:1px solid var(--line);border-radius:20px;background:var(--surface-raised);color:var(--ink);box-shadow:0 18px 64px var(--theme-shadow-a43,#30384b2b)}
+.release-history-dialog::backdrop{background:var(--theme-surface-sunken-a43,#30374b2b);backdrop-filter:blur(3px)}
+.release-history-dialog .dialog-head{align-items:center;gap:12px;margin-bottom:18px}
+.release-history-heading{flex:1;min-width:0}
+.release-history-heading .eyebrow{font-size:9px;letter-spacing:1.15px;color:var(--accent-ink)}
+.release-history-dialog h2{font-size:18px;font-weight:600;line-height:1.45;margin:3px 0 0}
+.release-history-source{font-size:11px;line-height:1.7;color:var(--muted);margin:5px 0 0;overflow-wrap:anywhere}
+.release-history-help{font-size:11px;line-height:1.8;color:var(--muted);margin:0 0 16px;overflow-wrap:anywhere}
+.release-history-dialog .icon-button{flex:none;width:32px;height:32px;min-width:32px;min-height:32px;padding:0}
+.release-history-dialog .icon-button .icon{width:18px;height:18px}
+.release-history-picker{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+.release-history-picker label{font-size:12px;flex:none}
+.release-history-picker select{flex:1;min-width:0;width:100%;height:32px;padding:4px 28px 4px 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font-size:12px}
+.release-history-count{font-size:11px;color:var(--muted);white-space:nowrap}
+.release-history-detail-heading{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.release-history-detail-heading h3{font-size:15px;font-weight:600;line-height:1.6;overflow-wrap:anywhere;margin:0;min-width:0}
+.release-history-current{font-size:10px;line-height:1.5;padding:2px 6px;border:1px solid var(--line);border-radius:6px;color:var(--accent-ink);background:var(--accent-tint);white-space:nowrap}
+.release-history-meta{font-size:11px;line-height:1.7;color:var(--muted);margin:5px 0 12px;overflow-wrap:anywhere}
+.release-history-notes{min-height:100px;max-height:38dvh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:13px;line-height:25px}
+.release-history-notes[data-empty="true"]{color:var(--muted)}
+.release-history-link{display:inline-flex;margin-top:12px;font-size:11px;line-height:1.7;color:var(--accent-ink);text-decoration:none}
+.release-history-link:hover{text-decoration:underline}
+.release-history-empty,.release-history-status{font-size:12px;line-height:1.8;color:var(--muted);overflow-wrap:anywhere;margin:12px 0 0}
+.release-history-empty{padding:24px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.release-history-dialog footer{display:flex;justify-content:flex-end;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:14px;margin-top:18px}
+.release-history-dialog footer button{min-height:32px;padding:6px 12px;font-size:12px}
+.release-history-dialog :is(button,select,a,.release-history-notes):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.release-history-dialog [hidden]{display:none}
+@media(max-width:480px){.release-history-dialog{padding:20px 16px}.release-history-picker{gap:8px;flex-wrap:wrap}.release-history-picker select{flex-basis:calc(100% - 40px)}.release-history-count{margin-left:auto}.release-history-notes{padding:13px;max-height:32dvh}}
+@media(forced-colors:active){.release-history-current,.release-history-notes,.release-history-picker select{border-color:CanvasText}.release-history-dialog :is(button,select,a,.release-history-notes):focus-visible{outline-color:Highlight}}
