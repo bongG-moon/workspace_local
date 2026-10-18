@@ -1,6 +1,6 @@
 "use strict";
 
-// Inventory discovery is read-only. Runtime tabs prepare only the selected task;
+// Inventory discovery is read-only. The catalog prepares only the selected task;
 // choosing its catalog context authorizes folder connection, never tool actions.
 // Metadata never becomes HTML or an executable request.
 globalThis.WorkspaceCapabilities = (() => {
@@ -13,11 +13,11 @@ globalThis.WorkspaceCapabilities = (() => {
   const attempted = new Map();
   function autoPrepare() {
     clearTimeout(autoTimer);
-    if (!opened || loading || !data || kind === "skills" || !runtimeSession() || data.runtime?.state === "live" || boot.demo || appClosed) return;
+    if (!opened || loading || !data || !runtimeSession() || data.runtime?.state === "live" || boot.demo || appClosed) return;
     const key = contextKey(), id = runtimeSession().id;
     if (attempted.has(id) && Date.now() - attempted.get(id) < 30000) return;
     autoTimer = setTimeout(() => {
-      if (!opened || loading || contextKey() !== key || kind === "skills" || data?.runtime?.state === "live") return;
+      if (!opened || loading || contextKey() !== key || data?.runtime?.state === "live") return;
       if (preparing) return;
       void prepareCatalog({automatic:true});
     }, 150);
@@ -129,7 +129,7 @@ globalThis.WorkspaceCapabilities = (() => {
       ? (kind === "skills" && !preparing ? "설치된 스킬 목록을 확인하고 있어요. AI 요청은 보내지 않습니다." : "선택한 폴더의 설정·후크·MCP로 목록을 자동 확인합니다. AI 요청은 보내지 않습니다.") + attention
       : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "공통 설치 스킬과 선택한 업무 연결의 보고 목록을 구분해 확인합니다.")) + attention;
     if (!loading && !preparing && kind === "skills" && data?.runtime?.state !== "live" && selected) {
-      $("capabilities-status").textContent += " 설치 스킬은 파일에서 바로 확인해요. 실행 기능·MCP·빠른 요청 탭을 선택하면 해당 업무를 자동으로 연결합니다.";
+      $("capabilities-status").textContent += " 설치 스킬은 파일에서 바로 확인하고, 선택한 업무의 실행 기능·MCP·빠른 요청도 자동으로 확인합니다.";
     }
   }
   function skillInventory() {
@@ -357,7 +357,9 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   // Selection changes share one debounce; stale fetches are detached immediately.
   // Disk discovery is bounded by the server and tab changes reuse this single payload.
-  function selectionChanged() {
+  function selectionChanged({retry=false} = {}) {
+    // An explicit context choice is a new request, unlike passive/tab refreshes.
+    if (retry && runtimeSession()) attempted.delete(runtimeSession().id);
     clearTimeout(autoTimer); clearTimeout(refreshTimer); clearTimeout(selectionTimer);
     generation++;
     if (controller) controller.abort();
@@ -435,7 +437,7 @@ globalThis.WorkspaceCapabilities = (() => {
     attempted.set(context.id, Date.now());
     while (attempted.size > 16) attempted.delete(attempted.keys().next().value);
     preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
-    const current=()=>opened&&!appClosed&&contextKey()===context.key&&(!automatic||kind!=="skills");
+    const current=()=>opened&&!appClosed&&contextKey()===context.key;
     try {
       const item=await api(`/api/session?id=${encodeURIComponent(context.id)}`);
       if(!current())return;
@@ -469,7 +471,7 @@ globalThis.WorkspaceCapabilities = (() => {
   $("capabilities-scope-select").onchange = () => {
     scope = $("capabilities-scope-select").value === "folder" ? "folder" : "common";
     syncFolders(scope === "folder");
-    selectionChanged();
+    selectionChanged({retry:true});
   };
   $("capabilities-folder").onchange = () => {
     if (!opened) return;
@@ -479,7 +481,7 @@ globalThis.WorkspaceCapabilities = (() => {
       commonSession = {id:item.id, title:item.title, workspace:item.workspace};
       commonExplicit = true;
     } else selectFolder($("capabilities-folder").value);
-    selectionChanged();
+    selectionChanged({retry:true});
   };
   $("capabilities-manage").onclick = () => globalThis.WorkspaceCustomizations?.open("skills",runtimeSession()?.id);
   $("capabilities-open").onclick = open;

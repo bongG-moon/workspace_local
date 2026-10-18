@@ -162,8 +162,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "87ef2ed7a0bebe8f107dfed5906864d0e21da88bb972a08dd92bae6b8b0de4ee",
-      "size": 52157
+      "sha256": "ba2f80ebae91357abfc7613158b71bdade8090928eb1d2eb97c98d0268da05d0",
+      "size": 52671
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -217,8 +217,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.27.md",
-      "sha256": "d03975c4e8210c07858f287f42b786c34430895c0e4fe794283a80eeae36d7db",
-      "size": 6770
+      "sha256": "2211b700808f2c41bc3a905837ad8ec7bc6adb8578c964b40ff568e51d4eb0aa",
+      "size": 7282
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -787,8 +787,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "4d5acea9073e86e0ac08268110cb00324c1700403bb16b7107f52f2ff79e447a",
-      "size": 85100
+      "sha256": "e5b333fc540a638852d3c49fa5671cd1fcc705279fa7286661b99a6497491f04",
+      "size": 85404
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -1152,8 +1152,8 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "98249596c40ad43209e2de3420dccfa5eaed40eeda90cb22b013e34a0e6c8b19",
-      "size": 165945
+      "sha256": "6753a4c2f6d7933b60649c7f57c9646554ff43c9a5340b865dd70a4d6a948454",
+      "size": 165938
     },
     {
       "path": "local_app/web/appearance.css",
@@ -1197,8 +1197,8 @@
     },
     {
       "path": "local_app/web/capabilities.js",
-      "sha256": "8270078d5f9745f971f6e2ff325394de12d564f9ec14d95681be9bdd44f6384a",
-      "size": 35516
+      "sha256": "36e3e7b765ef0f076d2485796b7351ec207018089dfaaaee6c8af0a0c54a3e08",
+      "size": 35629
     },
     {
       "path": "local_app/web/chat-shortcuts.css",
@@ -1917,8 +1917,8 @@
     },
     {
       "path": "tests/test_workspace_capabilities_frontend.py",
-      "sha256": "b5fa85bf3d16010c8b0658cb04ae8b5a846e014d4bf562a2743aa7d414c59984",
-      "size": 70567
+      "sha256": "d7c8a3062844702456ee9b0cf9d9b45add60421edb138985e45a3b971716e712",
+      "size": 75412
     },
     {
       "path": "tests/test_workspace_catalog_retention.py",

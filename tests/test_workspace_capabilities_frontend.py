@@ -66,7 +66,7 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
-    def test_runtime_tabs_auto_connect_once_and_reuse_reported_connection(self):
+    def test_catalog_opens_on_skills_and_auto_connects_once_for_all_tabs(self):
         self.run_case(r"""(async()=>{
           const timers=new Map();let serial=0,connects=0,live=false;
           globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};
@@ -77,7 +77,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
             if(path==='/api/connect'){connects++;live=true;return {connection:{connected:true}};}
             return modern('A',{state:live?'live':'none',status:live?'live':'awaiting-runtime'});
           };
-          WorkspaceCapabilities.open();await flush();await tick();assert.equal(connects,0);
+          WorkspaceCapabilities.open();await flush();await tick();assert.equal(connects,1);
           $('capabilities-tools-tab').onclick();$('capabilities-mcp-tab').onclick();await tick();
           assert.equal(connects,1);
           $('capabilities-commands-tab').onclick();await tick();assert.equal(connects,1);
@@ -120,6 +120,70 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           $('capabilities-folder').value='B';await $('capabilities-folder').onchange();
           for(let round=0;round<2;round++){const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();}
           assert.deepEqual(connected,['B']);WorkspaceCapabilities.close();
+        })()""")
+
+
+    def test_folder_choice_on_skills_refreshes_all_runtime_groups_without_button(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0;const calls=[],live=new Set(['A']);
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B',state:'idle',trusted:true});
+          api=async(path,body)=>{
+            calls.push({path,body});const id=new URLSearchParams(path.split('?')[1]).get('id');
+            if(path.startsWith('/api/session'))return {id,trusted:true,state:'idle',connection:{connected:live.has(id)}};
+            if(path==='/api/connect'){live.add(body.id);return {connection:{connected:true}};}
+            return modern(id,{state:live.has(id)?'live':'none',status:live.has(id)?'live':'awaiting-runtime',groups:{
+              tools:{reported:live.has(id),items:live.has(id)?[{name:id+'-tool'}]:[]},
+              mcp:{reported:live.has(id),items:live.has(id)?[{name:id+'-server',status:'connected'}]:[]},
+              commands:{reported:live.has(id),items:live.has(id)?[{name:id+'-command',invocation:'/cmd-'+id}]:[]}
+            }});
+          };
+          WorkspaceCapabilities.open();await flush();
+          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();
+          $('capabilities-folder').value='C:\\fixture\\B';$('capabilities-folder').onchange();
+          await tick();await tick();
+          assert.deepEqual(calls.filter(x=>x.body).map(x=>x.body),[{id:'B',catalog:true,automatic:true}]);
+          const count=calls.length;
+          for(const [tab,text] of [['tools','B-tool'],['mcp','B-server'],['commands','/cmd-B']]){
+            $('capabilities-'+tab+'-tab').onclick();await tick();assert.ok(flatText($('capabilities-list')).includes(text));
+          }
+          assert.equal(calls.length,count);assert.equal(active.id,'A');assert.equal(timers.size,0);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_explicit_context_reselection_retries_failure_without_passive_retry_loop(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,attempts=0,live=false;
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          sessions.push({id:'B',title:'B',workspace:'C:\\fixture\\B',state:'idle',trusted:true});
+          api=async(path,body)=>{
+            const id=new URLSearchParams(path.split('?')[1]).get('id');
+            if(path.startsWith('/api/session'))return {id,trusted:true,state:'idle'};
+            if(path==='/api/connect'){attempts++;if(attempts===1)throw Error('temporary failure');live=true;return {connection:{connected:true}};}
+            return modern(id,{state:id==='B'||live?'live':'none',status:id==='B'||live?'live':'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();await tick();assert.equal(attempts,1);
+          $('capabilities-mcp-tab').onclick();await tick();assert.equal(attempts,1);
+          $('capabilities-skills-tab').onclick();
+          $('capabilities-folder').value='B';$('capabilities-folder').onchange();await tick();
+          $('capabilities-folder').value='A';$('capabilities-folder').onchange();await tick();await tick();
+          assert.equal(attempts,2);assert.equal(timers.size,0);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_switching_to_skills_during_lookup_keeps_selected_context_preparation(self):
+        self.run_case(r"""(async()=>{
+          const timers=new Map();let serial=0,finish,connects=0,live=false;
+          globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
+          const tick=async()=>{const pending=[...timers.values()];timers.clear();for(const fn of pending)fn();await flush();await flush();};
+          api=async(path,body)=>{
+            if(path.startsWith('/api/session'))return new Promise(resolve=>finish=resolve);
+            if(path==='/api/connect'){connects++;live=true;return {connection:{connected:true}};}
+            return modern('A',{state:live?'live':'none',status:live?'live':'awaiting-runtime'});
+          };
+          WorkspaceCapabilities.open();await flush();$('capabilities-mcp-tab').onclick();await tick();
+          $('capabilities-skills-tab').onclick();finish({...active,trusted:true});await flush();await tick();
+          assert.equal(connects,1);assert.equal(timers.size,0);WorkspaceCapabilities.close();
         })()""")
 
     def test_plain_labels_explain_distinct_kinds_without_changing_reported_names(self):
@@ -275,7 +339,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.deepEqual(connected,['B']);WorkspaceCapabilities.close();
         })()""")
 
-    def test_selecting_skills_or_closing_while_lookup_pending_does_not_trust_or_connect(self):
+    def test_closing_while_lookup_pending_does_not_trust_or_connect(self):
         self.run_case(r"""(async()=>{
           const timers=new Map();let serial=0,finishLookup;const writes=[];
           globalThis.setTimeout=fn=>{timers.set(++serial,fn);return serial;};globalThis.clearTimeout=id=>timers.delete(id);
@@ -286,8 +350,8 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
             return modern('A',{state:'none',status:'awaiting-runtime'});
           };
           WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
-          $('capabilities-skills-tab').onclick();finishLookup({...active,trusted:false});await flush();await tick();
-          assert.deepEqual(writes,[]);assert.match($('capabilities-status').textContent,/파일에서 바로/);
+          WorkspaceCapabilities.close();finishLookup({...active,trusted:false});await flush();await tick();
+          assert.deepEqual(writes,[]);
           WorkspaceCapabilities.close();WorkspaceCapabilities.open();await flush();
           $('capabilities-folder').value='A';$('capabilities-folder').onchange();WorkspaceCapabilities.close();await tick();
           assert.deepEqual(writes,[]);assert.equal(timers.size,0);
