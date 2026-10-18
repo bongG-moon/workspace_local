@@ -46,7 +46,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = PREVIEW_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.28"
+WORKSPACE_VERSION = "0.23.27"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"

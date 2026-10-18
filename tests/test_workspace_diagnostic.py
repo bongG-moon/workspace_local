@@ -135,7 +135,7 @@ finally { $identity.Dispose() }
             "process64Bit", "stage", "reason", "nativeCode", "notTested",
             "executionPolicy", "scriptEvidence", "originalLaunchObserved", "nextStep",
         }, set(report))
-        self.assertEqual("ws33-58", report["diagnosticVersion"])
+        self.assertEqual("ws33-59", report["diagnosticVersion"])
         self.assertEqual("workspace-" + WORKSPACE_VERSION, report["targetSource"])
         self.assertEqual(set(SOURCES), set(report["files"]))
         self.assertTrue(set(report["files"].values()) <= {"matched", "missing", "different_version"})

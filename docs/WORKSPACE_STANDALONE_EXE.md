@@ -1,16 +1,16 @@
-# AX Workspace 독립 실행 EXE — 0.23.28
+# AX Workspace 독립 실행 EXE — 0.23.27
 
-이 문서의 `AX-Workspace-0.23.28.exe`는 **`AX-Workspace-0.23.28-exe.zip` 안에 들어 있는 독립 실행 파일**입니다. ZIP을 먼저 압축 해제한 뒤 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 요청은 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
+이 문서의 `AX-Workspace-0.23.27.exe`는 **`AX-Workspace-0.23.27-exe.zip` 안에 들어 있는 독립 실행 파일**입니다. ZIP을 먼저 압축 해제한 뒤 실행합니다. **이미 설치된 Python 3.11 이상이 필요하며 Python 실행 환경·설치 프로그램을 포함하거나 다운로드·자동 설치하지 않습니다.** 앱 전용 로그인은 없고 AI 요청은 현재 사용자의 기존 Claude Code와 인증을 사용합니다.
 
-**Release에서 ZIP 밖으로 직접 받는 `.exe`는 NSIS 설치본입니다.** `AX-Workspace-0.23.28-Setup.exe`와 최신 설치용 `AX-Workspace-Setup.exe`도 설치본에 해당합니다. 독립 실행 파일이 필요하면 `-exe.zip`을 선택하세요. 설치본 사용법은 [설치·제거 안내](WORKSPACE_NSIS_INSTALLER.md)를 참고하세요.
+**Release에서 ZIP 밖으로 직접 받는 `.exe`는 NSIS 설치본입니다.** `AX-Workspace-0.23.27-Setup.exe`와 최신 설치용 `AX-Workspace-Setup.exe`도 설치본에 해당합니다. 독립 실행 파일이 필요하면 `-exe.zip`을 선택하세요. 설치본 사용법은 [설치·제거 안내](WORKSPACE_NSIS_INSTALLER.md)를 참고하세요.
 
-현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md)와 [일반 대화·업무 안내](WORKSPACE_CHAT_MODES.md)를 참고하세요. 이 문서는 0.23.28의 독립 실행 파일 사용법입니다.
+현재 화면 사용법은 [로컬 업무 안내](LOCAL_WORKSPACE.md)와 [일반 대화·업무 안내](WORKSPACE_CHAT_MODES.md)를 참고하세요. 이 문서는 0.23.27의 독립 실행 파일 사용법입니다.
 
 ## 필요한 환경과 실행 순서
 
 Windows 10/11 x64, Windows PowerShell, .NET Framework 4.6.2 이상, WebView2 Evergreen Runtime, 기존 Python 3.11 이상이 필요합니다. AI 요청에는 사용 가능한 기존 Claude Code와 인증이 필요합니다. VBS 방식과 같은 시작·권한 검사 경로를 사용하므로 회사의 EXE·PowerShell 허용 정책에 따라 실행 여부가 달라질 수 있습니다.
 
-1. `AX-Workspace-0.23.28-exe.zip`을 별도 폴더에 압축 해제하고 안에 있는 EXE를 실행합니다.
+1. `AX-Workspace-0.23.27-exe.zip`을 별도 폴더에 압축 해제하고 안에 있는 EXE를 실행합니다.
 2. 같은 버전·더 최신 버전이 열려 있으면 기존 창을 사용합니다. 새 버전이면 기존 업무가 끝난 뒤 자동 전환합니다. 0.21.4 이하에서는 초안을 보관한 뒤 안내의 **확인**을 한 번 누릅니다.
 3. 왼쪽에서 **일반 대화 / 업무**를 선택합니다. **일반 대화 → 새 대화**는 폴더 선택 없이 질문·첨부 자료 요약에 사용하고, **업무 → 새 업무**는 폴더를 확인한 뒤 파일 작업·스킬·예약에 사용합니다. 일반 대화에서는 파일 탐색·수정·프로그램 실행 도구를 사용하지 않습니다.
 
@@ -54,7 +54,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 
 `WS-37`·`WS-38`은 확인한 Python 후보와 실패 이유를 구분합니다. 기록 저장에 성공하면 `%LOCALAPPDATA%\CompanyAgent\local-ui\diagnostics\python-check-….json` 위치를 안내합니다. 기록에는 로컬 설치 경로가 포함될 수 있지만 인증 값이나 표준 오류 원문은 저장하지 않습니다.
 
-시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.28 진단 표기는 **`ws33-58`**, 대상 소스는 **`workspace-0.23.28`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
+시작 오류가 계속되면 `%LOCALAPPDATA%\CompanyAgent\workspace-runtime`의 해당 버전 폴더 아래 `Company-Workspace\Check-Workspace.cmd`를 실행합니다. 0.23.27 진단 표기는 **`ws33-59`**, 대상 소스는 **`workspace-0.23.27`**입니다. 캐시 준비 전이라면 표시된 `EXE-` 오류 코드부터 확인합니다. [시작 진단 안내](WORKSPACE_STARTUP_DIAGNOSTIC.md)를 참고하세요.
 
 진단과 실행은 Windows의 UAC·영구 실행 정책·기존 파일 ACL을 바꾸지 않습니다. PowerShell의 이번 실행에 적용한 옵션으로 모든 그룹 정책·AppLocker·WDAC·Script Host 제한을 해결할 수 있다고 보장하지 않습니다.
 

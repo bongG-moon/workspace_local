@@ -1,4 +1,4 @@
-# AX Workspace — Claude Code 업무 화면 0.23.28
+# AX Workspace — Claude Code 업무 화면 0.23.27
 
 **내 업무와 AI가 만나는 공간**
 
