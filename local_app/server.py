@@ -24,7 +24,7 @@ from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSI
 from .session_order import SessionOrder
 from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
-from .artifacts import available_artifacts, changes, linked, snapshot, PREVIEW_TYPES
+from .artifacts import available_artifacts, changes, linked, snapshot, list_materials
 from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .capabilities import catalog
@@ -44,7 +44,7 @@ from .plain_chat import ChatSpaces, CHAT_PROFILE
 from .chat_attachments import prepare_chat_content, chat_attachment_policy, validate_chat_file
 
 ASSETS = Path(__file__).parent / "web"
-SAFE_FILES = PREVIEW_TYPES
+SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
 WORKSPACE_VERSION = "0.23.27"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
@@ -1808,7 +1808,7 @@ class LocalApp:
             raise ValueError('이미 답변했거나 만료된 선택 질문입니다.')
 
     @staticmethod
-    def validate_attachments(attachments):
+    def validate_attachments(attachments, *, allow_directories=False):
         if not isinstance(attachments, list) or len(attachments) > 12:
             raise ValueError('파일은 한 번에 12개까지 선택할 수 있습니다.')
         paths = []
@@ -1819,6 +1819,9 @@ class LocalApp:
             if not candidate.is_absolute() or '..' in candidate.parts:
                 raise ValueError('첨부 파일의 전체 경로를 확인해 주세요.')
             path = workspace_path(candidate).resolve(strict=True)
+            if allow_directories and path.is_dir():
+                paths.append(str(path))
+                continue
             if not path.is_file() or path.suffix.lower() not in REFERENCE_FILE_TYPES:
                 raise ValueError('지원하지 않는 파일 형식입니다. 문서·이미지·소스·EXE·압축 파일을 선택해 주세요.')
             paths.append(str(path))
@@ -1841,7 +1844,7 @@ class LocalApp:
                         item.pop('_chatPreparing', None)
 
     def validate_session_attachments(self, item, attachments):
-        paths = self.validate_attachments(attachments)
+        paths = self.validate_attachments(attachments, allow_directories=item.get('kind') != 'chat')
         if item.get('kind') == 'chat':
             return self.attachment_store.owned_paths(item['id'], paths)
         for path in paths:
@@ -1973,7 +1976,8 @@ class LocalApp:
             if chat:
                 prompt = chat_content
             elif paths:
-                prompt += "\n\n사용자가 선택한 원본 파일 경로(JSON):\n" + json.dumps(paths, ensure_ascii=False)
+                label = "사용자가 선택한 원본 파일·폴더 경로(JSON):" if any(Path(value).is_dir() for value in paths) else "사용자가 선택한 원본 파일 경로(JSON):"
+                prompt += "\n\n" + label + "\n" + json.dumps(paths, ensure_ascii=False)
             if self.demo:
                 if chat:
                     self.emit(sid, 'connected', {'model': '화면 체험 · AI 미호출', 'skills': [], 'tools': [], 'mcp': []})
@@ -2040,7 +2044,7 @@ class LocalApp:
         with self.lock:
             return {'ok': True, 'session': self.public(self.get(sid))}
 
-    def allowed_file(self, sid, value):
+    def allowed_file(self, sid, value, *, allow_directory=False):
         item = self.get(sid)
         if not isinstance(value, (str, Path)) or not str(value) or len(str(value)) > 32767:
             raise ValueError('파일 경로를 확인해 주세요.')
@@ -2052,20 +2056,20 @@ class LocalApp:
             self.chat_runtime_options(item)
             self.attachment_store.owned_paths(sid, [str(path)])
         root = workspace_folder(item)
-        if not path.is_file() or path.suffix.lower() not in SAFE_FILES:
+        if not (allow_directory and path.is_dir()) and (not path.is_file() or path.suffix.lower() not in SAFE_FILES):
             raise ValueError("미리보기를 지원하지 않는 파일입니다.")
         if not path.is_relative_to(root) and str(path) not in item.get("attachments", []):
             raise ValueError("이 대화의 작업 폴더 또는 직접 선택한 파일만 열 수 있습니다.")
         return path
 
-    def files(self, sid):
+    def file_listing(self, sid, directory=''):
         item = self.get(sid)
         if item.get('kind') == 'chat':
-            return []
-        root = workspace_folder(item)
-        observed = snapshot(root, max_files=100)
-        return [{"name": str(Path(value).relative_to(root)), "path": value, "size": signature[1]}
-                for value, signature in observed.files.items()]
+            return {'files': [], 'directory': '', 'limited': False, 'errors': 0}
+        return list_materials(workspace_folder(item), directory)
+
+    def files(self, sid, directory=''):
+        return self.file_listing(sid, directory)['files']
 
     def pick(self, kind, initial_directory=None):
         if os.name != "nt":
@@ -2349,7 +2353,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(catalog(selected, client=app.inventory_client,
                                           demo=app.demo, validate_workspace=workspace_folder))
             if route.path == "/api/files":
-                return self.reply({"files": app.files(sid)})
+                return self.reply(app.file_listing(sid, query.get("directory", [""])[0]))
             if route.path == '/api/changes':
                 return self.reply(app.file_changes(sid, query.get('run', [None])[0]))
             if route.path == '/api/changes/file':
@@ -2359,10 +2363,12 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == "/api/results":
                 return self.reply(app.results(sid))
             if route.path == "/api/preview":
-                path = app.allowed_file(sid, query.get("path", [""])[0])
+                path = app.allowed_file(sid, query.get("path", [""])[0], allow_directory=True)
                 if not source_preview_allowed(path, workspace_folder(app.get(sid))):
                     raise ValueError('숨김 설정 또는 인증 정보로 보이는 소스 파일은 미리보기에서 제외합니다.')
-                preview = build_preview(path)
+                preview = ({'kind': 'external', 'directory': True, 'name': path.name,
+                            'message': '폴더 경로를 자료로 전달합니다. 하위 파일을 일괄 복사하거나 읽지 않으며, 이후 처리는 업무의 도구·승인 설정을 따릅니다.'}
+                           if path.is_dir() else build_preview(path))
                 if preview['kind'] != 'external' and app.get(sid).get('observation'):
                     app.get(sid)['observation']['previewed'].add(str(path))
                 return self.reply(preview)

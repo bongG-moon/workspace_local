@@ -514,3 +514,15 @@ dialog.path-picker .path-picker-location .quiet-button{
 .file-list-empty-icon .icon{width:16px;height:16px}
 #files .file-list-empty strong{font-size:13px;line-height:20px;font-weight:600;letter-spacing:-.15px;color:var(--theme-text-secondary,#5b6679);word-break:keep-all}
 #files .file-list-empty p{margin:9px 0 0;font-size:12px;line-height:20px;font-weight:400;color:var(--theme-text-muted,#778198);word-break:keep-all;overflow-wrap:anywhere}
+
+/* Folder browsing shares the compact material typography. */
+#files .material-folder-row{display:flex;align-items:center;min-width:0;border-bottom:1px solid var(--theme-line);gap:4px}
+#files .material-folder-row .file{min-width:0;flex:1;min-height:44px;padding:7px 3px;gap:8px;border:0}
+#files .material-folder-row .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#files .file-extension .icon{width:18px;height:18px}
+#files .material-attach{flex:0 0 28px;width:28px;height:28px;min-height:28px;padding:5px;border-radius:7px}
+#files .material-attach .icon{width:16px;height:16px}
+.material-location{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:0 0 8px;min-width:0;padding:4px 0}
+.material-location .text-button{flex-shrink:0;font-size:12px;min-height:28px;padding:3px 5px}
+.material-location>span{flex-basis:100%;padding:0 5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;color:var(--theme-text-muted)}
+.material-list-note{font-size:12px;line-height:20px;color:var(--theme-text-muted);margin:8px 0;word-break:keep-all}

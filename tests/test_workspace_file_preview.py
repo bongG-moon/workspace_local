@@ -249,10 +249,10 @@ class PreviewRouteTests(unittest.TestCase):
             rows = self.app.files(self.sid)
             after = snapshot(self.work)
             status, preview = self.request(archive)
-        self.assertEqual({'자료 묶음.ZIP', str(Path('하위 폴더/nested.zip'))}, {r['name'] for r in rows})
+        self.assertEqual({'자료 묶음.ZIP', '하위 폴더', 'run.exe'}, {r['name'] for r in rows})
         self.assertEqual((200, 'external'), (status, preview['kind']))
         self.assertIn('ZIP', preview['message'])
-        self.assertEqual(2, len(changes(self.work, before, after, 'run', 1)))
+        self.assertEqual(3, len(changes(self.work, before, after, 'run', 1)))
         archive.unlink()
         self.assertNotIn(str(archive), {r['path'] for r in self.app.files(self.sid)})
 
@@ -263,6 +263,68 @@ class PreviewRouteTests(unittest.TestCase):
         self.assertEqual(400, self.request(archive)[0])
         self.app.get(self.sid)['attachments'] = [str(archive)]
         self.assertEqual('external', self.request(archive)[1]['kind'])
+
+    def test_material_listing_matches_attachment_types_without_opening_contents(self):
+        from local_app.completions import REFERENCE_FILE_TYPES
+        from local_app.artifacts import list_materials
+        for suffix in REFERENCE_FILE_TYPES:
+            (self.work / ('sample' + suffix.upper())).write_bytes(b'fixture')
+        nested = self.work / '자료 폴더'
+        nested.mkdir()
+        (nested / 'inside.exe').write_bytes(b'not executed')
+        (self.work / 'unsupported.bin').write_bytes(b'not supported')
+        original_scan = __import__('os').scandir
+        seen = []
+        def scan(path):
+            seen.append(Path(path))
+            return original_scan(path)
+        with patch.object(Path, 'open', side_effect=AssertionError('metadata only')), patch('local_app.artifacts.os.scandir', side_effect=scan):
+            result = list_materials(self.work)
+            self.assertEqual([self.work], seen)
+            self.assertFalse(result['limited'])
+            self.assertEqual(REFERENCE_FILE_TYPES, {Path(r['name']).suffix.lower() for r in result['files'] if r['kind'] == 'file'})
+            self.assertEqual('directory', result['files'][0]['kind'])
+            self.assertEqual(['inside.exe'], [r['name'] for r in self.app.files(self.sid, '자료 폴더')])
+            self.assertEqual('external', self.request(nested / 'inside.exe')[1]['kind'])
+        self.assertTrue(list_materials(self.work, max_items=1)['limited'])
+        self.assertTrue(list_materials(self.work, seconds=0)['limited'])
+        distribution = self.work / 'dist'
+        distribution.mkdir()
+        (distribution / 'setup.exe').write_bytes(b'fixture')
+        self.assertIn('dist', {r['name'] for r in self.app.files(self.sid)})
+        self.assertEqual(['setup.exe'], [r['name'] for r in self.app.files(self.sid, 'dist')])
+
+    def test_folder_listing_auth_scope_and_redirect_checks(self):
+        from local_app.artifacts import list_materials
+        for value in ('../outside', str(self.root), '.claude', 'secrets', 'node_modules', 'missing'):
+            with self.subTest(value=value), self.assertRaises((ValueError, OSError)):
+                list_materials(self.work, value)
+        with patch('local_app.artifacts.workspace_path', side_effect=ValueError('redirected')):
+            with self.assertRaises(ValueError):
+                list_materials(self.work)
+        for auth, directory, expected in ((False, '', 403), (True, '../outside', 400), (True, '', 200)):
+            req = Request(self.server.origin + '/api/files?' + urlencode({'id': self.sid, 'directory': directory}),
+                          headers={'Authorization': 'Bearer ' + self.app.token} if auth else {})
+            try:
+                with urlopen(req, timeout=5) as response:
+                    self.assertEqual(expected, response.status)
+            except HTTPError as exc:
+                self.assertEqual(expected, exc.code)
+
+    def test_work_folder_reference_is_single_path_and_chat_remains_file_only(self):
+        directory = self.work / '첨부 폴더'
+        directory.mkdir()
+        item = self.app.get(self.sid)
+        with patch.object(Path, 'open', side_effect=AssertionError('no folder contents read')):
+            self.assertEqual([str(directory)], self.app.validate_session_attachments(item, [str(directory)]))
+            self.assertTrue(self.request(directory)[1]['directory'])
+            with self.assertRaises(ValueError):
+                self.app.allowed_file(self.sid, directory)
+            with self.assertRaises(ValueError):
+                self.app.validate_session_attachments({'kind': 'chat', 'id': self.sid}, [str(directory)])
+        directory.rmdir()
+        with self.assertRaises((ValueError, OSError)):
+            self.app.validate_session_attachments(item, [str(directory)])
 
     def test_auth_scope_and_direct_attachment_authorization_still_required(self):
         outside = self.root / 'outside.py'; outside.write_text('print(1)')

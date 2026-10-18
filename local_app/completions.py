@@ -13,30 +13,12 @@ import time
 import threading
 import unicodedata
 
-from .artifacts import DOCUMENT_TYPES, EXCLUDED
+from .artifacts import DOCUMENT_TYPES, EXCLUDED, ARCHIVE_FILE_TYPES, REFERENCE_FILE_TYPES
 from .windows_paths import redirects_path, workspace_path
 
 MAX_ATTACHMENTS = 12
 MAX_SAVED_ATTACHMENTS = 200
 MAX_COMMANDS = 1000
-# Referencing a file is separate from parsing or opening it in an external app.
-# Binary references are metadata/path attachments: never execute or extract them
-# during discovery, selection or upload.
-ARCHIVE_FILE_TYPES = frozenset({
-    '.zip', '.7z', '.rar', '.tar', '.gz', '.tgz', '.bz2', '.tbz', '.tbz2',
-    '.xz', '.txz', '.zst', '.tzst', '.lz', '.lzma', '.lz4', '.cab', '.alz', '.egg',
-})
-REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
-    '.py', '.pyi', '.pyw', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts',
-    '.tsx', '.jsx', '.css', '.scss', '.sass', '.less', '.json', '.jsonc',
-    '.yaml', '.yml', '.toml', '.xml', '.sql', '.sh', '.bash', '.zsh',
-    '.ps1', '.psm1', '.psd1', '.bat', '.cmd', '.cs', '.java', '.go',
-    '.rs', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hxx', '.ini',
-    '.cfg', '.conf', '.properties', '.log', '.ipynb', '.r', '.rmd',
-    '.rb', '.php', '.vue', '.svelte', '.swift', '.kt', '.kts', '.dart',
-    '.lua', '.pl', '.ex', '.exs', '.fs', '.fsx', '.vb', '.vbs', '.tex',
-    '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe', '.markdown',
-}) | ARCHIVE_FILE_TYPES
 _COMMAND = re.compile(r'[\w][\w.:-]{0,199}', re.UNICODE)
 _COMMAND_DIRECTORY = re.compile(r'[\w.][\w.-]*', re.UNICODE)
 _WORDS = re.compile(r'[\W_]+', re.UNICODE)

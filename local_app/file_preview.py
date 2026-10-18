@@ -207,7 +207,9 @@ def build_preview(path: Path):
     is_image = suffix in IMAGE_TYPES
     is_code = suffix in CODE_LANGUAGES
     if not is_image and not is_code and suffix not in {'.md', '.txt', '.csv', '.tsv', '.html', '.htm'}:
-        return external(path, 'Office·PDF 원본은 원래 앱에서 열어 확인해 주세요.')
+        message = ('Office·PDF 원본은 원래 앱에서 열어 확인해 주세요.' if suffix in {'.pdf', '.pptx', '.docx', '.xlsx'}
+                   else '이 형식은 내용 미리보기를 지원하지 않아요. 입력창으로 끌어 자료로 첨부하거나 폴더에서 확인하세요.')
+        return external(path, message)
     limit = MAX_IMAGE_BYTES if is_image else MAX_TEXT_BYTES
     # Read a finite amount even if a file grows after the authorization/stat.
     with path.open('rb') as handle:

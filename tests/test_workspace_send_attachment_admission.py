@@ -24,6 +24,18 @@ class SendAttachmentAdmissionTests(unittest.TestCase):
     def create(self):
         return self.app.get(self.app.create(str(self.root), True)['id'])
 
+    def test_work_folder_is_sent_once_as_a_path_without_expanding_files(self):
+        directory = self.root / 'selected-folder'
+        directory.mkdir()
+        (directory / 'sample.exe').write_bytes(b'not executable')
+        bridge = MemoryBridge()
+        self.item.update(bridge=bridge, state='done')
+        self.app.send(self.item['id'], '폴더를 확인해 주세요', [str(directory)])
+        self.assertEqual([str(directory)], self.item['attachments'])
+        self.assertEqual(1, len(bridge.sent))
+        self.assertIn('파일·폴더 경로(JSON)', bridge.sent[0])
+        self.assertNotIn('sample.exe', bridge.sent[0])
+
     def test_failed_manifest_does_not_strand_three_empty_bridges_or_consume_choices(self):
         rows = [self.item, self.create(), self.create()]
         for row in rows:

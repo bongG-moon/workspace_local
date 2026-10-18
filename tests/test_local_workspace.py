@@ -428,10 +428,18 @@ class ServerTests(unittest.TestCase):
             self.app.allowed_file(self.id, link)
 
     def test_executable_not_opened(self):
+        from local_app.external_apps import open_document
         path = self.workspace / "bad.cmd"
         path.write_text("should not run", encoding="utf-8")
-        with self.assertRaises(ValueError):
-            self.app.allowed_file(self.id, path)
+        # References and previews may resolve scripts; external execution stays blocked.
+        resolved = self.app.allowed_file(self.id, path)
+        self.assertEqual(resolved, path)
+        with patch('local_app.external_apps.os.startfile', create=True) as start, \
+             patch('local_app.external_apps.subprocess.Popen') as run:
+            with self.assertRaises(ValueError):
+                open_document(resolved, 'open')
+            start.assert_not_called()
+            run.assert_not_called()
 
     def test_original_attachment_is_not_copied_or_modified(self):
         path = self.root / "자료.pptx"

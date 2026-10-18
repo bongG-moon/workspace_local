@@ -7,13 +7,32 @@ from pathlib import Path
 import stat
 import time
 
-from .windows_paths import redirects_path
+from .windows_paths import redirects_path, workspace_path
 from .file_preview import ARCHIVE_TYPES, CODE_LANGUAGES, private_name
 
 DOCUMENT_TYPES = {'.md', '.txt', '.csv', '.tsv', '.html', '.htm', '.pdf', '.pptx', '.docx', '.xlsx', '.png', '.jpg', '.jpeg', '.webp'}
 # Archives are listed by metadata only and offer an external-open handoff.
 # Source previews remain separate from the external-app opening allowlist.
 PREVIEW_TYPES = DOCUMENT_TYPES | ARCHIVE_TYPES | set(CODE_LANGUAGES)
+# Referencing a file is separate from parsing or opening it in an external app.
+# Binary references are metadata/path attachments: never execute or extract them
+# during discovery, selection or upload.
+ARCHIVE_FILE_TYPES = frozenset({
+    '.zip', '.7z', '.rar', '.tar', '.gz', '.tgz', '.bz2', '.tbz', '.tbz2',
+    '.xz', '.txz', '.zst', '.tzst', '.lz', '.lzma', '.lz4', '.cab', '.alz', '.egg',
+})
+REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
+    '.py', '.pyi', '.pyw', '.js', '.mjs', '.cjs', '.ts', '.mts', '.cts',
+    '.tsx', '.jsx', '.css', '.scss', '.sass', '.less', '.json', '.jsonc',
+    '.yaml', '.yml', '.toml', '.xml', '.sql', '.sh', '.bash', '.zsh',
+    '.ps1', '.psm1', '.psd1', '.bat', '.cmd', '.cs', '.java', '.go',
+    '.rs', '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hxx', '.ini',
+    '.cfg', '.conf', '.properties', '.log', '.ipynb', '.r', '.rmd',
+    '.rb', '.php', '.vue', '.svelte', '.swift', '.kt', '.kts', '.dart',
+    '.lua', '.pl', '.ex', '.exs', '.fs', '.fsx', '.vb', '.vbs', '.tex',
+    '.rst', '.adoc', '.graphql', '.gql', '.proto', '.exe', '.markdown',
+}) | ARCHIVE_FILE_TYPES
+
 EXCLUDED = {'node_modules', 'venv', '__pycache__', 'build', 'dist'}
 
 
@@ -77,7 +96,7 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
                                 pending.append((path, 1))
                             else:
                                 result.limited = True
-                        elif stat.S_ISREG(info.st_mode) and path.suffix.lower() in PREVIEW_TYPES:
+                        elif stat.S_ISREG(info.st_mode) and path.suffix.lower() in REFERENCE_FILE_TYPES:
                             if path.resolve(strict=True).parent != directory:
                                 continue
                             result.files[str(path)] = (info.st_mtime_ns, info.st_size)
@@ -90,6 +109,48 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
         except OSError:
             result.errors += 1
     return result
+
+
+def list_materials(root: Path, directory='', *, max_items=200, max_entries=2000, seconds=.5):
+    """List only the requested folder's metadata; never scan descendants."""
+    if (not isinstance(directory, str) or len(directory) > 32767
+            or '\x00' in directory or Path(directory).is_absolute()
+            or Path(directory).drive or '..' in Path(directory).parts):
+        raise ValueError('업무 폴더 안의 자료 위치를 선택해 주세요.')
+    parts = Path(directory).parts
+    if any(private_name(part) for part in parts):
+        raise ValueError('숨김 설정 또는 인증 정보로 보이는 폴더는 자료 목록에서 열 수 없습니다.')
+    root = workspace_path(root)
+    target = workspace_path(root.joinpath(*parts))
+    if not target.is_relative_to(root) or not target.is_dir():
+        raise ValueError('자료 폴더가 없거나 위치가 바뀌었어요. 업무 폴더로 돌아가 주세요.')
+    deadline = time.monotonic() + seconds
+    rows, scanned, limited, errors = [], 0, False, 0
+    with os.scandir(target) as children:
+        for child in children:
+            if scanned >= max_entries or len(rows) >= max_items or time.monotonic() >= deadline:
+                limited = True
+                break
+            scanned += 1
+            if private_name(child.name):
+                continue
+            try:
+                info = child.stat(follow_symlinks=False)
+                if redirects_path(info):
+                    continue
+                is_directory = stat.S_ISDIR(info.st_mode)
+                path = Path(child.path)
+                if not is_directory and (not stat.S_ISREG(info.st_mode) or path.suffix.lower() not in REFERENCE_FILE_TYPES):
+                    continue
+                rows.append({'name': child.name, 'path': str(path),
+                             'relativePath': path.relative_to(root).as_posix(),
+                             'kind': 'directory' if is_directory else 'file',
+                             'size': 0 if is_directory else info.st_size})
+            except OSError:
+                errors += 1
+    rows.sort(key=lambda row: (row['kind'] != 'directory', row['name'].casefold(), row['name']))
+    return {'files': rows, 'directory': '' if target == root else target.relative_to(root).as_posix(),
+            'limited': limited, 'errors': errors}
 
 
 def changes(root: Path, before: Snapshot, after: Snapshot, run_id: str, observed_at: float):

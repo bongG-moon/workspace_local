@@ -55,6 +55,67 @@ class FileRefreshFrontendTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_folder_navigation_is_lazy_refreshes_current_folder_and_adds_one_reference(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];saveDraft=()=>{};
+          api=async path=>{calls.push(path);return path.includes('directory=')
+            ?{directory:'docs',files:[{name:'setup.exe',path:'C:/task/A/docs/setup.exe',kind:'file'}]}
+            :{directory:'',files:[{name:'docs',relativePath:'docs',path:'C:/task/A/docs',kind:'directory'}]};};
+          await refreshFiles();assert.equal(calls.length,1);
+          const row=$('files').children[0];
+          row.children[1].onclick();assert.deepEqual(attachments,['C:/task/A/docs']);
+          row.children[1].onclick();assert.equal(attachments.length,1);
+          await row.children[0].onclick();
+          assert.equal(calls[1],'/api/files?id=A&directory=docs');
+          assert.equal($('files').children[1].title,'C:/task/A/docs/setup.exe');
+          await refreshFiles();assert.equal(calls[2],calls[1]);
+          await $('files').children[0].children[0].onclick();
+          assert.equal(calls[3],'/api/files?id=A');
+          active={...active,id:'B'};selectionGeneration++;
+          row.children[1].onclick();assert.equal(attachments.length,1);
+          await refreshFiles();assert.equal(calls[4],'/api/files?id=B');
+        })()""")
+
+    def test_executable_preview_offers_reveal_without_launch(self):
+        self.run_case(r"""(async()=>{
+          boot.demo=false;const calls=[];
+          api=async path=>{calls.push(path);return {name:'setup.exe',kind:'external',message:'미리보기 없음'};};
+          await preview('C:/task/A/setup.exe');
+          assert.equal($('open-file').hidden,true);assert.equal($('reveal-file').hidden,false);
+          assert.equal($('open-text-file').hidden,true);
+          assert.equal(calls.length,1);assert.ok(calls[0].startsWith('/api/preview?'));
+        })()""")
+
+    def test_nested_parent_root_and_deleted_folder_recovery(self):
+        self.run_case(r"""(async()=>{
+          const calls=[],warnings=[];let missing=false;toast=value=>warnings.push(value);
+          api=async path=>{calls.push(path);const directory=decodeURIComponent(path.split('&directory=')[1]||'');
+            if(missing&&directory)throw Error('자료 폴더가 없어졌어요');
+            return {directory,files:[]};};
+          await refreshFiles('자료/2026/보고서');
+          assert.equal($('files').children[0].children[0].textContent,'← 상위 폴더');
+          $('files').scrollTop=100;
+          await $('files').children[0].children[0].onclick();
+          assert.equal(materialLocation.directory,'자료/2026');assert.equal($('files').scrollTop,0);
+          await $('files').children[0].children[1].onclick();
+          assert.equal(materialLocation.directory,'');assert.equal($('files').querySelector('.material-location'),null);
+          await refreshFiles('자료/2026');missing=true;await refreshFiles();
+          assert.equal(materialLocation.directory,'');assert.equal(calls.at(-1),'/api/files?id=A');
+          assert.equal(warnings.length,1);assert.equal(fileRefreshRequests.size,0);
+          assert.equal($('refresh-files').disabled,false);
+        })()""")
+
+    def test_slow_child_response_cannot_replace_parent_navigation(self):
+        self.run_case(r"""(async()=>{
+          const pending=[];api=(path,body,signal)=>new Promise(resolve=>pending.push({path,signal,resolve}));
+          const child=refreshFiles('docs/deep'),parent=refreshFiles('docs');
+          assert.equal(pending[0].signal.aborted,true);
+          pending[1].resolve({directory:'docs',files:[]});await parent;
+          pending[0].resolve({directory:'docs/deep',files:[{name:'stale.exe',path:'C:/task/A/docs/deep/stale.exe'}]});await child;
+          assert.equal(materialLocation.directory,'docs');assert.equal($('file-count').textContent,0);
+          assert.equal($('files').querySelector('.file'),null);
+        })()""")
+
     def test_shared_manual_refresh_removes_deleted_rows_and_preserves_tab(self):
         self.run_case(r"""(async()=>{
           let response=snapshot('existing.zip'),calls=[];

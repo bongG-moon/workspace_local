@@ -51,6 +51,20 @@ class ExternalAppsTests(unittest.TestCase):
             open_document(self.html, 'text')
             self.assertEqual(['C:/Windows/notepad.exe', str(self.html)], run.call_args.args[0])
 
+    def test_reference_only_files_reveal_but_never_execute(self):
+        with patch('local_app.external_apps.os.startfile', create=True) as start, \
+             patch('local_app.external_apps.windows_program', return_value='C:/Windows/explorer.exe'), \
+             patch('local_app.external_apps.subprocess.Popen') as run:
+            for name in ('setup.EXE', 'run.bat', 'source.pyw', 'bundle.7z'):
+                path = self.work / name
+                path.write_bytes(b'fixture')
+                with self.assertRaises(ValueError):
+                    open_document(path, 'open')
+                open_document(path, 'reveal')
+                self.assertEqual(['C:/Windows/explorer.exe', '/select,', str(path)], run.call_args.args[0])
+            start.assert_not_called()
+            self.assertEqual(4, run.call_count)
+
     def test_executable_protocol_relative_or_wrong_action_never_launches(self):
         exe = self.work / 'bad.exe'; exe.write_bytes(b'test')
         with patch('local_app.external_apps.os.startfile', create=True) as start, \
