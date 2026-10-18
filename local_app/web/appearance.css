@@ -527,15 +527,42 @@ dialog.path-picker .path-picker-location .quiet-button{
 .material-location>span{flex-basis:100%;padding:0 5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;color:var(--theme-text-muted)}
 .material-list-note{font-size:12px;line-height:20px;color:var(--theme-text-muted);margin:8px 0;word-break:keep-all}
 
-/* Short, entry-only motion. No retained compositor hint, layout tween or exit delay.
+/* Fallback entry motion. No retained compositor hint, layout tween or delayed close.
    Alternate task names restart on navigation without forcing synchronous layout.
    Streaming updates do not touch the navigation marker. */
 @media(prefers-reduced-motion:no-preference){
-  dialog[open]{animation:workspace-dialog-enter 140ms cubic-bezier(.2,.8,.2,1)}
-  #welcome:not([hidden]),#capabilities-view:not([hidden]),#task-view:not([hidden]){animation:workspace-view-enter 120ms ease-out}
+  dialog[open]{animation:workspace-dialog-enter 300ms cubic-bezier(.2,.8,.2,1)}
+  #welcome:not([hidden]),#capabilities-view:not([hidden]),#task-view:not([hidden]){animation:workspace-view-enter 300ms ease-out}
   :is(#task-view,#welcome)[data-motion-step="b"]:not([hidden]){animation-name:workspace-view-enter-alt}
-  #source-panel:not([hidden]),#results-panel:not([hidden]){animation:workspace-view-enter 100ms ease-out}
+  #source-panel:not([hidden]),#results-panel:not([hidden]){animation:workspace-view-enter 300ms ease-out}
 }
-@keyframes workspace-dialog-enter{from{opacity:.6;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-@keyframes workspace-view-enter{from{opacity:.82}to{opacity:1}}
-@keyframes workspace-view-enter-alt{from{opacity:.82}to{opacity:1}}
+@keyframes workspace-dialog-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes workspace-view-enter{from{opacity:0}to{opacity:1}}
+@keyframes workspace-view-enter-alt{from{opacity:0}to{opacity:1}}
+
+/* Native top-layer transitions preserve close(), focus and form semantics.
+   No delayed callbacks, cloned dialogs or persistent compositing hints. */
+@supports (transition-behavior:allow-discrete){
+ @media(prefers-reduced-motion:no-preference){
+  dialog{opacity:0;transform:translateY(6px) scale(.985);transition:opacity 300ms cubic-bezier(.2,0,0,1),transform 300ms cubic-bezier(.2,0,0,1),display 300ms allow-discrete,overlay 300ms allow-discrete}
+  dialog[open]{animation:none;opacity:1;transform:translateY(0) scale(1)}
+  dialog:not([open]){pointer-events:none}
+  dialog::backdrop{opacity:0;transition:opacity 300ms ease,display 300ms allow-discrete,overlay 300ms allow-discrete}
+  dialog[open]::backdrop{opacity:1}
+  dialog:not([open])::backdrop{pointer-events:none}
+  @starting-style{
+   dialog[open]{opacity:0;transform:translateY(6px) scale(.985)}
+   dialog[open]::backdrop{opacity:0}
+  }
+ }
+}
+/* Keep storage context compact so the file list has room to breathe. */
+.folder-card{display:grid;grid-template-columns:36px minmax(0,1fr);column-gap:10px;row-gap:0;padding:14px}
+.folder-card-icon{grid-column:1;grid-row:1 / 3;width:36px;height:36px;margin:0;align-self:center;border-radius:10px}
+.folder-card>.eyebrow{grid-column:2;grid-row:1;align-self:end;font-size:11px;line-height:18px;letter-spacing:0}
+.folder-card>strong{grid-column:2;grid-row:2;min-width:0;margin:0;font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-card>p{grid-column:1 / -1;margin:10px 0 4px;font-size:12px;line-height:20px;overflow-wrap:anywhere}
+.folder-card>.text-button{grid-column:1 / -1;justify-self:start;min-height:28px;padding:4px 0;font-size:11px;line-height:20px}
+
+/* Preview cleanup immediately releases iframe content and resize observers. */
+#preview-dialog:not([open]){transition:none}

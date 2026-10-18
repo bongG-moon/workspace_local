@@ -126,7 +126,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('A');};
           WorkspaceCapabilities.open();await flush();
-          assert.equal($('chat-title').textContent,'스킬·기능');
+          assert.equal($('chat-title').textContent,'스킬과 기능');
           assert.match($('capabilities-kind-description').textContent,/업무 절차/);
           for(const [type,label,meaning,canonical] of [
             ['tools','실행 기능','개별 동작','Read'],
@@ -454,7 +454,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.equal(visible($('verification-status')),true);
           const calls=[];api=async(path,body)=>{calls.push({path,body});return modern('A');};
           WorkspaceCapabilities.open();await flush();
-          assert.equal(taskView.hidden,true);assert.equal($('chat-title').textContent,'스킬·기능');
+          assert.equal(taskView.hidden,true);assert.equal($('chat-title').textContent,'스킬과 기능');
           assert.equal($('home-button').attributes['aria-current'],'false');
           assert.equal($('capabilities-open').attributes['aria-current'],'page');
           const search=$('capabilities-search'),area=$('work-area');area.scrollTop=137;

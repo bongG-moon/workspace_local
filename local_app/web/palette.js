@@ -15,7 +15,7 @@ globalThis.WorkspacePalette = (() => {
     {id:"new",label:"새 업무 시작",detail:"이름과 저장할 폴더 정하기",keywords:"new task 폴더",glyph:"＋",run:()=>activate("new-chat")},
     {id:"inbox",label:"통합 알림함",detail:"완료·응답 대기·확인할 일",keywords:"notification inbox 승인 알림",glyph:"◉",run:()=>globalThis.WorkspaceDesktop?.open()},
     {id:"tasks",label:"전체 업무 보기",detail:"업무 이름이나 저장 위치로 찾기",keywords:"tasks search 검색",glyph:"≡",run:()=>activate("tasks-open")},
-    {id:"skills",label:"스킬·기능 보기",detail:"업무 절차·실행 기능·MCP 연결·빠른 요청",keywords:"skills tools mcp 도구 연결 서버 명령",glyph:"◇",run:()=>globalThis.WorkspaceCapabilities?.open()},
+    {id:"skills",label:"스킬과 기능 보기",detail:"업무 절차·실행 기능·MCP 연결·빠른 요청",keywords:"skills tools mcp 도구 연결 서버 명령",glyph:"◇",run:()=>globalThis.WorkspaceCapabilities?.open()},
     {id:"results",label:"이번 결과 보기",detail:"현재 업무에서 만든 결과물",keywords:"results files 파일",glyph:"▤",enabled:hasTask,run:()=>{taskView();setPanel("results");globalThis.WorkspaceLayout?.openInspector();}},
     {id:"changes",label:"파일 변경 비교",detail:"현재 업무의 요청 전후 변경 내용",keywords:"diff changes 비교 수정",glyph:"±",enabled:()=>hasTask()&&typeof globalThis.WorkspaceProductivityActions?.openChanges==="function",run:()=>globalThis.WorkspaceProductivityActions?.openChanges()},
     {id:"branch",label:"대화 분기 만들기",detail:"현재 대화를 이어갈 별도 업무",keywords:"branch fork 분기",glyph:"⑂",enabled:()=>hasTask()&&typeof globalThis.WorkspaceProductivityActions?.openBranch==="function"&&(globalThis.WorkspaceProductivityActions?.canBranch?.()??true),run:()=>globalThis.WorkspaceProductivityActions?.openBranch()},

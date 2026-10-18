@@ -411,7 +411,7 @@ globalThis.WorkspaceCapabilities = (() => {
     $("capabilities-view").hidden = false;
     $("capabilities-open").setAttribute("aria-current", "page");
     $("home-button").setAttribute("aria-current", "false");
-    $("chat-title").textContent = "스킬·기능";
+    $("chat-title").textContent = "스킬과 기능";
     $("work-area").scrollTop = 0;
     syncFolders(); data = null; loading = true; render(); refresh();
     $("capabilities-search").focus();

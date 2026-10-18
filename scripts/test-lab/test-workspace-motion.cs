@@ -63,14 +63,16 @@ internal static class TestWorkspaceMotion
                     await view.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"no-preference\"}]}");
                     report["runtime"] = environment.BrowserVersionString;
                     report["checks"] = await Evaluate(view, "motionChecks()");
-                    await Evaluate(view, "motionBatch(false,12)");
-                    await Evaluate(view, "motionBatch(true,12)");
+                    await Evaluate(view, "motionBatch(false,6)");
+                    await Evaluate(view, "motionBatch(true,6)");
                     var rounds = new List<object>();
-                    foreach (bool enabled in new[] { false, true, true, true, true, false }) {
+                    foreach (string mode in new[] { "off", "previous", "adjusted", "adjusted", "adjusted", "previous", "off" }) {
+                        var enabled = mode != "off";
+                        var option = mode == "previous" ? "'previous'" : (enabled ? "true" : "false");
                         var before = await Sample(view, environment);
-                        var timing = await Evaluate(view, "motionBatch(" + (enabled ? "true" : "false") + ",60)");
+                        var timing = await Evaluate(view, "motionBatch(" + option + ",30)");
                         var after = await Sample(view, environment);
-                        rounds.Add(new { enabled, before, timing, after });
+                        rounds.Add(new { mode, enabled, before, timing, after });
                     }
                     report["rounds"] = rounds;
                     await view.CoreWebView2.CallDevToolsProtocolMethodAsync("Emulation.setEmulatedMedia", "{\"features\":[{\"name\":\"prefers-reduced-motion\",\"value\":\"reduce\"}]}");

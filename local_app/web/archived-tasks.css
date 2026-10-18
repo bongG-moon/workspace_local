@@ -1,5 +1,6 @@
 .archived-tasks-dialog{width:min(760px,calc(100vw - 32px));max-height:calc(100dvh - 48px);padding:24px;overflow:hidden}
-.archived-tasks-dialog[open]{display:flex;flex-direction:column;gap:12px}
+.archived-tasks-dialog{flex-direction:column;gap:12px}
+.archived-tasks-dialog[open]{display:flex}
 .archived-tasks-dialog .dialog-head{margin:0;flex:none;gap:16px;align-items:flex-start}
 .archived-tasks-dialog h2{font-size:21px;line-height:1.45;margin:0}
 .archived-tasks-dialog .dialog-head p{margin:6px 0 0;font-size:12px;line-height:1.7}
