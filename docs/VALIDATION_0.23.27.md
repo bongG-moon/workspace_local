@@ -4,11 +4,17 @@
 
 사내 마지막 운영 버전인 **0.23.26 이후 변경을 0.23.27 하나로 통합**했습니다. UI 환경 개선, 일반 대화, 간편 화면과 릴리즈 노트 이력 기능을 모두 유지합니다. 별도로 작성했던 0.23.28 변경 내역을 0.23.27에 합치고 앱·실행기·사용 안내서·배포 도구의 현재 버전을 맞췄습니다. 시작 진단은 `ws33-59`, 대상 소스는 `workspace-0.23.27`입니다.
 
-## 이번 통합본의 자동 검사
+## 이번 수정본의 자동 검사
 
-버전·시작 진단·번들·게시 설명·릴리즈 이력 API와 화면·시작 화면·업데이트 패키징 관련 **194개 검사 실행: 192개 통과, 2개 건너뜀, 실패·오류 0개**입니다. 별도 실행 허용이 필요한 실제 사용자 토큰 검사와 Windows 심볼릭 링크 권한 검사는 통과 수에 포함하지 않았습니다.
+ZIP 목록·미리보기·외부 앱 열기·새로고침·자동완성과 버전·시작 진단·번들·게시 설명·릴리즈 이력·시작 화면·업데이트 패키징 관련 **294개 검사 실행: 291개 통과, 3개 건너뜀, 실패·오류 0개**입니다. 별도 실행 허용이 필요한 실제 사용자 토큰 검사와 Windows 심볼릭 링크 권한 검사는 통과 수에 포함하지 않았습니다.
 
-검사 모듈: `test_workspace_diagnostic`, `test_local_workspace`, `test_workspace_bundle_check`, `test_workspace_publisher_release_notes`, `test_workspace_release_history`, `test_workspace_release_history_routes`, `test_workspace_release_history_integration`, `test_workspace_release_history_frontend`, `test_workspace_startup_health_frontend`, `test_workspace_update_packaging`.
+검사 모듈: `test_workspace_file_preview`, `test_workspace_external_apps`, `test_workspace_artifact_refresh`, `test_workspace_file_refresh_frontend`, `test_workspace_completions`, `test_workspace_diagnostic`, `test_local_workspace`, `test_workspace_bundle_check`, `test_workspace_publisher_release_notes`, `test_workspace_release_history`, `test_workspace_release_history_routes`, `test_workspace_release_history_integration`, `test_workspace_release_history_frontend`, `test_workspace_startup_health_frontend`, `test_workspace_update_packaging`.
+
+## ZIP 표시와 빈 목록 안내 보완
+
+- ZIP·대문자 ZIP·하위 폴더 자료 표시, 추가·삭제 후 재조회, 요청 전후 변경 감지와 선택한 ZIP의 기본 앱 열기·폴더 보기를 확인했습니다. 압축 내용 읽기·자동 해제는 수행하지 않습니다. 인증·업무 범위·비공개 파일 제외는 유지합니다.
+- 실제 브라우저에서 ZIP 2개 표시와 새로고침·선택 안내를 확인했습니다. 빈 목록은 왼쪽 정렬의 제목 13px, 설명 12px·줄 간격 20px로 정리했습니다. 라이트·다크 및 260px·292px 패널에서 넘침이 없고 브라우저 오류가 없었습니다.
+- 버전은 0.23.27을 유지하고, 아래 배포 파일 해시는 이번 재빌드 결과로 갱신했습니다.
 
 ## 실제 배포 파일 검증
 
@@ -21,15 +27,15 @@
 
 | 파일 | SHA-256 |
 | --- | --- |
-| ZIP 안의 독립 실행 EXE | `967032021939419c0de20d5a8c8d0290c5e4c83590998d2933798bfb7f1c984a` |
-| AX-Workspace-0.23.27-vbs.zip | `e1e86d436fe83c79738960f539c9495c016ec3021abc5f939c48b5b56c2570e9` |
-| AX-Workspace-0.23.27-Setup.exe | `00e4c4e92fdb0dd4abed3d02772f17b5befd417d7dfd015ae4e2d0091e3751af` |
+| ZIP 안의 독립 실행 EXE | `a9bd0c95f83614fceb93aa4eb71132b5ba25acb5da4bc8695a8c41cb0b6f2f54` |
+| AX-Workspace-0.23.27-vbs.zip | `d49015a932fff14a3200d9798a736109175b0d53f69d193e21eaf25b873b56d5` |
+| AX-Workspace-0.23.27-Setup.exe | `6775735d796852078ce32eba220badeae8c0b4daefe6f8221245a9c8c7674b3f` |
 
 공개 다운로드의 전체 해시는 [SHA256SUMS.txt](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.27/SHA256SUMS.txt)를 기준으로 확인하세요. 직접 EXE 이름은 NSIS 설치본의 호환 이름이며, EXE ZIP에는 기존 독립 실행기를 제공합니다. Python·Claude Code·개인 인증·대화 상태는 포함하지 않습니다.
 
 ## 포함된 기능의 앞선 검증
 
-아래는 통합 전 기능 구현 단계의 기록이며 이번 버전 정리에서 전체를 다시 실행한 것으로 계산하지 않습니다. 이번 변경은 버전·설명·진단 해시·패키징에 한정되고 기능 구현을 되돌리지 않습니다.
+아래는 통합 전 기능 구현 단계의 기록이며 이번 버전 정리에서 전체를 다시 실행한 것으로 계산하지 않습니다. 통합 시 버전·설명·진단 해시·패키징을 정리했으며 아래 기능 구현을 유지합니다. ZIP 표시 보완의 별도 검증은 위에 기록했습니다.
 
 - 간편 화면 23개와 우측 패널 12개, 총 **35개 브라우저 시나리오** 통과, 페이지 오류 0개. 화면 전환 시 업무·입력·첨부·승인·진행 중 응답 유지, 설정 복원, 중복 패널 버튼 제거, 드래그·키보드 너비 조절과 라이트·다크·좁은 화면을 확인했습니다.
 - 릴리즈 이력·GitLab 이전 배포 기록 구현: 중복을 제외한 **493개 검사 통과, 심볼릭 링크 환경 검사 3개 건너뜀**. 별도 **11개 브라우저 시나리오**에서 지연 조회·캐시·오프라인·서버 설명 우선 반영·출처 구분·키보드·1440/640/360px 화면을 확인했습니다.

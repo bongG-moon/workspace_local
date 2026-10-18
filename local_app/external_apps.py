@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from .artifacts import DOCUMENT_TYPES
+from .file_preview import ARCHIVE_TYPES
 from .windows_paths import workspace_path
 
 TEXT_TYPES = {'.md', '.txt', '.csv', '.tsv', '.html', '.htm'}
@@ -36,8 +37,8 @@ def open_document(path, action='open'):
     if action not in {'open', 'reveal', 'text'}:
         raise ValueError('파일을 열 방식을 확인해 주세요.')
     path = Path(path)
-    if not path.is_absolute() or '..' in path.parts or path.suffix.lower() not in DOCUMENT_TYPES:
-        raise ValueError('지원하는 문서 또는 이미지 파일을 선택해 주세요.')
+    if not path.is_absolute() or '..' in path.parts or path.suffix.lower() not in DOCUMENT_TYPES | ARCHIVE_TYPES:
+        raise ValueError('지원하는 문서·이미지 또는 ZIP 파일을 선택해 주세요.')
     workspace_path(path)
     if not path.is_file() or path.resolve(strict=True) != path:
         raise ValueError('파일의 실제 위치를 다시 확인해 주세요.')

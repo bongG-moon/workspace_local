@@ -25,6 +25,23 @@ class ExternalAppsTests(unittest.TestCase):
                 start.assert_called_with(str(path), 'open')
         self.assertEqual('<script>example()</script>', self.html.read_text(encoding='utf-8'))
 
+    def test_zip_uses_explicit_open_or_reveal_without_extraction(self):
+        archive = self.work / '업무 자료 & 배포.ZIP'
+        archive.write_bytes(b'archive')
+        with patch('local_app.external_apps.os.startfile', create=True) as start, \
+             patch('local_app.external_apps.windows_program', return_value='C:/Windows/explorer.exe'), \
+             patch('local_app.external_apps.subprocess.Popen') as run:
+            open_document(archive)
+            start.assert_called_once_with(str(archive), 'open')
+            run.assert_not_called()
+            open_document(archive, 'reveal')
+            self.assertEqual(['C:/Windows/explorer.exe', '/select,', str(archive)], run.call_args.args[0])
+            self.assertNotIn('shell', run.call_args.kwargs)
+            with self.assertRaises(ValueError):
+                open_document(archive, 'text')
+            self.assertEqual(1, run.call_count)
+        self.assertEqual(b'archive', archive.read_bytes())
+
     def test_reveal_and_text_use_fixed_program_and_literal_arguments(self):
         with patch('local_app.external_apps.windows_program', side_effect=lambda name: 'C:/Windows/' + name), \
              patch('local_app.external_apps.subprocess.Popen') as run:

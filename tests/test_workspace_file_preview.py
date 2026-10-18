@@ -235,6 +235,35 @@ class PreviewRouteTests(unittest.TestCase):
         except HTTPError as exc:
             return exc.code, json.load(exc)
 
+    def test_zip_listing_refresh_and_preview_do_not_read_archive_contents(self):
+        from local_app.artifacts import changes
+        before = snapshot(self.work)
+        archive = self.work / '자료 묶음.ZIP'
+        archive.write_bytes(b'archive contents are not needed for metadata')
+        for name in ('secret.zip', '.hidden.zip', 'run.exe'):
+            (self.work / name).write_bytes(b'not listed')
+        nested = self.work / '하위 폴더'
+        nested.mkdir()
+        (nested / 'nested.zip').write_bytes(b'nested')
+        with patch.object(Path, 'open', side_effect=AssertionError('no archive content reads')):
+            rows = self.app.files(self.sid)
+            after = snapshot(self.work)
+            status, preview = self.request(archive)
+        self.assertEqual({'자료 묶음.ZIP', str(Path('하위 폴더/nested.zip'))}, {r['name'] for r in rows})
+        self.assertEqual((200, 'external'), (status, preview['kind']))
+        self.assertIn('ZIP', preview['message'])
+        self.assertEqual(2, len(changes(self.work, before, after, 'run', 1)))
+        archive.unlink()
+        self.assertNotIn(str(archive), {r['path'] for r in self.app.files(self.sid)})
+
+    def test_zip_preview_still_requires_auth_and_task_scope(self):
+        archive = self.root / 'outside.zip'
+        archive.write_bytes(b'archive')
+        self.assertEqual(403, self.request(archive, token=False)[0])
+        self.assertEqual(400, self.request(archive)[0])
+        self.app.get(self.sid)['attachments'] = [str(archive)]
+        self.assertEqual('external', self.request(archive)[1]['kind'])
+
     def test_auth_scope_and_direct_attachment_authorization_still_required(self):
         outside = self.root / 'outside.py'; outside.write_text('print(1)')
         self.assertEqual(403, self.request(outside, token=False)[0])

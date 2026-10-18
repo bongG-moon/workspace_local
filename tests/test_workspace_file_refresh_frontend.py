@@ -57,10 +57,10 @@ class FileRefreshFrontendTests(unittest.TestCase):
 
     def test_shared_manual_refresh_removes_deleted_rows_and_preserves_tab(self):
         self.run_case(r"""(async()=>{
-          let response=snapshot('existing.txt'),calls=[];
+          let response=snapshot('existing.zip'),calls=[];
           api=async(path,body)=>{calls.push(path);assert.equal(body,undefined);return response;};
           await refreshInspector();setPanel('results');
-          assert.equal($('files').children[0].title,'C:/task/A/existing.txt');
+          assert.equal($('files').children[0].title,'C:/task/A/existing.zip');
           assert.equal($('result-count').textContent,1);
           response=snapshot('');await $('refresh-files').onclick();
           assert.deepEqual(calls,['/api/files?id=A','/api/results?id=A','/api/files?id=A','/api/results?id=A']);

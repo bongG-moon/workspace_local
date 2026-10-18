@@ -32,6 +32,7 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16_000_000
 MAX_TABLE_ROWS = 100
 MAX_TABLE_COLUMNS = 30
+ARCHIVE_TYPES = {'.zip'}
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg',
                '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
 SECRET_NAME = re.compile(r'(^|[._-])(secret|secrets|credential|credentials|password|passwords|'
@@ -201,6 +202,8 @@ def _table(path, text):
 
 def build_preview(path: Path):
     suffix = path.suffix.lower()
+    if suffix in ARCHIVE_TYPES:
+        return external(path, 'ZIP 파일은 기본 앱에서 열거나 폴더에서 확인하세요. 앱 안에서는 압축을 풀지 않아요.')
     is_image = suffix in IMAGE_TYPES
     is_code = suffix in CODE_LANGUAGES
     if not is_image and not is_code and suffix not in {'.md', '.txt', '.csv', '.tsv', '.html', '.htm'}:
