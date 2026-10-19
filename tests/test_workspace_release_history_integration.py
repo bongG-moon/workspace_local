@@ -122,7 +122,7 @@ class ReleaseHistoryIntegrationTests(unittest.TestCase):
             self.assertEqual(by_version['0.22.1']['notes'], '')
             self.assertEqual(by_version['0.22.1']['noteSource'], 'package')
             self.assertEqual(by_version['0.22.1']['publishedAt'], '2026-09-11T00:00:00Z')
-            self.assertNotIn('개발자가 만든 기본 설명', json.dumps(snapshot, ensure_ascii=False))
+            self.assertNotIn('개발자가 만든 기본 설명', json.dumps(snapshot["entries"], ensure_ascii=False))
             self.assertNotIn('glpat-integration-secret', json.dumps(snapshot))
             self.assertEqual(len(calls), 1)
             before = len(registry.calls)

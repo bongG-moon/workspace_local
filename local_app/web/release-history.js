@@ -7,7 +7,7 @@ globalThis.WorkspaceReleaseHistory = (() => {
   const stable=value=>typeof value==="string"&&/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value);
   const plain=(value,limit)=>typeof value==="string"?value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,"").slice(0,limit):"";
   let hooks=null,bound=false,stopped=false,generation=0,pending=false,timer=null,controller=null,returnFocus=null,polls=0;
-  let selectedVersion="",optionKey="",localError="";
+  let selectedVersion="",optionKey="",localError="",catalog="published";
   let snapshot={status:"idle",currentVersion:"",source:{provider:"",label:"배포 서버"},entries:[],checkedAt:null,error:null};
 
   function safeLink(value,provider,version,origin){
@@ -22,7 +22,7 @@ globalThis.WorkspaceReleaseHistory = (() => {
       return url.href;
     }catch{return "";}
   }
-  function normalize(value){
+  function normalize(value, bundleOnly=false){
     if(!value||!["idle","loading","ready","error"].includes(value.status)||!Array.isArray(value.entries))return null;
     const provider=value.source?.provider,byVersion=new Map();
     for(const row of value.entries.slice(0,30)){
@@ -44,6 +44,7 @@ globalThis.WorkspaceReleaseHistory = (() => {
     }
     return {status:value.status,currentVersion:stable(value.currentVersion)?value.currentVersion:"",
       source:{provider,label:plain(value.source?.label,120)||"배포 서버"},entries:[...byVersion.values()],
+      bundledEntries:!bundleOnly&&Array.isArray(value.bundledEntries)?normalize({...value,entries:value.bundledEntries,bundledEntries:null},true)?.entries.filter(row=>row.origin==="bundled"):null,
       checkedAt:typeof value.checkedAt==="number"&&Number.isFinite(value.checkedAt)?value.checkedAt:null,
       error:plain(value.error,1000)||null};
   }
@@ -61,10 +62,14 @@ globalThis.WorkspaceReleaseHistory = (() => {
   }
   function text(id,value){const node=$(id);if(node.textContent!==value)node.textContent=value;}
   function render(){
-    const rows=snapshot.entries;
+    const separated=Array.isArray(snapshot.bundledEntries);
+    const rows=separated?(catalog==="bundled"?snapshot.bundledEntries:snapshot.entries.filter(row=>row.origin==="published")):snapshot.entries;
+    $("release-history-catalog-picker").hidden=!separated;
+    $("release-history-catalog").value=catalog;
+    $("release-history-empty").textContent=catalog==="published"?"확인된 배포 이력이 없습니다. 설치본 기본 변경사항은 위 목록에서 따로 볼 수 있어요.":"설치본에 포함된 변경사항이 없습니다.";
     if(!rows.some(row=>row.version===selectedVersion))selectedVersion=rows.find(row=>row.version===snapshot.currentVersion)?.version||rows[0]?.version||"";
     const row=rows.find(item=>item.version===selectedVersion),select=$("release-history-version");
-    const key=JSON.stringify([snapshot.currentVersion,snapshot.source.provider,rows.map(item=>[item.version,item.origin,item.noteSource])]);
+    const key=JSON.stringify([catalog,snapshot.currentVersion,snapshot.source.provider,rows.map(item=>[item.version,item.origin,item.noteSource])]);
     if(key!==optionKey){
       optionKey=key;
       const options=rows.map(item=>{const node=document.createElement("option");node.value=item.version;
@@ -74,9 +79,9 @@ globalThis.WorkspaceReleaseHistory = (() => {
     select.value=selectedVersion;select.disabled=!rows.length;
     $("release-history-content").hidden=!row;$("release-history-empty").hidden=!!row;
     text("release-history-source",snapshot.source.label);
-    text("release-history-help",snapshot.source.provider==="gitlab"
+    text("release-history-help",separated&&catalog==="bundled"?"설치본에 포함된 기본 변경사항입니다. 사내에서 작성한 배포 설명과는 별도입니다.":snapshot.source.provider==="gitlab"
       ?row?.noteSource==="package"?"사내 서버의 파일 기록입니다. 설명이 남아 있지 않거나 조회 권한·지원 범위가 제한된 경우입니다. ‘앱 변경 이력’은 설치본의 설명입니다."
-      :"사내 서버에 남은 기록을 표시해요. ‘앱 변경 이력’은 설치본의 설명이며 사내 배포 기록과 다를 수 있어요."
+      :"사내 서버에 동기화된 기록입니다. GitLab에서 수정한 설명은 배포 도구로 다시 게시한 뒤 새로고침하면 반영됩니다. ‘앱 변경 이력’은 설치본의 설명이며 사내 배포 기록과 다를 수 있어요."
       :"‘앱 변경 이력’은 설치본에 포함된 설명이며 실제 배포 기록과 다를 수 있어요.");
     text("release-history-count",`${rows.length}개 버전`);
     text("release-history-detail-title",row?.title||"");
@@ -140,6 +145,7 @@ globalThis.WorkspaceReleaseHistory = (() => {
       if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
     };
+    $("release-history-catalog").onchange=()=>{catalog=$("release-history-catalog").value==="bundled"?"bundled":"published";selectedVersion="";render();$("release-history-notes").scrollTop=0;};
     $("release-history-version").onchange=()=>{selectedVersion=$("release-history-version").value;render();$("release-history-notes").scrollTop=0;};
     $("release-history-refresh").onclick=()=>{if(pending||snapshot.status==="loading")return;polls=0;return request({action:"check",force:true});};
     document.addEventListener("visibilitychange",()=>{if(document.hidden)clearPoll();else schedule();});

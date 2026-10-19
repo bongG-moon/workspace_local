@@ -159,8 +159,8 @@ class PublicationHistoryTests(unittest.TestCase):
         self.assertEqual('v' + VERSION, release['tag_name'])
         self.assertEqual('b' * 40, release['ref'])
         self.assertIn('배포 패키지', release['tag_message'])
-        self.assertIn('이전 앱 변경 이력 (사내 배포 날짜 아님)', release['description'])
-        self.assertIn('### 0.22.0', release['description'])
+        self.assertNotIn('이전 앱 변경 이력 (사내 배포 날짜 아님)', release['description'])
+        self.assertNotIn('### 0.22.0', release['description'])
         self.assertNotIn('### ' + VERSION, release['description'])
         self.assertEqual(4, len(release['assets']['links']))
         calls = self.gitlab.calls

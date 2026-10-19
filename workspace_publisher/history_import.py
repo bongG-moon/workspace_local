@@ -55,6 +55,18 @@ class Importer:
         if message not in self.warnings and len(self.warnings) < 10:
             self.warnings.append(message)
 
+    def excluded(self, value, reason):
+        version = '확인 불가'
+        if isinstance(value, dict):
+            raw = value.get('version', value.get('tag_name', ''))
+            try:
+                version = checked_version(raw.removeprefix('v'))
+            except (ValueError, TypeError, AttributeError):
+                pass
+        ident = value.get('id') if isinstance(value, dict) else None
+        suffix = f' · 기록 ID {ident}' if type(ident) is int and 0 < ident < 2 ** 63 else ''
+        self.warn(f'버전 {version}{suffix}: {reason} 해당 기록을 제외했습니다.')
+
     def request(self, url, *, max_bytes=MAX_HISTORY_BYTES):
         remaining = MAX_TOTAL_BYTES - self.bytes
         if self.is_set() or remaining <= 1:
@@ -113,7 +125,7 @@ class Importer:
         if not isinstance(value, dict):
             raise ValueError()
         if 'project_id' in value and _id(value['project_id']) != int(self.source['projectId']):
-            raise ValueError()
+            raise ValueError('프로젝트 ID 불일치')
 
     def project(self):
         response = self.request(self.api)
@@ -139,6 +151,11 @@ class Importer:
         if key in self.ambiguous:
             return
         old = self.candidates.get(key)
+        if old is not None and all(old[k] == row[k] for k in ('title', 'notes')):
+            # Re-publishing the same description only changes its timestamp.
+            if row['publishedAt'] < old['publishedAt']:
+                self.candidates[key] = row
+            return
         if old is not None and old != row:
             if row['noteSource'] == 'package':
                 # Multiple package IDs still prove only package presence. Use
@@ -152,7 +169,7 @@ class Importer:
                 return
             del self.candidates[key]
             self.ambiguous.add(key)
-            self.warn('같은 버전·출처의 이전 설명이 서로 달라 새 설명으로 단정하지 않았습니다. 저장된 기록 또는 더 낮은 출처의 확인 정보만 유지합니다.')
+            self.warn(f"버전 {row['version']} · 배포 기록: 제목 또는 설명이 달라 최신 설명을 단정하지 않았습니다. 저장된 기록 또는 GitLab 설명을 유지합니다.")
             return
         self.candidates[key] = row
 
@@ -160,35 +177,40 @@ class Importer:
         seen = set()
         for value in self.pages('/packages', {'package_type': 'generic', 'package_name': name,
                                               'order_by': 'created_at', 'sort': 'desc'}, '패키지 목록'):
+            reason = '프로젝트 ID 또는 응답 형식 불일치.'
             try:
                 self.project_matches(value)
                 if value.get('name') != name or value.get('package_type') != 'generic':
                     continue  # GitLab's package_name query is a fuzzy filter.
                 if value.get('status', 'default') not in {'default', 'deprecated'}:
                     continue
+                reason = '패키지 ID 형식 오류.'
                 package_id = _id(value.get('id'))
                 if package_id in seen:
                     continue
                 seen.add(package_id)
+                reason = '프로젝트 링크 불일치.'
                 links = value.get('_links', {})
                 expected_path = urlsplit(self.web).path + '/-/packages/' + str(package_id)
                 if (not isinstance(links, dict) or 'web_path' in links and links['web_path'] != expected_path):
                     raise ValueError()
                 yield value
             except (ValueError, TypeError, KeyError, UnicodeError):
-                self.warn(INVALID_WARNING)
+                self.excluded(value, reason)
 
     def package_rows(self):
         for value in self.packages(self.source['packageName']):
+            reason = '버전·등록일 형식 오류.'
             try:
                 version = checked_version(value.get('version'))
                 self.add({'version': version, 'title': 'AX Workspace ' + version, 'notes': '',
                           'publishedAt': value.get('created_at'), 'noteSource': 'package'})
             except (ValueError, TypeError, KeyError, UnicodeError):
-                self.warn(INVALID_WARNING)
+                self.excluded(value, reason)
 
     def release_rows(self):
         for value in self.pages('/releases', {'order_by': 'released_at', 'sort': 'desc'}, 'GitLab 릴리스 목록'):
+            reason = '프로젝트 ID 또는 응답 형식 불일치.'
             try:
                 self.project_matches(value)
                 tag = value.get('tag_name')
@@ -198,17 +220,19 @@ class Importer:
                     version = checked_version(tag[1:] if tag.startswith('v') else tag)
                 except ValueError:
                     continue
+                reason = '프로젝트 링크 불일치.'
                 links = value.get('_links', {})
                 if not isinstance(links, dict) or 'self' in links and links['self'] != self.web + '/-/releases/' + tag:
                     raise ValueError()
                 title, notes = value.get('name'), value.get('description')
                 if 'description' not in value or 'name' not in value:
                     raise ValueError()
+                reason = '릴리스 제목·설명 크기·문자 또는 날짜 형식 오류.'
                 self.add({'version': version, 'title': 'AX Workspace ' + version if title is None else title,
                           'notes': '' if notes is None else notes, 'publishedAt': value.get('released_at'),
                           'noteSource': 'gitlab-release'})
             except (ValueError, TypeError, KeyError, UnicodeError):
-                self.warn('이전 GitLab 릴리스 일부의 설명 형식·크기·날짜·프로젝트를 확인하지 못해 해당 설명을 제외했습니다.')
+                self.excluded(value, reason)
 
     def retained_rows(self):
         seen = set()
@@ -218,6 +242,8 @@ class Importer:
             package_id = package['id']
             path = '/packages/' + str(package_id) + '/package_files'
             for value in self.pages(path, {'order_by': 'id', 'sort': 'desc'}, '보존된 채널 파일 목록'):
+                evidence = value
+                reason = '프로젝트·파일 ID 또는 상위 패키지 불일치.'
                 try:
                     self.project_matches(value)
                     if value.get('file_name') != 'latest.json':
@@ -229,6 +255,7 @@ class Importer:
                     if key in seen:
                         continue
                     seen.add(key)
+                    reason = '파일 크기 또는 SHA256 메타데이터 형식 오류.'
                     size, digest = value.get('size'), value.get('file_sha256')
                     if (type(size) is not int or not 0 < size <= MAX_MANIFEST_BYTES
                             or not isinstance(digest, str) or not re.fullmatch(r'[a-fA-F0-9]{64}', digest)):
@@ -241,14 +268,18 @@ class Importer:
                     response = self.request(self.api + path + '/' + str(file_id) + '/download', max_bytes=size)
                     if not self.status(response, '보존된 채널 파일'):
                         continue
+                    reason = '다운로드 크기 또는 SHA256 검증 실패.'
                     if len(response.body) != size or hashlib.sha256(response.body).hexdigest() != digest.lower():
                         raise ValueError()
+                    reason = '보존된 latest.json 형식 또는 프로젝트·파일 주소 불일치.'
                     manifest = _json(response.body)
+                    if isinstance(manifest, dict):
+                        evidence = {'id': file_id, 'version': manifest.get('version')}
                     parse_manifest(manifest, source_from_config(self.source))
                     self.add({key: manifest[key] for key in ('version', 'title', 'notes', 'publishedAt')}
                              | {'noteSource': 'deployment'})
                 except (ValueError, TypeError, KeyError, UnicodeError):
-                    self.warn('보존된 채널 파일 일부의 크기·SHA256·프로젝트·업데이트 형식을 검증하지 못해 제외했습니다.')
+                    self.excluded(evidence, reason)
 
     def phase(self, action):
         if self.stopped:

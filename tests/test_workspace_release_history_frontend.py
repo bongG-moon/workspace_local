@@ -51,6 +51,21 @@ class WorkspaceReleaseHistoryFrontendTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_separate_catalog_defaults_to_server_and_switches_without_fetch(self):
+        self.run_case("""(async()=>{
+          fixture.bundledEntries=[fixture.entries[0]];
+          await open();
+          assert.equal($('release-history-version').value,'0.22.0');
+          assert.equal($('release-history-notes').textContent,'이전 변경 내용');
+          const count=calls.length;
+          $('release-history-catalog').value='bundled';$('release-history-catalog').onchange();
+          assert.equal($('release-history-version').value,'0.23.0');
+          assert.equal(calls.length,count);
+          assert.match($('release-history-help').textContent,/별도/);
+          $('release-history-catalog').value='published';$('release-history-catalog').onchange();
+          assert.equal($('release-history-version').value,'0.22.0');
+        })()""")
+
     def test_attach_does_not_fetch_and_open_gets_cache_then_checks_once(self):
         self.run_case("""(async()=>{
           assert.equal(calls.length,0);assert.equal(timers.size,0);

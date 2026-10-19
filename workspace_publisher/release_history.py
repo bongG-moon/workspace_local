@@ -22,7 +22,7 @@ MAX_TITLE = 300
 MAX_NOTES = 32768
 BASE_FIELDS = {'version', 'title', 'notes', 'publishedAt'}
 FIELDS = BASE_FIELDS | {'noteSource'}
-SOURCE_RANK = {'package': 0, 'gitlab-release': 1, 'deployment': 2}
+SOURCE_RANK = {'package': 0, 'deployment': 1, 'gitlab-release': 2}
 
 
 class HistoryError(PublisherError):
@@ -114,6 +114,8 @@ def merge_history(history, manifest):
     row = _entry({**{key: manifest[key] for key in BASE_FIELDS}, 'noteSource': 'deployment'})
     rows = _rows(history)
     old = rows.get(row['version'])
+    if old and old['noteSource'] == 'gitlab-release':
+        return _bounded(rows)
     if old and old['noteSource'] == 'deployment':
         row['publishedAt'] = old['publishedAt']
     rows[row['version']] = row
@@ -130,8 +132,8 @@ def merge_imported(history, imported):
             rows[row['version']] = row
         elif old['noteSource'] == row['noteSource'] == 'gitlab-release':
             rows[row['version']] = row
-        elif old['noteSource'] == row['noteSource'] == 'deployment' and old != row:
-            message = '같은 버전·출처의 이전 기록이 서로 달라 저장된 배포 설명을 유지했습니다.'
+        elif old['noteSource'] == row['noteSource'] == 'deployment' and any(old[k] != row[k] for k in ('title', 'notes')):
+            message = f"버전 {row['version']} · 배포 기록: 제목 또는 설명이 달라 저장된 배포 설명을 유지했습니다."
             if message not in warnings:
                 warnings.append(message)
     return _bounded(rows), warnings
@@ -257,7 +259,7 @@ def publish_gitlab_release(config, manifest, files, *, transport, headers, cance
     history_url = endpoint(config, manifest['version'], HISTORY_NAME, channel=True)
     notice = '이 릴리스는 검증된 배포 패키지를 기록합니다. 태그가 배포 패키지 전체 소스를 나타내는 것은 아닙니다.'
     expected = {'tag_name': tag, 'name': manifest['title'],
-                'description': _description(manifest, notice, history_url, bundled_history),
+                'description': _description(manifest, notice, history_url, None),
                 'released_at': manifest['publishedAt'],
                 'assets': {'links': [{'name': file['name'], 'url': endpoint(config, manifest['version'], file['name'])}
                                     for file in files] + [{'name': HISTORY_NAME, 'url': history_url}]}}

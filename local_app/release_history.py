@@ -235,7 +235,9 @@ class HistoryManager:
         merged.update({entry['version']: entry for entry in self._published})
         entries = sorted(merged.values(), key=lambda entry: version_tuple(entry['version']), reverse=True)[:MAX_ENTRIES]
         return {'status': self._status, 'currentVersion': self.current_version, 'source': self.source.public(),
-                'entries': [dict(entry) for entry in entries], 'checkedAt': self._checked, 'error': self._error}
+                'entries': [dict(entry) for entry in entries],
+                'bundledEntries': [dict(entry) for entry in self._bundled],
+                'checkedAt': self._checked, 'error': self._error}
 
     def snapshot(self):
         with self._lock:

@@ -115,13 +115,13 @@ class SchemaTests(unittest.TestCase):
                     'publishedAt': '2025-01-01T01:00:00Z'}]
         merged, warnings = merge_imported(history, changes)
         rows = {row['version']: row for row in merged['releases']}
-        self.assertEqual('저장된 실제 배포', rows['0.20.0']['notes'])
+        self.assertEqual('더 낮은 릴리스 설명', rows['0.20.0']['notes'])
         self.assertEqual('관리자가 수정한 실제 설명', rows['0.19.0']['notes'])
         self.assertEqual('검증된 채널 설명', rows['0.18.0']['notes'])
         self.assertEqual('2025-01-01T01:00:00Z', rows['0.18.0']['publishedAt'])
         self.assertTrue(warnings)
         current = merge_history(merged, entry('0.20.0', notes='방금 검증한 최신 채널'))
-        self.assertEqual('방금 검증한 최신 채널', current['releases'][0]['notes'])
+        self.assertEqual('더 낮은 릴리스 설명', current['releases'][0]['notes'])
         self.assertEqual(deployed['publishedAt'], current['releases'][0]['publishedAt'])
 
 
@@ -142,9 +142,9 @@ class ImportTests(unittest.TestCase):
         self.gitlab.keep(501, '0.12.0')
         result = self.read()
         rows = {row['version']: row for row in result['releases']}
-        self.assertEqual('보존된 당시 설명', rows['0.12.0']['notes'])
-        self.assertEqual('deployment', rows['0.12.0']['noteSource'])
-        self.assertEqual('2024-03-04T05:06:07.1234567Z', rows['0.12.0']['publishedAt'])
+        self.assertEqual('릴리스보다 강한 채널 기록 있음', rows['0.12.0']['notes'])
+        self.assertEqual('gitlab-release', rows['0.12.0']['noteSource'])
+        self.assertEqual(self.gitlab.native[1]['released_at'], rows['0.12.0']['publishedAt'])
         self.assertEqual('사내에서 수정한 설명', rows['0.11.0']['notes'])
         self.assertEqual('gitlab-release', rows['0.11.0']['noteSource'])
         self.assertEqual('', rows['0.10.0']['notes'])
@@ -215,7 +215,32 @@ class ImportTests(unittest.TestCase):
         result = self.read()
         existing = {'schema': 2, 'releases': [{**entry('0.11.0', notes='저장된 실제 설명'), 'noteSource': 'deployment'}]}
         merged, _ = merge_imported(existing, result['releases'])
-        self.assertEqual('저장된 실제 설명', merged['releases'][0]['notes'])
+        self.assertEqual('첫 설명', merged['releases'][0]['notes'])
+
+    def test_same_description_different_dates_is_not_a_conflict(self):
+        self.channel()
+        self.gitlab.keep(501, '0.12.0', publishedAt='2024-03-04T05:06:07Z')
+        self.gitlab.keep(502, '0.12.0', publishedAt='2024-03-05T05:06:07Z')
+        result = self.read()
+        self.assertEqual(1, len(result['releases']))
+        self.assertEqual([], result['warnings'])
+
+    def test_edited_gitlab_description_wins_over_saved_deployment(self):
+        old = {'schema': 2, 'releases': [{**entry('0.11.0', notes='old'), 'noteSource': 'deployment'}]}
+        self.gitlab.native = [native('0.11.0', description='운영자가 고친 설명')]
+        merged, warnings = merge_imported(old, self.read()['releases'])
+        self.assertEqual('운영자가 고친 설명', merged['releases'][0]['notes'])
+        from workspace_publisher.release_history import merge_history
+        merged = merge_history(merged, entry('0.11.0', notes='old bundled default'))
+        self.assertEqual('운영자가 고친 설명', merged['releases'][0]['notes'])
+        self.assertEqual([], warnings)
+
+    def test_excluded_record_warning_identifies_version_without_echoing_secrets(self):
+        self.gitlab.native = [native('0.11.0', description='x' * 32769)]
+        warnings = ' '.join(self.read()['warnings'])
+        self.assertIn('0.11.0', warnings)
+        self.assertIn('크기', warnings)
+        self.assertNotIn('x' * 100, warnings)
 
     def test_deploy_token_skips_metadata_and_access_job_use_only_expected_header(self):
         result = import_history(CONFIG, transport=self.gitlab, headers={'DEPLOY-TOKEN': 'gldt-secret'}, token_kind='deploy')
