@@ -240,17 +240,89 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(calls,0);assert.equal($('prompt').value,'그대로');assert.equal(attachments.length,1);
         })()""", ("attachments",))
 
+    def test_composer_keeps_send_and_shows_apply_only_for_busy_draft(self):
+        self.run_case(r"""(async()=>{
+          const state={revision:1,queue:[],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();setStatus('running');
+          assert.equal($('send').hidden,false);assert.equal($('send').disabled,false);
+          assert.equal($('followup-now').hidden,true);
+          $('prompt').value='추가 요청';emit($('prompt'),'input');
+          assert.equal($('followup-now').hidden,false);
+          let calls=[];api=async(path,body)=>{calls.push(body);return {...state,revision:2};};
+          await submit();assert.equal(calls[0].action,'enqueue');
+          assert.equal($('prompt').value,'');assert.equal($('followup-now').hidden,true);
+          active.state='idle';$('prompt').value='다음 질문';WorkspaceWorkflow.render();
+          assert.equal($('followup-now').hidden,true);
+          active.state='running';$('prompt').value='   ';emit($('prompt'),'input');
+          assert.equal($('followup-now').hidden,true);
+        })()""", ("workflow",))
+
     def test_followup_idempotency_retry_preserves_draft_and_action_semantics(self):
         self.run_case(r"""(async()=>{
           const state={revision:1,queue:[],schedules:[],steer:{supported:true,mode:'interrupt_resume',reason:'현재 요청을 중지한 뒤 같은 대화에서 이어갑니다.'}};
           api=async()=>state;await WorkspaceWorkflow.refresh();
-          assert.match($('followup-note').textContent,/중지/);assert.equal($('followup-now').disabled,false);
+          assert.match($('followup-now').title,/중지/);assert.equal($('followup-now').disabled,false);
           $('prompt').value='후속 질문';attachments=['C:/A/data.csv'];let calls=[];
           api=async(path,body)=>{calls.push(body);throw Error('응답 확인 실패');};
           await WorkspaceWorkflow.send('enqueue');assert.equal($('prompt').value,'후속 질문');assert.equal(attachments.length,1);
           api=async(path,body)=>{calls.push(body);return {...state,revision:2,queue:[{id:'q1',text:body.text,attachments:body.attachments,state:'queued'}]};};
           await WorkspaceWorkflow.send('enqueue');assert.equal(calls[0].clientRequestId,calls[1].clientRequestId);
           assert.equal(calls[1].action,'enqueue');assert.equal($('prompt').value,'');assert.equal(attachments.length,0);
+        })()""", ("workflow",))
+
+    def test_inline_queue_apply_keeps_draft_and_saved_attachment(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'saved',text:'저장된 요청',attachments:['saved.csv'],state:'queued',editRevision:3};
+          const state={revision:1,queue:[row],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const button=$('inline-queue-list').children[0].children[1];
+          assert.equal(button.textContent,'지금 반영');assert.equal(button.disabled,false);
+          $('prompt').value='아직 작성 중';attachments=['draft.csv'];
+          let body;api=async(path,value)=>{body=value;return {...state,revision:2,applyingId:'saved'};};
+          await button.onclick();
+          assert.equal(body.action,'apply_now');assert.equal(body.requestId,'saved');assert.equal(body.editRevision,3);
+          assert.ok(body.clientRequestId);assert.equal(body.text,undefined);assert.equal(body.attachments,undefined);
+          assert.equal($('prompt').value,'아직 작성 중');assert.equal(attachments[0],'draft.csv');
+          const waiting=$('inline-queue-list').children[0].children[1];
+          assert.equal(waiting.textContent,'전환 중…');assert.equal(waiting.disabled,true);
+        })()""", ("workflow",))
+
+    def test_inline_delete_and_drag_preserve_other_requests_and_draft(self):
+        self.run_case(r"""(async()=>{
+          const queue=Array.from({length:5},(_,i)=>({id:'q'+i,text:'요청 '+i,state:'queued'}));
+          let state={revision:1,queue,schedules:[],steer:{supported:true}},calls=[];
+          api=async(path,body)=>{if(body)calls.push(body);return state;};
+          $('prompt').value='작성 중';attachments=['draft.csv'];await WorkspaceWorkflow.refresh();
+          let rows=$('inline-queue-list').children;
+          rows[0].ondragstart({target:rows[0],dataTransfer:{setData(){}}});
+          await rows[2].ondrop({preventDefault(){}});
+          assert.equal(calls[0].action,'reorder');assert.equal(JSON.stringify(calls[0].order),JSON.stringify(['q1','q2','q0','q3','q4']));
+          rows=$('inline-queue-list').children;await rows[1].children[2].onclick();
+          assert.equal(calls[1].action,'cancel');assert.equal(calls[1].requestId,'q1');
+          assert.equal($('prompt').value,'작성 중');assert.equal(attachments[0],'draft.csv');assert.equal(queue.length,5);
+          rows=$('inline-queue-list').children;rows[0].ondragstart({target:rows[0],dataTransfer:{setData(){}}});
+          active={id:'B',state:'idle',trusted:true};selectionGeneration++;WorkspaceWorkflow.contextChanged();
+          rows[1].ondrop({preventDefault(){}});assert.equal(calls.length,2);
+        })()""", ("workflow",))
+
+    def test_inline_queue_limits_rows_and_hides_on_context_switch(self):
+        self.run_case(r"""(async()=>{
+          const queue=Array.from({length:5},(_,i)=>({id:'q'+i,text:'요청 '+i,state:'queued'}));
+          api=async()=>({revision:1,queue,schedules:[],steer:{supported:true}});
+          $('prompt').value='보존할 초안';attachments=['draft.txt'];
+          await WorkspaceWorkflow.refresh();
+          assert.equal($('inline-queue').hidden,false);
+          assert.equal($('inline-queue-list').children.length,3);
+          assert.equal($('inline-queue-more').textContent,'2개 더 보기');
+          assert.equal($('queue-list').children.length,5);
+          $('inline-queue-more').onclick();
+          assert.equal($('workflow-dialog').open,true);
+          assert.equal($('prompt').value,'보존할 초안');assert.equal(attachments[0],'draft.txt');
+          const old=$('inline-queue-list').children[0].children[1];
+          active={id:'B',state:'idle',trusted:true};selectionGeneration++;WorkspaceWorkflow.contextChanged();
+          let calls=0;api=async()=>{calls++;};old.onclick();
+          assert.equal(calls,0);assert.equal($('inline-queue').hidden,true);
+          assert.equal($('inline-queue-list').children.length,0);
         })()""", ("workflow",))
 
     def test_saved_queue_now_uses_saved_id_revision_without_consuming_composer(self):

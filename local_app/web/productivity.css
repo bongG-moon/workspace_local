@@ -38,3 +38,28 @@
 .execution-mode-section [data-mode=administrator]{color:var(--theme-warning, #916326);font-weight:600}
 
 .workflow-row-actions .queue-apply-now{min-height:30px;padding:5px 10px;border-radius:8px;font-size:11px;line-height:1.5;white-space:nowrap}
+
+/* Local trial: saved follow-ups, compact rows above the composer. */
+.inline-queue{margin:0 0 8px;padding:5px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface);max-height:176px;overflow:auto}
+.inline-queue[hidden]{display:none}.inline-queue-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.inline-queue-heading strong{font-size:11px;font-weight:600;color:var(--muted)}
+.inline-queue-heading .text-button,#inline-queue-more{font-size:11px;padding:2px 0;min-height:22px}
+.inline-queue-row{display:flex;align-items:center;gap:6px;padding:2px 0;min-width:0;min-height:32px;border-radius:6px;cursor:grab}
+.inline-queue-row.dragging{opacity:.45}.inline-queue-row.drop-target{box-shadow:inset 0 2px var(--accent);background:var(--accent-tint)}
+.inline-queue-copy{flex:1;min-width:0}.inline-queue-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--ink)}
+.inline-queue-apply,.inline-queue-delete,.inline-queue-handle{flex:none;border:0;border-radius:6px;padding:3px 6px;min-height:28px;font-size:11px;line-height:20px;color:var(--muted);background:transparent;cursor:pointer}
+.inline-queue-delete,.inline-queue-handle{width:28px;font-size:18px;padding:0}.inline-queue-handle{cursor:grab}
+.inline-queue-apply:hover:not(:disabled),.inline-queue-delete:hover:not(:disabled){background:var(--accent-tint);color:var(--accent-ink)}
+.inline-queue-row button:disabled{opacity:.5;cursor:default}
+
+.inline-queue-row+.inline-queue-row{box-shadow:0 -1px 0 color-mix(in srgb,var(--line) 65%,transparent)}
+.inline-queue-copy{display:flex;align-items:center;gap:8px}.inline-queue-text{min-width:0}
+.inline-queue-mark{width:16px;height:16px;flex:none;color:var(--muted);opacity:.75}
+.inline-queue-mark svg,.inline-queue-turn svg{width:100%;height:100%;display:block}
+.inline-queue-apply{display:flex;align-items:center;gap:5px}.inline-queue-turn{order:-1;width:14px;height:14px}
+.inline-queue-delete{display:grid;place-items:center}.inline-queue-delete svg{width:16px;height:16px}
+
+/* Keep compose actions in one row, with scheduling beside attachments. */
+.send-tools{display:flex;align-items:center;gap:8px}
+.send-tools #followup-now{height:32px;min-height:32px;padding:0 12px;font-size:12px}
+.send-tools #followup-now[hidden]{display:none}

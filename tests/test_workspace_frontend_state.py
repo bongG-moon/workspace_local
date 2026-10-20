@@ -134,7 +134,7 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
           refreshSessionMeta=async()=>{};
           const pending=submit();
           assert.equal($('prompt').readOnly,true);assert.equal($('attach').disabled,true);
-          assert.equal($('attach-path').disabled,true);
+          assert.equal($('send').disabled,true);
           renderDelta({messageId:'answer',index:2,text:'already streamed prefix'});
           const bubble=streaming.get('answer:2');
           resolveReply({ok:true});await pending;

@@ -22,7 +22,7 @@
     },
     {
       "path": "Check-Workspace.ps1",
-      "sha256": "9f9a16a8c187f68b8de95540edf18cbfa52c36a1bbd73c4e6a5901368310aa1c",
+      "sha256": "26eedae7166e26ea29d37e6e905ef255d3b8b7ff6b5ad0d83c514df38929a237",
       "size": 10692
     },
     {
@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "dfbbadc5b052f9561fda979466d2541c0a2d45527a705ff0b1955aab3022350f",
-      "size": 43803
+      "sha256": "29b2e5328726edf3b4f698314ca34edd0f3be343f3d369dedf400e693de8bfb5",
+      "size": 43459
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -77,12 +77,12 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Startup.ps1",
-      "sha256": "961149c5d7ebe1f5ef60c4bf5cc012f181c65f88f42a9b8f076d64a80e7ee49a",
+      "sha256": "14c269ef45f374be9e32b7621f238f99dd60d4909850e3796fe01351372d0037",
       "size": 22717
     },
     {
       "path": "deploy/New-WorkspaceBundle.ps1",
-      "sha256": "afc06a65ed4fa32b7efe4f1f9d65d422ec7b8cd53df954cf3f87599e0c0520ff",
+      "sha256": "882c049e6b9689cf432afb33f9abe4e8b6fea62ca69334f3e224a60fa5915730",
       "size": 8474
     },
     {
@@ -112,7 +112,7 @@
     },
     {
       "path": "deploy/Start-CompanyWorkspace.ps1",
-      "sha256": "1c0547cfeccf725bbb3091958098e2452aee611399bc134ca41de00c4d039103",
+      "sha256": "16de244ac6cff834c04db868adc7623d9824562e57d22d172c96513ce5507e99",
       "size": 40612
     },
     {
@@ -162,8 +162,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "786b8f7b3cebda0cc0db0c06f553efb48b748bcb726999381cf637081e96f843",
-      "size": 53879
+      "sha256": "694da835d2a55e19bfa84aa844a882141d9936e03ba53137e194997818d2a646",
+      "size": 55192
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -224,6 +224,11 @@
       "path": "docs/RELEASE_NOTES_0.23.28.md",
       "sha256": "168d8f92aa26e8bcbde9377c20068db5e91b3a5b4fa948e77dc4ce52a711480f",
       "size": 1051
+    },
+    {
+      "path": "docs/RELEASE_NOTES_0.23.29.md",
+      "sha256": "1488303606ffa1f475d75e41fa7ebbca38b0f40848900a1f777c567207101f4d",
+      "size": 1164
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -474,6 +479,11 @@
       "path": "docs/VALIDATION_0.23.27.md",
       "sha256": "77486f0839a0f129d79e54dbffb9dd35648ab9f06df422412ad5207b5b75ae49",
       "size": 9050
+    },
+    {
+      "path": "docs/VALIDATION_0.23.29.md",
+      "sha256": "9cef2ce7fa7f3fcd09b8573f14ae0f2d1edef5d92dd5fbdb9d25dc8ffe901734",
+      "size": 1088
     },
     {
       "path": "docs/VALIDATION_0.23.3.md",
@@ -792,8 +802,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "73b02b9311a98a63fe8028764071f9c1fef78bd8e2a3df55214679c916b56853",
-      "size": 85755
+      "sha256": "adb01fd9c87285689eb55540f66dcb4eefec2e8d268dcc7a1ae439960c9b1408",
+      "size": 85894
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -1052,7 +1062,7 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "ef6d81fbbbb4e01e49b299ca94982afadac6df859ecaa6448333eff61a8d8a6e",
+      "sha256": "3a341fa3d703c56d575b6bf5112a13ac98a2ea3b67edc8e5b824ef28a641db26",
       "size": 178101
     },
     {
@@ -1157,13 +1167,13 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "6753a4c2f6d7933b60649c7f57c9646554ff43c9a5340b865dd70a4d6a948454",
-      "size": 165938
+      "sha256": "94954218ea7d5fc382088fbc8e064f549e2fc7ef525ffbaa6323b7df22d8df2d",
+      "size": 165755
     },
     {
       "path": "local_app/web/appearance.css",
-      "sha256": "2d04e9ac3295f6b37e766f45836168c5dbcf4f15953188159f3e1b2e28397867",
-      "size": 53872
+      "sha256": "94d2d94707ac3bd289a47d2ed297667af123290dfd0428e5b153e2823f3ebb35",
+      "size": 53870
     },
     {
       "path": "local_app/web/appearance.js",
@@ -1192,8 +1202,8 @@
     },
     {
       "path": "local_app/web/attachments.js",
-      "sha256": "17dccda67036ad57a4ac7c1f3b477c45da06cc743c15ee30bf0e297f8b2ae617",
-      "size": 9530
+      "sha256": "b6dec4c1c5102d47141d66a38005deeef2a2feba2bf58557b76861f839f9face",
+      "size": 9559
     },
     {
       "path": "local_app/web/attention.js",
@@ -1287,8 +1297,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "c86f760553c8dd25081e279df103b7aeaaf3ebd133085b6df6d79b7179dcc454",
-      "size": 96072
+      "sha256": "0d54387c999c1cc98fd48beb149cab6ad70257b116c466d413f42291b871e2ee",
+      "size": 96297
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1322,8 +1332,8 @@
     },
     {
       "path": "local_app/web/productivity.css",
-      "sha256": "558f82ddd808e447e9d3ce68d8885491e59c46a1a6054e568eef52c262874f40",
-      "size": 11347
+      "sha256": "d2499d7e8ccc525bf255666b5bc68be423a859249869ec9fd270845e5da9c180",
+      "size": 13698
     },
     {
       "path": "local_app/web/productivity.js",
@@ -1412,8 +1422,8 @@
     },
     {
       "path": "local_app/web/workflow.js",
-      "sha256": "98c7b87a850af7e44c229050bae7737ce34e0b96e79148b675fbcf1c6851d90e",
-      "size": 31168
+      "sha256": "0e46a05a062d992c7b1f6cdb0d7c433aae1f2f7c57a85607f04f0bc2b1108523",
+      "size": 35666
     },
     {
       "path": "local_app/web/zoom-feedback.css",
@@ -2162,8 +2172,8 @@
     },
     {
       "path": "tests/test_workspace_frontend_state.py",
-      "sha256": "5e66b0c87314182e36b9664a680d0824fba3249b865b015616802c582305ddff",
-      "size": 16537
+      "sha256": "2ef86ffc541823e16bfd5f0369f288a9fa967ba1c1b8d6c11fdbb529a45bef85",
+      "size": 16530
     },
     {
       "path": "tests/test_workspace_generic_claude.py",
@@ -2352,8 +2362,8 @@
     },
     {
       "path": "tests/test_workspace_productivity_frontend.py",
-      "sha256": "c1229d56bbee5c535d6bdf1d9914d39327dbe4c9a475a6aaf87e98b460d2ab33",
-      "size": 42430
+      "sha256": "5462056368fcb7af944a4d2991d7bc5432bcfe7e5448135f5ff8045bda42dcdb",
+      "size": 47551
     },
     {
       "path": "tests/test_workspace_productivity_routes.py",
@@ -2807,5 +2817,5 @@
     }
   ],
   "schema": 1,
-  "version": "0.23.28"
+  "version": "0.23.29"
 }

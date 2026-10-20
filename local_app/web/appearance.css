@@ -141,8 +141,8 @@
 .app.chat-mode #capabilities-open,.app.chat-mode #schedule-overview-open,.app.chat-mode #task-group-create,
 .app.chat-mode #prompt-shortcuts,.app.chat-mode .work-home-only,
 .app.chat-mode #branch-open,.app.chat-mode #branch-origin,.app.chat-mode #imported-context,.app.chat-mode #progress-view,
-.app.chat-mode #verification-status,.app.chat-mode #workspace-choice,.app.chat-mode .workflow-toolbar,.app.chat-mode #followup-actions,
-.app.chat-mode #attach-path,.app.chat-mode .composer-trigger-hints,.app.chat-mode #composer-effort,.app.chat-mode #composer-permission,
+.app.chat-mode #verification-status,.app.chat-mode #workspace-choice,.app.chat-mode .workflow-toolbar,.app.chat-mode #followup-now,
+.app.chat-mode #schedule-open,.app.chat-mode .composer-trigger-hints,.app.chat-mode #composer-effort,.app.chat-mode #composer-permission,
 .app.chat-mode #tool-activity-open,.app.chat-mode #tool-activity-badge{display:none!important}
 .app.chat-mode .composer-input-hints{justify-content:flex-end}
 

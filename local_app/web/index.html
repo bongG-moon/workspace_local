@@ -184,7 +184,12 @@
       </div>
       <div class="composer-wrap">
         <button id="latest-response" type="button" class="latest-response" hidden>최신 응답으로 이동 ↓</button>
-        <div class="composer-heading"><div id="status" class="status" role="status"><span class="status-dot" aria-hidden="true"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="tool-activity-badge" class="tool-activity-badge" hidden></span><button id="tool-activity-open" type="button" class="text-button tool-activity-open" hidden></button><span id="elapsed"></span><button id="stop" class="text-button" title="현재 요청만 멈추고 같은 대화에서 이어갑니다." hidden>답변 중지</button></div><div class="workflow-toolbar" role="group" aria-label="후속 업무"><button id="workflow-open" type="button" class="workflow-button">이어 할 일</button><button id="schedule-open" type="button" class="workflow-button">실행 예약</button></div></div>
+        <div class="composer-heading"><div id="status" class="status" role="status"><span class="status-dot" aria-hidden="true"></span><span id="status-text">어떤 일을 도와드릴까요?</span><span id="tool-activity-badge" class="tool-activity-badge" hidden></span><button id="tool-activity-open" type="button" class="text-button tool-activity-open" hidden></button><span id="elapsed"></span><button id="stop" class="text-button" title="현재 요청만 멈추고 같은 대화에서 이어갑니다." hidden>답변 중지</button></div><div class="workflow-toolbar" role="group" aria-label="후속 업무"><button id="workflow-open" type="button" class="workflow-button">이어 할 일</button></div></div>
+        <section id="inline-queue" class="inline-queue" aria-label="이어 할 일" hidden>
+          <div class="inline-queue-heading"><strong id="inline-queue-title">이어 할 일</strong><button id="inline-queue-manage" type="button" class="text-button">목록 관리</button></div>
+          <div id="inline-queue-list"></div>
+          <button id="inline-queue-more" type="button" class="text-button" hidden></button>
+        </section>
         <form id="composer" class="composer">
           <section id="composer-suggestions" class="composer-suggestions" aria-label="입력 도움 목록" hidden><div class="composer-suggestion-heading"><strong id="composer-suggestion-title"></strong><span id="composer-suggestion-context"></span></div><div id="composer-suggestion-list" role="listbox" aria-label="스킬과 빠른 요청·파일 추천"></div><p id="composer-suggestion-note" role="status"></p><div class="composer-suggestion-actions"><button id="composer-connect" class="quiet-button" type="button" hidden>빠른 요청 불러오기</button><button id="composer-native" class="text-button" type="button" hidden>원본 Claude Code 열기 ↗</button></div></section>
           <div id="attachments" class="attachments"></div>
@@ -198,15 +203,15 @@
             <p id="runtime-panel-error" class="runtime-panel-error" role="status" hidden></p>
           </section>
           <div class="composer-tools">
-            <div class="attachment-tools"><button id="attach" type="button" class="quiet-button"><svg class="icon"><use href="#i-attach"/></svg>자료 추가</button><button id="attach-path" type="button" class="text-button" title="복사한 파일 경로로 추가">경로로 추가</button></div>
+            <div class="attachment-tools"><button id="attach" type="button" class="quiet-button"><svg class="icon"><use href="#i-attach"/></svg>자료 추가</button><button id="schedule-open" type="button" class="quiet-button" title="이 업무의 실행 예약"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg>실행 예약</button></div>
             <div class="composer-runtime-controls" role="group" aria-label="모델과 실행 방식">
               <button type="button" id="composer-model" class="runtime-chip" aria-expanded="false" aria-controls="composer-controls-panel"><span class="runtime-chip-label">모델</span><strong>기존 설정</strong><svg class="runtime-chip-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4"/></svg></button>
               <button type="button" id="composer-effort" class="runtime-chip" aria-expanded="false" aria-controls="composer-controls-panel"><span class="runtime-chip-label">Effort</span><strong>기본</strong><svg class="runtime-chip-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4"/></svg></button>
               <button type="button" id="composer-permission" class="runtime-chip" aria-expanded="false" aria-controls="composer-controls-panel"><span class="runtime-chip-label">승인</span><strong>기존 설정</strong><svg class="runtime-chip-caret" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4 6 4 4 4-4"/></svg></button>
             </div>
-            <div class="send-tools"><button id="send" type="submit" class="send-button">보내기<svg class="icon"><use href="#i-up"/></svg></button></div>
+            <div class="send-tools"><button id="followup-now" type="button" class="quiet-button" hidden>지금 반영</button><button id="send" type="submit" class="send-button">보내기<svg class="icon"><use href="#i-up"/></svg></button></div>
           </div>
-          <div id="followup-actions" class="followup-actions" hidden><p id="followup-note"></p><div><button id="followup-now" type="button" class="quiet-button">지금 반영</button><button id="followup-queue" type="button" class="send-button">끝나고 이어서</button></div></div>
+
           <p id="composer-control-status" class="composer-control-status" role="status" hidden></p>
         </form>
       </div>
