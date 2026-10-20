@@ -152,7 +152,7 @@ class WorkspaceInputKeysTests(unittest.TestCase):
 
     def test_control_a_e_and_u_k_preserve_other_lines_and_delete_boundary_newline_only(self):
         self.run_case(r"""
-          set('one\ntwo\nthree',6);ctrl('a');assert.equal(input.selectionStart,4);
+          set('one\ntwo\nthree',6);assert.equal(ctrl('a').handled,false);assert.equal(input.selectionStart,6);
           ctrl('e');assert.equal(input.selectionStart,7);ctrl('u');assert.equal(input.value,'one\n\nthree');
           ctrl('u');assert.equal(input.value,'one\nthree');assert.equal(input.selectionStart,3);
           ctrl('k');assert.equal(input.value,'onethree');assert.equal(input.selectionStart,3);

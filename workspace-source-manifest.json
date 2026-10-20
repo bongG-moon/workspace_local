@@ -22,7 +22,7 @@
     },
     {
       "path": "Check-Workspace.ps1",
-      "sha256": "26eedae7166e26ea29d37e6e905ef255d3b8b7ff6b5ad0d83c514df38929a237",
+      "sha256": "0d6a03ed12730877bdbcf13b0e89e62a3e34a8f2033fbdfa84623ca36229b114",
       "size": 10692
     },
     {
@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "29b2e5328726edf3b4f698314ca34edd0f3be343f3d369dedf400e693de8bfb5",
-      "size": 43459
+      "sha256": "ccd99c6578e8bc6f1a0a23d43256532194fa47f85df12e5f460a4b1a7868726c",
+      "size": 42858
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -77,12 +77,12 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Startup.ps1",
-      "sha256": "14c269ef45f374be9e32b7621f238f99dd60d4909850e3796fe01351372d0037",
+      "sha256": "4b6a7bd7be12ac31f3ff7191675440fea748211c78442443a3c2c5d7011b56c5",
       "size": 22717
     },
     {
       "path": "deploy/New-WorkspaceBundle.ps1",
-      "sha256": "882c049e6b9689cf432afb33f9abe4e8b6fea62ca69334f3e224a60fa5915730",
+      "sha256": "d546a958125132ec66fe8b6e6206a0ab454fdb38d234ab9650e462241b66ab36",
       "size": 8474
     },
     {
@@ -112,7 +112,7 @@
     },
     {
       "path": "deploy/Start-CompanyWorkspace.ps1",
-      "sha256": "16de244ac6cff834c04db868adc7623d9824562e57d22d172c96513ce5507e99",
+      "sha256": "0580f36e4cb2b6f3250ed16b92407e034c053a26157d3a7782250c6197ee6611",
       "size": 40612
     },
     {
@@ -162,8 +162,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "694da835d2a55e19bfa84aa844a882141d9936e03ba53137e194997818d2a646",
-      "size": 55192
+      "sha256": "78dce2c94c2b73f8082e5610758c6bffc659faa3b98962f2333ad5bd76ad2958",
+      "size": 55122
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -229,6 +229,11 @@
       "path": "docs/RELEASE_NOTES_0.23.29.md",
       "sha256": "1488303606ffa1f475d75e41fa7ebbca38b0f40848900a1f777c567207101f4d",
       "size": 1164
+    },
+    {
+      "path": "docs/RELEASE_NOTES_0.23.30.md",
+      "sha256": "2787da044f6566435176006c34fee4862dba4887f2fe2662276613d8e93f9f9c",
+      "size": 561
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -489,6 +494,11 @@
       "path": "docs/VALIDATION_0.23.3.md",
       "sha256": "3b16703276d45110219171cab69ccb90ef35f9e0d377b446d0342aee0a62a34f",
       "size": 4552
+    },
+    {
+      "path": "docs/VALIDATION_0.23.30.md",
+      "sha256": "079110b4a7a86c563903980f2cb63a6eda5ced0dede2ef1f3c2c2a2336c58cfd",
+      "size": 919
     },
     {
       "path": "docs/VALIDATION_0.23.4.md",
@@ -802,8 +812,8 @@
     },
     {
       "path": "docs/WORKSPACE_USER_GUIDE.html",
-      "sha256": "adb01fd9c87285689eb55540f66dcb4eefec2e8d268dcc7a1ae439960c9b1408",
-      "size": 85894
+      "sha256": "6c165a91ff8467060662132e3d74a031e6963a128b212aad38d10bfe1ed26d67",
+      "size": 85952
     },
     {
       "path": "docs/WORKSPACE_WS38_ACCESS_DENIED.md",
@@ -1062,7 +1072,7 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "3a341fa3d703c56d575b6bf5112a13ac98a2ea3b67edc8e5b824ef28a641db26",
+      "sha256": "ee46247195ee1954c6800b98e93384038ba28cc5b4a75893ff680bee40abd480",
       "size": 178101
     },
     {
@@ -1297,8 +1307,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "0d54387c999c1cc98fd48beb149cab6ad70257b116c466d413f42291b871e2ee",
-      "size": 96297
+      "sha256": "4f2507f4e4e7f9d07b1634172c834199c7a377c660e088f46fc9e010aba7380b",
+      "size": 96386
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1307,8 +1317,8 @@
     },
     {
       "path": "local_app/web/input-keys.js",
-      "sha256": "176495b02e2b52bda6a6f5b1b2dd7ba76513ce7d443d53bebbf55ee63ea5be12",
-      "size": 13032
+      "sha256": "0639927c3beec49909efd60bdf3e143d532f7f7e24951df946c83bd5826e79c1",
+      "size": 13109
     },
     {
       "path": "local_app/web/layout.js",
@@ -2217,8 +2227,8 @@
     },
     {
       "path": "tests/test_workspace_input_keys.py",
-      "sha256": "7df662317c9049ea26457658126f5f54def2605ade7c4bcc7af6c5cb0fe9d9fa",
-      "size": 16306
+      "sha256": "560dfcce06b5ba73b1c30bb12f4c9d16464fa6ec1905aef3616b9034cd28d4f3",
+      "size": 16334
     },
     {
       "path": "tests/test_workspace_launcher_resolution.py",
@@ -2817,5 +2827,5 @@
     }
   ],
   "schema": 1,
-  "version": "0.23.29"
+  "version": "0.23.30"
 }

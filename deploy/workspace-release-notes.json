@@ -1,7 +1,12 @@
 {
   "schema": 1,
-  "currentVersion": "0.23.29",
+  "currentVersion": "0.23.30",
   "releases": [
+    {
+      "version": "0.23.30",
+      "title": "AX Workspace 0.23.30 — 입력창 전체 선택 수정",
+      "notes": "# AX Workspace 0.23.30\r\n\r\n- 일반 대화와 업무 채팅 입력창에서 Ctrl+A가 현재 줄 처음으로 이동하던 문제를 수정했습니다. 이제 작성 내용 전체를 선택합니다.\r\n- 여러 줄, 한글, 이모지가 포함된 입력에서도 전체 선택 후 삭제·되돌리기를 사용할 수 있습니다.\r\n- 단축키 안내와 사용 도움말을 수정했습니다. 줄 처음 이동은 Home, 줄 끝 이동은 Ctrl+E를 사용할 수 있습니다.\r\n- 기존 이어 할 일, 지금 반영, 실행 예약 기능을 유지합니다."
+    },
     {
       "version": "0.23.29",
       "title": "AX Workspace 0.23.29 — 이어 할 일과 입력창 개선",
@@ -146,11 +151,6 @@
       "version": "0.23.1",
       "title": "Company Workspace 0.23.1 — Download ZIP으로 사내 배포",
       "notes": "- GitHub Code → Download ZIP으로 받은 소스를 Git 설치나 .git 복원 없이 사내에서 빌드하고 게시합니다.\n- 소스 ZIP에는 완성된 EXE·DLL·WebView2 SDK 패키지를 넣지 않습니다. 사내 빌드 PC에서 EXE/VBS 배포본을 만듭니다.\n- SDK 상태를 확인하고 승인된 파일 선택 또는 명시적 다운로드로 준비합니다. 고정된 SDK 버전과 SHA256을 확인합니다.\n- 소스 파일의 누락·변경·추가 여부와 빌드 전후 체크섬을 확인합니다. Git 이력이 없는 ZIP에서는 Git 소스 반영만 생략합니다."
-    },
-    {
-      "version": "0.23.0",
-      "title": "Company Workspace 0.23.0 — 사내 GitLab 배포와 업데이트",
-      "notes": "- Python 배포 도구에서 사내 Git 저장소 반영, 별도 폴더의 EXE/VBS 빌드와 GitLab Generic Package 게시를 진행합니다.\n- 배포 파일의 인증 없는 다운로드와 체크섬을 확인한 뒤 최신 버전과 변경 내용을 게시합니다.\n- 게시 실패 후 배포 창을 다시 열어도 직전 빌드를 검증해 불러오고 같은 파일로 재시도할 수 있습니다.\n- 사내 배포본은 지정된 GitLab에서 업데이트를 받습니다. 사용자 앱에 게시 토큰이나 SSH 개인키를 포함하지 않으며 기존 공개 배포본의 GitHub 업데이트를 유지합니다."
     }
   ]
 }

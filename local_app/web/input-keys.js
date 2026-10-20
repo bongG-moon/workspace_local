@@ -193,7 +193,9 @@ globalThis.WorkspaceInputKeys = (() => {
       // textarea does not expose its wrapped visual-line caret positions.
       vertical(key === "p" ? -1 : 1); event.preventDefault(); return true;
     }
-    if (control && ["a", "e"].includes(key)) return take(() => { caret(key === "a" ? lineStart(text, start) : lineEnd(text, end)); yank = null; });
+    // Keep Ctrl+A native: select the entire textarea in both chat and work modes.
+    if (control && key === "a") return false;
+    if (control && key === "e") return take(() => { caret(lineEnd(text, end)); yank = null; });
     if (control && key === "f") return take(() => {
       caret(start !== end ? ceilBoundary(text, end) : boundaries(text).find(point => point > end) ?? text.length); yank = null;
     });
