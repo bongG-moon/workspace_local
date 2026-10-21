@@ -44,7 +44,7 @@
 .inline-queue[hidden]{display:none}.inline-queue-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .inline-queue-heading strong{font-size:11px;font-weight:600;color:var(--muted)}
 .inline-queue-heading .text-button,#inline-queue-more{font-size:11px;padding:2px 0;min-height:22px}
-.inline-queue-row{display:flex;align-items:center;gap:6px;padding:2px 0;min-width:0;min-height:32px;border-radius:6px;cursor:grab}
+.inline-queue-row{display:flex;align-items:center;gap:6px;padding:2px 0;min-width:0;min-height:32px;border-radius:6px}
 .inline-queue-row.dragging{opacity:.45}.inline-queue-row.drop-target{box-shadow:inset 0 2px var(--accent);background:var(--accent-tint)}
 .inline-queue-copy{flex:1;min-width:0}.inline-queue-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;color:var(--ink)}
 .inline-queue-apply,.inline-queue-delete,.inline-queue-handle{flex:none;border:0;border-radius:6px;padding:3px 6px;min-height:28px;font-size:11px;line-height:20px;color:var(--muted);background:transparent;cursor:pointer}

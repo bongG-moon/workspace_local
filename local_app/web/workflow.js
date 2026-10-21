@@ -112,12 +112,13 @@ globalThis.WorkspaceWorkflow = (() => {
         remove.onclick=()=>{if(current(context)&&!remove.disabled)return cancelRequest(item,context);};
         const handle=existing?.children[3]||el('button','⠿','inline-queue-handle');handle.type='button';handle.title='드래그로 순서 변경 · Alt+↑/↓로 이동';handle.setAttribute('aria-label',`순서 변경: ${item.text}`);handle.disabled=blocked||item.state!=='queued';
         handle.onkeydown=event=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key)||!current(context)||handle.disabled||locked())return;event.preventDefault();return reorder(position,position+(event.key==='ArrowUp'?-1:1));};
-        compact.draggable=!handle.disabled;
-        compact.ondragstart=event=>{if(handle.disabled||!current(context)||locked()||event.target?.closest?.('.inline-queue-apply,.inline-queue-delete')){event.preventDefault();return;}queueDrag={...context,requestId:item.id,revision:snapshot?.revision};event.dataTransfer?.setData('text/plain',item.id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';compact.classList.add('dragging');};
+        // Only the handle starts a native drag; button jitter must remain a click.
+        compact.draggable=false;handle.draggable=!handle.disabled;
+        compact.ondragstart=event=>{if(event.target!==handle||handle.disabled||!current(context)||locked()){event.preventDefault();return;}queueDrag={...context,requestId:item.id,order:JSON.stringify(pending().filter(row=>row.state==='queued').map(row=>row.id))};event.dataTransfer?.setData('text/plain',item.id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';compact.classList.add('dragging');};
         compact.ondragover=event=>{if(queueDrag&&current(queueDrag)&&!handle.disabled){event.preventDefault();compact.classList.add('drop-target');}};
         compact.ondragleave=()=>compact.classList.remove('drop-target');
         compact.ondragend=()=>{queueDrag=null;compact.classList.remove('dragging');for(const row of $('inline-queue-list').children)row.classList.remove('drop-target');};
-        compact.ondrop=event=>{event.preventDefault();const drag=queueDrag;queueDrag=null;compact.classList.remove('drop-target');if(!drag||!current(drag)||!current(context)||locked()||blocked||drag.revision!==snapshot?.revision)return;const items=pending().filter(r=>r.state==='queued');const from=items.findIndex(r=>r.id===drag.requestId),to=items.findIndex(r=>r.id===item.id);if(from<0||to<0||from===to)return;const [moved]=items.splice(from,1);items.splice(to,0,moved);return mutate({action:'reorder',order:items.map(r=>r.id)},context);};
+        compact.ondrop=event=>{event.preventDefault();const drag=queueDrag;queueDrag=null;compact.classList.remove('drop-target');if(!drag||!current(drag)||!current(context)||locked()||blocked||drag.order!==JSON.stringify(pending().filter(row=>row.state==='queued').map(row=>row.id)))return;const items=pending().filter(r=>r.state==='queued');const from=items.findIndex(r=>r.id===drag.requestId),to=items.findIndex(r=>r.id===item.id);if(from<0||to<0||from===to)return;const [moved]=items.splice(from,1);items.splice(to,0,moved);return mutate({action:'reorder',order:items.map(r=>r.id)},context);};
         if(!existing)compact.append(copy,apply,remove,handle);if(inlineList.children[index]!==compact)inlineList.append(compact);
       }
     });

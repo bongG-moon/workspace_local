@@ -227,8 +227,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.29.md",
-      "sha256": "1c476d0d2a00be78844c50c33d81cb2f464e66965293700a48817f49a9b1066f",
-      "size": 2164
+      "sha256": "ba028d97b812c7c3b1c4d1a1be4cda3fc5d04b0752d85d88c74541a2b1f36fb3",
+      "size": 2455
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -564,6 +564,11 @@
       "path": "docs/VALIDATION_NSIS_0.23.25.md",
       "sha256": "6d2af19c053b1be14e11e79229e047d3d302aaa1f689b6b938379aca47a3ee7d",
       "size": 3409
+    },
+    {
+      "path": "docs/VALIDATION_QUEUE_POINTER_0.23.29.md",
+      "sha256": "b19b9aaff5180e504b0a0fcfa7a7cd0721a6876b02789cc9598af99b324cfe81",
+      "size": 1882
     },
     {
       "path": "docs/VALIDATION_RESPONSIVENESS_0.23.20.md",
@@ -1332,8 +1337,8 @@
     },
     {
       "path": "local_app/web/productivity.css",
-      "sha256": "d2499d7e8ccc525bf255666b5bc68be423a859249869ec9fd270845e5da9c180",
-      "size": 13698
+      "sha256": "650a274b9ec0a760854af2fb1db0edf6a748a7f056f902754667266c5dd7d534",
+      "size": 13686
     },
     {
       "path": "local_app/web/productivity.js",
@@ -1422,8 +1427,8 @@
     },
     {
       "path": "local_app/web/workflow.js",
-      "sha256": "1ba22ddc5847e394365b768531c8b73aba3511198647fb7e54484714b09efde6",
-      "size": 38349
+      "sha256": "3e5fc23a4744b4871c40fdfef5059c09398d05a69be73f5f9bcf795d3470c9c4",
+      "size": 38520
     },
     {
       "path": "local_app/web/zoom-feedback.css",
@@ -1719,6 +1724,11 @@
       "path": "scripts/test-lab/verify-workspace-process-lifecycle.py",
       "sha256": "44aa8d2e5c2f1fb946f57dc42fc960ab6147ea3fe3cbeeca8a23d470ff8a7f53",
       "size": 7999
+    },
+    {
+      "path": "scripts/test-lab/verify-workspace-queue-pointer.cjs",
+      "sha256": "bd0111e68ec1084b93523ae5534c979ca873e8451b753f6431c87f8a68745ce0",
+      "size": 8510
     },
     {
       "path": "scripts/test-lab/verify-workspace-release-history.cjs",
@@ -2362,8 +2372,8 @@
     },
     {
       "path": "tests/test_workspace_productivity_frontend.py",
-      "sha256": "0d4f3ed783c9c0b59a7bc8067443c20f32c378fa8823e1441cc66163f5121898",
-      "size": 50928
+      "sha256": "b38341aa1ea41b06050119f19db5b826e453fba9caed7e3f6e21defdfdd7f1c9",
+      "size": 52333
     },
     {
       "path": "tests/test_workspace_productivity_routes.py",

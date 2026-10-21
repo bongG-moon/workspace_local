@@ -336,15 +336,31 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           api=async(path,body)=>{if(body)calls.push(body);return state;};
           $('prompt').value='작성 중';attachments=['draft.csv'];await WorkspaceWorkflow.refresh();
           let rows=$('inline-queue-list').children;
-          rows[0].ondragstart({target:rows[0],dataTransfer:{setData(){}}});
+          rows[0].ondragstart({target:rows[0].children[3],dataTransfer:{setData(){}}});
           await rows[2].ondrop({preventDefault(){}});
           assert.equal(calls[0].action,'reorder');assert.equal(JSON.stringify(calls[0].order),JSON.stringify(['q1','q2','q0','q3','q4']));
           rows=$('inline-queue-list').children;await rows[1].children[2].onclick();
           assert.equal(calls[1].action,'cancel');assert.equal(calls[1].requestId,'q1');
           assert.equal($('prompt').value,'작성 중');assert.equal(attachments[0],'draft.csv');assert.equal(queue.length,5);
-          rows=$('inline-queue-list').children;rows[0].ondragstart({target:rows[0],dataTransfer:{setData(){}}});
+          rows=$('inline-queue-list').children;rows[0].ondragstart({target:rows[0].children[3],dataTransfer:{setData(){}}});
           active={id:'B',state:'idle',trusted:true};selectionGeneration++;WorkspaceWorkflow.contextChanged();
           rows[1].ondrop({preventDefault(){}});assert.equal(calls.length,2);
+        })()""", ("workflow",))
+
+    def test_queue_drag_is_handle_only_and_ignores_unrelated_revision(self):
+        self.run_case(r"""(async()=>{
+          let state={revision:1,queue:[{id:'a',text:'a',state:'queued'},{id:'b',text:'b',state:'queued'}],schedules:[]},calls=[];
+          api=async(path,body)=>{if(body)calls.push(body);return state;};await WorkspaceWorkflow.refresh();
+          let rows=$('inline-queue-list').children,prevented=0;
+          assert.equal(rows[0].draggable,false);assert.equal(rows[0].children[3].draggable,true);
+          for(const target of [rows[0],rows[0].children[1],rows[0].children[2]])rows[0].ondragstart({target,preventDefault(){prevented++;}});
+          assert.equal(prevented,3);await rows[1].ondrop({preventDefault(){}});assert.equal(calls.length,0);
+          rows[0].ondragstart({target:rows[0].children[3],dataTransfer:{setData(){}}});
+          state={...state,revision:2};await WorkspaceWorkflow.refresh();
+          await rows[1].ondrop({preventDefault(){}});assert.equal(calls.length,1);assert.equal(JSON.stringify(calls[0].order),JSON.stringify(['b','a']));
+          rows[0].ondragstart({target:rows[0].children[3],dataTransfer:{setData(){}}});
+          state={...state,revision:3,queue:[state.queue[0]]};await WorkspaceWorkflow.refresh();
+          await rows[0].ondrop({preventDefault(){}});assert.equal(calls.length,1);
         })()""", ("workflow",))
 
     def test_inline_queue_limits_rows_and_hides_on_context_switch(self):
