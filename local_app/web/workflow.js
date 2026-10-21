@@ -7,14 +7,17 @@ globalThis.WorkspaceWorkflow = (() => {
   const overviewPageSize = 15;
   const overviewDateFormatter = new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"numeric",day:"numeric",hour:"numeric",minute:"2-digit"});
   const overviewDateLabel = value => value ? overviewDateFormatter.format(new Date(value*1000)) : "미정";
-  const attempts = new Map(), mutations = new Map();
+  const attempts = new Map(), mutations = new Map(), cancellations = new Map();
+  const cancelling = (id, sid=active?.id) => cancellations.has(`${sid}:${id}`);
+  const cancellingCurrent = () => [...cancellations.values()].some(context=>context.id===active?.id);
   const current = context => context?.id === active?.id && context.generation === selectionGeneration && !appClosed;
   const capture = () => ({id:active?.id,generation:selectionGeneration});
   const busy = () => busyStates.has(active?.state);
   const stopBlocked = () => !!globalThis.WorkspaceStop?.blocked();
   const queuePolicy = "대기 요청은 정상 완료 후 순서대로 자동 실행됩니다. 오류·중지·연결 종료 시에는 대기를 유지하고, 승인·질문은 응답을 기다립니다.";
   const pending = () => (snapshot?.queue || []).filter(item => ["queued","needs_review","dispatching"].includes(item.state));
-  const locked = () => mutations.has(active?.id);
+  const locked = () => mutations.has(active?.id) || cancellingCurrent();
+  const cancelBlocked = () => mutations.has(active?.id) || !!snapshot?.applyingId || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed;
   const pausedByUser = item => typeof item?.pausedByUser === "boolean" ? item.pausedByUser
     : item?.enabled === false && !(item.kind === "once" && item.nextRunAt == null && ["queued","submitted","done","missed","queue_full","needs_review","previous_pending"].includes(item.lastRun?.status || item.lastStatus));
   const dateLabel = value => value ? new Date(value*1000).toLocaleString("ko-KR") : "미정";
@@ -62,14 +65,16 @@ globalThis.WorkspaceWorkflow = (() => {
     const context = capture();
     // Status/stream refreshes must not replace a pressed button before click.
     const nextQueueFingerprint = JSON.stringify([context, queue, blocked, active?.trusted, busy(),
-      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.steer?.supported]);
+      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.steer?.supported, queue.map(item=>cancelling(item.id))]);
     if (queueFingerprint !== nextQueueFingerprint) {
     queueFingerprint = nextQueueFingerprint;
     $("queue-list").replaceChildren();$("queue-empty").hidden = queue.length > 0;
     const inline=$('inline-queue');
     inline.hidden=!active||appClosed||globalThis.WorkspaceModes?.isChat()||!queue.length;
     $('inline-queue-title').textContent=`이어 할 일 · ${queue.length}`;
-    $('inline-queue-list').replaceChildren();
+    const inlineList=$('inline-queue-list'), existingRows=new Map([...inlineList.children].map(row=>[row.dataset.requestId,row]));
+    const visibleIds=new Set(queue.slice(0,3).map(item=>item.id));
+    for(const row of [...inlineList.children])if(!visibleIds.has(row.dataset.requestId))row.remove();
     $('inline-queue-more').hidden=queue.length<=3;
     $('inline-queue-more').textContent=`${Math.max(0,queue.length-3)}개 더 보기`;
     queue.forEach((item,index) => {
@@ -87,22 +92,25 @@ globalThis.WorkspaceWorkflow = (() => {
       now.title=busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
       const reorderable=queue.filter(entry=>entry.state==="queued"),position=reorderable.findIndex(entry=>entry.id===item.id);
       action("위로",()=>reorder(position,position-1),position<=0);action("아래로",()=>reorder(position,position+1),position<0||position===reorderable.length-1);
-      action("수정",()=>openEditor("queue",item),item.state!=="queued");action(item.state==="needs_review"?"대기에서 제거":"취소",()=>mutate({action:"cancel",requestId:item.id},context));
+      action("수정",()=>openEditor("queue",item),item.state!=="queued");
+      const cancel=action(cancelling(item.id)?"삭제 중…":item.state==="needs_review"?"대기에서 제거":"취소",()=>cancelRequest(item,context));
+      cancel.disabled=cancelBlocked()||cancelling(item.id)||!["queued","needs_review"].includes(item.state);
       row.append(actions);$("queue-list").append(row);
       if(index<3){
-        const compact=el('div',null,'inline-queue-row'),copy=el('div',null,'inline-queue-copy');
+        const existing=existingRows.get(item.id),compact=existing||el('div',null,'inline-queue-row'),copy=existing?.children[0]||el('div',null,'inline-queue-copy');
+        copy.replaceChildren();compact.classList.toggle('cancelling',cancelling(item.id));compact.setAttribute('aria-busy',String(cancelling(item.id)));
         compact.dataset.requestId=item.id;
         const title=el('span',item.text,'inline-queue-text');title.title=`${item.text}\n${waitLabel}${item.attachments?.length?` · 자료 ${item.attachments.length}개`:''}`;
         const mark=el('span',null,'inline-queue-mark');mark.setAttribute('aria-hidden','true');mark.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v12a3 3 0 0 0 3 3h12m-4-4 4 4-4 4M10 6h9M10 11h6"/></svg>';
         copy.append(mark,title);
-        const apply=el('button',now.textContent,'inline-queue-apply');apply.type='button';apply.disabled=now.disabled;apply.title=now.title;apply.setAttribute('aria-busy',String(applying));
+        const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':now.textContent;apply.type='button';apply.disabled=now.disabled;apply.title=now.title;apply.setAttribute('aria-busy',String(applying));
         const turn=el('span',null,'inline-queue-turn');turn.setAttribute('aria-hidden','true');turn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v5a3 3 0 0 0 3 3h12m-5-5 5 5-5 5"/></svg>';apply.append(turn);
         apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};
-        const remove=el('button',null,'inline-queue-delete');remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
-        remove.disabled=blocked||!['queued','needs_review'].includes(item.state);
+        const remove=existing?.children[2]||el('button',null,'inline-queue-delete');if(!existing)remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
+        remove.disabled=cancelBlocked()||cancelling(item.id)||!['queued','needs_review'].includes(item.state);
         if(item.state==='needs_review')remove.title='전송 여부를 확인한 요청을 대기에서 제거';
-        remove.onclick=()=>{if(current(context)&&!remove.disabled&&!locked())return mutate({action:'cancel',requestId:item.id},context);};
-        const handle=el('button','⠿','inline-queue-handle');handle.type='button';handle.title='드래그로 순서 변경 · Alt+↑/↓로 이동';handle.setAttribute('aria-label',`순서 변경: ${item.text}`);handle.disabled=blocked||item.state!=='queued';
+        remove.onclick=()=>{if(current(context)&&!remove.disabled)return cancelRequest(item,context);};
+        const handle=existing?.children[3]||el('button','⠿','inline-queue-handle');handle.type='button';handle.title='드래그로 순서 변경 · Alt+↑/↓로 이동';handle.setAttribute('aria-label',`순서 변경: ${item.text}`);handle.disabled=blocked||item.state!=='queued';
         handle.onkeydown=event=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key)||!current(context)||handle.disabled||locked())return;event.preventDefault();return reorder(position,position+(event.key==='ArrowUp'?-1:1));};
         compact.draggable=!handle.disabled;
         compact.ondragstart=event=>{if(handle.disabled||!current(context)||locked()||event.target?.closest?.('.inline-queue-apply,.inline-queue-delete')){event.preventDefault();return;}queueDrag={...context,requestId:item.id,revision:snapshot?.revision};event.dataTransfer?.setData('text/plain',item.id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';compact.classList.add('dragging');};
@@ -110,7 +118,7 @@ globalThis.WorkspaceWorkflow = (() => {
         compact.ondragleave=()=>compact.classList.remove('drop-target');
         compact.ondragend=()=>{queueDrag=null;compact.classList.remove('dragging');for(const row of $('inline-queue-list').children)row.classList.remove('drop-target');};
         compact.ondrop=event=>{event.preventDefault();const drag=queueDrag;queueDrag=null;compact.classList.remove('drop-target');if(!drag||!current(drag)||!current(context)||locked()||blocked||drag.revision!==snapshot?.revision)return;const items=pending().filter(r=>r.state==='queued');const from=items.findIndex(r=>r.id===drag.requestId),to=items.findIndex(r=>r.id===item.id);if(from<0||to<0||from===to)return;const [moved]=items.splice(from,1);items.splice(to,0,moved);return mutate({action:'reorder',order:items.map(r=>r.id)},context);};
-        compact.append(copy,apply,remove,handle);$('inline-queue-list').append(compact);
+        if(!existing)compact.append(copy,apply,remove,handle);if(inlineList.children[index]!==compact)inlineList.append(compact);
       }
     });
     }
@@ -215,8 +223,16 @@ globalThis.WorkspaceWorkflow = (() => {
     if (!attempts.has(fingerprint)) attempts.set(fingerprint,globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
     return {fingerprint,id:attempts.get(fingerprint)};
   }
+  async function cancelRequest(item,context=capture()) {
+    if(!current(context)||cancelBlocked()||cancelling(item.id,context.id)||!["queued","needs_review"].includes(item.state))return;
+    const key=`${context.id}:${item.id}`;
+    cancellations.set(key,context);render();setStatus(active?.state||"idle");
+    try {const value=await api("/api/dispatch",{id:context.id,action:"cancel",requestId:item.id});apply(value,context);return value;}
+    catch(err){if(current(context)){toast(`삭제하지 못했어요. ${err.message}`);$("workflow-message").textContent=err.message;}return null;}
+    finally {cancellations.delete(key);if(current(context)){render();setStatus(active?.state||"idle");}}
+  }
   async function mutate(body,context=capture()) {
-    if (!context.id || mutations.has(context.id) || appClosed || (current(context)&&globalThis.WorkspaceConnectionRestart?.isCurrent())) return null;
+    if (!context.id || mutations.has(context.id) || [...cancellations.values()].some(value=>value.id===context.id) || appClosed || (current(context)&&globalThis.WorkspaceConnectionRestart?.isCurrent())) return null;
     const creating=["enqueue","steer","apply_now","schedule"].includes(body.action),payload={id:context.id,...body},attempt=creating?requestId(payload):null;
     if(attempt)payload.clientRequestId=attempt.id;
     mutations.set(context.id,context);render();setStatus(active?.state||"idle");

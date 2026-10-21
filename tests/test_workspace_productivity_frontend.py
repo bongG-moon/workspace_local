@@ -254,6 +254,34 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'남겨둘 초안');assert.deepEqual([...attachments],['C:/draft.txt']);
         })()""", ("workflow",))
 
+    def test_slow_cancel_is_immediate_deduplicated_and_allows_other_cancels(self):
+        self.run_case(r"""(async()=>{
+          const queue=[{id:'q1',text:'첫 요청',state:'queued'},{id:'q2',text:'둘째 요청',state:'queued'}];
+          const state={revision:1,queue,schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const first=$('inline-queue-list').children[0],second=$('inline-queue-list').children[1],remove=first.children[2];
+          active.state='question';WorkspaceWorkflow.render();assert.equal($('inline-queue-list').children[0],first);assert.equal(first.children[2],remove);
+          $('prompt').value='보존할 초안';attachments=['C:/keep.txt'];
+          const calls=[],resolve=[];api=(path,body)=>{calls.push(body);return new Promise(done=>resolve.push(done));};
+          const a=remove.onclick();assert.equal(first.children[1].textContent,'삭제 중…');assert.equal(remove.disabled,true);
+          await remove.onclick();assert.equal(calls.length,1);assert.equal(second.children[2].disabled,false);
+          const b=second.children[2].onclick();assert.equal(calls.length,2);
+          resolve[1]({...state,revision:3,queue:[]});await b;
+          resolve[0]({...state,revision:2,queue:[queue[1]]});await a;
+          assert.equal($('inline-queue-list').children.length,0);
+          assert.equal($('prompt').value,'보존할 초안');assert.deepEqual([...attachments],['C:/keep.txt']);
+        })()""", ("workflow",))
+
+    def test_cancel_failure_restores_row_and_retry_without_consuming_draft(self):
+        self.run_case(r"""(async()=>{
+          const state={revision:1,queue:[{id:'q1',text:'남겨야 할 요청',state:'queued'}],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();$('prompt').value='초안';
+          const row=$('inline-queue-list').children[0];api=async()=>{throw Error('연결 오류');};
+          await row.children[2].onclick();assert.equal(row.children[2].disabled,false);assert.equal(row.children[1].textContent,'지금 반영');
+          assert.equal($('prompt').value,'초안');assert.equal($('inline-queue-list').children[0],row);
+          api=async()=>({...state,revision:2,queue:[]});await row.children[2].onclick();assert.equal($('inline-queue').hidden,true);
+        })()""", ("workflow",))
+
     def test_composer_keeps_send_and_shows_apply_only_for_busy_draft(self):
         self.run_case(r"""(async()=>{
           const state={revision:1,queue:[],schedules:[],steer:{supported:true}};

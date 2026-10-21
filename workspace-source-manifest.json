@@ -227,8 +227,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.29.md",
-      "sha256": "ad3ce53174c5b62dabb06459792126a99d8c312c57adcf188f04532f2b3fe49c",
-      "size": 1921
+      "sha256": "1c476d0d2a00be78844c50c33d81cb2f464e66965293700a48817f49a9b1066f",
+      "size": 2164
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -482,8 +482,8 @@
     },
     {
       "path": "docs/VALIDATION_0.23.29.md",
-      "sha256": "b04ab62fd73853241b9de3acba7cd10d2d184145fc4f82084547d132350f67c7",
-      "size": 1140
+      "sha256": "9c5d806971d6a6d4e4b0f90d14e43158b447587b0de26774a4d7e906c17cff4b",
+      "size": 1783
     },
     {
       "path": "docs/VALIDATION_0.23.3.md",
@@ -1422,8 +1422,8 @@
     },
     {
       "path": "local_app/web/workflow.js",
-      "sha256": "b8d3a5cc4c45c65b7e583bd2f9e273f0ec0e8cb894df9052c9e4570f348b0cb5",
-      "size": 36370
+      "sha256": "1ba22ddc5847e394365b768531c8b73aba3511198647fb7e54484714b09efde6",
+      "size": 38349
     },
     {
       "path": "local_app/web/zoom-feedback.css",
@@ -2362,8 +2362,8 @@
     },
     {
       "path": "tests/test_workspace_productivity_frontend.py",
-      "sha256": "c939040e0e20771c2e5d13def0e58fd9a0589c4ee08ae093941941a19b470e07",
-      "size": 48550
+      "sha256": "0d4f3ed783c9c0b59a7bc8067443c20f32c378fa8823e1441cc66163f5121898",
+      "size": 50928
     },
     {
       "path": "tests/test_workspace_productivity_routes.py",
