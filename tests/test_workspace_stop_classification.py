@@ -74,6 +74,16 @@ class StopClassificationTests(unittest.TestCase):
                 self.assertFalse(bridge.closed)  # Cleanup still owns the final stop status.
                 self.assertIsNone(bridge.process)  # No automatic replay or reconnect.
 
+    def test_prompt_check_is_benign_only_during_explicit_stop(self):
+        message = 'prompt_check: the turn was stopped before its prompt was checked'
+        for stopping in (False, True):
+            bridge, native_id, events = self.session(stopping=stopping)
+            bridge.handle(result_frame(native_id, result=message))
+            self.assertEqual(not stopping, any(kind == 'error' for kind, _ in events))
+        bridge, native_id, events = self.session(stopping=True)
+        bridge.handle(result_frame(native_id, result=message, errors=['actual tool failure']))
+        self.assertTrue(any(kind == 'error' for kind, _ in events))
+
     def test_delegated_diagnostic_cannot_finish_parent_stop_or_replace_identity(self):
         bridge, native_id, events = self.session(stopping=True)
         bridge.handle(result_frame(str(uuid.uuid4()), parent_tool_use_id='worker'))

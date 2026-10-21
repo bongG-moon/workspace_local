@@ -41,6 +41,33 @@ globalThis.WorkspaceWorkflow = (() => {
     if (snapshot?.sessionId === context.id && Number(next.revision) < Number(snapshot.revision)) return;
     snapshot = {...next,sessionId:context.id};render();
   }
+  // Keep a press attached to its original button across streaming layout updates.
+  // Activate on release (never on press), and consume the following native click.
+  function bindQueuePointer(button) {
+    if(button.dataset.queuePointerBound)return;
+    button.dataset.queuePointerBound="true";
+    let press=null,suppressClick=false;
+    button.addEventListener?.("pointerdown",event=>{
+      suppressClick=false;
+      if(event.button!==0||event.isPrimary===false||button.disabled)return;
+      const rect=button.getBoundingClientRect();
+      press={id:event.pointerId,x:event.clientX,y:event.clientY,rect,context:capture(),moved:false};
+      try {button.setPointerCapture(event.pointerId);} catch(_) {press=null;}
+    });
+    button.addEventListener?.("pointermove",event=>{
+      if(press&&event.pointerId===press.id&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>12)press.moved=true;
+    });
+    button.addEventListener?.("pointerup",event=>{
+      const down=press;if(!down||event.pointerId!==down.id)return;press=null;suppressClick=true;
+      try {button.releasePointerCapture(event.pointerId);} catch(_) {}
+      const rect=down.rect,inside=event.clientX>=rect.left&&event.clientX<=rect.right&&event.clientY>=rect.top&&event.clientY<=rect.bottom;
+      if(!down.moved&&inside&&current(down.context)&&!button.disabled)button.onclick?.();
+    });
+    for(const type of ["pointercancel","lostpointercapture"])button.addEventListener?.(type,()=>{press=null;});
+    button.addEventListener?.("click",event=>{
+      if(event.detail>0&&suppressClick){suppressClick=false;event.preventDefault();event.stopImmediatePropagation();}
+    },true);
+  }
   function render() {
     const blocked = sending || !!choiceSubmission || modelChanging || permissionChanging || effortChanging || connectionPreparing || stopBlocked() || !!snapshot?.applyingId || !!globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed || locked() || !!globalThis.WorkspaceAttachments?.isUploading();
     const queue = pending(), schedules = snapshot?.schedules || [];
@@ -105,11 +132,11 @@ globalThis.WorkspaceWorkflow = (() => {
         copy.append(mark,title);
         const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':now.textContent;apply.type='button';apply.disabled=now.disabled;apply.title=now.title;apply.setAttribute('aria-busy',String(applying));
         const turn=el('span',null,'inline-queue-turn');turn.setAttribute('aria-hidden','true');turn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v5a3 3 0 0 0 3 3h12m-5-5 5 5-5 5"/></svg>';apply.append(turn);
-        apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};
+        apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};bindQueuePointer(apply);
         const remove=existing?.children[2]||el('button',null,'inline-queue-delete');if(!existing)remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
         remove.disabled=cancelBlocked()||cancelling(item.id)||!['queued','needs_review'].includes(item.state);
         if(item.state==='needs_review')remove.title='전송 여부를 확인한 요청을 대기에서 제거';
-        remove.onclick=()=>{if(current(context)&&!remove.disabled)return cancelRequest(item,context);};
+        remove.onclick=()=>{if(current(context)&&!remove.disabled)return cancelRequest(item,context);};bindQueuePointer(remove);
         const handle=existing?.children[3]||el('button','⠿','inline-queue-handle');handle.type='button';handle.title='드래그로 순서 변경 · Alt+↑/↓로 이동';handle.setAttribute('aria-label',`순서 변경: ${item.text}`);handle.disabled=blocked||item.state!=='queued';
         handle.onkeydown=event=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key)||!current(context)||handle.disabled||locked())return;event.preventDefault();return reorder(position,position+(event.key==='ArrowUp'?-1:1));};
         // Only the handle starts a native drag; button jitter must remain a click.

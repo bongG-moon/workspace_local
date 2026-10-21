@@ -798,8 +798,10 @@ class ClaudeSession:
         details = [value for value in [data.get('result', ''), *errors] if value != '']
         expected = {'result_type=user', 'last_content_type=n/a', 'stop_reason=tool_use'}
         return bool(details) and all(
-            isinstance(value, str) and len(parts := value.split()) == 4
-            and parts[0] == '[ede_diagnostic]' and set(parts[1:]) == expected
+            isinstance(value, str) and (
+                value.strip() == 'prompt_check: the turn was stopped before its prompt was checked'
+                or (len(parts := value.split()) == 4
+                    and parts[0] == '[ede_diagnostic]' and set(parts[1:]) == expected))
             for value in details)
 
     def start(self):

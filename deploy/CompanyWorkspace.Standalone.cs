@@ -22,6 +22,8 @@ namespace CompanyAgent {
     internal static class WorkspaceStandalone {
         private const string PayloadPrefix = "Company-Workspace/";
         private static bool quiet;
+        private static string stage = "실행 정보 확인";
+        private static string failureDetail = "";
         [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
@@ -47,9 +49,11 @@ namespace CompanyAgent {
                         try { held = mutex.WaitOne(TimeSpan.FromSeconds(60)); }
                         catch (AbandonedMutexException) { held = true; }
                         if (!held) throw new StandaloneFailure(55);
+                        stage = "실행 자료 폴더 접근";
                         EnsureNoReparse(cacheRoot);
                         EnsureNoReparse(target);
                         if (Directory.Exists(target)) {
+                            stage = "기존 실행 자료 읽기 및 검사";
                             VerifyFiles(target, manifest);
                         } else {
                             Extract(cacheRoot, target, manifest, archiveHash);
@@ -57,9 +61,28 @@ namespace CompanyAgent {
                     } finally { if (held) mutex.ReleaseMutex(); }
                 }
                 if (options.VerifyOnly) return 0;
+                stage = "앱 실행기 시작";
                 return Launch(Path.Combine(target, "Company-Workspace"), options, version);
             } catch (StandaloneFailure error) { return Report(error.Code); }
-            catch { return Report(59); }
+            catch (Exception error) {
+                failureDetail = "실패 단계: " + stage + Environment.NewLine +
+                    "진단: " + error.GetType().Name + " / 0x" + error.HResult.ToString("X8");
+                return Report(ClassifyFailure(error));
+            }
+        }
+
+        private static int ClassifyFailure(Exception error) {
+            int native = error.HResult & 0xffff;
+            if (error is UnauthorizedAccessException || error is System.Security.SecurityException || native == 5) return 60;
+            if (error is PathTooLongException) return 63;
+            if (error is InvalidDataException) return 64;
+            if (error is IOException) {
+                if (native == 112 || native == 39) return 61;
+                if (native == 32 || native == 33) return 62;
+                if (native == 3 || native == 2 || native == 53 || native == 67 || native == 267 || native == 183 || native == 80) return 65;
+                return 66;
+            }
+            return 59;
         }
 
         private sealed class Options {
@@ -192,11 +215,13 @@ namespace CompanyAgent {
         }
 
         private static void Extract(string cacheRoot, string target, Dictionary<string, string> manifest, string expectedHash) {
+            stage = "실행 자료 저장 폴더 생성";
             Directory.CreateDirectory(cacheRoot);
             EnsureNoReparse(cacheRoot);
             string staging = Path.Combine(cacheRoot, ".staging-" + expectedHash.Substring(0, 16) + "-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(staging);
             try {
+                stage = "내장 실행 자료 압축 해제";
                 using (Stream resource = Resource("WorkspacePayload.zip")) {
                     if (!String.Equals(Hash(resource), expectedHash, StringComparison.OrdinalIgnoreCase)) throw new StandaloneFailure(51);
                     resource.Position = 0;
@@ -232,8 +257,10 @@ namespace CompanyAgent {
                         if (fileCount != manifest.Count) throw new StandaloneFailure(51);
                     }
                 }
+                stage = "압축 해제한 자료 검사";
                 VerifyFiles(staging, manifest);
                 EnsureNoReparse(target);
+                stage = "실행 자료 폴더 확정";
                 Directory.Move(staging, target);
             } finally {
                 // Only our uncommitted staging tree is eligible for cleanup.
@@ -354,9 +381,17 @@ namespace CompanyAgent {
                 case 56: message = "Windows PowerShell을 찾거나 시작하지 못했습니다. PC의 기존 PowerShell 실행 환경을 확인해 주세요. 설치나 설정 변경은 하지 않았습니다."; break;
                 case 57: message = "실행 준비 시간이 길어지고 있습니다. 준비 중인 프로세스는 종료하지 않았습니다. 잠시 뒤 앱이 열리는지 확인해 주세요."; break;
                 case 58: message = "앱 실행을 완료하지 못했습니다. 실행 캐시의 Company-Workspace 폴더에 있는 Check-Workspace.cmd로 진단하거나 이 오류 코드를 담당자에게 전달해 주세요."; break;
+                case 60: message = "실행 자료 폴더 또는 파일에 접근할 권한이 없습니다. 사용자 폴더의 읽기·쓰기 권한과 보안 프로그램 차단 기록을 확인해 주세요."; break;
+                case 61: message = "실행 자료를 저장할 디스크 공간이 부족합니다. 실행 캐시가 저장되는 드라이브의 여유 공간을 확보해 주세요."; break;
+                case 62: message = "실행 자료 파일을 다른 프로그램이 사용 중입니다. 실행 중인 AX Workspace를 종료한 뒤 다시 시도해 주세요. 계속되면 보안 프로그램의 파일 검사 여부를 확인해 주세요."; break;
+                case 63: message = "실행 자료의 파일 경로가 너무 깁니다. 더 짧은 실행 캐시 경로를 사용해 주세요."; break;
+                case 64: message = "내장 실행 자료의 압축을 읽지 못했습니다. 설치파일을 다시 받아 확인해 주세요."; break;
+                case 65: message = "실행 자료 경로를 사용할 수 없습니다. 드라이브 연결 상태와 같은 이름의 파일 또는 폴더가 있는지 확인해 주세요."; break;
+                case 66: message = "실행 자료를 읽거나 저장하는 중 입출력 오류가 발생했습니다. 디스크 상태와 보안 프로그램 차단 기록을 확인해 주세요."; break;
                 default: message = "실행 자료를 준비하지 못했습니다. 저장 공간과 폴더 접근 권한을 확인해 주세요. 개인 설정은 변경하지 않았습니다."; break;
             }
             message += Environment.NewLine + "오류 코드: EXE-" + code;
+            if (failureDetail.Length != 0) message += Environment.NewLine + failureDetail;
             if (quiet) Console.Error.WriteLine(message);
             else MessageBox.Show(message, "AX Workspace", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return code;

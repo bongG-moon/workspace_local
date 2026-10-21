@@ -119,6 +119,15 @@ class StandaloneBootstrapTests(unittest.TestCase):
     def target(self, digest=None):
         return self.cache / ('0.12.5-' + (digest or self.good_hash)[:16])
 
+    def test_cache_path_collision_reports_specific_error_and_stage(self):
+        self.cache.write_text('keep this file', encoding='utf-8')
+        result = self.run_exe(None, '--verify-only')
+        self.assertEqual(65, result.returncode, result.stderr)
+        self.assertIn(b'EXE-65', result.stderr)
+        self.assertIn(b'IOException', result.stderr)
+        self.assertIn(b'0x', result.stderr)
+        self.assertEqual('keep this file', self.cache.read_text(encoding='utf-8'))
+
     def test_extract_only_and_repeat_reuses_identical_cache(self):
         first = self.run_exe(None, '--verify-only')
         self.assertEqual(0, first.returncode, first.stderr)

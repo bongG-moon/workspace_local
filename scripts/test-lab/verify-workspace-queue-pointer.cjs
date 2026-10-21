@@ -84,5 +84,20 @@ for(const streaming of [false,true]){
  results.push({streaming,action:'handle reorder',passed:true});
  if(streaming){const ticks=await p.evaluate(()=>{clearInterval(testStream);return testTicks;});assert.ok(ticks>0);console.log(JSON.stringify({streamTicks:ticks}));}
 }
+
+for(const [selector,action] of [['.inline-queue-delete','cancel'],['.inline-queue-apply','apply_now']]){
+ for(const offset of [[2,2],[14,14],[26,26]]){
+  f.resetQueue();await p.evaluate(()=>WorkspaceWorkflow.refresh());const before=f.calls.filter(c=>c.body.action===action).length,b=await p.locator(selector).first().boundingBox();
+  await p.mouse.click(b.x+offset[0],b.y+offset[1]);await p.waitForFunction(()=>document.querySelectorAll('.inline-queue-row').length===2);
+  assert.equal(f.calls.filter(c=>c.body.action===action).length,before+1);
+ }
+ f.resetQueue();await p.evaluate(()=>WorkspaceWorkflow.refresh());let b=await p.locator(selector).first().boundingBox(),before=f.calls.filter(c=>c.body.action===action).length;
+ await p.mouse.move(b.x+b.width/2,b.y+b.height/2);await p.mouse.down();assert.equal(f.calls.filter(c=>c.body.action===action).length,before);
+ await p.evaluate(()=>{$('prompt').style.height=$('prompt').style.height==='120px'?'49px':'120px';setStatus('running');});await p.mouse.up();await p.waitForFunction(()=>document.querySelectorAll('.inline-queue-row').length===2);assert.equal(f.calls.filter(c=>c.body.action===action).length,before+1);
+ f.resetQueue();await p.evaluate(()=>WorkspaceWorkflow.refresh());b=await p.locator(selector).first().boundingBox();before=f.calls.filter(c=>c.body.action===action).length;
+ await p.mouse.move(b.x+b.width/2,b.y+b.height/2);await p.mouse.down();await p.mouse.move(b.x-50,b.y-50,{steps:5});await p.mouse.up();await p.waitForTimeout(100);assert.equal(f.calls.filter(c=>c.body.action===action).length,before);
+ await p.locator(selector).first().focus();await p.keyboard.press('Enter');await p.waitForFunction(()=>document.querySelectorAll('.inline-queue-row').length===2);assert.equal(f.calls.filter(c=>c.body.action===action).length,before+1);
+ results.push({action,iconAndPadding:true,layoutShift:true,releaseOutsideCancelled:true,keyboard:true});
+}
 assert.deepEqual(f.errors,[]);console.log(JSON.stringify({checks:results,errors:f.errors}));await f.finish();
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1);});

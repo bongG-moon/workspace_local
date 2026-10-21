@@ -22,7 +22,7 @@ SOFT_INTERRUPT = """    elif subtype == 'interrupt':
         while not (root / 'release-stop').exists() and time.monotonic() < deadline:
             time.sleep(.01)
         terminal = {'type': 'result', 'session_id': session, 'is_error': True,
-                    'result': '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use'}
+                    'result': config.get('stopDiagnostic', '[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use')}
         acknowledgement = {'type': 'control_response', 'response': {
             'subtype': 'success', 'request_id': data['request_id'], 'response': {}}}
         if config.get('stopResultFirst'):
@@ -132,6 +132,33 @@ class StopResumeTests(unittest.TestCase):
         eventually(lambda: self.item['state'] == 'done')
         self.assertIs(bridge, self.item['bridge'])
         self.assertEqual(2, sum(row['type'] == 'user' for row in self.frames()))
+
+    def test_repeated_apply_preserves_remaining_queue(self):
+        self.check_repeated_apply('prompt_check: the turn was stopped before its prompt was checked')
+
+    def test_repeated_apply_with_tool_stop_preserves_remaining_queue(self):
+        self.check_repeated_apply('[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use')
+
+    def check_repeated_apply(self, diagnostic):
+        bridge = self.connect(stopDiagnostic=diagnostic)
+        context = self.app.dispatch.context(self.item)
+        self.app.send(self.sid, 'wait for cancellation', [])
+        self.wait_user_count(1)
+        first = self.app.dispatch.queue.enqueue(self.sid, 'wait for cancellation', context=context)
+        second = self.app.dispatch.queue.enqueue(self.sid, 'final selected', context=context)
+        remaining = self.app.dispatch.queue.enqueue(self.sid, 'keep queued', context=context)
+        for count, selected in enumerate((first, second), 2):
+            self.app.dispatch.action(self.sid, {'action': 'apply_now', 'requestId': selected['id'],
+                'editRevision': 0, 'clientRequestId': selected['id']})
+            self.release_stop()
+            eventually(lambda: self.app.stop_state(self.item) == 'stopped')
+            self.app.dispatch.pump()
+            self.wait_user_count(count)
+            self.assertNotEqual('error', self.item['state'])
+        eventually(lambda: self.item['state'] == 'done')
+        self.assertIs(bridge, self.item['bridge'])
+        self.assertEqual([remaining['id']], [r['id'] for r in self.app.dispatch.snapshot(self.sid)['queue']])
+        self.assertEqual(3, sum(r['type'] == 'user' for r in self.frames()))
 
     def test_saved_queue_apply_interrupts_once_then_keeps_cli_pid_and_queue_identity(self):
         for result_first in (False, True):

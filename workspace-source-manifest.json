@@ -67,8 +67,8 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Standalone.cs",
-      "sha256": "86b1e3c6ab17976938253f930c656f1482e19c811876507ecf0cb48cc008fad8",
-      "size": 22145
+      "sha256": "5a9d58d2384ef6d9095d4c5221c1217c6731a4231b0eab60b0999baf69b1db04",
+      "size": 25138
     },
     {
       "path": "deploy/CompanyWorkspace.Standalone.manifest",
@@ -227,8 +227,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.29.md",
-      "sha256": "ba028d97b812c7c3b1c4d1a1be4cda3fc5d04b0752d85d88c74541a2b1f36fb3",
-      "size": 2455
+      "sha256": "f5825624053554e626c3696bc3240e2ed86c8b61d0bc476833db3773973d9df4",
+      "size": 3197
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -567,8 +567,8 @@
     },
     {
       "path": "docs/VALIDATION_QUEUE_POINTER_0.23.29.md",
-      "sha256": "b19b9aaff5180e504b0a0fcfa7a7cd0721a6876b02789cc9598af99b324cfe81",
-      "size": 1882
+      "sha256": "c3119c026ec42689c0d86c7d7c2b439adc4705d162b5b16c6683a5e2fca75664",
+      "size": 5475
     },
     {
       "path": "docs/VALIDATION_RESPONSIVENESS_0.23.20.md",
@@ -872,8 +872,8 @@
     },
     {
       "path": "local_app/bridge.py",
-      "sha256": "cdf541398ee3ea7c5743a744607b1047cef5987a94b247cc1c0c654297d5ee92",
-      "size": 110175
+      "sha256": "fcd11018dd4c1fc2134cd6aff8aa23e83ca853b8b4d18edc28de671a96cbacee",
+      "size": 110307
     },
     {
       "path": "local_app/capabilities.py",
@@ -1337,8 +1337,8 @@
     },
     {
       "path": "local_app/web/productivity.css",
-      "sha256": "650a274b9ec0a760854af2fb1db0edf6a748a7f056f902754667266c5dd7d534",
-      "size": 13686
+      "sha256": "fd098352478ec82394792f5f42aa884e2bad4b85f1e23e7be1bcd459d92e8eb5",
+      "size": 13863
     },
     {
       "path": "local_app/web/productivity.js",
@@ -1427,8 +1427,8 @@
     },
     {
       "path": "local_app/web/workflow.js",
-      "sha256": "3e5fc23a4744b4871c40fdfef5059c09398d05a69be73f5f9bcf795d3470c9c4",
-      "size": 38520
+      "sha256": "c397451a826707bb14c736e6dbd3b74ae1fe2ffdd989007f333596e8ce5872e8",
+      "size": 40231
     },
     {
       "path": "local_app/web/zoom-feedback.css",
@@ -1726,9 +1726,19 @@
       "size": 7999
     },
     {
+      "path": "scripts/test-lab/verify-workspace-queue-http.cjs",
+      "sha256": "773dfde32d2fb99160bc9523c56cc599420b9655e8eb4eb5d3c16ae205b2df45",
+      "size": 1751
+    },
+    {
+      "path": "scripts/test-lab/verify-workspace-queue-http.py",
+      "sha256": "d4947af8d3124536b91393df26db1ab3252ee2c44105a9e9d9e6076c56c5e6fb",
+      "size": 1731
+    },
+    {
       "path": "scripts/test-lab/verify-workspace-queue-pointer.cjs",
-      "sha256": "bd0111e68ec1084b93523ae5534c979ca873e8451b753f6431c87f8a68745ce0",
-      "size": 8510
+      "sha256": "a4ead595cd370cc4d53fa7981e4d7859fc445d2be1aef94602af94abf67da389",
+      "size": 10443
     },
     {
       "path": "scripts/test-lab/verify-workspace-release-history.cjs",
@@ -2622,8 +2632,8 @@
     },
     {
       "path": "tests/test_workspace_standalone_bootstrap.py",
-      "sha256": "932f360795266a275ced5f72ed3d7072892c3ce4011558e25e1ba6ad5c61900d",
-      "size": 24413
+      "sha256": "1a6df92ee3bf962afc1a089654a9467e9fbab372a4ffc0c0a7c351742804e197",
+      "size": 24898
     },
     {
       "path": "tests/test_workspace_startup.py",
@@ -2642,8 +2652,8 @@
     },
     {
       "path": "tests/test_workspace_stop_classification.py",
-      "sha256": "c650cdcd51f294c51d590e705f81c295bf4a5e5c9a6518181f49653cf87499c9",
-      "size": 22685
+      "sha256": "f7838f822b64df379eb238c5a72c32cf1f8d9222e258e8dea652b186a1f53eb4",
+      "size": 23332
     },
     {
       "path": "tests/test_workspace_stop_frontend.py",
@@ -2652,8 +2662,8 @@
     },
     {
       "path": "tests/test_workspace_stop_resume.py",
-      "sha256": "95e2c257633a827217a4540285e7f526652b3eb2f85e56093281d1ae1281efdd",
-      "size": 20142
+      "sha256": "080ea076322923d1c7d3a3df9f8857c9a97f18f739148ce492327acba26044f4",
+      "size": 21843
     },
     {
       "path": "tests/test_workspace_taskbar_identity.py",
