@@ -1,4 +1,4 @@
-# AX Workspace 0.23.30
+# AX Workspace 0.23.29
 
 **내 업무와 AI가 만나는 공간**
 
@@ -12,7 +12,7 @@
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.30/AX-Workspace-0.23.30-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.30/AX-Workspace-0.23.30-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.29/AX-Workspace-0.23.29-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.29/AX-Workspace-0.23.29-vbs.zip)**
 
 [NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -20,13 +20,13 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.30-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.30.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.29-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.29.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.30 Release의 `AX-Workspace-0.23.30-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.30.exe`, `Company-Workspace-0.23.30.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.29 Release의 `AX-Workspace-0.23.29-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.29.exe`, `Company-Workspace-0.23.29.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 
@@ -34,14 +34,20 @@
 
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
 
-## 0.23.30 변경
+## 0.23.29 변경
 
-- 일반 대화와 업무 채팅 입력창에서 Ctrl+A가 현재 줄 처음으로 이동하던 문제를 수정했습니다. 이제 작성 내용 전체를 선택합니다.
-- 여러 줄, 한글, 이모지가 포함된 입력에서도 전체 선택 후 삭제·되돌리기를 사용할 수 있습니다.
-- 단축키 안내와 사용 도움말을 수정했습니다. 줄 처음 이동은 Home, 줄 끝 이동은 Ctrl+E를 사용할 수 있습니다.
-- 기존 이어 할 일, 지금 반영, 실행 예약 기능을 유지합니다.
+- 입력창 위에 이어 할 일 목록을 표시합니다. 처음 3개를 간결하게 보여 주고 더 보기와 목록 관리로 전체 요청을 확인할 수 있습니다.
+- 대기 요청을 지금 반영하거나 삭제하고, 드래그 또는 Alt+위/아래 키로 실행 순서를 조정할 수 있습니다. 작성 중인 입력과 첨부, 다른 대기 요청은 유지합니다.
+- 작업 중 보내기를 누르면 대기 요청으로 추가합니다. 작업 중이면서 입력한 내용이 있을 때만 보내기 옆에 지금 반영 버튼이 표시됩니다.
+- 지금 반영은 현재 요청의 중지를 확인한 뒤 같은 대화에서 이어가는 방식입니다. 이미 수행한 파일 변경을 되돌리지 않습니다.
+- 중복된 이어 할 일 버튼과 별도 후속 전송 영역을 정리하고, 삭제는 휴지통 아이콘으로 표시하며 항목 사이에 구분선을 추가했습니다.
+- 실행 예약을 입력창의 자료 추가 옆으로 옮기고, 사용 빈도가 낮은 경로로 추가 버튼을 제거했습니다. 기존 전체 예약과 예약 관리 기능은 유지합니다.
+- 일반 대화와 업무 입력창의 Ctrl+A를 작성 내용 전체 선택으로 수정하고 단축키 안내를 맞췄습니다. 여러 줄·한글·이모지 입력의 전체 선택, 삭제와 되돌리기를 확인했습니다.
+- 작업 상태 갱신 중 대기 목록 버튼이 교체되어 휴지통·지금 반영 클릭이 무시되는 문제를 수정했습니다. 내용이 같으면 기존 버튼을 유지합니다.
+- 전송 확인 필요 상태의 대기 요청도 휴지통으로 목록에서 제거할 수 있습니다. 이미 실행 중인 요청은 답변 중지를 사용합니다.
+- 대기 요청 삭제, 순서 변경, 줄바꿈 유지, 두 종류의 지금 반영과 작성 중 내용·첨부 보존을 함께 검증했습니다.
 
-[변경 내용](docs/RELEASE_NOTES_0.23.30.md) · [릴리즈 검증](docs/VALIDATION_0.23.30.md) · [사용 안내서](docs/WORKSPACE_USER_GUIDE.html)
+[변경 내용](docs/RELEASE_NOTES_0.23.29.md) · [릴리즈 검증](docs/VALIDATION_0.23.29.md) · [사용 안내서](docs/WORKSPACE_USER_GUIDE.html)
 
 ## 0.23.26 변경
 
@@ -82,7 +88,7 @@
 
 [설계와 검증](docs/WORKSPACE_CUSTOMIZATIONS_0.23.23.md) · [설정 명령 사용 안내](docs/WORKSPACE_USER_GUIDE.html#claude-settings-commands)
 
-[0.23.30 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.30)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.30/workspace-local-0.23.30-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
+[0.23.29 Release](https://github.com/bongG-moon/workspace_local/releases/tag/v0.23.29)에서 EXE·VBS ZIP과 [사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.29/workspace-local-0.23.29-source.zip)을 받을 수 있습니다. Code → Download ZIP에도 소스와 배포 이력이 포함됩니다. 사내 GitLab 게시는 사내 PC에서 진행하세요.
 
 ## 0.23.22 변경
 

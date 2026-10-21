@@ -70,6 +70,17 @@ class DispatchRoutesTests(unittest.TestCase):
         self.assertEqual(200, code, value)
         return value
 
+    def test_cancel_multiline_request_removes_only_selected_row_and_persists(self):
+        self.app.get(self.sid)['state'] = 'running'
+        first = self.enqueue('첫 줄\n두 번째 줄')['queue'][0]
+        state = self.enqueue('남겨둘 요청')
+        other = next(row for row in state['queue'] if row['id'] != first['id'])
+        code, result = self.request({'action': 'cancel', 'requestId': first['id']})
+        self.assertEqual(200, code)
+        self.assertEqual([other['id']], [row['id'] for row in result['queue']])
+        self.assertEqual([other['id']], [row['id'] for row in self.request()[1]['queue']])
+        self.assertEqual('running', self.app.get(self.sid)['state'])
+
     def test_schedule_overview_requires_auth_and_cannot_start_work(self):
         for authorized in (False, True):
             headers = {'Authorization': 'Bearer ' + self.app.token} if authorized else {}

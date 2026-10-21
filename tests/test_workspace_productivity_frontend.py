@@ -240,6 +240,20 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(calls,0);assert.equal($('prompt').value,'그대로');assert.equal(attachments.length,1);
         })()""", ("attachments",))
 
+    def test_inline_buttons_survive_status_refresh_and_review_rows_can_cancel(self):
+        self.run_case(r"""(async()=>{
+          let state={revision:1,queue:[{id:'q1',text:'확인할 요청',state:'needs_review'}],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const row=$('inline-queue-list').children[0],remove=row.children[2];
+          assert.equal(remove.disabled,false);
+          setStatus('running');await WorkspaceWorkflow.refresh();
+          assert.equal($('inline-queue-list').children[0],row);
+          $('prompt').value='남겨둘 초안';attachments=['C:/draft.txt'];
+          api=async(path,body)=>{assert.equal(body.action,'cancel');state={...state,revision:2,queue:[]};return state;};
+          await remove.onclick();assert.equal($('inline-queue').hidden,true);
+          assert.equal($('prompt').value,'남겨둘 초안');assert.deepEqual([...attachments],['C:/draft.txt']);
+        })()""", ("workflow",))
+
     def test_composer_keeps_send_and_shows_apply_only_for_busy_draft(self):
         self.run_case(r"""(async()=>{
           const state={revision:1,queue:[],schedules:[],steer:{supported:true}};

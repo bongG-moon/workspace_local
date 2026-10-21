@@ -3,7 +3,7 @@
 globalThis.WorkspaceWorkflow = (() => {
   let snapshot = null, readGeneration = 0, controller = null, editor = null, trustReturn = null;
   let overview = null, overviewController = null, overviewGeneration = 0, overviewPage = 0, overviewFocus = null, overviewNavigating = false;
-  let overviewFingerprint = "", queueDrag = null;
+  let overviewFingerprint = "", queueFingerprint = "", queueDrag = null;
   const overviewPageSize = 15;
   const overviewDateFormatter = new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"numeric",day:"numeric",hour:"numeric",minute:"2-digit"});
   const overviewDateLabel = value => value ? overviewDateFormatter.format(new Date(value*1000)) : "미정";
@@ -59,8 +59,13 @@ globalThis.WorkspaceWorkflow = (() => {
     $("workflow-resume").hidden = !(snapshot?.paused || uncertain);
     $("workflow-resume").disabled = blocked || busy() || uncertain;
     if(snapshot?.warning)$("workflow-message").textContent=snapshot.warning;
-    $("queue-list").replaceChildren();$("queue-empty").hidden = queue.length > 0;
     const context = capture();
+    // Status/stream refreshes must not replace a pressed button before click.
+    const nextQueueFingerprint = JSON.stringify([context, queue, blocked, active?.trusted, busy(),
+      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.steer?.supported]);
+    if (queueFingerprint !== nextQueueFingerprint) {
+    queueFingerprint = nextQueueFingerprint;
+    $("queue-list").replaceChildren();$("queue-empty").hidden = queue.length > 0;
     const inline=$('inline-queue');
     inline.hidden=!active||appClosed||globalThis.WorkspaceModes?.isChat()||!queue.length;
     $('inline-queue-title').textContent=`이어 할 일 · ${queue.length}`;
@@ -94,7 +99,8 @@ globalThis.WorkspaceWorkflow = (() => {
         const turn=el('span',null,'inline-queue-turn');turn.setAttribute('aria-hidden','true');turn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v5a3 3 0 0 0 3 3h12m-5-5 5 5-5 5"/></svg>';apply.append(turn);
         apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};
         const remove=el('button',null,'inline-queue-delete');remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
-        remove.disabled=blocked||item.state!=='queued';
+        remove.disabled=blocked||!['queued','needs_review'].includes(item.state);
+        if(item.state==='needs_review')remove.title='전송 여부를 확인한 요청을 대기에서 제거';
         remove.onclick=()=>{if(current(context)&&!remove.disabled&&!locked())return mutate({action:'cancel',requestId:item.id},context);};
         const handle=el('button','⠿','inline-queue-handle');handle.type='button';handle.title='드래그로 순서 변경 · Alt+↑/↓로 이동';handle.setAttribute('aria-label',`순서 변경: ${item.text}`);handle.disabled=blocked||item.state!=='queued';
         handle.onkeydown=event=>{if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key)||!current(context)||handle.disabled||locked())return;event.preventDefault();return reorder(position,position+(event.key==='ArrowUp'?-1:1));};
@@ -102,11 +108,12 @@ globalThis.WorkspaceWorkflow = (() => {
         compact.ondragstart=event=>{if(handle.disabled||!current(context)||locked()||event.target?.closest?.('.inline-queue-apply,.inline-queue-delete')){event.preventDefault();return;}queueDrag={...context,requestId:item.id,revision:snapshot?.revision};event.dataTransfer?.setData('text/plain',item.id);if(event.dataTransfer)event.dataTransfer.effectAllowed='move';compact.classList.add('dragging');};
         compact.ondragover=event=>{if(queueDrag&&current(queueDrag)&&!handle.disabled){event.preventDefault();compact.classList.add('drop-target');}};
         compact.ondragleave=()=>compact.classList.remove('drop-target');
-        compact.ondragend=()=>{queueDrag=null;render();};
+        compact.ondragend=()=>{queueDrag=null;compact.classList.remove('dragging');for(const row of $('inline-queue-list').children)row.classList.remove('drop-target');};
         compact.ondrop=event=>{event.preventDefault();const drag=queueDrag;queueDrag=null;compact.classList.remove('drop-target');if(!drag||!current(drag)||!current(context)||locked()||blocked||drag.revision!==snapshot?.revision)return;const items=pending().filter(r=>r.state==='queued');const from=items.findIndex(r=>r.id===drag.requestId),to=items.findIndex(r=>r.id===item.id);if(from<0||to<0||from===to)return;const [moved]=items.splice(from,1);items.splice(to,0,moved);return mutate({action:'reorder',order:items.map(r=>r.id)},context);};
         compact.append(copy,apply,remove,handle);$('inline-queue-list').append(compact);
       }
     });
+    }
     $("schedule-list").replaceChildren();$("schedule-empty").hidden = schedules.length > 0;
     schedules.forEach(item => {
       const row=el("article",null,"workflow-row"),actions=el("div",null,"workflow-row-actions");
@@ -350,7 +357,7 @@ globalThis.WorkspaceWorkflow = (() => {
     } finally {$("request-editor-save").disabled=false;}
   }
   function contextChanged() {
-    queueDrag=null;readGeneration++;controller?.abort();snapshot=null;editor=null;trustReturn=null;
+    queueFingerprint="";queueDrag=null;readGeneration++;controller?.abort();snapshot=null;editor=null;trustReturn=null;
     if($("request-editor-dialog").open)$("request-editor-dialog").close();
     if($("workflow-dialog").open)$("workflow-dialog").close();
     render();
