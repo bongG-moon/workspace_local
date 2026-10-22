@@ -13,8 +13,8 @@ function Get-InstallerDigest([string]$Path) {
     finally { $sha.Dispose(); $stream.Dispose() }
 }
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
-if (-not $version) { throw 'Workspace version not found.' }
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 if (-not $StandaloneExe) { $StandaloneExe = Join-Path $repoRoot ('dist\AX-Workspace-' + $version + '.exe') }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot ('dist\workspace-installer-' + $version) }
 $StandaloneExe = (Resolve-Path -LiteralPath $StandaloneExe).Path

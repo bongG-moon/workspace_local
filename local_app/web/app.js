@@ -108,7 +108,7 @@ const stateNames = {idle:"대기", starting:"준비 중", running:"진행 중", 
 function el(tag,text,cls){const n=document.createElement(tag);if(text!=null)n.textContent=text;if(cls)n.className=cls;return n;}
 function basename(path=""){return String(path).split(/[\\/]/).filter(Boolean).pop()||path;}
 function markViewTransition(id){const node=$(id);node.dataset.motionStep=node.dataset.motionStep==="a"?"b":"a";}
-function showDialog(id){const dialog=$(id);for(let i=modalStack.length-1;i>=0;i--)if(!modalStack[i].open||modalStack[i]===dialog)modalStack.splice(i,1);dialog.showModal();modalStack.push(dialog);}
+function showDialog(id){const dialog=$(id);for(let i=modalStack.length-1;i>=0;i--)if(!modalStack[i].open||modalStack[i]===dialog)modalStack.splice(i,1);if(id==="tasks-dialog")renderAllSessions();dialog.showModal();modalStack.push(dialog);}
 function toast(text){
   const notice=$("toast"),dialog=[...modalStack].reverse().find(item=>item.open);
   notice.textContent=text;notice.hidden=false;notice.classList.toggle("in-dialog",!!dialog);
@@ -377,7 +377,7 @@ function renderSessions(){
       empty.append(el("span","···","chat-recents-empty-mark"),copy);$("home-recents").append(empty);
     }else $("home-recents").append(el("p",query?"검색어를 바꾸어 다시 찾아보세요.":"첫 업무를 시작하면, 다음에 이곳에서 이어갈 수 있어요.","empty-recents"));
   }
-  $("tasks-open").hidden=!visibleSessions().length;updateModeNavigation();renderAllSessions();globalThis.WorkspaceCapabilities?.contextChanged();
+  $("tasks-open").hidden=!visibleSessions().length;updateModeNavigation();if($("tasks-dialog").open)renderAllSessions();globalThis.WorkspaceCapabilities?.contextChanged();
   if(focused){const row=[...$(focused.container).children].find(row=>(focused.id?row.dataset.sessionId===focused.id:row.dataset.groupId===focused.groupId)&&row.querySelector(focused.selector));row?.querySelector(focused.selector)?.focus({preventScroll:true});}
 }
 function renderAllSessions(){
@@ -606,7 +606,7 @@ async function selectSession(id,{keepDraft=false}={}){
 function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
 async function poll(id,after,signal){while(!appClosed&&!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(appClosed||signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
 function handleEvent(event){
-  const d=event.data,area=$("work-area"),nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
+  const d=event.data,area=$("work-area"),nearBottom=!globalThis.WorkspaceStream&&area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
   if(["connected","connection_restart_finished","status","permission_mode_changed","control_restore_changed"].includes(event.type))applyPermissionNotices(d);
   if(["status","error","result"].includes(event.type)){
     // A result already on the wire cannot cancel an explicit stop intent.
@@ -614,7 +614,7 @@ function handleEvent(event){
     if(!staleTerminal){const changed=applyStopState(d)||(event.type==="status"&&d.state==="stopped"&&applyStopState({stopState:"stopped"}));if(changed&&!stopBlocked())renderConnection(active.connection);}
   }
   if(event.type==="connection_idle"){
-    active.connection=d.connection||null;renderConnection(active.connection);return;
+    active.connection=d.connection||null;renderConnection(active.connection);globalThis.WorkspaceCapabilities?.contextChanged(true);return;
   }
   if(event.type==="connection_restart_finished"){
     active.connection=d.connection||null;if(d.connection&&"modelOverride" in d.connection)active.modelOverride=d.connection.modelOverride;
@@ -642,7 +642,9 @@ function handleEvent(event){
   if(event.type==="result"){if(d.lastRunId)active.lastRunId=d.lastRunId;if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus(stopState()==="stopped"?"stopped":"done");refreshInspector(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
   if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshInspector();}if(event.type==="notice")toast(d.message);
   if(["queue_changed","schedule_changed","dispatch_changed","result","status"].includes(event.type))globalThis.WorkspaceWorkflow?.refresh();
-  globalThis.WorkspaceCapabilities?.contextChanged(["connected","model_changed","error"].includes(event.type)||(event.type==="status"&&d.state==="stopped"));
+  // Text/progress chunks cannot change the catalog's folder or connection context.
+  if(["connected","model_changed","error","status","request","request_closed","result"].includes(event.type))
+    globalThis.WorkspaceCapabilities?.contextChanged(["connected","model_changed","error"].includes(event.type)||(event.type==="status"&&d.state==="stopped"));
   if(globalThis.WorkspaceStream){if(["assistant","queued_user","request","request_closed","result","choice","choice_closed","execution","tool_activity","verification","status","error"].includes(event.type))WorkspaceStream.changed();}
   else if(newRequest)revealRequest(newRequest);
   else if(!["request","tool_activity"].includes(event.type)&&nearBottom&&!$("requests").children.length&&!globalThis.WorkspaceCapabilities?.isOpen())requestAnimationFrame(()=>{if(active?.id===sid&&!$("requests").children.length&&!globalThis.WorkspaceCapabilities?.isOpen())area.scrollTop=area.scrollHeight;});
@@ -862,7 +864,7 @@ $("browse-folder").onclick=()=>browseWorkspace(false);
 $("choose-managed").onclick=()=>browseWorkspace(true);
 $("attach").onclick=async()=>{if(attachmentPicking||sending||choiceSubmission||appClosed)return;if(isGeneralChat()){$("chat-file-input").click();return;}const ticket=selectionGeneration,sid=active?.id||null;attachmentPicking=true;$("attach").disabled=true;try{toast("파일 선택 창을 열고 있어요.");const options={kind:"files",initialDirectory:active?.workspace||boot.defaultWorkspace,existingPaths:[...attachments]};const d=await (globalThis.WorkspacePathPicker?WorkspacePathPicker.open(options):api("/api/pick",{kind:"files"}));if(ticket!==selectionGeneration||sid!==(active?.id||null)||appClosed)return;attachments=[...new Set([...attachments,...d.paths])].slice(0,12);renderAttachments();saveDraft();}catch(e){if(ticket===selectionGeneration&&sid===(active?.id||null))error(e.message);}finally{attachmentPicking=false;setStatus(active?.state||"idle");}};
 $("path-form").onsubmit=e=>{if(appClosed||e.submitter?.value!=="ok")return;if(!pathInputContext||pathInputContext.id!==(active?.id||null)||pathInputContext.generation!==selectionGeneration)return;const p=$("path-input").value.trim().replace(/^"|"$/g,"");if(p)attachments=[...new Set([...attachments,p])].slice(0,12);renderAttachments();saveDraft();$("path-input").value="";};
-$("tasks-open").onclick=()=>{$("task-search").value="";renderAllSessions();showDialog("tasks-dialog");$("task-search").focus();};$("tasks-close").onclick=()=>$("tasks-dialog").close();$("task-search").oninput=renderAllSessions;
+$("tasks-open").onclick=()=>{$("task-search").value="";showDialog("tasks-dialog");$("task-search").focus();};$("tasks-close").onclick=()=>$("tasks-dialog").close();$("task-search").oninput=renderAllSessions;$("tasks-dialog").onclose=()=>{if(!$("tasks-dialog").open)$("all-sessions").replaceChildren();};
 $("new-chat").onclick=()=>{showHome(true);modeViews[currentMode].selected=null;persistMode();if(!isGeneralChat())chooseFolder();else $("prompt").focus();};$("home-button").onclick=event=>{event.preventDefault();showHome();modeViews[currentMode].selected=null;persistMode();};$("session-search").oninput=()=>{modeViews[currentMode].search=$("session-search").value;renderSessions();};
 $("mode-chat").onclick=()=>switchMode("chat");$("mode-work").onclick=()=>switchMode("work");
 $("chat-file-input").onchange=event=>{const files=[...event.target.files];event.target.value="";void globalThis.WorkspaceAttachments?.uploadFiles(files);};

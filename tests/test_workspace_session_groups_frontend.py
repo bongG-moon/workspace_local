@@ -593,6 +593,7 @@ class SessionGroupsFrontendTests(unittest.TestCase):
 
     def test_task_lists_keep_title_drag_pin_and_remove_without_folder_move_button(self):
         self.run_case(DRAG_SETUP+r"""(()=>{
+          showDialog('tasks-dialog');
           for(const id of ['sessions','home-recents','all-sessions']){
             const listed=[...$(id).children].filter(node=>node.dataset.sessionId);assert.ok(listed.length);
             for(const item of listed){

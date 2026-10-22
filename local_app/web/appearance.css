@@ -291,7 +291,10 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 
 /* Result files use compact metadata and a predictable action grid. */
 .inspector .inspector-tabs{gap:4px;padding:4px;border:1px solid var(--line);border-radius:11px;background:var(--theme-surface,#e9edf5);box-shadow:none}
-.inspector .inspector-tab{min-height:34px;padding:7px 6px;border-radius:8px;font-weight:500}
+.inspector .inspector-tab{flex:1 1 0;min-width:0;min-height:34px;gap:4px;padding:7px 3px;border-radius:8px;font-weight:500}
+.inspector .inspector-tab>.icon{flex:none}
+/* Reserve three digits without moving the labels or changing the two tab widths. */
+.inspector .inspector-tab>span{flex:0 0 24px;width:24px;padding:2px;box-sizing:border-box;font-variant-numeric:tabular-nums;text-align:center}
 .inspector .inspector-tab[aria-selected=true]{border-color:var(--line);background:var(--theme-surface-raised,#fafbff);box-shadow:0 1px 3px #0000000a}
 .inspector .inspector-panel{margin-top:18px}
 #results-panel .result-intro{padding:0 0 12px}
@@ -440,6 +443,14 @@ dialog.path-picker .path-picker-location .quiet-button{
  .topbar .title-row{gap:6px}
  .topbar .top-actions{width:100%;max-width:100%;margin-left:0;flex-wrap:wrap;justify-content:flex-end;gap:6px}
  .topbar .top-actions .pill{min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+}
+/* Follow the composer width when the results panel expands, not the window width. */
+.composer-heading .workflow-toolbar:not(:has(button:not([hidden]))){display:none}
+.composer-heading #stop{white-space:nowrap}
+@container composer (max-width:640px){
+ .composer-heading{flex-wrap:wrap;gap:6px}
+ .composer-heading .status{flex-basis:100%}
+ .composer-heading .workflow-toolbar{margin-left:auto}
 }
 /* The reading scale applies to both sent and received conversation messages. */
 #conversation .message{font-size:13px;line-height:25px}

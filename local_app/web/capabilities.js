@@ -46,20 +46,30 @@ globalThis.WorkspaceCapabilities = (() => {
   const installedPartial = () => data?.installed?.state === "partial" || data?.installed?.limited === true;
   const contextKey = () => [scope, scope === "folder" ? pathKey(selectedFolder) : "", runtimeSession()?.id || ""].join("\n");
   const pathKey = value => (value || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  // Retain only navigation metadata, never conversation bodies or connection objects.
+  let foldersCacheKey = "", foldersCache = [];
   function sessionFolders() {
-    const folders = new Map();
-    const recent = [...sessions].sort((a, b) => (b.updated || b.created || 0) - (a.updated || a.created || 0));
-    for (const item of [active, ...recent].filter(Boolean)) {
-      if (item.kind === "chat" || typeof item.workspace !== "string" || !item.workspace || !item.id) continue;
-      const key = pathKey(item.workspace);
-      if (!folders.has(key)) folders.set(key, {workspace:item.workspace, sessions:[]});
-      const rows = folders.get(key).sessions;
-      if (!rows.some(row => row.id === item.id)) rows.push(item);
+    const project = item => item ? [item.id, item.title, item.workspace, item.kind,
+      item.updated || item.created || 0, isLive(item)] : null;
+    const rows = sessions.map(project), current = project(active);
+    const key = JSON.stringify([current, rows]);
+    if (key === foldersCacheKey) return foldersCache;
+    const folders = new Map(), seen = new Set();
+    rows.sort((a, b) => b[4] - a[4]);
+    for (const row of [current, ...rows]) {
+      if (!row) continue;
+      const [id, title, workspace, kind, updated, live] = row;
+      if (kind === "chat" || typeof workspace !== "string" || !workspace || !id || seen.has(id)) continue;
+      seen.add(id);
+      const folderKey = pathKey(workspace);
+      if (!folders.has(folderKey)) folders.set(folderKey, {workspace, sessions:[]});
+      folders.get(folderKey).sessions.push({id, title, workspace, updated, connectionState:live ? "live" : "closed"});
     }
-    return [...folders.values()];
+    foldersCacheKey = key; foldersCache = [...folders.values()];
+    return foldersCache;
   }
-  function selectFolder(value) {
-    const folder = sessionFolders().find(item => pathKey(item.workspace) === pathKey(value));
+  function selectFolder(value, folders = sessionFolders()) {
+    const folder = folders.find(item => pathKey(item.workspace) === pathKey(value));
     selectedFolder = folder?.workspace || "";
     const match = folder?.sessions.find(isLive) || folder?.sessions.find(item => item.id === selectedSession?.id) || folder?.sessions[0];
     selectedSession = match ? {id:match.id, title:match.title, workspace:folder.workspace} : null;
@@ -79,7 +89,7 @@ globalThis.WorkspaceCapabilities = (() => {
       }
     }
     const exists = folders.some(item => pathKey(item.workspace) === pathKey(selectedFolder));
-    selectFolder(exists ? selectedFolder : chooseDefault ? folders[0]?.workspace : "");
+    selectFolder(exists ? selectedFolder : chooseDefault ? folders[0]?.workspace : "", folders);
     select.value = selectedFolder; select.disabled = folders.length === 0;
   }
   function syncConnections() {
@@ -422,6 +432,7 @@ globalThis.WorkspaceCapabilities = (() => {
     clearTimeout(autoTimer);
     if (!opened) return;
     opened = false; generation++; loading = false; refreshPending = null;
+    foldersCacheKey = ""; foldersCache = [];
     clearTimeout(selectionTimer); selectionTimer = null;
     if (controller) controller.abort();
     clearTimeout(refreshTimer);

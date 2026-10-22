@@ -80,7 +80,9 @@ class PlainChatTests(unittest.TestCase):
         self.assertTrue(restored.get(chat['id'])['trusted'])
         self.assertEqual('chat-v1', restored.get(chat['id'])['runtimeProfile'])
         self.assertEqual('work', restored.get(work['id'])['kind'])
-        self.assertFalse(restored.get(work['id'])['trusted'])
+        # Explicit folder approval is restored from app-owned preferences;
+        # it is still absent from the conversation history itself.
+        self.assertTrue(restored.get(work['id'])['trusted'])
         self.assertIsNone(restored.get(chat['id'])['bridge'])
 
     def test_kind_profile_mismatch_is_not_loaded_as_unrestricted_chat(self):

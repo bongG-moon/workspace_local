@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 from local_app.build_identity import build_identity, EXCLUDED, SUFFIXES
+from local_app.server import WORKSPACE_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'deploy/CompanyWorkspace.Startup.ps1'
@@ -59,7 +60,7 @@ class BuildIdentityTests(unittest.TestCase):
                 launcher = deploy / 'Start-CompanyWorkspace.ps1'
                 shutil.copyfile(ROOT / 'deploy/Start-CompanyWorkspace.ps1', launcher)
                 fingerprint = build_identity(root) if mode == 'same' else '0' * 64 if mode == 'changed' else ''
-                version = '9.0.0' if mode == 'newer' else '0.23.29'
+                version = '9.0.0' if mode == 'newer' else WORKSPACE_VERSION
                 helper = HELPER.read_text(encoding='utf-8-sig') + """
 function Get-WorkspaceVerifiedContext { [pscustomobject]@{verified=$true;sid='S-1-5-21-build-fixture';sessionId=1;isAdministrator=$false} }
 function Get-WorkspaceExecutionMode { 'normal' }

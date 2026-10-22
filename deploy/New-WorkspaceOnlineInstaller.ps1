@@ -6,8 +6,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
-if (-not $version) { throw 'Workspace version not found.' }
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot ('dist\workspace-online-installer-' + $version) }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 $installer = Join-Path $outputRoot 'AX-Workspace-Install.exe'

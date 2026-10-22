@@ -2,6 +2,8 @@
 param([string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'dist' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
@@ -15,13 +17,13 @@ $files = @(
     'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'docs\WORKSPACE_CHAT_MODES.md',
     'local_app\customizations.py', 'local_app\web\customizations.js',
     'local_app\workspace_preferences.py', 'local_app\session_groups.py', 'local_app\web\session-groups.js',
-    'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\web\drafts.js',
+    'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\history_writer.py', 'local_app\web\drafts.js',
     'local_app\web\attachment-storage.js', 'local_app\web\attachment-storage.css',
     'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',
     'local_app\appearance.py', 'local_app\layout_preferences.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',
     'local_app\session_visibility.py', 'local_app\path_browser.py', 'local_app\web\path-picker.js', 'local_app\web\path-picker.css',
     'local_app\native_window.py', 'local_app\ui_health.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',
-    'deploy\New-WorkspaceDesktop.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
+    'deploy\New-WorkspaceDesktop.ps1', 'deploy\Workspace.Version.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',
     'docs\WORKSPACE_0.18.0_NATIVE_WINDOW.md',
     'docs\WORKSPACE_0.20.0_NOTIFICATIONS.md',
     'AX-Workspace.vbs', 'Company-Workspace.vbs',
@@ -88,7 +90,7 @@ New-Item -ItemType Directory -Path $desktopPayload -Force | Out-Null
 foreach ($name in @('Workspace.Desktop.exe','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WebView2-LICENSE.txt','WebView2-NOTICE.txt','desktop-build.json')) {
     Copy-Item -LiteralPath (Join-Path $desktopBuild $name) -Destination (Join-Path $desktopPayload $name)
 }
-$zip = Join-Path $outputRoot ('ax-workspace-preview-0.23.29-' + $stamp + '.zip')
+$zip = Join-Path $outputRoot ('ax-workspace-preview-' + $version + '-' + $stamp + '.zip')
 if (Test-Path -LiteralPath $zip) { throw 'Output already exists; refusing to overwrite.' }
 & $ConfigPython -X utf8 (Join-Path $repoRoot 'scripts\create-workspace-archive.py') --source $payload --output $zip
 if ($LASTEXITCODE -ne 0) { throw 'Application ZIP creation failed. Check the file and retry details above; no completed ZIP was published.' }

@@ -48,7 +48,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.29"
+WORKSPACE_VERSION = "0.23.30"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -335,17 +335,54 @@ class LocalApp:
         self.session_order = SessionOrder(self.state)
         self.session_visibility = SessionVisibility(self.state)
         self.session_groups = SessionGroups(self.state)
+        from .history_writer import ProgressHistoryWriter
+        self._progress_history = ProgressHistoryWriter(
+            self._progress_history_snapshot, self.history.save_progress, self._progress_history_completed)
+
+    def _progress_history_snapshot(self, sid, token):
+        from .history import row
+        with self.lock:
+            item = self.sessions.get(sid)
+            if (not self._progress_history.current(sid, token) or item is None
+                    or item.get('_historyUnloaded')):
+                return None
+            return row(item)
+
+    def _progress_history_completed(self, sid, token, written, error):
+        with self.lock:
+            item = self.sessions.get(sid)
+            if item is not None and self._progress_history.current(sid, token):
+                item['_historySaved'] = bool(written and error is None)
+
+    def _save_progress_history(self, sid):
+        # A first save/migration must establish the index synchronously. Later
+        # tool/execution changes affect only the bounded display body.
+        if self.history.migrate or sid not in self.history.index_entries:
+            self.save(sid)
+            return
+        self.sessions[sid]['_historySaved'] = False
+        if not self._progress_history.defer(sid):
+            self.save(sid)
 
     def save(self, sid=None):
         with self.lock:
             migrated = self.history.migrate
+            self._progress_history.invalidate(None if migrated else sid)
             for item in self.sessions.values():
                 if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
                     # A failed (or partially successful) write must never make a
                     # newer in-memory result eligible for replacement by old disk data.
                     item['_historySaved'] = False
-            self.history.save(self.sessions.values(), sid)
+            try:
+                self.history.save(self.sessions.values(), sid)
+            except (OSError, ValueError):
+                # Invalidating an older background save must not discard the
+                # only retry marker when its synchronous replacement fails.
+                self._progress_history.failed_save(item['id'] for item in self.sessions.values()
+                    if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'))
+                raise
             if not self.history.warning:
+                self._progress_history.saved(None if migrated else sid)
                 for item in self.sessions.values():
                     if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
                         item['_historySaved'] = True
@@ -627,7 +664,9 @@ class LocalApp:
             order = self.session_order.snapshot()
             order['ids'] = [sid for sid in order['ids'] if not self.session_visibility.contains(sid)]
             return {"application": "company-workspace", "version": self.info.get("version"), "error": self.error, "demo": self.demo,
-                    "workspaceVersion": WORKSPACE_VERSION, "buildIdentity": BUILD_ID, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
+                    "workspaceVersion": WORKSPACE_VERSION, "buildIdentity": BUILD_ID, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning or (
+                        '일부 진행 기록을 아직 저장하지 못했습니다. 현재 대화는 유지되며 다음 저장 시 다시 확인합니다.'
+                        if self._progress_history.failed() else None),
                     "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
@@ -1877,7 +1916,9 @@ class LocalApp:
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
-            if kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed', 'execution', 'tool_activity'} or terminal:
+            if kind in {'execution', 'tool_activity'}:
+                self._save_progress_history(sid)
+            elif kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed'} or terminal:
                 self.save(sid)
             if kind in {'request', 'request_closed', 'choice', 'choice_closed', 'status', 'result', 'error'}:
                 pending = attention_snapshot(self.visible_sessions())
@@ -2259,6 +2300,17 @@ class LocalApp:
             # A previously admitted operation may publish its bridge while the
             # first snapshot is taken. Never miss that child on final cleanup.
             close_bridges()
+            # Seal under the app lock so late callbacks use synchronous storage.
+            # Wait outside it: the final coalesced snapshot needs the same lock.
+            with self.lock:
+                for sid in self._progress_history.failed_sessions():
+                    try:
+                        self.save(sid)
+                    except (OSError, ValueError):
+                        issues.append({'sessionId': sid, 'code': 'history_save_failed'})
+                self._progress_history.seal()
+            if not self._progress_history.flush(SHUTDOWN_DRAIN_TIMEOUT, seal=True):
+                issues.append({'code': 'history_save_pending'})
             if updates_closed is False and self.app_updates.close() is False:
                 issues.append({'code': 'update_launcher_pending'})
             if not issues:

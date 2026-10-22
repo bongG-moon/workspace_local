@@ -27,10 +27,10 @@ const observers=[];
 class Observer{constructor(callback){this.callback=callback;this.nodes=[];observers.push(this);}observe(node){this.nodes.push(node);}unobserve(node){this.nodes=this.nodes.filter(n=>n!==node);}disconnect(){this.nodes=[];}trigger(visible=true){this.callback(this.nodes.map(target=>({target,isIntersecting:visible})));}}
 const parent=new Element();parent.root=true;
 let clipboard='',opens=[],apiCalls=[],replies=[];
-const context={assert,console,URL,Set,Map,encodeURIComponent,Element,all,tag,cls,parent,observers,active:{id:'A',workspace:'C:/work'},
+const context={assert,console,URL,Set,Map,AbortController,encodeURIComponent,Element,all,tag,cls,parent,observers,active:{id:'A',workspace:'C:/work'},
 document:{createElement:tag=>new Element(tag),createTextNode:text=>({textContent:String(text)})},
 navigator:{clipboard:{writeText:async value=>{clipboard=value;}}},IntersectionObserver:Observer,
-setTimeout:fn=>{return 1;},api:path=>{apiCalls.push(path);return new Promise((resolve,reject)=>replies.push({resolve,reject}));},
+setTimeout:fn=>{return 1;},api:(path,body,signal)=>{apiCalls.push(path);return new Promise((resolve,reject)=>{replies.push({resolve,reject,signal});signal?.addEventListener("abort",()=>reject(Object.assign(new Error("aborted"),{name:"AbortError"})),{once:true});});},
 preview:path=>opens.push(path),readClipboard:()=>clipboard,opens,apiCalls,replies,
 flush:async()=>{for(let i=0;i<8;i++)await Promise.resolve();}};
 vm.createContext(context);vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context);
@@ -202,6 +202,22 @@ class WorkspaceRichContentFrontendTests(unittest.TestCase):
           const old=cls(parent,'rich-image')[0];R.reset();active={id:'B',workspace:'C:/other'};
           replies[0].resolve({kind:'image',data:'data:image/png;base64,YQ=='});await flush();
           assert.equal(tag(parent,'img').length,0);await old.onclick();assert.equal(opens.length,0);
+        })()""")
+
+    def test_reset_aborts_obsolete_images_and_releases_slots_without_old_replies(self):
+        self.run_case(r"""(async()=>{
+          R.files(parent,['old1.png','old2.png','old3.png'],{sessionId:'A'});
+          observers[0].trigger();assert.equal(apiCalls.length,2);
+          R.reset();assert.ok(replies.slice(0,2).every(row=>row.signal.aborted));
+          parent.replaceChildren();active={id:'B',workspace:'C:/new'};
+          R.files(parent,['new1.png','new2.png','new3.png'],{sessionId:'B'});
+          observers[1].trigger();await flush();
+          assert.equal(apiCalls.length,4);assert.ok(apiCalls.slice(2).every(path=>path.includes('id=B')));
+          replies[0].resolve({kind:'image',data:'data:image/png;base64,YQ=='});await flush();
+          assert.equal(apiCalls.length,4,'settling an aborted request twice must not free an extra slot');
+          replies[2].resolve({kind:'image',data:'data:image/png;base64,YQ=='});await flush();
+          assert.equal(apiCalls.length,5);assert.equal(tag(parent,'img').length,1);
+          R.reset();assert.ok(replies.slice(3).every(row=>row.signal.aborted));await flush();
         })()""")
 
     def test_failed_or_malformed_image_has_manual_open_and_no_unsafe_src(self):

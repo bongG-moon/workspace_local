@@ -26,6 +26,20 @@ class SessionVisibilityFrontendTests(unittest.TestCase):
                                 input=HARNESS, text=True, encoding='utf-8', capture_output=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
+    def test_all_tasks_only_mounts_while_open_and_reopens_with_current_data(self):
+        self.run_case(r"""(()=>{
+          $('prompt').value='보존할 초안';attachments=['keep.csv'];
+          for(let i=0;i<20;i++)renderSessions();assert.equal($('all-sessions').children.length,0);
+          $('tasks-open').onclick();assert.equal($('all-sessions').children.length,2);
+          $('task-search').value='업무 B';$('task-search').oninput();assert.equal($('all-sessions').children.length,1);
+          $('tasks-dialog').close();assert.equal($('all-sessions').children.length,0);
+          sessions.push({id:'C',title:'업무 C',workspace:'C:/C',state:'idle'});renderSessions();
+          assert.equal($('all-sessions').children.length,0);$('tasks-open').onclick();
+          assert.equal($('all-sessions').children.length,3);assert.equal($('task-search').value,'');
+          $('tasks-dialog').onclose();assert.equal($('all-sessions').children.length,3,'a queued close event cannot clear a reopened dialog');
+          assert.equal($('prompt').value,'보존할 초안');assert.equal(attachments[0],'keep.csv');
+        })()""")
+
     def test_cancel_confirmation_sends_nothing_and_preserves_draft_and_list(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='아직 보내지 않은 질문';attachments=['C:/첨부.csv'];let calls=0;api=async()=>{calls++;};

@@ -66,6 +66,39 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
+    def test_text_events_do_not_recompute_catalog_but_connection_events_do(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>modern('A');WorkspaceCapabilities.open();await flush();
+          const original=WorkspaceCapabilities.contextChanged;let changes=0;
+          WorkspaceCapabilities.contextChanged=(...args)=>{changes++;return original(...args);};
+          renderDelta=()=>{};
+          $('prompt').value='보존할 초안';attachments=['keep.csv'];
+          for(let i=0;i<500;i++)handleEvent({type:'assistant_delta',data:{text:'응답',messageId:'M',index:0}});
+          assert.equal(changes,0);assert.equal($('prompt').value,'보존할 초안');assert.equal(attachments[0],'keep.csv');
+          handleEvent({type:'connection_idle',data:{connection:{connected:false}}});
+          assert.equal(changes,1);WorkspaceCapabilities.close();
+        })()""")
+
+    def test_folder_cache_reuses_unchanged_order_and_invalidates_navigation_changes(self):
+        self.run_case(r"""(async()=>{
+          sessions.push({id:'B',title:'업무 B',workspace:'C:/fixture/B',updated:2});
+          api=async()=>modern('A');WorkspaceCapabilities.open();await flush();
+          $('capabilities-scope-select').value='folder';$('capabilities-scope-select').onchange();await flush();
+          const option=$('capabilities-folder').children[1];
+          const originalSort=Array.prototype.sort;let sorts=0;
+          Array.prototype.sort=function(...args){sorts++;return originalSort.apply(this,args);};
+          try {
+            for(let i=0;i<100;i++)WorkspaceCapabilities.contextChanged();
+            assert.equal(sorts,0);assert.equal($('capabilities-folder').children[1],option);
+            sessions[1].workspace='D:/changed';WorkspaceCapabilities.contextChanged();await flush();
+            assert.ok(sorts>0);assert.ok($('capabilities-folder').children.some(row=>row.value==='D:/changed'));
+            sorts=0;sessions[1].connectionState='live';WorkspaceCapabilities.contextChanged();await flush();
+            assert.ok(sorts>0,'live source changes must invalidate cached connection preference');
+            sessions=sessions.filter(row=>row.id!=='B');WorkspaceCapabilities.contextChanged();await flush();
+            assert.ok(!$('capabilities-folder').children.some(row=>row.value==='D:/changed'));
+          } finally {Array.prototype.sort=originalSort;WorkspaceCapabilities.close();}
+        })()""")
+
     def test_catalog_opens_on_skills_and_auto_connects_once_for_all_tabs(self):
         self.run_case(r"""(async()=>{
           const timers=new Map();let serial=0,connects=0,live=false;

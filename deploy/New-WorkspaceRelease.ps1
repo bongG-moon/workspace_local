@@ -3,8 +3,8 @@ param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [
       [switch]$IncludeInstaller, [string]$NsisCompiler)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"').Groups[1].Value
-if (-not $version) { throw 'Workspace version not found.' }
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 if (-not $StandaloneExe) { $StandaloneExe = Join-Path $repoRoot ('dist\AX-Workspace-' + $version + '.exe') }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot ('dist\workspace-release-' + $version) }
 $StandaloneExe = (Resolve-Path -LiteralPath $StandaloneExe).Path
@@ -80,8 +80,10 @@ AX Workspace $version - single EXE edition
    download or install Python. Missing prerequisites are reported at startup.
 3. AI features use the current Windows user's existing Claude Code installation
    and authentication. Claude and Company Agent are not installed by this ZIP.
-4. Launching the same or an older version reuses the running app. A newer
-   version waits for current work, then closes and restarts normally. Releases
+4. Launching the same version and build, or an older version, reuses the running
+   app. A different or unverified build of the same version reports WS-48;
+   fully exit the running app from its tray menu before opening the new EXE.
+   A newer version waits for current work, then closes and restarts normally. Releases
    before 0.21.5 require one confirmation after saving unsent drafts yourself.
    From 0.21.5, drafts are preserved automatically. Review queues and schedules
    after restarting to resume them.

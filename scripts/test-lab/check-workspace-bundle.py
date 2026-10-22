@@ -31,13 +31,14 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "local_app/web/desktop.js", "local_app/web/session-import.js", "local_app/web/rendering.js", "local_app/web/attachments.js", "local_app/web/workflow.js", "local_app/web/productivity.js", "local_app/web/palette.js", "local_app/web/layout.js", "local_app/web/productivity.css", "local_app/web/review.css",
             "local_app/web/icon.svg", "local_app/web/app-icon.ico",
             "local_app/web/app-icon-192.png", "local_app/web/app-icon-512.png"}
-expected.update({'local_app/drafts.py', 'local_app/idle_connections.py', 'local_app/web/drafts.js',
+expected.update({'local_app/drafts.py', 'local_app/idle_connections.py', 'local_app/history_writer.py', 'local_app/web/drafts.js',
                  'local_app/web/attachment-storage.js', 'local_app/web/attachment-storage.css',
                  'local_app/web/archived-tasks.js', 'local_app/web/archived-tasks.css'})
 expected.update({'local_app/appearance.py', 'local_app/managed_launcher.py',
                  'local_app/web/appearance.js', 'local_app/web/appearance.css'})
 expected.add('local_app/web/focus-navigation.js')
 expected.add('local_app/layout_preferences.py')
+expected.update({'local_app/build_identity.py', 'local_app/workspace_preferences.py'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
@@ -57,7 +58,7 @@ expected.update({'local_app/web/zoom-feedback.js', 'local_app/web/zoom-feedback.
 expected.update({'local_app/web/input-keys.js', 'local_app/web/chat-shortcuts.js', 'local_app/web/chat-shortcuts.css'})
 expected.update({'local_app/ui_health.py','local_app/web/startup-health.js','local_app/web/startup-health.css'})
 expected.update({'local_app/native_window.py','deploy/Workspace.Desktop.cs','deploy/WebView2.lock.json',
-                 'deploy/New-WorkspaceDesktop.ps1','deploy/CompanyWorkspace.Standalone.manifest',
+                 'deploy/New-WorkspaceDesktop.ps1','deploy/Workspace.Version.ps1','deploy/CompanyWorkspace.Standalone.manifest',
                  'docs/WORKSPACE_0.18.0_NATIVE_WINDOW.md'})
 expected.add('docs/WORKSPACE_0.20.0_NOTIFICATIONS.md')
 expected.add('local_app/update_source.py')

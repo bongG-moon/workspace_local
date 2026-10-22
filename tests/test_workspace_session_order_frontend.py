@@ -98,6 +98,7 @@ class SessionOrderFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
           api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
+          showDialog('tasks-dialog');
           for(const container of ['home-recents','all-sessions']){
             boot.sessionOrder={};renderSessions();hitContainer=container;
             const title=row('A',container).querySelector(container==='home-recents'?'.recent-card':'.session');

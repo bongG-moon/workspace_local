@@ -2,6 +2,8 @@
 param([string]$SdkPackage)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 $lockPath = Join-Path $PSScriptRoot 'WebView2.lock.json'
 $sdk = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
 $cache = Join-Path $repoRoot 'build\desktop-sdk'

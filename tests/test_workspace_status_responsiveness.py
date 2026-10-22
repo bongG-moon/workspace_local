@@ -10,6 +10,24 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(NODE, "Node.js is required")
 class WorkspaceStatusResponsivenessTests(unittest.TestCase):
+    def test_batched_stream_does_not_force_scroll_layout_per_fragment(self):
+        scenario = r"""
+active={id:'A',title:'작업 A',workspace:'C:/fixture',state:'running',connection:{}};
+let reads=0,fragments=0;
+Object.defineProperty($('work-area'),'scrollHeight',{get(){reads++;return 100;}});
+WorkspaceStream={enqueue(){fragments++;}};
+for(let i=0;i<500;i++)handleEvent({type:'assistant_delta',data:{text:'x',messageId:'M',index:0}});
+assert.equal(fragments,500);assert.equal(reads,0);
+delete globalThis.WorkspaceStream;renderDelta=()=>{};
+handleEvent({type:'assistant_delta',data:{text:'x'}});
+assert.ok(reads>0,'the legacy fallback still decides whether to follow the latest text');
+"""
+        result = subprocess.run(
+            [NODE, '-', str(ROOT / 'local_app/web/app.js'), scenario],
+            input=HARNESS, text=True, encoding='utf-8', capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_repeated_progress_preserves_click_target_and_updates_status(self):
         scenario = r"""
 active={id:'A',title:'작업 A',workspace:'C:/fixture',state:'running',connection:{}};

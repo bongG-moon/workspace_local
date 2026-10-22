@@ -24,6 +24,7 @@ const headers={Authorization:'Bearer '+location.hash.slice(7)};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function run(){
   const requests=[];
+  const command=fetch('/api/command-slow',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'}).then(r=>r.json());
   for(let i=0;i<EVENT_COUNT;i++){
     const abort=new AbortController();
     requests.push(fetch('/api/events?n='+i,{headers,signal:abort.signal}).catch(()=>{}));
@@ -35,9 +36,10 @@ async function run(){
   let measured;
   document.querySelector('#control').addEventListener('click',async()=>{
     const start=performance.now();
-    const response=await fetch('/api/control',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'});
+    const response=await fetch(PROBE_PATH,PROBE_OPTIONS);
     const result=await response.json();
     measured={latencyMs:performance.now()-start,ok:result.ok,status:response.status};
+    measured.commandPreserved=(await command).ok;
     await fetch('/api/measure',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify(measured)});
   });
   document.querySelector('#control').click();
@@ -45,10 +47,12 @@ async function run(){
 </script>'''
 
 
-def scenario(binary, state, *, event_count, read_count, abort_events, upload_count):
+def scenario(binary, state, *, event_count, read_count, abort_events, upload_count, event_refresh=False):
     token = secrets.token_urlsafe(32)
     page = (PAGE.replace('EVENT_COUNT', str(event_count)).replace('READ_COUNT', str(read_count))
             .replace('UPLOAD_COUNT', str(upload_count))
+            .replace('PROBE_PATH', "'/api/events?current=1'" if event_refresh else "'/api/control'")
+            .replace('PROBE_OPTIONS', '{headers}' if event_refresh else "{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:'{}'}")
             .replace('ABORT_EVENTS', 'setTimeout(()=>abort.abort(),100);' if abort_events else '')).encode('utf-8')
     release = threading.Event()
     measured = threading.Event()
@@ -83,6 +87,8 @@ def scenario(binary, state, *, event_count, read_count, abort_events, upload_cou
                 return self.reply(page, 'text/html; charset=utf-8')
             if self.headers.get('Authorization') != 'Bearer ' + token:
                 return self.send_error(403)
+            if self.path == '/api/events?current=1':
+                return self.reply(b'{"ok":true}')
             if self.path.startswith(('/api/events?', '/api/slow-read?')):
                 with lock:
                     result['eventRequests' if self.path.startswith('/api/events?') else 'readRequests'] += 1
@@ -101,6 +107,8 @@ def scenario(binary, state, *, event_count, read_count, abort_events, upload_cou
             if not 0 < length < 1024:
                 return self.send_error(400)
             payload = self.rfile.read(length)
+            if self.path == '/api/command-slow':
+                time.sleep(1)  # A mutation already in flight must survive poll replacement.
             if self.path == '/api/attachments/upload':
                 with lock:
                     result['uploadRequests'] += 1
@@ -134,7 +142,7 @@ def scenario(binary, state, *, event_count, read_count, abort_events, upload_cou
         with lock:
             report = dict(result)
         report['nativeFailures'] = [json.loads(row) for row in events if 'failed' in row]
-        assert report['ok'] and report['status'] == 200 and not report['nativeFailures'], report
+        assert report['ok'] and report['status'] == 200 and report['commandPreserved'] and not report['nativeFailures'], report
         # WebView may prioritize the control ahead of some queued reads when
         # abandoned polls already occupy browser-side origin connections.
         # The reads-only case proves all four read slots were occupied.
@@ -181,6 +189,8 @@ def main():
             ('uploads', 0, 0, False, 4)):
         results[name] = scenario(binary, args.state / name,
                                  event_count=events, read_count=reads, abort_events=abort, upload_count=uploads)
+    results['replacement-event'] = scenario(binary, args.state / 'replacement-event',
+        event_count=8, read_count=0, abort_events=True, upload_count=0, event_refresh=True)
     report = {'scope': 'isolated real WebView2 administrator proxy; actual Windows role unchanged; no Claude',
               'results': results}
     (args.state / 'verification.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')

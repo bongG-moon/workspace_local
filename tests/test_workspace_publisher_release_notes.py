@@ -215,10 +215,15 @@ class ReleaseNotesTests(unittest.TestCase):
         result = load_notes(ROOT, source_version)
         self.assertEqual('bundled', result['source'])
         self.assertEqual(source_version, result['history'][0]['version'])
-        history = {item['version']: item for item in result['history']}
-        self.assertTrue({'0.23.2', '0.23.1', '0.23.0'} <= history.keys())
-        self.assertIn('HTTPS 서버 주소, 숫자 프로젝트 ID, 게시 토큰', history['0.23.2']['notes'])
-        self.assertIn('glpat-', history['0.23.2']['notes'])
+        versions = [item['version'] for item in result['history']]
+        self.assertGreater(len(versions), 1)
+        self.assertLessEqual(len(versions), MAX_HISTORY)
+        self.assertEqual(len(versions), len(set(versions)))
+        self.assertEqual(versions, sorted(versions, key=lambda value: tuple(map(int, value.split('.'))), reverse=True))
+        # Older releases may leave the bounded catalog as new versions arrive.
+        # The current reviewed notes must remain identical to the shipped copy.
+        reviewed = ROOT / f'docs/RELEASE_NOTES_{source_version}.md'
+        self.assertEqual(reviewed.read_text(encoding='utf-8-sig').strip(), result['notes'])
         self.assertNotIn('HTTP 주소', result['notes'])
         self.assertNotIn('프로젝트 경로를 자동', result['notes'])
 

@@ -179,6 +179,9 @@ internal sealed class DesktopWindow : Form
     // Event long-polls can last 20 seconds, including requests from a view
     // that was just switched. They must never occupy command/control slots.
     private readonly SemaphoreSlim eventGate = new SemaphoreSlim(4, 4);
+    // Only the selected conversation owns a long-poll. WebView fetch aborts
+    // do not propagate to HttpWebRequest, so a replacement must cancel it here.
+    private CancellationTokenSource activeEventPoll;
     private WebView2 view;
     private Panel recovery;
     private bool exiting, started, initializing, controlReaderStarted;
@@ -226,6 +229,7 @@ internal sealed class DesktopWindow : Form
         };
         FormClosed += delegate
         {
+            CancelEventPoll();
             SystemEvents.UserPreferenceChanged -= UserPreferenceChanged;
             if (notificationCard != null) notificationCard.Finish(false);
             if (view != null) view.Dispose();
@@ -405,6 +409,7 @@ internal sealed class DesktopWindow : Form
             var environment = await CoreWebView2Environment.CreateAsync(null, profile, options);
             runtimeVersion = environment.BrowserVersionString;
             if (exiting) return;
+            CancelEventPoll();
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor, AllowExternalDrop = true };
             Controls.Add(view);
@@ -489,6 +494,13 @@ internal sealed class DesktopWindow : Form
         finally { initializing = false; }
     }
 
+    private void CancelEventPoll()
+    {
+        var previous = activeEventPoll;
+        activeEventPoll = null;
+        if (previous != null) previous.Cancel();
+    }
+
     private async Task ProxyApi(CoreWebView2Environment environment, CoreWebView2WebResourceRequestedEventArgs e)
     {
         const int limit = 32 * 1024 * 1024;
@@ -500,16 +512,29 @@ internal sealed class DesktopWindow : Form
             (e.Request.Method != "GET" && e.Request.Method != "POST"))
         { e.Response = environment.CreateWebResourceResponse(null, 403, "Blocked", ""); return; }
         string path = new Uri(e.Request.Uri).AbsolutePath;
-        var gate = e.Request.Method == "GET" ? (path == "/api/events" ? eventGate : readGate)
+        bool isEventPoll = e.Request.Method == "GET" && path == "/api/events";
+        var gate = e.Request.Method == "GET" ? (isEventPoll ? eventGate : readGate)
             : path == "/api/attachments/upload" ? uploadGate : apiGate;
-        await gate.WaitAsync();
+        CancellationTokenSource poll = null;
+        if (isEventPoll)
+        {
+            CancelEventPoll();
+            activeEventPoll = poll = new CancellationTokenSource();
+        }
+        var cancellation = poll == null ? CancellationToken.None : poll.Token;
+        CancellationTokenRegistration abort = default(CancellationTokenRegistration);
+        bool acquired = false;
         MemoryStream content = null;
         Stream upload = null;
         int stage = 1;
         try
         {
+            await gate.WaitAsync(cancellation);
+            acquired = true;
+            cancellation.ThrowIfCancellationRequested();
             if (exiting) return;
             var request = (HttpWebRequest)WebRequest.Create(e.Request.Uri);
+            if (poll != null) abort = cancellation.Register(delegate { request.Abort(); });
             request.Method = e.Request.Method;
             request.Proxy = null;
             request.AllowAutoRedirect = false;
@@ -592,6 +617,13 @@ internal sealed class DesktopWindow : Form
         }
         catch
         {
+            if (cancellation.IsCancellationRequested)
+            {
+                // The old fetch has normally already been aborted in the page.
+                // Complete its native deferral without reporting a connection failure.
+                if (!exiting) e.Response = environment.CreateWebResourceResponse(null, 204, "Superseded", "");
+                return;
+            }
             DesktopProgram.Emit(new { type = "api_proxy_failed", code = stage });
             if (!exiting)
             {
@@ -599,7 +631,18 @@ internal sealed class DesktopWindow : Form
                 e.Response = environment.CreateWebResourceResponse(error, 502, "Gateway failure", "Content-Type: application/json; charset=utf-8\r\n");
             }
         }
-        finally { if (upload != null) upload.Dispose(); if (content != null) content.Dispose(); gate.Release(); }
+        finally
+        {
+            abort.Dispose();
+            if (poll != null)
+            {
+                if (activeEventPoll == poll) activeEventPoll = null;
+                poll.Dispose();
+            }
+            if (upload != null) upload.Dispose();
+            if (content != null) content.Dispose();
+            if (acquired) gate.Release();
+        }
     }
 
     private void Download(object sender, CoreWebView2DownloadStartingEventArgs e)
@@ -632,6 +675,7 @@ internal sealed class DesktopWindow : Form
     private void ShowRecovery()
     {
         if (exiting || recovery != null) return;
+        CancelEventPoll();
         recovery = new Panel { Dock = DockStyle.Fill, BackColor = BackColor, Padding = new Padding(48) };
         var label = new Label { Dock = DockStyle.Top, Height = 100,
             Text = "화면 연결이 잠시 끊겼어요.\n진행 중인 업무를 다시 요청하지 않고 화면만 다시 열 수 있어요." };

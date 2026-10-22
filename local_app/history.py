@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import time
 import uuid
+import threading
 
 from .executions import normalize_executions, safe_run_id
 from .tool_activity import normalize_activities
@@ -136,6 +137,7 @@ class HistoryStore:
         self.migrate = False
         self.index_bytes = None
         self.index_entries = {}
+        self.write_lock = threading.RLock()
 
     @staticmethod
     def compact(item):
@@ -265,6 +267,19 @@ class HistoryStore:
             temp.unlink(missing_ok=True)
 
     def save(self, items, changed_id=None):
+        with self.write_lock:
+            self._save(items, changed_id)
+
+    def save_progress(self, value, current):
+        """Write an immutable display snapshot, without changing index metadata."""
+        payload = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
+        with self.write_lock:
+            if self.warning or not current():
+                return False
+            self._write(self.root/'history-sessions'/(value['id']+'.json'), payload)
+            return True
+
+    def _save(self, items, changed_id=None):
         if self.warning:
             return
         items = list(items)

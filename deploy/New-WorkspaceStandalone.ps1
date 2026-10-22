@@ -2,10 +2,9 @@
 param([string]$OutputDirectory, [string]$VerificationDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
+$version = Sync-WorkspaceVersion -RepoRoot $repoRoot -Check
 $utf8 = New-Object Text.UTF8Encoding($false)
-$versionMatch = [regex]::Match([IO.File]::ReadAllText((Join-Path $repoRoot 'local_app\server.py')), 'WORKSPACE_VERSION = "([0-9.]+)"')
-if (-not $versionMatch.Success) { throw 'Workspace version not found.' }
-$version = $versionMatch.Groups[1].Value
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repoRoot 'dist' }
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null

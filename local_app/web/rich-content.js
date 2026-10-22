@@ -8,6 +8,7 @@ globalThis.WorkspaceRichContent = (() => {
   const nameOf = path => String(path).split(/[\\/]/).pop() || "파일";
   const sessionIsCurrent = sid => !sid || typeof active === "undefined" || active?.id === sid;
   let generation=0, requests=0, observer=null, images=[], queue=[], mounted=[];
+  const pendingImages=new Set();
   function localPath(raw, workspace="") {
     let path=String(raw||"").trim().replace(/^<|>$/g,"");
     // No network shares, URLs, data URIs, or device paths can initiate preview reads.
@@ -113,7 +114,7 @@ globalThis.WorkspaceRichContent = (() => {
   function prune() {
     // Cards are often built in a detached article and attached after render().
     // Do not drop their observer while the same article adds its file chips.
-    for(const record of images){record.seenConnected ||= record.node.isConnected;if(record.seenConnected&&!record.node.isConnected){release(record);observer?.unobserve(record.node);}}
+    for(const record of images){record.seenConnected ||= record.node.isConnected;if(record.seenConnected&&!record.node.isConnected){record.controller?.abort();release(record);observer?.unobserve(record.node);}}
     images=images.filter(record=>!record.seenConnected||record.node.isConnected);queue=queue.filter(record=>!record.seenConnected||record.node.isConnected);
   }
   function current(record) {return record.epoch===generation&&record.node.isConnected&&sessionIsCurrent(record.options.sessionId);}
@@ -125,11 +126,11 @@ globalThis.WorkspaceRichContent = (() => {
   }
   function enqueue(record) {if(!current(record)||record.pending||record.loaded||record.failed)return;if(!queue.includes(record))queue.push(record);pump();}
   function pump() {
-    while(requests<LIMITS.imageRequests&&queue.length){const record=queue.shift();if(!current(record)||!record.visible)continue;record.pending=true;requests++;loadImage(record).finally(()=>{record.pending=false;requests--;pump();});}
+    while(requests<LIMITS.imageRequests&&queue.length){const record=queue.shift();if(!current(record)||!record.visible)continue;record.pending=true;record.controller=new AbortController();pendingImages.add(record);requests++;loadImage(record).finally(()=>{record.pending=false;record.controller=null;pendingImages.delete(record);requests--;pump();});}
   }
   async function loadImage(record) {
     try {
-      const result=await api(`/api/preview?id=${encodeURIComponent(record.options.sessionId)}&path=${encodeURIComponent(record.path)}&thumbnail=1`);
+      const result=await api(`/api/preview?id=${encodeURIComponent(record.options.sessionId)}&path=${encodeURIComponent(record.path)}&thumbnail=1`,undefined,record.controller.signal);
       if(!current(record)||!record.visible)return;
       if(result.kind!=="image"||typeof result.data!=="string"||result.data.length>LIMITS.imageData||!/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(result.data))throw new Error("no inline preview");
       while(mounted.length>=LIMITS.images) {const oldest=mounted.find(item=>!item.visible)||mounted[0];release(oldest);}
@@ -137,7 +138,7 @@ globalThis.WorkspaceRichContent = (() => {
       img.onerror=()=>{release(record);record.failed=true;record.status.textContent="미리보기 열기";};
       img.onload=()=>{if(img.naturalWidth*img.naturalHeight>16000000){release(record);record.failed=true;record.status.textContent="파일 열어 보기";}};
       record.media.append(img);record.img=img;record.loaded=true;mounted.push(record);record.status.textContent="확대해서 보기";
-    } catch (_) {if(current(record)){record.failed=true;record.status.textContent="파일 열어 보기";}}
+    } catch (err) {if(current(record)&&err.name!=="AbortError"){record.failed=true;record.status.textContent="파일 열어 보기";}}
   }
   function image(parent,path,alt,options) {
     if(!options.sessionId||images.length>=LIMITS.records){fileChip(parent,path,options);return nameOf(path);}
@@ -180,6 +181,6 @@ globalThis.WorkspaceRichContent = (() => {
     }
     if(full.length>LIMITS.text)parent.append(make("p","긴 메시지의 앞부분만 표시합니다.","rich-limit"));return true;
   }
-  function reset() {generation++;queue=[];observer?.disconnect();observer=null;for(const record of images)release(record);images=[];mounted=[];}
+  function reset() {generation++;queue=[];for(const record of pendingImages)record.controller?.abort();observer?.disconnect();observer=null;for(const record of images)release(record);images=[];mounted=[];}
   return {render,code,table,files,reset,dispose:reset,limits:{...LIMITS}};
 })();

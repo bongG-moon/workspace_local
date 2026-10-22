@@ -3,13 +3,13 @@
 **0.23.26 사내 배포부터:** 한 번 받은 EXE로 최신 버전을 바로 설치하려면 사내 배포 도구가 만든 `AX-Workspace-Install.exe`를 공유하세요. [최신 설치 EXE 안내](WORKSPACE_ONLINE_INSTALLER.md). 아래 버전별 Setup은 파일에 포함된 특정 버전을 설치하는 방식입니다.
 
 
-`AX-Workspace-0.23.27-Setup.exe`는 AX Workspace 0.23.27을 설치하고 시작 메뉴에서 다시 열 수 있게 하는 NSIS 설치 프로그램입니다. [설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)에서 받을 수 있습니다. GitHub 0.23.27 Release의 직접 EXE 다운로드도 같은 설치 프로그램으로 제공합니다. EXE·VBS ZIP은 기존 실행 및 자동 업데이트 용도로 유지합니다.
+`AX-Workspace-0.23.30-Setup.exe`는 AX Workspace 0.23.30을 설치하고 시작 메뉴에서 다시 열 수 있게 하는 NSIS 설치 프로그램입니다. [설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)에서 받을 수 있습니다. GitHub 0.23.30 Release의 직접 EXE 다운로드도 같은 설치 프로그램으로 제공합니다. EXE·VBS ZIP은 기존 실행 및 자동 업데이트 용도로 유지합니다.
 
 ## 사용자가 설치하고 실행하기
 
 1. 최신 Claude Code를 설치하고 인증을 완료합니다. 기존 Python **3.11 이상**, Windows 10/11 x64, Windows PowerShell, WebView2 Runtime, .NET Framework 4.6.2 이상도 필요합니다.
 2. AX Workspace가 열려 있다면 트레이 아이콘을 우클릭해 **완전 종료**합니다. 창의 **X**는 트레이로 숨기는 기능입니다.
-3. `AX-Workspace-0.23.27-Setup.exe`를 실행합니다. 바탕화면 바로가기 여부를 선택하고 설치합니다.
+3. `AX-Workspace-0.23.30-Setup.exe`를 실행합니다. 바탕화면 바로가기 여부를 선택하고 설치합니다.
 4. 시작 메뉴 또는 바탕화면의 **AX Workspace**를 엽니다. 기존 업무와 Claude 인증·설정을 그대로 사용합니다.
 
 현재 Windows 사용자 계정에 설치하며 기본 위치는 다음과 같습니다. 별도 앱 로그인은 없습니다.
@@ -43,7 +43,7 @@
 - GitHub 0.23.25 Release에서 `AX-Workspace-0.23.25.exe`, `Company-Workspace-0.23.25.exe`, `AX-Workspace-0.23.25-Setup.exe`는 같은 NSIS 설치 파일입니다. 이전에 공유한 해당 EXE 링크로 새로 받는 사람도 설치 화면을 봅니다.
 - 앞으로 공유할 주소는 [설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)입니다. 다음 Release에도 `AX-Workspace-Setup.exe`를 첨부해야 이 주소가 계속 작동합니다.
 - 이미 PC에 저장되거나 메일에 첨부된 예전 EXE의 내용은 바뀌지 않습니다. 설치 파일을 한 번 새로 받아 실행하세요. 업무·설정과 Claude 환경은 유지됩니다.
-- 기존 앱의 자동 업데이트는 ZIP으로 계속 동작하며, 이것만으로 Windows에 설치 등록되지는 않습니다. 당시에는 같은 0.23.25였으므로 설치 방식 변경만으로 새 버전 알림이 뜨지 않았습니다. 0.23.27은 새 버전으로 안내합니다.
+- 기존 앱의 자동 업데이트는 ZIP으로 계속 동작하며, 이것만으로 Windows에 설치 등록되지는 않습니다. 당시에는 같은 0.23.25였으므로 설치 방식 변경만으로 새 버전 알림이 뜨지 않았습니다. 0.23.30은 새 버전으로 안내합니다.
 - 이 전환은 GitHub 0.23.25 Release에 적용합니다. 과거 버전 링크와 별도 사내 GitLab 배포 파일은 자동으로 교체되지 않습니다.
 
 ## 배포 담당자가 설치 파일 만들기
@@ -60,8 +60,8 @@
 컴파일러가 없거나 NSIS 3가 아니면 중단합니다. 자동 다운로드는 하지 않습니다. 기존 앱 빌드용 WebView2 SDK도 먼저 준비해야 합니다. 아래 명령은 저장소 루트에서 실행하며, 출력 폴더에는 기존 파일이 없어야 합니다.
 
 ```powershell
-.\deploy\New-WorkspaceStandalone.ps1 -OutputDirectory .\dist\installer-input-0.23.27
-.\deploy\New-WorkspaceRelease.ps1 -StandaloneExe .\dist\installer-input-0.23.27\AX-Workspace-0.23.27.exe -OutputDirectory .\dist\installer-release-0.23.27 -IncludeInstaller -NsisCompiler "C:\approved-tools\nsis\makensis.exe"
+.\deploy\New-WorkspaceStandalone.ps1 -OutputDirectory .\dist\installer-input-0.23.30
+.\deploy\New-WorkspaceRelease.ps1 -StandaloneExe .\dist\installer-input-0.23.30\AX-Workspace-0.23.30.exe -OutputDirectory .\dist\installer-release-0.23.30 -IncludeInstaller -NsisCompiler "C:\approved-tools\nsis\makensis.exe"
 ```
 
 두 번째 명령은 현재 소스와 실행기에 포함된 앱 파일이 같은지 확인하고, Setup 파일·기존 EXE/VBS ZIP·호환 파일·체크섬을 함께 만듭니다. 기존 업데이트를 위해 ZIP 파일도 계속 배포하세요.
@@ -69,7 +69,7 @@
 이미 검증한 같은 버전의 독립 실행 EXE를 설치 파일로 감싸기만 하려면 아래 명령을 사용합니다. 이 명령은 앱 자체를 다시 빌드하지 않으므로 입력 EXE가 원하는 수정본인지 먼저 확인해야 합니다.
 
 ```powershell
-.\deploy\New-WorkspaceInstaller.ps1 -StandaloneExe .\dist\AX-Workspace-0.23.27.exe -OutputDirectory .\dist\workspace-installer-0.23.27 -NsisCompiler "C:\approved-tools\nsis\makensis.exe"
+.\deploy\New-WorkspaceInstaller.ps1 -StandaloneExe .\dist\AX-Workspace-0.23.30.exe -OutputDirectory .\dist\workspace-installer-0.23.30 -NsisCompiler "C:\approved-tools\nsis\makensis.exe"
 ```
 
 Setup과 `.sha256` 파일이 출력 폴더에 생성되며, 빌드 기록에는 원본 EXE의 SHA256과 NSIS 버전도 남습니다. 설치 파일은 서명되지 않았습니다. 회사가 허용한 배포 경로와 실행 정책을 사용하세요.
@@ -81,14 +81,14 @@ GitHub에서 공유하는 직접 EXE는 설치 프로그램으로, 앱의 자동
 설치 파일을 빌드한 뒤, 검증한 ZIP 폴더와 소스 ZIP을 사용해 아래처럼 게시용 폴더를 준비합니다. 출력 폴더는 새 경로로 지정하세요.
 
 ```powershell
-python -X utf8 scripts/prepare-workspace-github-downloads.py --release-directory dist/workspace-release-0.23.27 --installer-report build/workspace-installer-0.23.27.json --source-zip dist/source-0.23.27/workspace-local-0.23.27-source.zip --output-directory dist/github-installer-0.23.27
+python -X utf8 scripts/prepare-workspace-github-downloads.py --release-directory dist/workspace-release-0.23.30 --installer-report build/workspace-installer-0.23.30.json --source-zip dist/source-0.23.30/workspace-local-0.23.30-source.zip --output-directory dist/github-installer-0.23.30
 ```
 
 이 도구는 기존 ZIP의 체크섬을 확인해 바이트 그대로 복사하고, 설치 파일을 버전별 이름·기존 직접 EXE 이름·고정 다운로드 이름으로 함께 준비합니다. `SHA256SUMS.txt`도 전체 파일에 맞춰 만듭니다. 네트워크 게시나 사용자 PC 설치는 수행하지 않습니다. 다음 버전에도 이 게시용 파일 구성을 유지하세요.
 
 이미 공개한 버전을 전환할 때는 **4개 업데이트 ZIP을 다시 업로드하지 않고** 새 설치 EXE·직접 EXE·소스 ZIP을 올린 뒤 체크섬과 다운로드 안내를 갱신합니다. 게시 전 파일명·버전·해시를 확인하고 게시 후 로그인 없이 다시 내려받아 검증하세요. 이전 업데이트 정보를 보관한 앱에서 전환 중 해시 확인 오류가 나면 **새 버전 확인**으로 다운로드 정보를 갱신합니다.
 
-`v0.23.27` 태그와 **workspace-local-0.23.27-source.zip**에는 최신 설치기 소스와 사내 배포 도구가 포함됩니다. **Code → Download ZIP**은 main의 최신 소스입니다. 이전 `v0.23.25` 태그와 과거 Release는 유지합니다.
+`v0.23.30` 태그와 **workspace-local-0.23.30-source.zip**에는 최신 설치기 소스와 사내 배포 도구가 포함됩니다. **Code → Download ZIP**은 main의 최신 소스입니다. 이전 `v0.23.25` 태그와 과거 Release는 유지합니다.
 
 ## 사내 GitLab 배포 도구에서 만들기
 
