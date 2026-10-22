@@ -20,8 +20,50 @@ function Get-WorkspaceStartupMessage {
         42 { return '실행기에 전달한 경로 또는 인수가 너무 길거나 유효하지 않습니다. 압축 해제한 Workspace 폴더와 지정한 경로를 확인해 주세요. 값을 잘라서 실행하지 않았습니다.' }
         46 { return '전용 앱 창에 필요한 Microsoft Edge WebView2 Runtime을 찾지 못했습니다. 회사에서 허용한 WebView2 Runtime이 설치되어 있는지 담당자에게 확인해 주세요. 브라우저 실행, 자동 설치 또는 PC 설정 변경은 하지 않았습니다.' }
         47 { return '전용 앱 창을 준비하지 못했습니다. 배포 파일이 모두 있는지, Microsoft Edge WebView2 Runtime 실행이 회사 정책에서 허용되는지 확인해 주세요. Python이나 Claude 인증 문제로 단정하지 않았습니다. 기존 설정은 변경하지 않았습니다.' }
+        48 { return '같은 버전의 다른 빌드가 아직 실행 중이거나 실행 빌드를 확인할 수 없습니다. 기존 앱에서 작업을 마친 뒤 [설정 → 앱 종료] 또는 트레이의 [완전 종료]를 선택하고 새 EXE를 다시 열어 주세요. 창의 X는 완전 종료가 아닙니다. 대화와 설정을 삭제할 필요는 없습니다.' }
         default { return 'Workspace 실행을 완료하지 못했습니다. ZIP 전체를 압축 해제했는지 확인하고, 담당자에게 아래 오류 코드를 전달해 주세요. 기존 로그인과 개인 설정은 변경하지 않았습니다.' }
     }
+}
+
+function Get-WorkspaceBuildIdentity {
+    param([string] $AppRoot)
+    # Mirrors local_app/build_identity.py. Only startup reads source files;
+    # never hash user data or repeatedly scan during streaming/polling.
+    try {
+        $root = [IO.Path]::GetFullPath($AppRoot).TrimEnd('\', '/')
+        $paths = New-Object 'Collections.Generic.List[string]'
+        foreach ($relative in @('local_app', 'local_app/web')) {
+            $folder = Join-Path $root $relative
+            if (-not [IO.Directory]::Exists($folder)) { return '' }
+            foreach ($file in [IO.Directory]::GetFiles($folder)) {
+                if ([IO.Path]::GetExtension($file).ToLowerInvariant() -notin @('.py','.ps1','.cs','.js','.css','.html') -or
+                    [IO.Path]::GetFileName($file) -in @('companion.py','harness_client.py','companion.js')) { continue }
+                $paths.Add($file.Substring($root.Length + 1).Replace('\','/'))
+            }
+        }
+        if ($paths.Count -eq 0 -or $paths.Count -gt 256) { return '' }
+        $paths.Sort([StringComparer]::Ordinal)
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $framed = New-Object Text.StringBuilder
+            $total = 0L
+            foreach ($relative in $paths) {
+                $path = Join-Path $root $relative
+                $total += (Get-Item -LiteralPath $path -ErrorAction Stop).Length
+                if ($total -gt 16777216) { return '' }
+                $hash = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($path))).Replace('-','').ToLowerInvariant()
+                $null = $framed.Append($relative).Append([char]0).Append($hash).Append([char]10)
+            }
+            return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($framed.ToString()))).Replace('-','').ToLowerInvariant()
+        } finally { $sha.Dispose() }
+    } catch { return '' }
+}
+
+function Test-WorkspaceRunningBuild {
+    param([string] $AppRoot, [string] $RunningBuild)
+    if ($RunningBuild -cnotmatch '^[a-f0-9]{64}$') { return $false }
+    $expected = Get-WorkspaceBuildIdentity -AppRoot $AppRoot
+    return $expected.Length -eq 64 -and $RunningBuild -ceq $expected
 }
 
 function ConvertTo-WorkspacePythonChecks {

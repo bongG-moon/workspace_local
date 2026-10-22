@@ -286,7 +286,7 @@ class SessionGroupRoutesTests(unittest.TestCase):
         self.addCleanup(reloaded.close)
         reloaded.restore_session(sid)
         self.assertEqual(gid, reloaded.bootstrap()['sessionGroups']['assignments'][sid])
-        self.assertFalse(reloaded.sessions[sid]['trusted'])
+        self.assertTrue(reloaded.sessions[sid]['trusted'])
         self.assertIsNone(reloaded.sessions[sid]['bridge'])
 
     def test_group_delete_also_unassigns_archived_without_deleting_it(self):

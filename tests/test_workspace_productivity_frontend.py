@@ -149,6 +149,21 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.ok(messages.length<=150);assert.match(flatText(messages.at(-1)),/169:/);
         """)
 
+    def test_stream_fragments_keep_history_reference_and_append_to_existing_text_node(self):
+        self.run_case(r"""
+          active.messages=Array.from({length:150},(_,i)=>({role:'assistant',text:'history '+i}));
+          applyDelta({messageId:'live',text:'first'});
+          const history=active.messages,article=streaming.get('live:0'),body=article.querySelector('.message-body');
+          const text={nodeType:3,data:'first',get length(){return this.data.length;},appendData(value){this.data+=value;}};
+          body.replaceChildren(text);body.childNodes=body.children;
+          for(let i=0;i<100;i++)applyDelta({messageId:'live',text:' next'});
+          assert.equal(active.messages,history);assert.equal(history.length,150);
+          assert.equal(body.firstChild,text);assert.equal(text.data,'first'+' next'.repeat(100));
+          assert.equal(article.dataset.streamText,text.data);
+          renderMessage({role:'assistant',messageId:'live',text:'completed'});
+          assert.equal(article.classList.contains('streaming'),false);assert.equal(streaming.size,0);
+        """)
+
     def test_many_simultaneous_text_blocks_still_obey_visible_aggregate_limit(self):
         self.run_case(r"""
           for(let i=0;i<175;i++)applyDelta({messageId:'stream-'+i,text:'x'.repeat(100000)});
@@ -372,9 +387,10 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('inline-queue').hidden,false);
           assert.equal($('inline-queue-list').children.length,3);
           assert.equal($('inline-queue-more').textContent,'2개 더 보기');
-          assert.equal($('queue-list').children.length,5);
+          assert.equal($('queue-list').children.length,0);
           $('inline-queue-more').onclick();
           assert.equal($('workflow-dialog').open,true);
+          assert.equal($('queue-list').children.length,5);
           assert.equal($('prompt').value,'보존할 초안');assert.equal(attachments[0],'draft.txt');
           const old=$('inline-queue-list').children[0].children[1];
           active={id:'B',state:'idle',trusted:true};selectionGeneration++;WorkspaceWorkflow.contextChanged();
@@ -383,8 +399,29 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('inline-queue-list').children.length,0);
         })()""", ("workflow",))
 
+    def test_hidden_large_workflow_is_lazy_and_visible_schedules_are_reused(self):
+        self.run_case(r"""(async()=>{
+          const queue=Array.from({length:100},(_,i)=>({id:'q'+i,text:'요청 '+i,state:'queued'}));
+          const schedules=Array.from({length:100},(_,i)=>({id:'s'+i,text:'예약 '+i,kind:'daily',time:'09:00',enabled:true,nextRunAt:2000000000}));
+          api=async()=>({revision:1,queue,schedules,steer:{supported:true}});
+          $('prompt').value='작성 중 초안';await WorkspaceWorkflow.refresh();
+          const inline=$('inline-queue-list').children[0],remove=inline.children[2];
+          for(let i=0;i<100;i++){active.state=i%2?'running':'question';WorkspaceWorkflow.render();}
+          assert.equal($('queue-list').children.length,0);assert.equal($('schedule-list').children.length,0);
+          assert.equal($('inline-queue-list').children.length,3);assert.equal(inline.children[2],remove);
+          $('workflow-open').onclick();
+          assert.equal($('queue-list').children.length,100);assert.equal($('schedule-list').children.length,100);
+          const schedule=$('schedule-list').children[0];
+          for(let i=0;i<100;i++)WorkspaceWorkflow.render();
+          assert.equal($('schedule-list').children[0],schedule);
+          $('workflow-dialog').close();emit($('workflow-dialog'),'close');
+          assert.equal($('queue-list').children.length,0);assert.equal($('schedule-list').children.length,0);
+          assert.equal($('prompt').value,'작성 중 초안');assert.equal(inline.children[2],remove);
+        })()""", ("workflow",))
+
     def test_saved_queue_now_uses_saved_id_revision_without_consuming_composer(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           const row={id:'saved',text:'저장된 요청',attachments:['saved.csv'],state:'queued',editRevision:3};
           const state={revision:1,queue:[row],schedules:[],steer:{supported:true}};
           api=async()=>state;await WorkspaceWorkflow.refresh();
@@ -402,6 +439,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_saved_queue_now_lost_reply_retry_reuses_receipt_and_ignores_double_click(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           const row={id:'saved',text:'요청',state:'queued',editRevision:0};
           const state={revision:1,queue:[row],schedules:[],steer:{supported:true}};
           api=async()=>state;await WorkspaceWorkflow.refresh();
@@ -416,6 +454,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_saved_queue_now_idle_demo_and_uncertain_stop_capabilities(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           const row={id:'saved',text:'요청',state:'queued'};
           let state={revision:1,queue:[row],schedules:[],steer:{supported:false}};
           api=async()=>state;await WorkspaceWorkflow.refresh();
@@ -430,6 +469,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_saved_queue_old_task_button_and_ack_cannot_change_new_task(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           const state={revision:1,queue:[{id:'saved',text:'요청',state:'queued'}],schedules:[],steer:{supported:true}};
           api=async()=>state;await WorkspaceWorkflow.refresh();
           const button=$('queue-list').children[0].children.at(-1).children[0];
@@ -517,6 +557,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_queue_rows_explain_autorun_approval_wait_and_pause_without_resuming(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           let revision=0,writes=0,paused=false;
           api=async(path,body)=>{if(body)writes++;return {revision:++revision,paused,queue:[{id:'q1',text:'후속 요청',state:'queued'}],schedules:[]};};
           await WorkspaceWorkflow.refresh();
@@ -535,6 +576,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_workflow_cannot_resume_or_submit_while_stop_is_unconfirmed(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           active.state='stopping';let writes=0;
           globalThis.WorkspaceStop={blocked:()=>true};
           api=async(path,body)=>{if(body)writes++;return {revision:1,paused:true,queue:[{id:'q1',text:'남은 요청',state:'queued'}],schedules:[]};};
@@ -548,6 +590,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_stop_requested_during_enqueue_does_not_promise_automatic_execution(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           $('prompt').value='후속 요청';let reply,stopping=false;
           globalThis.WorkspaceStop={blocked:()=>stopping};
           api=()=>new Promise(resolve=>reply=resolve);
@@ -561,6 +604,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_newer_pause_snapshot_overrides_stale_enqueue_confirmation(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           $('prompt').value='후속 요청';let reply;
           api=()=>new Promise(resolve=>reply=resolve);
           const operation=WorkspaceWorkflow.send('enqueue');
@@ -574,6 +618,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
 
     def test_reorder_only_sends_queued_rows_and_uncertain_delivery_requires_review(self):
         self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
           active.state='done';const state={revision:1,paused:true,queue:[
             {id:'uncertain',text:'확인 필요',attachments:[],state:'needs_review'},
             {id:'sending',text:'전송 중',attachments:[],state:'dispatching'},

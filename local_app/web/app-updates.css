@@ -18,6 +18,8 @@
 .app-update-versions>div{min-width:0}
 .app-update-versions dt{color:var(--muted);font-size:11px;margin:0 0 5px}
 .app-update-versions dd{margin:0;color:var(--ink);font-size:13px;overflow-wrap:anywhere}
+.app-update-versions .app-update-build{display:block;margin-top:4px;color:var(--muted);font-size:10px;line-height:1.5}
+.app-update-versions .app-update-build[hidden]{display:none}
 .app-update-versions .app-update-checked{grid-column:1/-1}
 .app-update-versions .app-update-checked dd{font-size:11px;color:var(--muted)}
 .settings-section .app-update-auto{display:flex;align-items:center;gap:9px;margin:14px 0 5px;font-size:12px;color:var(--ink);cursor:pointer}

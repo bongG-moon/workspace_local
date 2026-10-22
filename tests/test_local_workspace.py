@@ -400,7 +400,8 @@ class ServerTests(unittest.TestCase):
     def test_bootstrap_identifies_shared_cli_without_claiming_login_success(self):
         with self.request("/api/bootstrap") as response:
             value = json.load(response)
-        self.assertEqual(value["workspaceVersion"], "0.23.27")
+            from local_app.server import WORKSPACE_VERSION
+            self.assertEqual(value["workspaceVersion"], WORKSPACE_VERSION)
         self.assertEqual(value["appRoot"], str(ROOT))
         self.assertEqual(value["runtime"]["authentication"], "shared-with-cli")
         self.assertNotIn("loggedIn", value["runtime"])
@@ -456,16 +457,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(self.app.get(self.id)["state"], "question")
         self.assertNotEqual(self.app.get(self.id)["state"], "done")
 
-    def test_history_requires_new_trust_and_does_not_store_permission_payloads(self):
+    def test_history_recovers_approved_folder_without_storing_permission_payloads(self):
         self.app.emit(self.id, "assistant", {"text": "안녕"})
         self.app.emit(self.id, "request", {"id":"r", "tool":"Bash", "input":{"command":"sensitive"}})
         self.app.save()
         saved=(self.root / 'state/history-sessions' / (self.id+'.json')).read_text(encoding="utf-8")
         self.assertNotIn("sensitive", saved)
         restored=LocalApp(self.root / "state",command=FAKE,info={})
-        self.assertFalse(restored.get(self.id)["trusted"])
-        with self.assertRaises(ValueError):
-            restored.send(self.id, "다시", [])
+        self.addCleanup(restored.close)
+        self.assertTrue(restored.get(self.id)["trusted"])
+        self.assertFalse(restored.get(self.id)['requests'])
 
     def test_utf8_preview_not_lossy(self):
         path=self.workspace / "한글.md"

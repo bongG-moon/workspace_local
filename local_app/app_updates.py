@@ -23,6 +23,7 @@ import zipfile
 import zlib
 
 from .history import HistoryStore, read, safe
+from .build_identity import BUILD_ID
 from .update_source import CONFIG_NAME, MAX_CONFIG, GITHUB_SOURCE, GITHUB_HISTORY_API, UpdateSource, from_bytes
 
 
@@ -508,7 +509,7 @@ class UpdateManager:
             data = self._metadata
             release = {'version': data['tag_name'][1:], 'title': data['name'], 'notes': data['body'],
                        'publishedAt': data['published_at'], 'url': data['html_url']}
-        return {'currentVersion': self.current_version, 'status': self._status, 'autoCheck': self._auto,
+        return {'currentVersion': self.current_version, 'buildIdentity': BUILD_ID, 'status': self._status, 'autoCheck': self._auto,
                 'startupSequence': self._startup_sequence,
                 'source': self.source.public(),
                 'launcher': dict(self._launcher_result) if self._launcher_result is not None else None,

@@ -22,7 +22,7 @@ class WorkspaceStartupTests(unittest.TestCase):
     def test_reopen_version_matches_running_server(self):
         from local_app.server import WORKSPACE_VERSION
         source = LAUNCHER.read_text(encoding="utf-8-sig")
-        match = re.search(r"\$health\.workspaceVersion -eq '([^']+)'", source)
+        match = re.search(r"\$targetVersion = \[version\]'([^']+)'", source)
         self.assertIsNotNone(match)
         self.assertEqual(WORKSPACE_VERSION, match.group(1))
 

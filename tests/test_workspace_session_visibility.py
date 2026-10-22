@@ -104,7 +104,7 @@ class SessionVisibilityTests(unittest.TestCase):
         self.assertTrue(response['restored'])
         self.assertTrue(response['existing'])
         self.assertEqual(self.sid, response['session']['id'])
-        self.assertFalse(response['session']['trusted'])
+        self.assertTrue(response['session']['trusted'])
         self.assertEqual(before, self.originals())
         self.assertEqual(1, len(self.app.sessions))
 

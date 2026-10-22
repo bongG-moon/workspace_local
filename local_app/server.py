@@ -21,6 +21,8 @@ import webbrowser
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, safe
+from .workspace_preferences import WorkspacePreferences
+from .build_identity import BUILD_ID
 from .session_order import SessionOrder
 from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
@@ -296,7 +298,7 @@ class LocalApp:
                 raise ValueError('앱이 관리하는 일반 대화는 일반 대화 목록에서 이어 주세요. 업무로 가져오지 않습니다.')
             item['title'] = self.unique_title(item['title'][:100])
             workspace_folder(item)
-            item.update(pinned=False, trusted=False, state='idle', seq=0, events=[], requests={},
+            item.update(pinned=False, trusted=self.workspace_preferences.approved(item['workspace']), state='idle', seq=0, events=[], requests={},
                         bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
                         importedConfigRoot=str(Path(runtime_context(self.command)['configRoot']).resolve()))
             self.sessions[sid] = item
@@ -314,10 +316,21 @@ class LocalApp:
                 raise ValueError('이 대화를 가져온 Claude 설정 위치가 현재 연결과 다릅니다. 원래 환경으로 앱을 다시 열어 주세요.')
 
     def _load(self):
+        self.workspace_preferences = WorkspacePreferences(self.state)
         self.history = HistoryStore(self.state)
         self._history_access = {}
+        approvals = {}
         for item in self.history.load(lazy=True):
-            item.update(bridge=None, requests={}, events=[], seq=0, trusted=item.get('kind') == 'chat', state='idle')
+            if item.get('kind') != 'chat' and item['workspace'] not in approvals:
+                approvals[item['workspace']] = self.workspace_preferences.approved(item['workspace'])
+            item.update(bridge=None, requests={}, events=[], seq=0,
+                        trusted=item.get('kind') == 'chat' or approvals[item['workspace']], state='idle')
+            if item.get('kind') != 'chat':
+                remembered = self.workspace_preferences.mode(item)
+                if remembered.get('inherit'):
+                    item['_inheritPermissionMode'] = True
+                elif remembered:
+                    item['_sessionControls'] = remembered
             self.sessions[item['id']] = item
         self.session_order = SessionOrder(self.state)
         self.session_visibility = SessionVisibility(self.state)
@@ -385,6 +398,61 @@ class LocalApp:
             raise ValueError('일반 대화 실행 범위를 확인하지 못했습니다.')
         self.chat_spaces.validate(item['id'], item['workspace'])
         return {'runtime_profile': CHAT_PROFILE}
+
+    def _validate_remembered_trust(self, item):
+        if item.get('kind') != 'chat' and item.get('trusted'):
+            if not self.workspace_preferences.approved(item['workspace']):
+                item['trusted'] = False
+
+    def trust_workspace(self, sid):
+        with self.lock:
+            item = self.require_work(sid)
+            workspace_folder(item)
+            self.workspace_preferences.approve(item['workspace'])
+            item['trusted'] = True
+
+    def _needs_default_permission(self, item):
+        from .permission_contract import help_permission_modes
+        bridge = item.get('bridge')
+        return (item.get('kind') != 'chat' and 'permissionMode' not in item.get('_sessionControls', {})
+                and 'permissionMode' not in item.get('_idleRestoreControls', {})
+                and not item.get('_inheritPermissionMode')
+                and not (bridge is not None and not bridge.closed
+                         and getattr(bridge, '_workspaceAutoDefaultChecked', False))
+                and 'auto' in help_permission_modes(self.info.get('help', '')))
+
+    def _apply_default_permission(self, item, bridge):
+        if not self._needs_default_permission(item) or getattr(bridge, '_workspaceAutoDefaultChecked', False):
+            return
+        state = bridge.model_state()
+        available = [row.get('value') for row in state.get('availablePermissionModes', [])]
+        if 'auto' not in available or not state.get('capabilities', {}).get('setPermissionMode'):
+            bridge._workspaceAutoDefaultChecked = True
+            item['permissionDefaultNotice'] = '현재 Claude 연결이 Auto를 지원하지 않아 기존 승인 모드를 사용합니다.'
+            return
+        bridge._workspace_default_permission_pending = True
+        try:
+            if state.get('permissionMode') != 'auto':
+                state = bridge.set_permission_mode('auto')
+            bridge._workspaceAutoDefaultChecked = True
+            self._default_permission_notice(item, state)
+        except BridgeError as exc:
+            if exc.code not in {'permission_mode_invalid', 'permission_mode_rejected', 'permission_mode_unavailable'}:
+                raise
+            bridge._workspaceAutoDefaultChecked = True
+            item['permissionDefaultNotice'] = '현재 Claude 연결이 Auto를 허용하지 않아 기존 승인 모드를 사용합니다.'
+        finally:
+            # A late ACK must remain distinguishable from an explicit user
+            # selection, including after this call has timed out.
+            if not bridge.model_state().get('permissionModeChangePending'):
+                bridge._workspace_default_permission_pending = False
+
+    @staticmethod
+    def _default_permission_notice(item, state):
+        if state.get('permissionMode') == 'auto':
+            item.pop('permissionDefaultNotice', None)
+        else:
+            item['permissionDefaultNotice'] = '현재 Claude 연결이 Auto 대신 보고한 승인 모드를 사용합니다.'
 
     @contextmanager
     def chat_io(self, sid):
@@ -507,8 +575,10 @@ class LocalApp:
 
     def _public(self, item):
         item = self.get(item['id'])
-        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "choice", "verification", "branch") } | {
+        result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
+            'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
+            'permissionPreferenceNotice': item.get('permissionPreferenceNotice') or '',
             'attachmentReads': item.get('attachmentReads', []),
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
@@ -557,7 +627,7 @@ class LocalApp:
             order = self.session_order.snapshot()
             order['ids'] = [sid for sid in order['ids'] if not self.session_visibility.contains(sid)]
             return {"application": "company-workspace", "version": self.info.get("version"), "error": self.error, "demo": self.demo,
-                    "workspaceVersion": WORKSPACE_VERSION, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
+                    "workspaceVersion": WORKSPACE_VERSION, "buildIdentity": BUILD_ID, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning,
                     "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
@@ -840,6 +910,7 @@ class LocalApp:
                     "messages": [], "state": "idle", "seq": 0, "events": [], "requests": {},
                     "sessionId": None, "bridge": None, "trusted": True, "attachments": [], "artifacts": [], "lastRunId": None,
                     "modelOverride": None}
+            self.workspace_preferences.approve(item["workspace"])
             self.sessions[sid] = item
             self.save(sid)
         return self.public(item)
@@ -924,7 +995,7 @@ class LocalApp:
                     'activeLimit': MAX_SESSIONS, 'warning': self.history.warning}
 
     def restore_session(self, sid):
-        """Restore the app list entry only; never trust a folder or resume work."""
+        """Restore the list and recorded folder consent; never resume work."""
         with self.lock:
             if sid not in self.sessions:
                 raise ValueError('복원할 업무를 찾지 못했습니다.')
@@ -935,7 +1006,7 @@ class LocalApp:
             if item.get('_removingFromList'):
                 raise ValueError('업무 목록을 정리하고 있습니다. 잠시 뒤 복원해 주세요.')
             self.session_visibility.set_hidden(sid, False)
-            item['trusted'] = False
+            item['trusted'] = self.workspace_preferences.approved(item['workspace'])
             return {'ok': True, 'restored': True, 'session': self.public(item)}
 
     def hide_session(self, sid, confirmed=False):
@@ -1050,6 +1121,7 @@ class LocalApp:
                 return {'available': True, 'scope': 'latest',
                         'reason': '마지막 완료 기록에서 이어가요. 분기 생성만으로 AI 요청을 보내지는 않아요.'}
             item.update(bridge=None, requests={}, events=[], seq=0, state='idle',
+                        trusted=self.workspace_preferences.approved(item['workspace']),
                         attachments=[], artifacts=[], lastRunId=None)
             item['title'] = self.unique_title(item['title'][:100])
             self.sessions[item['id']] = item
@@ -1330,6 +1402,7 @@ class LocalApp:
             self._require_running()
             item = self.get(sid)
             runtime_options = self.chat_runtime_options(item)
+            self._validate_remembered_trust(item)
             if item.get('_restarting') != _restart_claim:
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 잠시 후 다시 시도해 주세요.')
             if item.get('_dispatchClaim') != _dispatch_claim:
@@ -1381,6 +1454,7 @@ class LocalApp:
             # initialization, and never create a synthetic conversation turn.
             bridge.prepare()
             self._apply_control_baselines(item, bridge)
+            self._apply_default_permission(item, bridge)
             # Make the real, prepared state visible if a previously selected
             # mode is no longer available. No business request is sent until
             # every remembered selection has been acknowledged again.
@@ -1401,11 +1475,17 @@ class LocalApp:
             with self.lock:
                 item['_connecting'] = bool(item.get('_restarting'))
 
-    @staticmethod
-    def _remember_control(item, name, value):
-        # Current app lifetime only. HistoryStore deliberately excludes this
-        # private field, so personal Claude settings and restart defaults stay
-        # owned by the CLI.
+    def _remember_control(self, item, name, value):
+        # Ordinary permission choices are app-owned and survive restart;
+        # model/effort remain app-lifetime overrides. Claude files are untouched.
+        if name == 'permissionMode' and item.get('kind') != 'chat':
+            item.pop('permissionDefaultNotice', None)
+            item.pop('_inheritPermissionMode', None)
+            try:
+                self.workspace_preferences.remember_mode(item, value)
+                item.pop('permissionPreferenceNotice', None)
+            except (OSError, ValueError):
+                item['permissionPreferenceNotice'] = '현재 승인 모드는 적용했지만 저장하지 못했습니다. 다음 실행에는 이 선택이 유지되지 않을 수 있습니다.'
         choices = item.setdefault('_sessionControls', {})
         # None is an explicit reset to the app-lifetime observed baseline, not
         # permission to inherit the last completed turn of a resumed process.
@@ -1470,6 +1550,15 @@ class LocalApp:
                 # The user explicitly abandons this stale selection only. No
                 # inherited value or other control becomes a new override.
                 item.get('_sessionControls', {}).pop(control, None)
+                if control == 'permissionMode':
+                    # Accepting the CLI baseline is distinct from replaying a
+                    # reset control that this CLI may no longer support.
+                    item['_inheritPermissionMode'] = True
+                    try:
+                        self.workspace_preferences.remember_mode(item, None, inherit=True)
+                        item.pop('permissionPreferenceNotice', None)
+                    except (OSError, ValueError):
+                        item['permissionPreferenceNotice'] = '현재 모드 사용은 적용했지만 저장하지 못했습니다. 다음 실행에는 이전 선택을 다시 확인할 수 있습니다.'
             self._control_selected(item, bridge, control)
             with self.lock:
                 session = self.public(item)
@@ -1728,7 +1817,11 @@ class LocalApp:
                         and not data.get('permissionModeChangePending')
                         and data.get('permissionMode')):
                     bridge = item.get('bridge')
-                    if not getattr(bridge, '_idle_permission_restore', False):
+                    if getattr(bridge, '_workspace_default_permission_pending', False):
+                        bridge._workspace_default_permission_pending = False
+                        bridge._workspaceAutoDefaultChecked = True
+                        self._default_permission_notice(item, data)
+                    elif not getattr(bridge, '_idle_permission_restore', False):
                         self._remember_control(item, 'permissionMode',
                             data.get('permissionMode') if data.get('permissionModeOverride') is not None else None)
                     elif bridge is not None:
@@ -1777,6 +1870,10 @@ class LocalApp:
                 data['lastRunId'] = item.get('lastRunId')
             if kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal:
                 item['updated'] = time.time()
+            if kind in {'connected', 'permission_mode_changed', 'control_restore_changed',
+                        'model_changed', 'effort_changed', 'status', 'result', 'error'}:
+                data = dict(data, permissionDefaultNotice=item.get('permissionDefaultNotice') or '',
+                            permissionPreferenceNotice=item.get('permissionPreferenceNotice') or '')
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
             item["events"] = item["events"][-300:]
@@ -1862,6 +1959,7 @@ class LocalApp:
             self._require_running()
             current = self.get(sid)
             runtime_options = self.chat_runtime_options(current)
+            self._validate_remembered_trust(current)
             chat = current.get('kind') == 'chat'
             if current.get('_restarting'):
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 요청을 보내 주세요.')
@@ -1896,7 +1994,10 @@ class LocalApp:
             # preparing a child or changing conversation/choice state. A failed
             # manifest write must leave no empty CLI occupying a connection slot.
             self.attachment_store.mark_used(paths)
-            restore = (not self.demo and bool(current.get('_sessionControls') or current.get('_idleRestoreControls') or current.get('_idleReleased'))
+            if not chat and trusted is True:
+                self.workspace_preferences.approve(current['workspace'])
+                current['trusted'] = True
+            restore = (not self.demo and bool(current.get('_sessionControls') or current.get('_idleRestoreControls') or current.get('_idleReleased') or self._needs_default_permission(current))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
         chat_content, notices = (None, [])
         if chat:
@@ -2775,8 +2876,7 @@ class Handler(BaseHTTPRequestHandler):
             app.require_work(sid)
             if data.get('trusted') is not True:
                 raise ValueError('작업 폴더 확인이 필요합니다.')
-            workspace_folder(app.get(sid))
-            app.get(sid)['trusted'] = True
+            app.trust_workspace(sid)
             return self.reply({'ok': True})
         if route == "/api/send":
             app.send(sid, data.get("text"), data.get("attachments", []), data.get("trusted"), _offer_replacement=True, _replacement_token=data.get("replacementToken"))

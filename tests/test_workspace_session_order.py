@@ -123,7 +123,7 @@ class SessionOrderRoutesTests(unittest.TestCase):
         reloaded = LocalApp(self.app.state, demo=True)
         self.addCleanup(reloaded.close)
         self.assertEqual([a, c, b], [row['id'] for row in reloaded.bootstrap()['sessions']])
-        self.assertFalse(reloaded.get(a)['trusted'])
+        self.assertTrue(reloaded.get(a)['trusted'])
         self.assertTrue(all(item['bridge'] is None and not reloaded.get(item['id'])['messages'] for item in reloaded.sessions.values()))
 
     def test_pin_persists_and_server_rechecks_current_group_before_move(self):

@@ -64,6 +64,25 @@ function positionFixture() {
 
 @unittest.skipUnless(NODE, "Node.js is required for inline-control UI checks")
 class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
+    def test_auto_fallback_and_preference_save_notices_preserve_actual_mode(self):
+        self.run_case(r"""
+          applyConnectionState({session:{connection:connection(),permissionDefaultNotice:'Auto를 적용하지 못해 직접 승인을 사용합니다.',permissionPreferenceNotice:''}});
+          renderConnection(active.connection);
+          assert.equal(textFor('composer-permission'),'직접 승인');
+          assert.match($('composer-control-status').textContent,/Auto를 적용하지 못해/);
+          assert.match($('permission-mode-message').textContent,/Auto를 적용하지 못해/);
+          assert.equal($('composer-control-status').dataset.error,'true');
+          applyConnectionState({session:{connection:{...connection(),permissionMode:'auto'},permissionDefaultNotice:'',permissionPreferenceNotice:'현재 연결에는 적용했지만 선택을 저장하지 못했습니다.'}});
+          renderConnection(active.connection);
+          assert.equal(textFor('composer-permission'),'자동 판단');
+          assert.match($('composer-control-status').textContent,/선택을 저장하지 못했습니다/);
+          applyConnectionState({session:{connection:{...connection(),permissionMode:'auto'},permissionDefaultNotice:'',permissionPreferenceNotice:''}});
+          renderConnection(active.connection);
+          assert.equal($('composer-control-status').hidden,true);assertDraft();
+          handleEvent({type:'permission_mode_changed',data:{permissionMode:'default',permissionDefaultNotice:'Auto 대신 직접 승인을 사용합니다.',permissionPreferenceNotice:''}});
+          assert.equal(textFor('composer-permission'),'직접 승인');assert.match($('composer-control-status').textContent,/Auto 대신 직접 승인/);
+        """)
+
     def test_model_command_uses_existing_control_endpoint_not_send(self):
         self.run_case(r"""(async()=>{
           const calls=[];api=async(path,body)=>{calls.push({path,body});return {ok:true,model:body.model,modelOverride:body.model,connection:{...connection(),model:body.model}};};

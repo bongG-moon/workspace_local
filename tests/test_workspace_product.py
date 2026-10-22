@@ -105,7 +105,7 @@ class WorkspaceLocationTests(unittest.TestCase):
         app.close()
         restored = self.app()
         self.assertEqual(old['workspace'], restored.get(old['id'])['workspace'])
-        self.assertFalse(restored.get(old['id'])['trusted'])
+        self.assertTrue(restored.get(old['id'])['trusted'])
         self.assertEqual('preserve', original.read_text(encoding='utf-8'))
         new = restored.create('', True, managed=True)
         self.assertEqual(self.desktop / 'Company Workspace', Path(new['workspace']).parent)
@@ -213,7 +213,7 @@ class ProductTests(unittest.TestCase):
         self.app.update_session(self.sid, {'pinned': False})
         restored = LocalApp(self.app.state, command=['fixture-cli'])
         self.addCleanup(restored.close)
-        self.assertFalse(restored.get(self.sid)['trusted'])
+        self.assertTrue(restored.get(self.sid)['trusted'])
         self.assertEqual('이름을 바꾼 업무', restored.get(self.sid)['title'])
 
     def test_history_retains_more_than_forty_and_preserves_original_files(self):

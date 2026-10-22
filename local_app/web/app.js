@@ -414,7 +414,7 @@ function renderBoundedMessageText(body,text){
   body.textContent="";
   if(marks>600){body.replaceChildren();body.textContent=text;}else renderText(body,text);
 }
-function boundConversation(keep){
+function boundConversation(keep,updateHistory=true){
   const conversation=$("conversation"),articles=[...conversation.children].filter(node=>node.classList.contains("message"));
   let total=articles.reduce((sum,node)=>sum+Number(node.dataset.messageSize||0),0),count=articles.length,removed=false;
   const over=()=>count>CONVERSATION_MESSAGE_LIMIT||total>CONVERSATION_TEXT_LIMIT;
@@ -432,7 +432,7 @@ function boundConversation(keep){
     if(count>CONVERSATION_MESSAGE_LIMIT)discard(node);
   }
   if(removed&&!conversation.querySelector(".conversation-limit"))conversation.prepend(el("p","최근 대화 일부만 표시하고 있어요. 표시 범위는 최대 150개 메시지·50만 자이며 Claude 기록은 변경하지 않아요.","message-interrupted conversation-limit"));
-  if(Array.isArray(active?.messages)){
+  if(updateHistory&&Array.isArray(active?.messages)){
     const messages=active.messages.slice(-CONVERSATION_MESSAGE_LIMIT).map(message=>typeof message.text==="string"&&message.text.length>MESSAGE_TEXT_LIMIT?{...message,text:message.text.slice(0,MESSAGE_TEXT_LIMIT),uiTruncated:true}:message);
     const size=message=>String(message.text||"").length+(Array.isArray(message.files)?message.files:[]).reduce((sum,path)=>sum+String(path).length,0);
     let characters=messages.reduce((sum,message)=>sum+size(message),0);while(messages.length>1&&characters>CONVERSATION_TEXT_LIMIT)characters-=size(messages.shift());
@@ -453,7 +453,25 @@ function renderMessage(message){
   if(existing){renderBoundedMessageText(existing.querySelector(".message-body"),text);existing.classList.remove("streaming");delete existing.dataset.streamText;delete existing.dataset.streamTruncated;existing.dataset.messageSize=String(text.length);if(message.runId)existing.dataset.runId=message.runId;streaming.delete(sk);messageTruncation(existing,truncated);boundConversation(existing);return existing;}
   const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);article.append(el("div",message.role==="user"?"나":"AX Workspace","message-label"));const body=el("div",null,"message-body");renderBoundedMessageText(body,text);article.append(body);if(fileText){if(globalThis.WorkspaceRichContent&&!message.pending)WorkspaceRichContent.files(article,message.files,{sessionId:active?.id,workspace:active?.workspace});else article.append(el("div",fileText,"message-files"));}if(message.role==="user")renderAttachmentReads(article,message.attachmentReads);article.dataset.runId=message.runId||"";messageTruncation(article,truncated);$("conversation").append(article);boundConversation(article);return article;
 }
-function applyDelta(data){const sk=streamKey(data);let article=streaming.get(sk);if(!article){article=renderMessage({role:"assistant",text:"",runId:data.runId});article.classList.add("streaming");article.dataset.streamText="";streaming.set(sk,article);}if(data.runId)article.dataset.runId=data.runId;const old=article.dataset.streamText||"",incoming=String(data.text||""),available=Math.max(0,MESSAGE_TEXT_LIMIT-old.length);if(article.dataset.streamTruncated!=="true")article.dataset.streamText=old+incoming.slice(0,available);if(data.uiTruncated||incoming.length>available)article.dataset.streamTruncated="true";article.dataset.messageSize=String(article.dataset.streamText.length);article.querySelector(".message-body").textContent=article.dataset.streamText;messageTruncation(article,article.dataset.streamTruncated==="true");boundConversation(article);}
+function applyDelta(data){
+  const sk=streamKey(data);let article=streaming.get(sk);
+  if(!article){article=renderMessage({role:"assistant",text:"",runId:data.runId});article.classList.add("streaming");article.dataset.streamText="";streaming.set(sk,article);}
+  if(data.runId)article.dataset.runId=data.runId;
+  const old=article.dataset.streamText||"",incoming=String(data.text||""),available=Math.max(0,MESSAGE_TEXT_LIMIT-old.length);
+  const addition=article.dataset.streamTruncated==="true"?"":incoming.slice(0,available);
+  if(addition)article.dataset.streamText=old+addition;
+  if(data.uiTruncated||incoming.length>available)article.dataset.streamTruncated="true";
+  article.dataset.messageSize=String(article.dataset.streamText.length);
+  const body=article.querySelector(".message-body"),textNode=body.firstChild;
+  // Streaming text stays plain until the final message. Append to its existing
+  // text node instead of replacing a growing response on every small fragment.
+  if(textNode?.nodeType===3&&body.childNodes.length===1&&textNode.length===old.length){if(addition)textNode.appendData(addition);}
+  else body.textContent=article.dataset.streamText;
+  messageTruncation(article,article.dataset.streamTruncated==="true");
+  // Delta events do not mutate active.messages; its bounds are enforced when
+  // complete messages arrive. Keep visible streaming bounds on every fragment.
+  boundConversation(article,false);
+}
 function renderDelta(data){if(globalThis.WorkspaceStream)WorkspaceStream.enqueue(data,applyDelta);else applyDelta(data);}
 function renderConnection(info){
   updateRestartControls();
@@ -476,6 +494,8 @@ function hasControlRestoreIssue(control){return controlRestoreIssues().some(issu
 function modelOptions(){return (Array.isArray(active?.connection?.availableModels)?active.connection.availableModels:[]).slice(0,100).map(item=>typeof item==="string"?{value:item,displayName:item}:item).filter(item=>item&&typeof item.value==="string"&&item.value);}
 function permissionOptions(){const rows=(Array.isArray(active?.connection?.availablePermissionModes)?active.connection.availablePermissionModes:[]).filter(item=>item&&["manual","default","plan","acceptEdits","auto","bypassPermissions"].includes(item.value)&&(item.value!=="bypassPermissions"||active.connection.bypassPermissions?.available===true));return rows.filter(item=>item.value!=="manual"||!rows.some(row=>row.value==="default"));}
 function permissionOptionValue(mode,rows=permissionOptions()){if(mode==="manual"||mode==="default")return rows.find(row=>row.value==="default")?.value||rows.find(row=>row.value==="manual")?.value||mode;return mode;}
+function permissionNotice(){return [active?.permissionDefaultNotice,active?.permissionPreferenceNotice].filter(value=>typeof value==="string"&&value).join(" ");}
+function applyPermissionNotices(session){if(!active||!session)return;for(const name of ["permissionDefaultNotice","permissionPreferenceNotice"])if(name in session)active[name]=String(session[name]||"");}
 function effortOptions(){return (Array.isArray(active?.connection?.availableEfforts)?active.connection.availableEfforts:[]).filter(item=>item&&["low","medium","high","xhigh","max"].includes(item.value));}
 function renderConnectionOptions(){
   const model=$("model-select"),previousModel=model.value;model.replaceChildren();const custom=el("option","직접 입력");custom.value="";model.append(custom);
@@ -492,11 +512,13 @@ function updatePermissionControls(){
   const current=permissionOptions().find(item=>item.value===permissionOptionValue(info?.permissionMode)),selected=permissionOptions().find(item=>item.value===$("permission-mode-select").value);
   $("permission-mode-detail").textContent=selected?.description||"기존 Claude 설정을 사용합니다. 개인 설정과 회사 정책은 변경하지 않아요.";
   $("permission-mode-message").textContent=permissionChanging||info?.permissionModeChangePending===true?"승인 모드 변경을 확인하고 있어요.":!active?"업무 연결 후 현재 승인 모드를 확인할 수 있어요.":busyStates.has(active.state)&&info?.capabilities?.setPermissionModeWhileRunning!==true?"진행 중인 요청이 끝나면 승인 모드를 바꿀 수 있어요.":!capable?"현재 연결은 승인 모드 변경을 제공하지 않아요. 기존 승인 흐름을 유지합니다.":`현재: ${current?.displayName||info?.permissionMode||"미확인"}${info?.permissionModeOverride?" · 이 연결에서 선택":" · 기존 설정 상속"}${info?.permissionModeSupport==="unverified"?" · 선택 시 CLI 적용 응답 확인":""}${busyStates.has(active.state)?" · 작업 중에도 변경할 수 있어요. 대기 중인 확인 요청은 직접 응답해 주세요.":""}`;
+  if(permissionNotice())$("permission-mode-message").textContent+=` ${permissionNotice()}`;
   $("permission-mode-reset-note").textContent=info?.permissionModeResetRequiresReconnect?"기존 설정으로 돌아가면 이 연결을 닫고 다음 요청에서 기존 설정을 다시 불러옵니다.":"이 업무에 적용합니다. 같은 앱에서 다시 연결하면 선택을 이어갑니다.";
 }
 function applyConnectionState(value){
   if(!active)return;const state=value?.session?.connection||value?.connection||value;
   if(!state||typeof state!=="object")return;
+  applyPermissionNotices(value?.session||value);
   active.connection=active.connection||{};
   for(const name of ["model","modelOverride","availableModels","effort","effortOverride","availableEfforts","effortSupport","effortSource","effortChangeRequiresReconnect","effortResetRequiresReconnect","effortResetAvailable","capabilities","permissionMode","permissionModeLabel","permissionModeSource","permissionModeCycle","permissionModeOverride","availablePermissionModes","permissionModeSupport","permissionModeResetRequiresReconnect","permissionModeResetAvailable","permissionModeChangePending","connected","controlRestore"])if(name in state)active.connection[name]=state[name];
   if("modelOverride" in state)active.modelOverride=state.modelOverride;else if("modelOverride" in value)active.modelOverride=value.modelOverride;
@@ -585,6 +607,7 @@ function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichConte
 async function poll(id,after,signal){while(!appClosed&&!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(appClosed||signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
+  if(["connected","connection_restart_finished","status","permission_mode_changed","control_restore_changed"].includes(event.type))applyPermissionNotices(d);
   if(["status","error","result"].includes(event.type)){
     // A result already on the wire cannot cancel an explicit stop intent.
     const staleTerminal=stopState()==="stopping"&&event.type!=="status"&&d.stopState==null;
@@ -629,7 +652,7 @@ function revealRequest(card){
   requestAnimationFrame(()=>{if(active?.id===sid&&[...$("requests").children].includes(card)&&!globalThis.WorkspaceCapabilities?.isOpen())card.scrollIntoView({block:"nearest",inline:"nearest"});});
 }
 function sessionMetadata(item){return {kind:sessionKind(item),runtimeProfile:item.runtimeProfile,stopState:item.stopState,cleanupRetryable:item.cleanupRetryable,connectionStopped:item.connectionStopped,id:item.id,title:item.title,workspace:item.workspace,connectionState:item.connection?.connected?"live":item.connection?"last-seen":item.connectionState||"unavailable",created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0};}
-async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?sessionMetadata(next):s);if(active?.id===id){active.updated=next.updated;active.artifactCount=next.artifactCount;active.title=next.title;if(isGeneralChat()){const latest=[...(next.messages||[])].reverse().find(row=>row.role==="user"),article=[...$("conversation").querySelectorAll(".message.user")].at(-1);if(article&&latest)renderAttachmentReads(article,latest.attachmentReads);}globalThis.WorkspaceProgressView?.metadata(next.progress);taskHeader();}renderSessions();}catch(e){toast(e.message);}}
+async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?sessionMetadata(next):s);if(active?.id===id){applyPermissionNotices(next);active.updated=next.updated;active.artifactCount=next.artifactCount;active.title=next.title;if(isGeneralChat()){const latest=[...(next.messages||[])].reverse().find(row=>row.role==="user"),article=[...$("conversation").querySelectorAll(".message.user")].at(-1);if(article&&latest)renderAttachmentReads(article,latest.attachmentReads);}globalThis.WorkspaceProgressView?.metadata(next.progress);taskHeader();}renderSessions();}catch(e){toast(e.message);}}
 function approvalSummary(request){
   const input=request.input||{},tool=request.tool||"업무 도구",target=input.file_path||input.path||input.notebook_path;
   const known={Read:["자료를 읽습니다","선택한 자료의 내용을 확인하는 요청이에요."],Write:["파일에 내용을 저장합니다","같은 이름의 파일이 있으면 기존 내용이 바뀔 수 있어요."],Edit:["파일 내용을 수정합니다","아래 변경 전후와 대상 파일을 확인해 주세요."],MultiEdit:["파일의 여러 부분을 수정합니다","대상 파일과 상세 변경 내용을 확인해 주세요."],Glob:["파일을 찾습니다","조건에 맞는 파일 경로를 찾는 요청이에요."],Grep:["자료 안에서 내용을 찾습니다","검색 조건에 맞는 내용을 확인하는 요청이에요."]};

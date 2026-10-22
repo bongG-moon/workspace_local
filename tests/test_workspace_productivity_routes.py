@@ -124,12 +124,12 @@ class ProductivityRoutesTests(unittest.TestCase):
         self.assertEqual(before, self.source.read_bytes())
         self.assertEqual(history, (self.root / 'state' / 'history-index.json').read_bytes())
 
-    def test_create_keeps_source_and_separates_trust_controls_queue_and_history(self):
+    def test_create_keeps_approved_folder_but_separates_controls_queue_and_history(self):
         before = self.source.read_bytes()
         with patch('local_app.server.ClaudeSession') as bridge:
             child = self.create_branch()
         bridge.assert_not_called()
-        self.assertFalse(child['trusted'])
+        self.assertTrue(child['trusted'])
         self.assertEqual('idle', child['state'])
         self.assertIsNone(child['sessionId'])
         self.assertNotEqual(self.parent_id, child['id'])
@@ -150,7 +150,7 @@ class ProductivityRoutesTests(unittest.TestCase):
         restored = self.make_app()
         self.addCleanup(restored.close)
         row = restored.get(child['id'])
-        self.assertFalse(row['trusted'])
+        self.assertTrue(row['trusted'])
         self.assertEqual(child['branch'], row['branch'])
         self.assertNotIn('_sessionControls', row)
         self.assertNotIn('_allowBypass', row)
@@ -159,6 +159,7 @@ class ProductivityRoutesTests(unittest.TestCase):
 
     def test_prepare_rechecks_trust_and_uses_native_fork_without_prompt(self):
         child = self.create_branch()
+        self.app.get(child['id'])['trusted'] = False
         with patch('local_app.server.ClaudeSession', side_effect=PreparedBridge) as factory:
             code, _ = self.request('/api/connect', {}, sid=child['id'])
             self.assertEqual(400, code)

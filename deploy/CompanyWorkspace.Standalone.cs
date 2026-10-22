@@ -348,7 +348,7 @@ namespace CompanyAgent {
                 int code = process.ExitCode;
                 // 20 means the existing launcher already displayed its reason.
                 if (code == 0 || code == 20) return code;
-                if (options.NoBrowser && code >= 22 && code <= 47) {
+                if (options.NoBrowser && code >= 22 && code <= 48) {
                     Console.Error.WriteLine("AX Workspace 실행 환경을 확인하지 못했습니다. 오류 코드: WS-" + code);
                     return code;
                 }

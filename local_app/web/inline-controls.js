@@ -127,8 +127,8 @@ globalThis.WorkspaceInlineControls = (() => {
     const changing = modelChanging || permissionChanging || info.permissionModeChangePending===true || effortChanging, restore = controlRestoreState(), issue = controlRestoreIssues()[0];
     const restoreText = restore ? (issue?.message || (chatMode()?"이전 모델을 적용하지 못했어요. 사용할 모델을 확인해 주세요.":"이전 선택을 적용하지 못했어요. 사용할 모델·Effort·승인 모드를 확인해 주세요.")) : "";
     const text = stopBlocked() ? (chatMode()?"답변 중지가 끝나면 모델을 바꿀 수 있어요.":"중지 상태를 확인한 뒤 모델·Effort·승인 모드를 바꿀 수 있어요.") : connectionPreparing ? "Claude 연결에서 선택 항목을 불러오는 중…" : changing ? "변경을 확인하고 있어요…"
-      : (visibleNotice?.isError ? visibleNotice.text : restoreText || visibleNotice?.text) || (active && busyStates.has(active.state) ? chatMode()?"답변이 끝나면 다음 질문에 사용할 모델을 바꿀 수 있어요.":info.capabilities?.setPermissionModeWhileRunning===true ? "작업 중에도 승인 모드는 바꿀 수 있어요. 모델·Effort는 요청이 끝난 뒤 변경할 수 있어요." : "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
-    node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || visibleNotice?.isError) && !changing));
+      : (visibleNotice?.isError ? visibleNotice.text : restoreText || permissionNotice() || visibleNotice?.text) || (active && busyStates.has(active.state) ? chatMode()?"답변이 끝나면 다음 질문에 사용할 모델을 바꿀 수 있어요.":info.capabilities?.setPermissionModeWhileRunning===true ? "작업 중에도 승인 모드는 바꿀 수 있어요. 모델·Effort는 요청이 끝난 뒤 변경할 수 있어요." : "요청이 끝나면 모델·Effort·승인 모드를 바꿀 수 있어요." : "");
+    node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || permissionNotice() || visibleNotice?.isError) && !changing));
     if (restore && !changing && !connectionPreparing) {
       const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
       button.disabled=blocked()||pending;button.onclick=()=>recover();node.append(button);

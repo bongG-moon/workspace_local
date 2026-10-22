@@ -118,7 +118,7 @@ class ReliabilityAppTests(unittest.TestCase):
         self.app.close()
         self.app=LocalApp(self.root/'state',command=FAKE,info={'version':'fixture'})
         self.addCleanup(self.app.close)
-        self.app.get(task)['trusted']=True
+        self.app.trust_workspace(task)
         self.app.send(task,'STREAM_PROTOCOL_TEST',[])
         eventually(lambda:self.app.get(task)['state']=='done')
         self.assertEqual(sid,self.app.get(task)['sessionId'])

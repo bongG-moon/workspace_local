@@ -32,7 +32,8 @@ globalThis.WorkspaceAppUpdates = (() => {
       // Never use a URL supplied by release notes or remote metadata.
       url:provider==="github"?`https://github.com/bongG-moon/workspace_local/releases/tag/v${value.release.version}`:""
     }:null;
-    return {currentVersion,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
+    const buildIdentity=typeof value.buildIdentity==="string"&&/^[a-f0-9]{64}$/.test(value.buildIdentity)?value.buildIdentity:"";
+    return {currentVersion,buildIdentity,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
       startupSequence:Number.isSafeInteger(value.startupSequence)&&value.startupSequence>=0?value.startupSequence:0,
       release,progress:typeof value.progress==="number"&&Number.isFinite(value.progress)?Math.max(0,Math.min(100,value.progress)):null,
       error:typeof value.error==="string"?value.error:null,canInstall:value.canInstall===true};
@@ -91,6 +92,8 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-settings-badge").hidden=!available;
     $("settings-open").setAttribute("aria-label","설정");$("settings-open").setAttribute("title","설정");
     $("app-update-current").textContent=snapshot.currentVersion||"확인 중";
+    const buildLabel=$("app-update-build");
+    if(buildLabel){buildLabel.textContent=snapshot.buildIdentity?`빌드 ${snapshot.buildIdentity.slice(0,12)}`:"";buildLabel.hidden=!snapshot.buildIdentity;}
     $("app-update-latest").textContent=release?.version||(snapshot.status==="current"?snapshot.currentVersion:"확인 전");
     $("app-update-source").textContent=snapshot.source?.label||"배포 서버";
     $("app-update-checked").textContent=dateText(snapshot.lastChecked,true);

@@ -401,7 +401,6 @@ try {
     $runtimePath = Join-Path $runtimeStateRoot 'runtime.json'
     # Reuse a live local server; do not start another CLI or abandon active work.
     $liveWorkspaceUri = $null
-    $sameWorkspaceRunning = $false
     $workspaceClosing = $false
     $upgradeNeeded = $false
     if (Test-Path -LiteralPath $runtimePath) {
@@ -415,7 +414,6 @@ try {
             if ($health.application -eq 'company-workspace' -and [bool]$health.demo -eq [bool]$Demo) {
                 $liveWorkspaceUri = $uri
                 $workspaceClosing = $health.closing -eq $true
-                $sameWorkspaceRunning = $health.workspaceVersion -eq '0.23.29'
             }
         } catch { # Stale runtime records never authorize process termination.
         }
@@ -450,6 +448,14 @@ try {
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)
         $upgradeNeeded = $runningVersion -lt $targetVersion -or $executionPolicyUpgrade
+        # A release number alone cannot distinguish rebuilt installers. Never
+        # silently present the old process as a newly opened fixed build.
+        if ($runningVersion -eq $targetVersion -and -not $executionPolicyUpgrade) {
+            $runningBuild = if ($health.PSObject.Properties['buildIdentity']) { [string]$health.buildIdentity } else { '' }
+            if (-not (Test-WorkspaceRunningBuild -AppRoot (Split-Path $PSScriptRoot -Parent) -RunningBuild $runningBuild)) {
+                throw 'WORKSPACE_STARTUP:48'
+            }
+        }
         $canReuseWindow = $health.PSObject.Properties['window'] -and $health.window -and
             $health.window.PSObject.Properties['reopenSupported'] -and ($health.window.reopenSupported -eq $true)
         if (-not $NoBrowser) {

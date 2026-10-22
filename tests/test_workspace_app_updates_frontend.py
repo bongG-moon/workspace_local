@@ -71,6 +71,12 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
     def test_updater_handlers_are_bound_before_bootstrap_readiness_check(self):
         self.run_case("assert.equal(updaterReadyAtBootstrap,true);")
 
+    def test_loaded_build_identity_is_visible_and_malformed_value_is_hidden(self):
+        self.run_case("assert.equal($('app-update-build').textContent,'빌드 0123456789ab');assert.equal($('app-update-build').hidden,false);",
+                      {**CURRENT, 'buildIdentity': '0123456789abcdef' * 4})
+        self.run_case("assert.equal($('app-update-build').textContent,'');assert.equal($('app-update-build').hidden,true);",
+                      {**CURRENT, 'buildIdentity': '<untrusted>'})
+
     def test_available_startup_opens_notes_with_explicit_install_and_later_buttons(self):
         self.run_case(r"""
           assert.equal($('app-update-sidebar-badge').hidden,false);

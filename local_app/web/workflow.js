@@ -3,7 +3,7 @@
 globalThis.WorkspaceWorkflow = (() => {
   let snapshot = null, readGeneration = 0, controller = null, editor = null, trustReturn = null;
   let overview = null, overviewController = null, overviewGeneration = 0, overviewPage = 0, overviewFocus = null, overviewNavigating = false;
-  let overviewFingerprint = "", queueFingerprint = "", queueDrag = null;
+  let overviewFingerprint = "", queueFingerprint = "", scheduleFingerprint = "", queueDrag = null;
   const overviewPageSize = 15;
   const overviewDateFormatter = new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"numeric",day:"numeric",hour:"numeric",minute:"2-digit"});
   const overviewDateLabel = value => value ? overviewDateFormatter.format(new Date(value*1000)) : "미정";
@@ -89,9 +89,9 @@ globalThis.WorkspaceWorkflow = (() => {
     $("workflow-resume").hidden = !(snapshot?.paused || uncertain);
     $("workflow-resume").disabled = blocked || busy() || uncertain;
     if(snapshot?.warning)$("workflow-message").textContent=snapshot.warning;
-    const context = capture();
+    const context = capture(), detailsOpen = $("workflow-dialog").open;
     // Status/stream refreshes must not replace a pressed button before click.
-    const nextQueueFingerprint = JSON.stringify([context, queue, blocked, active?.trusted, busy(),
+    const nextQueueFingerprint = JSON.stringify([context, queue, detailsOpen, blocked, active?.trusted, busy(),
       active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.steer?.supported, queue.map(item=>cancelling(item.id))]);
     if (queueFingerprint !== nextQueueFingerprint) {
     queueFingerprint = nextQueueFingerprint;
@@ -104,25 +104,31 @@ globalThis.WorkspaceWorkflow = (() => {
     for(const row of [...inlineList.children])if(!visibleIds.has(row.dataset.requestId))row.remove();
     $('inline-queue-more').hidden=queue.length<=3;
     $('inline-queue-more').textContent=`${Math.max(0,queue.length-3)}개 더 보기`;
-    queue.forEach((item,index) => {
-      const row = el("article",null,"workflow-row");
+    const reorderable=queue.filter(entry=>entry.state==="queued"), positions=new Map(reorderable.map((item,index)=>[item.id,index]));
+    // The composer needs three rows. Build the complete queue only while its
+    // management dialog is visible, rather than on every streaming status event.
+    (detailsOpen ? queue : queue.slice(0,3)).forEach((item,index) => {
       const waitLabel = stopBlocked() ? "중지 확인 중" : snapshot?.paused ? "일시 정지" : snapshot?.warning || uncertain ? "실행 확인 필요"
         : ["approval","question"].includes(active?.state) || active?.choice ? "응답 대기" : busy() ? "정상 완료 후 자동 실행" : "자동 실행 대기";
+      const applying = snapshot?.applyingId === item.id, position=positions.get(item.id)??-1;
+      const nowLabel=applying?"전환 중…":busy()?"지금 반영":"지금 실행";
+      const nowDisabled=blocked||item.state!=="queued"||!active?.trusted||uncertain||(busy()&&snapshot?.steer?.supported!==true);
+      const nowTitle=busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
+      if(detailsOpen){
+      const row = el("article",null,"workflow-row");
       row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 · ${waitLabel}`,"workflow-state"),el("p",item.text,"workflow-request"));
       if (item.attachments?.length) row.append(el("small",`자료 ${item.attachments.length}개 · ${item.attachments.map(basename).join(", ")}`,"workflow-files"));
       const actions=el("div",null,"workflow-row-actions");
       function action(label,fn,disabled=false) {const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||item.state==="dispatching"||disabled;button.onclick=()=>{if(current(context)&&!button.disabled)return fn();};actions.append(button);return button;}
-      const applying = snapshot?.applyingId === item.id;
-      const now = action(applying?"전환 중…":busy()?"지금 반영":"지금 실행",()=>applyQueuedNow(item,context),
-        item.state!=="queued" || !active?.trusted || uncertain || (busy()&&snapshot?.steer?.supported!==true));
+      const now = action(nowLabel,()=>applyQueuedNow(item,context),nowDisabled);
       now.className="quiet-button queue-apply-now";now.setAttribute("aria-busy",String(applying));
-      now.title=busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
-      const reorderable=queue.filter(entry=>entry.state==="queued"),position=reorderable.findIndex(entry=>entry.id===item.id);
+      now.title=nowTitle;
       action("위로",()=>reorder(position,position-1),position<=0);action("아래로",()=>reorder(position,position+1),position<0||position===reorderable.length-1);
       action("수정",()=>openEditor("queue",item),item.state!=="queued");
       const cancel=action(cancelling(item.id)?"삭제 중…":item.state==="needs_review"?"대기에서 제거":"취소",()=>cancelRequest(item,context));
       cancel.disabled=cancelBlocked()||cancelling(item.id)||!["queued","needs_review"].includes(item.state);
       row.append(actions);$("queue-list").append(row);
+      }
       if(index<3){
         const existing=existingRows.get(item.id),compact=existing||el('div',null,'inline-queue-row'),copy=existing?.children[0]||el('div',null,'inline-queue-copy');
         copy.replaceChildren();compact.classList.toggle('cancelling',cancelling(item.id));compact.setAttribute('aria-busy',String(cancelling(item.id)));
@@ -130,7 +136,7 @@ globalThis.WorkspaceWorkflow = (() => {
         const title=el('span',item.text,'inline-queue-text');title.title=`${item.text}\n${waitLabel}${item.attachments?.length?` · 자료 ${item.attachments.length}개`:''}`;
         const mark=el('span',null,'inline-queue-mark');mark.setAttribute('aria-hidden','true');mark.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v12a3 3 0 0 0 3 3h12m-4-4 4 4-4 4M10 6h9M10 11h6"/></svg>';
         copy.append(mark,title);
-        const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':now.textContent;apply.type='button';apply.disabled=now.disabled;apply.title=now.title;apply.setAttribute('aria-busy',String(applying));
+        const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':nowLabel;apply.type='button';apply.disabled=nowDisabled;apply.title=nowTitle;apply.setAttribute('aria-busy',String(applying));
         const turn=el('span',null,'inline-queue-turn');turn.setAttribute('aria-hidden','true');turn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v5a3 3 0 0 0 3 3h12m-5-5 5 5-5 5"/></svg>';apply.append(turn);
         apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};bindQueuePointer(apply);
         const remove=existing?.children[2]||el('button',null,'inline-queue-delete');if(!existing)remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
@@ -150,8 +156,11 @@ globalThis.WorkspaceWorkflow = (() => {
       }
     });
     }
+    const nextScheduleFingerprint = detailsOpen ? JSON.stringify([context,schedules,blocked]) : "closed";
+    if(scheduleFingerprint !== nextScheduleFingerprint){
+    scheduleFingerprint=nextScheduleFingerprint;
     $("schedule-list").replaceChildren();$("schedule-empty").hidden = schedules.length > 0;
-    schedules.forEach(item => {
+    (detailsOpen ? schedules : []).forEach(item => {
       const row=el("article",null,"workflow-row"),actions=el("div",null,"workflow-row-actions");
       row.dataset.scheduleId=item.id;
       row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
@@ -163,6 +172,7 @@ globalThis.WorkspaceWorkflow = (() => {
       }
       row.append(actions);$("schedule-list").append(row);
     });
+    }
   }
   async function refresh() {
     if(queueDrag&&current(queueDrag))return;
@@ -238,7 +248,7 @@ globalThis.WorkspaceWorkflow = (() => {
     try {
       const selected=active?.id===item.sessionId||await selectSession(item.sessionId);
       if(!selected||ticket!==overviewGeneration||!$("schedule-overview-dialog").open||appClosed)return;
-      overviewFocus=null;$("schedule-overview-dialog").close();render();$("workflow-message").textContent="";showDialog("workflow-dialog");await refresh();
+      overviewFocus=null;$("schedule-overview-dialog").close();$("workflow-message").textContent="";showDialog("workflow-dialog");render();await refresh();
       if(active?.id===item.sessionId&&$("workflow-dialog").open) {
         const row=[...$("schedule-list").children].find(node=>node.dataset.scheduleId===item.id);
         row?.scrollIntoView({block:"nearest"});row?.querySelector("button")?.focus();
@@ -407,9 +417,10 @@ globalThis.WorkspaceWorkflow = (() => {
     render();
   }
   $("followup-now").onclick=()=>send("steer");
-  $("workflow-open").onclick=()=>{render();$("workflow-message").textContent="";showDialog("workflow-dialog");refresh();};
+  $("workflow-open").onclick=()=>{$("workflow-message").textContent="";showDialog("workflow-dialog");render();refresh();};
   $('inline-queue-manage').onclick=$('inline-queue-more').onclick=()=>$('workflow-open').onclick();
   $("workflow-close").onclick=() => $("workflow-dialog").close();
+  $("workflow-dialog").addEventListener("close",render);
   $("workflow-resume").onclick=()=>requestResume();
   $("folder-dialog").addEventListener?.("cancel",()=>{trustReturn=null;});
   $("folder-form").addEventListener?.("submit",event=>{if(event.submitter?.value!=="ok")trustReturn=null;});
