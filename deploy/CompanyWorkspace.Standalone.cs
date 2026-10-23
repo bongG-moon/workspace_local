@@ -24,6 +24,7 @@ namespace CompanyAgent {
         private static bool quiet;
         private static string stage = "실행 정보 확인";
         private static string failureDetail = "";
+        private static string failurePath = "";
         [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
@@ -67,6 +68,7 @@ namespace CompanyAgent {
             catch (Exception error) {
                 failureDetail = "실패 단계: " + stage + Environment.NewLine +
                     "진단: " + error.GetType().Name + " / 0x" + error.HResult.ToString("X8");
+                if (failurePath.Length != 0) failureDetail += Environment.NewLine + "대상 위치: " + failurePath;
                 return Report(ClassifyFailure(error));
             }
         }
@@ -261,7 +263,9 @@ namespace CompanyAgent {
                 VerifyFiles(staging, manifest);
                 EnsureNoReparse(target);
                 stage = "실행 자료 폴더 확정";
-                Directory.Move(staging, target);
+                failurePath = target;
+                FinalizeExtraction(staging, target, manifest);
+                failurePath = "";
             } finally {
                 // Only our uncommitted staging tree is eligible for cleanup.
                 // Never remove a completed cache or files used by a running app.
@@ -271,6 +275,36 @@ namespace CompanyAgent {
                         Directory.Delete(staging, true);
                     }
                 } catch { }
+            }
+        }
+
+        private static void FinalizeExtraction(string staging, string target, Dictionary<string, string> manifest) {
+            // A VDI/antivirus reader may allow extraction and hashing but briefly
+            // deny renaming the directory (including ERROR_ACCESS_DENIED).
+            // Retry only publication, never unpack again or weaken permissions.
+            int[] retryDelays = { 100, 250, 500, 1000, 1500 };
+            for (int attempt = 0; ; attempt++) {
+                EnsureNoReparse(staging);
+                EnsureNoReparse(target);
+                // The named mutex is local to a Windows login session. Another
+                // session sharing a profile may have published this same bundle.
+                // Reuse it only after full verification; never replace its files.
+                if (Directory.Exists(target)) {
+                    stage = "기존 실행 자료 검사";
+                    VerifyFiles(target, manifest);
+                    return;
+                }
+                try {
+                    Directory.Move(staging, target);
+                    return;
+                } catch (IOException error) {
+                    int native = error.HResult & 0xffff;
+                    if (attempt >= retryDelays.Length ||
+                        (native != 5 && native != 32 && native != 33 && native != 183 && native != 80)) throw;
+                } catch (UnauthorizedAccessException) {
+                    if (attempt >= retryDelays.Length) throw;
+                }
+                Thread.Sleep(retryDelays[attempt]);
             }
         }
 
@@ -381,7 +415,9 @@ namespace CompanyAgent {
                 case 56: message = "Windows PowerShell을 찾거나 시작하지 못했습니다. PC의 기존 PowerShell 실행 환경을 확인해 주세요. 설치나 설정 변경은 하지 않았습니다."; break;
                 case 57: message = "실행 준비 시간이 길어지고 있습니다. 준비 중인 프로세스는 종료하지 않았습니다. 잠시 뒤 앱이 열리는지 확인해 주세요."; break;
                 case 58: message = "앱 실행을 완료하지 못했습니다. 실행 캐시의 Company-Workspace 폴더에 있는 Check-Workspace.cmd로 진단하거나 이 오류 코드를 담당자에게 전달해 주세요."; break;
-                case 60: message = "실행 자료 폴더 또는 파일에 접근할 권한이 없습니다. 사용자 폴더의 읽기·쓰기 권한과 보안 프로그램 차단 기록을 확인해 주세요."; break;
+                case 60: message = stage == "실행 자료 폴더 확정"
+                    ? "실행 자료 저장과 검사는 완료했지만 폴더 이름 변경이 거부되었습니다. 잠시 기다린 뒤 재시도했으나 해결되지 않았습니다. 담당자에게 아래 대상 위치의 폴더 이름 변경 권한과 VDI·보안 프로그램의 파일 잠금 또는 차단 기록을 확인해 달라고 요청해 주세요."
+                    : "실행 자료 폴더 또는 파일에 접근할 권한이 없습니다. 사용자 폴더의 읽기·쓰기 권한과 보안 프로그램 차단 기록을 확인해 주세요."; break;
                 case 61: message = "실행 자료를 저장할 디스크 공간이 부족합니다. 실행 캐시가 저장되는 드라이브의 여유 공간을 확보해 주세요."; break;
                 case 62: message = "실행 자료 파일을 다른 프로그램이 사용 중입니다. 실행 중인 AX Workspace를 종료한 뒤 다시 시도해 주세요. 계속되면 보안 프로그램의 파일 검사 여부를 확인해 주세요."; break;
                 case 63: message = "실행 자료의 파일 경로가 너무 깁니다. 더 짧은 실행 캐시 경로를 사용해 주세요."; break;

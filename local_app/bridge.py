@@ -282,6 +282,7 @@ class ClaudeSession:
         self._stop_confirmed = False
         self._turn_epoch = 0
         self._turn_submitted = None
+        self._turn_activity_seen = False
         self.busy = False
         self.initialization_error = None
         self.stderr = deque(maxlen=30)
@@ -900,6 +901,15 @@ class ClaudeSession:
             self.process.stdin.write((json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8"))
             self.process.stdin.flush()
 
+    @property
+    def interrupt_ready(self):
+        # Writing stdin does not mean Claude has admitted that turn yet. A
+        # second immediate follow-up must not abort its prompt-check/setup
+        # before the first root response proves that it is being processed.
+        # An unsent local turn can still be cancelled without sending interrupt.
+        with self.lock:
+            return self.busy and (self._turn_submitted is not True or self._turn_activity_seen)
+
     def send(self, prompt: str | list):
         prompt = user_content(prompt)
         with self.lock:
@@ -910,6 +920,7 @@ class ClaudeSession:
             self._turn_epoch += 1
             turn_epoch = self._turn_epoch
             self._turn_submitted = False
+            self._turn_activity_seen = False
             self._begin_tool_activity_turn()
             self.busy = True
             self.last_result = None
@@ -1248,6 +1259,16 @@ class ClaudeSession:
                     return
                 self._fork_confirmed = True
                 self.resume_id = self._fork_target
+        if not data.get('parent_tool_use_id'):
+            event = data.get('event')
+            request = data.get('request')
+            active = (kind == 'assistant'
+                      or kind == 'stream_event' and isinstance(event, dict) and event.get('type') == 'message_start'
+                      or kind == 'control_request' and isinstance(request, dict) and request.get('subtype') == 'can_use_tool')
+            if active:
+                with self.lock:
+                    if self.busy and not self.stopping and self._turn_submitted is True:
+                        self._turn_activity_seen = True
         # Detail projection is tied to a submitted root request. Preparing a
         # connection or changing its settings must not create activity history.
         progress = getattr(self, '_progress_capture_state', None)
@@ -1711,19 +1732,31 @@ class ClaudeSession:
                 'nextAction': '연결 종료 다시 시도' if self.cleanup_retryable else '하위 프로그램 종료 상태 확인'})
         return self._close_error is None
 
-    def interrupt(self, *, disconnect=False):
+    def interrupt_when_ready(self):
+        """Atomically defer follow-up interruption until native turn activity."""
+        return self.interrupt(require_activity=True)
+
+    def interrupt(self, *, disconnect=False, require_activity=False):
         # Interrupt the turn, not the persistent CLI connection. A follow-up
         # waits for its control ACK and same-session terminal result to drain.
-        if type(disconnect) is not bool:
+        if type(disconnect) is not bool or type(require_activity) is not bool:
             raise ValueError('연결 종료 여부를 확인해 주세요.')
         with self.lock:
+            # Readiness and claiming this stop must share send's write lock:
+            # stdin may have changed from unsent to submitted since the UI or
+            # dispatcher last inspected interrupt_ready.
+            if require_activity and (not self.busy or self._turn_submitted is True and not self._turn_activity_seen):
+                # busy is cleared before the terminal callback can obtain the
+                # app lock. Do not emit a synthetic stopped status in that gap;
+                # dispatch will see the actual done/error callback next tick.
+                return False
             if self.stopping and self.stop_state == 'stopping':
                 if disconnect and self._stop_attempt is not None:
                     self._stop_attempt['failed'] = True
                     self._stop_attempt['changed'].set()
-                return
+                return True
             if self.closed and self.cleanup_complete:
-                return
+                return True
             unsubmitted = self.busy and self._turn_submitted is False
             idle = (not disconnect and not self.closed and self.process is not None and self.process.poll() is None
                     and ((self.ready.is_set() and not self.busy and not self.pending
@@ -1743,7 +1776,7 @@ class ClaudeSession:
         self._interrupt_executions()
         if idle:
             self._emit_stopped(attempt, preserved=True)
-            return
+            return True
         self.emit('status', {'state': 'stopping', 'stopState': 'stopping',
                             'label': '현재 요청을 중지하고 있어요'})
         if self.process is None:
@@ -1755,7 +1788,7 @@ class ClaudeSession:
                 self.stopping = False
                 self._stop_confirmed = True
                 self.emit("status", {"state": "stopped", "stopState": 'stopped', "label": label})
-            return
+            return True
         try:
             if not disconnect:
                 self._write({"type": "control_request", "request_id": attempt['id'],
@@ -1765,6 +1798,7 @@ class ClaudeSession:
             attempt['changed'].set()
         finally:
             threading.Thread(target=lambda: self._finish_stop(attempt), daemon=True).start()
+        return True
 
     def _handle_stop_response(self, response):
         with self.lock:

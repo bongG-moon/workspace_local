@@ -452,6 +452,30 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(waiting.textContent,'전환 중…');assert.equal(waiting.disabled,true);
         })()""", ("workflow",))
 
+    def test_rapid_apply_waits_for_cli_activity_without_losing_queue_or_draft(self):
+        self.run_case(r"""(async()=>{
+          const queue=[{id:'first',text:'첫 요청',state:'queued'},
+                       {id:'second',text:'다음 요청',state:'queued'}];
+          let state={revision:1,queue,schedules:[],steer:{supported:true}};
+          let calls=[];api=async(path,body)=>{if(body){calls.push(body);state={...state,revision:2,applyingId:'first',applyingPhase:'waiting_activity'};}return state;};
+          await WorkspaceWorkflow.refresh();$('prompt').value='작성 중 초안';attachments=['draft.csv'];
+          const first=$('inline-queue-list').children[0].children[1];
+          const second=$('inline-queue-list').children[1].children[1];
+          await first.onclick();await second.onclick();await first.onclick();
+          assert.equal(calls.length,1);assert.equal(calls[0].requestId,'first');
+          assert.equal(first.textContent,'접수 확인 중…');assert.equal(first.disabled,true);
+          assert.match(first.title,/접수를 확인/);assert.equal(second.disabled,true);
+          assert.equal($('inline-queue-list').children.length,2);
+          assert.equal($('prompt').value,'작성 중 초안');assert.deepEqual(attachments,['draft.csv']);
+          // The stop phase can change without a durable queue revision.
+          state={...state,applyingPhase:'interrupting'};await WorkspaceWorkflow.refresh();
+          assert.equal($('inline-queue-list').children[0].children[1],first);
+          assert.equal(first.textContent,'전환 중…');assert.equal(first.disabled,true);
+          state={...state,revision:3,applyingId:null,applyingPhase:null,queue:[queue[1]]};
+          await WorkspaceWorkflow.refresh();assert.equal(second.disabled,false);
+          assert.equal($('prompt').value,'작성 중 초안');assert.deepEqual(attachments,['draft.csv']);
+        })()""", ("workflow",))
+
     def test_saved_queue_now_lost_reply_retry_reuses_receipt_and_ignores_double_click(self):
         self.run_case(r"""(async()=>{
           $('workflow-dialog').open=true;

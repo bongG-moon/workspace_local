@@ -1,9 +1,11 @@
 """Explicit-stop classification without a real CLI, authentication, or network."""
 from pathlib import Path
+import io
 import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -22,6 +24,136 @@ def result_frame(session_id, **fields):
 
 
 class StopClassificationTests(unittest.TestCase):
+    def test_followup_waits_for_inflight_completed_result_before_sending_next_turn(self):
+        # busy=False precedes delivery of the result through the app lock. An
+        # interrupt in that window must not synthesize stopped and allow a new
+        # run to be completed by the prior run's delayed result callback.
+        for already_waiting in (False, True):
+            with self.subTest(already_waiting=already_waiting), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                work = root / 'work'
+                work.mkdir()
+                app = LocalApp(root / 'state', command=['not-started'], managed_workspace_root=root / 'managed')
+                sid = app.create(str(work), True)['id']
+                item = app.get(sid)
+                entered, release = threading.Event(), threading.Event()
+                failures = []
+
+                def emit(kind, data):
+                    if kind == 'result':
+                        entered.set()
+                        if not release.wait(5):
+                            raise AssertionError('Result delivery was not released')
+                    app._emit_bridge(sid, bridge, kind, data)
+
+                bridge = ClaudeSession(['not-started'], {}, work, emit)
+                bridge.process = Mock()
+                bridge.process.poll.return_value = None
+                bridge.process.stdin = io.BytesIO()
+                bridge.session_id = str(uuid.uuid4())
+                bridge.ready.set()
+                bridge.busy = True
+                bridge._turn_submitted = True
+                bridge._turn_activity_seen = False
+                item.update(bridge=bridge, state='running', sessionId=bridge.session_id, lastRunId='old-run')
+                selected = app.dispatch.queue.enqueue(sid, 'selected next turn', context=app.dispatch.context(item))
+                remaining = app.dispatch.queue.enqueue(sid, 'keep queued', context=app.dispatch.context(item))
+                action = {'action': 'apply_now', 'requestId': selected['id'], 'editRevision': 0,
+                          'clientRequestId': 'select-next'}
+                reader = None
+                try:
+                    if already_waiting:
+                        self.assertEqual('waiting_activity', app.dispatch.action(sid, action)['applyingPhase'])
+
+                    def finish_old_turn():
+                        try:
+                            bridge.handle({'type': 'result', 'session_id': bridge.session_id,
+                                           'is_error': False, 'result': ''})
+                        except BaseException as exc:
+                            failures.append(exc)
+
+                    reader = threading.Thread(target=finish_old_turn, daemon=True)
+                    reader.start()
+                    self.assertTrue(entered.wait(2))
+                    self.assertFalse(bridge.busy)
+                    self.assertEqual('running', item['state'])
+                    if not already_waiting:
+                        self.assertEqual('waiting_activity', app.dispatch.action(sid, action)['applyingPhase'])
+
+                    def send_next(_sid, text, attachments, **_kwargs):
+                        item.update(state='running', lastRunId='next-run')
+                        bridge.busy = True
+
+                    with patch.object(app, 'send', side_effect=send_next) as send:
+                        app.dispatch.pump()
+                        send.assert_not_called()
+                        self.assertEqual('waiting_activity', app.dispatch.snapshot(sid)['applyingPhase'])
+                        self.assertEqual(b'', bridge.process.stdin.getvalue())
+                        release.set()
+                        reader.join(2)
+                        self.assertFalse(reader.is_alive())
+                        self.assertEqual([], failures)
+                        self.assertEqual('done', item['state'])
+                        app.dispatch.pump()
+                        send.assert_called_once()
+                        self.assertEqual('selected next turn', send.call_args.args[1])
+                        self.assertEqual('running', item['state'])
+                        queue = app.dispatch.snapshot(sid)['queue']
+                        self.assertEqual([(selected['id'], 'submitted'), (remaining['id'], 'queued')],
+                                         [(row['id'], row['status']) for row in queue])
+                finally:
+                    release.set()
+                    if reader is not None:
+                        reader.join(2)
+                    item['bridge'] = None  # The injected process is not a real owned child.
+                    app.close()
+
+    def test_interrupt_readiness_requires_root_activity_after_each_submission(self):
+        bridge, native_id, _ = self.session()
+        bridge._turn_submitted = True
+        self.assertFalse(bridge.interrupt_ready)
+        for frame in (
+                {'type': 'system', 'subtype': 'init', 'session_id': native_id},
+                {'type': 'system', 'subtype': 'status', 'status': 'compacting'},
+                {'type': 'assistant', 'parent_tool_use_id': 'worker',
+                 'message': {'content': []}}):
+            bridge.handle(frame)
+            self.assertFalse(bridge.interrupt_ready, frame)
+        bridge.handle({'type': 'stream_event', 'session_id': native_id,
+                       'event': {'type': 'message_start', 'message': {'id': 'root'}}})
+        self.assertTrue(bridge.interrupt_ready)
+        bridge.busy = False
+        with patch('local_app.bridge.threading.Thread'):
+            bridge.send('next explicit turn')
+        bridge._turn_submitted = True
+        self.assertFalse(bridge.interrupt_ready)
+        bridge.handle({'type': 'assistant', 'session_id': native_id,
+                       'message': {'id': 'next-root', 'content': []}})
+        self.assertTrue(bridge.interrupt_ready)
+
+    def test_unsent_turn_can_cancel_but_finished_turn_defers_to_terminal_callback(self):
+        bridge, _, _ = self.session()
+        bridge._turn_submitted = False
+        self.assertTrue(bridge.interrupt_ready)
+        bridge._turn_submitted = True
+        bridge.busy = False
+        self.assertFalse(bridge.interrupt_ready)
+        self.assertFalse(bridge.interrupt_when_ready())
+
+    def test_guarded_interrupt_rechecks_submission_atomically(self):
+        bridge, _, events = self.session()
+        bridge._turn_submitted = False
+        self.assertTrue(bridge.interrupt_ready)
+        # Sender wins the bridge lock after dispatch read the prior readiness.
+        bridge._turn_submitted = True
+        with patch.object(bridge, '_write') as write:
+            self.assertFalse(bridge.interrupt_when_ready())
+        write.assert_not_called()
+        self.assertTrue(bridge.busy)
+        self.assertFalse(bridge.stopping)
+        self.assertIsNone(bridge._stop_attempt)
+        self.assertEqual([], events)
+
     def session(self, *, stopping=False, **options):
         events = []
         native_id = str(uuid.uuid4())

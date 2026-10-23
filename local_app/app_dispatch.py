@@ -64,6 +64,7 @@ class DispatchController:
             result['policy']['message'] = 'PC가 켜져 있고 앱이 실행 중일 때 동작합니다. 앱 재시작 후에는 내용을 확인하고 이어 실행해 주세요. 놓친 예약은 몰아서 실행하지 않습니다.'
             result['trusted'] = item.get('trusted') is True
             result['applyingId'] = self.steering.get(sid, {}).get('requestId')
+            result['applyingPhase'] = self.steering.get(sid, {}).get('phase')
             return result
 
     def start(self):
@@ -259,7 +260,32 @@ class DispatchController:
                     pending = self.steering.get(sid)
                     if pending:
                         bridge = item.get('bridge')
-                        if item['state'] == 'stopped' and (bridge is None or getattr(bridge, 'cleanup_complete', False) is True
+                        if pending.get('phase') == 'waiting_activity':
+                            # A newly written prompt is not necessarily admitted
+                            # by Claude. Keep the selected row durable and wait
+                            # for real turn activity instead of interrupting
+                            # prompt-check repeatedly. No polling child/thread
+                            # is added; the existing dispatch tick handles it.
+                            if item['state'] in {'idle', 'done'}:
+                                self.queue.resume(sid)
+                                self.steering.pop(sid, None)
+                                pending = None
+                            elif item['state'] in {'error', 'stopped'} or bridge is None or bridge.closed:
+                                self.steering.pop(sid, None)
+                                self.queue.pause(sid, 'stopped')
+                                continue
+                            else:
+                                try:
+                                    if not self._try_followup_interrupt(bridge):
+                                        continue
+                                    pending.update(phase='interrupting', created=time.monotonic())
+                                except (ValueError, OSError, RuntimeError):
+                                    self.steering.pop(sid, None)
+                                    self.queue.pause(sid, 'stopped')
+                                    continue
+                        if pending is None:
+                            pass  # The original request completed naturally.
+                        elif item['state'] == 'stopped' and (bridge is None or getattr(bridge, 'cleanup_complete', False) is True
                                 or (getattr(bridge, 'stop_state', None) == 'stopped'
                                     and not bridge.closed and not getattr(bridge, 'stopping', False))):
                             # Explicit "now" cancels the interrupted queued turn;
@@ -319,16 +345,28 @@ class DispatchController:
     def first_run(schedule, now=None):
         return scheduled_first_run(schedule, time.time() if now is None else now)
 
+    @staticmethod
+    def _try_followup_interrupt(bridge):
+        if getattr(bridge, 'interrupt_ready', True) is False:
+            return False
+        guarded = getattr(bridge, 'interrupt_when_ready', None)
+        if callable(guarded):
+            return guarded() is not False
+        bridge.interrupt()  # Compatibility for alternate/injected bridges.
+        return True
+
     def _interrupt_for_followup(self, sid, item, before, request_id):
         """Share the composer/list stop-confirm-resume path without resending."""
         self.steering[sid] = {'created': time.monotonic(), 'requestId': request_id,
+            'phase': 'interrupting',
             'interrupted': {entry['id'] for entry in before['queue']
                             if entry['status'] in {'dispatching', 'submitted'}}}
         bridge = item.get('bridge')
         try:
             if bridge is None or bridge.closed:
                 raise ValueError('현재 연결을 확인할 수 없습니다. 대기 요청은 보존했습니다.')
-            bridge.interrupt()
+            if not self._try_followup_interrupt(bridge):
+                self.steering[sid]['phase'] = 'waiting_activity'
         except (ValueError, OSError, RuntimeError):
             self.steering.pop(sid, None)
             self.queue.pause(sid, 'stopped')

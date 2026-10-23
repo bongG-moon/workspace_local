@@ -93,6 +93,21 @@ class ModesFrontendTests(unittest.TestCase):
           assert.equal(drafts.get('chat').attachments.length,1);assert.equal(WorkspaceAttachments.isUploading(),false);assert.equal(currentMode,'work');
         })()''', ('attachments',))
 
+    def test_mode_badges_appear_for_activity_and_hide_after_completion(self):
+        self.run_case(r'''(()=>{
+          for(const kind of ['chat','work']){const badge=el('small');badge.className='mode-state';$('mode-'+kind).append(badge);}
+          const chatBadge=$('mode-chat').querySelector('.mode-state'),workBadge=$('mode-work').querySelector('.mode-state');
+          updateModeNavigation();assert.equal(chatBadge.hidden,true);assert.equal(workBadge.hidden,true);
+          chat.state='running';updateModeNavigation();assert.equal(chatBadge.hidden,false);assert.equal(chatBadge.textContent,'1');
+          assert.equal(workBadge.hidden,true);assert.equal($('mode-work').getAttribute('aria-pressed'),'true');
+          chat.state='idle';globalThis.WorkspaceAttention={countFor:id=>id==='work'?2:0};
+          updateModeNavigation();assert.equal(chatBadge.hidden,true);assert.equal(workBadge.hidden,false);
+          assert.equal(workBadge.textContent,'2');assert.equal(workBadge.classList.contains('needs-response'),true);
+          globalThis.WorkspaceAttention={countFor:()=>0};updateModeNavigation();
+          assert.equal(workBadge.hidden,true);assert.equal(workBadge.classList.contains('needs-response'),false);
+          assert.equal(calls.length,0);
+        })()''')
+
     def test_mode_filter_keeps_legacy_tasks_and_hides_other_kind(self):
         self.run_case(r'''(()=>{
           sessions.push({...work,id:'legacy',kind:undefined});renderSessions();

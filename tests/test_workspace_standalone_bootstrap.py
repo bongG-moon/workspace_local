@@ -53,6 +53,73 @@ class StandaloneBootstrapTests(unittest.TestCase):
             PREFIX + 'local_app/web/한글 설명.txt': '한글 파일과 경로 확인'.encode(),
         }
         cls.good_exe, cls.good_hash, cls.good_files = cls.compile_fixture()
+        cls.finalize_probe = cls.compile_finalize_probe()
+
+    @classmethod
+    def compile_finalize_probe(cls):
+        # Invoke the production publication path with a real Windows directory
+        # handle that does not share DELETE. No fault hooks ship in the app.
+        source = cls.root / 'FinalizeProbe.cs'
+        source.write_text(r'''
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
+class FinalizeProbe {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  static extern SafeFileHandle CreateFile(string name, uint access, uint share,
+      IntPtr security, uint creation, uint flags, IntPtr template);
+  static int Main(string[] args) {
+    var type = Assembly.LoadFrom(args[0]).GetType("CompanyAgent.WorkspaceStandalone");
+    var method = type.GetMethod("FinalizeExtraction", BindingFlags.NonPublic | BindingFlags.Static);
+    var manifest = new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+    foreach (string line in File.ReadAllLines(args[3])) {
+      if (line.Length == 0) continue;
+      var parts = line.Split('\t'); manifest.Add(parts[1], parts[0]);
+    }
+    SafeFileHandle handle = null;
+    Thread release = null;
+    try {
+      if (args[4].StartsWith("transient") || args[4].StartsWith("persistent")) {
+        bool childLock = args[4].EndsWith("-child");
+        string lockPath = childLock ? Path.Combine(args[1], "Company-Workspace/local_app/server.py") : args[1];
+        handle = CreateFile(lockPath, childLock ? 0x80000000 : 1, 3,
+            IntPtr.Zero, 3, childLock ? 0u : 0x02000000u, IntPtr.Zero);
+        if (handle.IsInvalid) return 90;
+        // Establish that this fixture reproduces the original single-move failure.
+        try { Directory.Move(args[1], args[2]); return 91; }
+        catch (IOException error) { Console.WriteLine("initial=0x" + error.HResult.ToString("X8")); }
+        catch (UnauthorizedAccessException error) { Console.WriteLine("initial=0x" + error.HResult.ToString("X8")); }
+        if (args[4].StartsWith("transient")) {
+          release = new Thread(() => { Thread.Sleep(200); handle.Dispose(); });
+          release.Start();
+        }
+      }
+      try { method.Invoke(null, new object[] { args[1], args[2], manifest }); return 0; }
+      catch (TargetInvocationException outer) {
+        var error = outer.InnerException;
+        Console.WriteLine(error.GetType().Name + "/0x" + error.HResult.ToString("X8"));
+        var codeField = error.GetType().GetField("Code", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (codeField != null) return (int)codeField.GetValue(error);
+        return (int)type.GetMethod("ClassifyFailure", BindingFlags.NonPublic | BindingFlags.Static)
+            .Invoke(null, new object[] { error });
+      }
+    } finally {
+      if (release != null) release.Join();
+      if (handle != null) handle.Dispose();
+    }
+  }
+}
+''', encoding='utf-8')
+        exe = cls.root / 'FinalizeProbe.exe'
+        result = subprocess.run([str(CSC), '/nologo', '/out:' + str(exe), str(source)],
+                                capture_output=True, timeout=30, creationflags=HIDDEN)
+        if result.returncode:
+            raise AssertionError(result.stdout + result.stderr)
+        return exe
 
     @classmethod
     def compile_fixture(cls, *, entries=None, manifest_entries=None, bad_archive_hash=False, powershell_archive=False):
@@ -250,6 +317,94 @@ class StandaloneBootstrapTests(unittest.TestCase):
                 if child.poll() is None:
                     child.kill()
                     child.wait()
+
+    def run_finalize(self, mode='normal'):
+        return subprocess.run([str(self.finalize_probe), str(self.good_exe),
+                               str(self.cache / 'staging'), str(self.target()),
+                               str(self.good_exe.parent / 'manifest.tsv'), mode],
+                              capture_output=True, timeout=15, creationflags=HIDDEN)
+
+    def prepare_finalize(self):
+        staging = self.cache / 'staging'
+        for name, data in self.good_files.items():
+            path = staging / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        return staging
+
+    def test_finalize_recovers_from_transient_windows_directory_lock(self):
+        staging = self.prepare_finalize()
+        result = self.run_finalize('transient')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn(b'initial=0x800700', result.stdout)
+        self.assertFalse(staging.exists())
+        for name, data in self.good_files.items():
+            self.assertEqual(data, (self.target() / name).read_bytes())
+
+    def test_finalize_recovers_from_transient_windows_child_file_access_denial(self):
+        staging = self.prepare_finalize()
+        result = self.run_finalize('transient-child')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn(b'initial=0x80070005', result.stdout)
+        self.assertFalse(staging.exists())
+        for name, data in self.good_files.items():
+            self.assertEqual(data, (self.target() / name).read_bytes())
+
+    def test_finalize_persistent_denial_stays_bounded_and_does_not_publish(self):
+        import time
+        staging = self.prepare_finalize()
+        for mode, code in [('persistent', 62), ('persistent-child', 60)]:
+            with self.subTest(mode=mode):
+                before = time.monotonic()
+                result = self.run_finalize(mode)
+                elapsed = time.monotonic() - before
+                self.assertEqual(code, result.returncode, result.stdout + result.stderr)
+                self.assertIn(b'initial=0x800700', result.stdout)
+                self.assertGreaterEqual(elapsed, 3)
+                self.assertLess(elapsed, 12)
+                self.assertFalse(self.target().exists())
+                for name, data in self.good_files.items():
+                    self.assertEqual(data, (staging / name).read_bytes())
+
+    def test_finalize_reuses_verified_concurrent_publication_without_overwriting(self):
+        staging = self.prepare_finalize()
+        shutil.copytree(staging, self.target())
+        timestamps = {str(p): p.stat().st_mtime_ns for p in self.target().rglob('*') if p.is_file()}
+        result = self.run_finalize()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(staging.exists())  # Extract owns cleanup, not publication.
+        self.assertEqual(timestamps, {str(p): p.stat().st_mtime_ns
+                                     for p in self.target().rglob('*') if p.is_file()})
+
+    def test_finalize_rejects_incomplete_or_corrupt_concurrent_publication(self):
+        staging = self.prepare_finalize()
+        shutil.copytree(staging, self.target())
+        damaged = self.target() / (PREFIX + 'local_app/server.py')
+        damaged.write_bytes(b'keep changed content')
+        result = self.run_finalize()
+        self.assertEqual(54, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(b'keep changed content', damaged.read_bytes())
+        damaged.unlink()
+        self.assertEqual(54, self.run_finalize().returncode)
+        self.assertFalse(damaged.exists())
+
+    def test_finalize_rejects_concurrent_reparse_target_without_touching_it(self):
+        staging = self.prepare_finalize()
+        destination = self.case / 'concurrent-destination'
+        shutil.copytree(staging, destination)
+        target = self.target()
+        created = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(target), str(destination)],
+                                 capture_output=True, creationflags=HIDDEN)
+        if created.returncode:
+            self.skipTest('This Windows environment cannot create a test junction')
+        try:
+            result = self.run_finalize()
+            self.assertEqual(53, result.returncode, result.stdout + result.stderr)
+            self.assertTrue(staging.exists())
+            for name, data in self.good_files.items():
+                self.assertEqual(data, (destination / name).read_bytes())
+        finally:
+            target.rmdir()  # Remove only the isolated junction entry.
 
     def test_launcher_receives_paths_flags_and_unchanged_environment(self):
         record = self.case / '실행 인수.json'

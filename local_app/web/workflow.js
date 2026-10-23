@@ -92,7 +92,7 @@ globalThis.WorkspaceWorkflow = (() => {
     const context = capture(), detailsOpen = $("workflow-dialog").open;
     // Status/stream refreshes must not replace a pressed button before click.
     const nextQueueFingerprint = JSON.stringify([context, queue, detailsOpen, blocked, active?.trusted, busy(),
-      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.steer?.supported, queue.map(item=>cancelling(item.id))]);
+      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.applyingPhase, snapshot?.steer?.supported, queue.map(item=>cancelling(item.id))]);
     if (queueFingerprint !== nextQueueFingerprint) {
     queueFingerprint = nextQueueFingerprint;
     $("queue-list").replaceChildren();$("queue-empty").hidden = queue.length > 0;
@@ -111,9 +111,10 @@ globalThis.WorkspaceWorkflow = (() => {
       const waitLabel = stopBlocked() ? "중지 확인 중" : snapshot?.paused ? "일시 정지" : snapshot?.warning || uncertain ? "실행 확인 필요"
         : ["approval","question"].includes(active?.state) || active?.choice ? "응답 대기" : busy() ? "정상 완료 후 자동 실행" : "자동 실행 대기";
       const applying = snapshot?.applyingId === item.id, position=positions.get(item.id)??-1;
-      const nowLabel=applying?"전환 중…":busy()?"지금 반영":"지금 실행";
+      const awaitingActivity=applying&&snapshot?.applyingPhase==="waiting_activity";
+      const nowLabel=awaitingActivity?"접수 확인 중…":applying?"전환 중…":busy()?"지금 반영":"지금 실행";
       const nowDisabled=blocked||item.state!=="queued"||!active?.trusted||uncertain||(busy()&&snapshot?.steer?.supported!==true);
-      const nowTitle=busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
+      const nowTitle=awaitingActivity?"Claude의 현재 요청 접수를 확인한 뒤 선택한 요청으로 이어갑니다.":busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
       if(detailsOpen){
       const row = el("article",null,"workflow-row");
       row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 · ${waitLabel}`,"workflow-state"),el("p",item.text,"workflow-request"));
@@ -301,6 +302,7 @@ globalThis.WorkspaceWorkflow = (() => {
     if(state.queue?.some(item=>item.state==="needs_review"))return "요청을 대기에 추가했습니다. 전송 확인이 필요한 항목을 ‘이어 할 일’에서 먼저 확인해 주세요.";
     if(state.warning)return "요청을 대기에 추가했습니다. 실행 상태는 ‘이어 할 일’의 안내를 확인해 주세요.";
     if(stopBlocked())return "요청을 대기에 추가했습니다. 중지 상태가 확인되면 ‘이어 할 일’의 안내를 확인해 주세요.";
+    if(state.applyingPhase==="waiting_activity")return "이어갈 요청을 보관했습니다. Claude의 현재 요청 접수를 확인한 뒤 전환합니다.";
     if(state.paused)return "요청을 대기에 추가했습니다. 일시 정지 상태이므로 확인 후 ‘이어 실행’을 눌러 주세요.";
     return action==="steer"?"현재 요청을 중지하고 이어갈 요청을 등록했습니다.":busy()?"현재 요청이 정상 완료되면 순서대로 자동 실행합니다.":"요청을 대기에 추가했습니다. 순서대로 자동 실행합니다.";
   }
@@ -327,6 +329,7 @@ globalThis.WorkspaceWorkflow = (() => {
     const result=await mutate({action:"apply_now",requestId:item.id,editRevision:item.editRevision||0},context);
     if(!result){if(current(context))await refresh();return;}
     if(current(context))toast(result.alreadyApplied?"이미 접수한 요청입니다. 현재 대기·실행 상태를 확인해 주세요.":
+      result.applyingPhase==="waiting_activity"?"선택한 요청을 보관했습니다. Claude의 현재 요청 접수를 확인한 뒤 전환합니다.":
       result.applyingId?"현재 요청을 중지한 뒤 선택한 대기 요청을 실행합니다.":"선택한 대기 요청을 먼저 실행합니다.");
   }
   function localDate(value) {const date=new Date(value*1000);date.setMinutes(date.getMinutes()-date.getTimezoneOffset());return date.toISOString().slice(0,16);}

@@ -370,6 +370,76 @@ class DispatchRoutesTests(unittest.TestCase):
         self.assertEqual('stopped', self.app.dispatch.snapshot(self.sid)['reason'])
         self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['queue'][0]['id'])
 
+    def test_saved_now_waits_for_actual_activity_without_interrupting_prompt_setup(self):
+        item = self.app.get(self.sid)
+        item['state'] = 'running'
+        self.bridge.interrupt_ready = False
+        selected = self.enqueue('selected')['queue'][0]
+        remaining = self.enqueue('remaining')['queue'][-1]
+        with patch.object(self.bridge, 'interrupt') as interrupt:
+            code, response = self.apply_now(selected)
+            self.assertEqual(200, code)
+            self.assertEqual('waiting_activity', response['applyingPhase'])
+            self.app.dispatch.steering[self.sid]['created'] -= 60
+            for _ in range(3):
+                self.app.dispatch.pump()
+            interrupt.assert_not_called()
+            self.assertEqual(400, self.apply_now(remaining, 'second-too-early')[0])
+            self.assertTrue(self.apply_now(selected)[1]['alreadyApplied'])
+            self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['applyingId'])
+            self.bridge.interrupt_ready = True
+            self.app.dispatch.pump()
+            interrupt.assert_called_once()
+            self.assertEqual('interrupting', self.app.dispatch.snapshot(self.sid)['applyingPhase'])
+        self.assertEqual([selected['id'], remaining['id']],
+                         [row['id'] for row in self.app.dispatch.snapshot(self.sid)['queue']])
+
+    def test_waiting_activity_natural_completion_sends_selected_once_without_interrupt(self):
+        item = self.app.get(self.sid)
+        item['state'] = 'running'
+        self.bridge.interrupt_ready = False
+        selected = self.enqueue('selected')['queue'][0]
+        remaining = self.enqueue('remaining')['queue'][-1]
+        with patch.object(self.bridge, 'interrupt') as interrupt:
+            self.assertEqual(200, self.apply_now(selected)[0])
+            self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+            self.app.dispatch.pump()
+            interrupt.assert_not_called()
+        self.assertEqual(['selected'], self.bridge.sent)
+        self.assertEqual([remaining['id']], [row['id'] for row in self.app.dispatch.snapshot(self.sid)['queue']])
+
+    def test_terminal_callback_racing_readiness_does_not_create_false_stopped_transition(self):
+        item = self.app.get(self.sid)
+        item['state'] = 'running'
+        # Bridge activity was observed, but its terminal reader cleared busy
+        # while waiting for the app lock held by this dispatch request.
+        self.bridge.interrupt_ready = True
+        self.bridge.interrupt_when_ready = lambda: False
+        selected = self.enqueue('selected')['queue'][0]
+        with patch.object(self.bridge, 'interrupt') as interrupt:
+            code, response = self.apply_now(selected)
+            self.assertEqual(200, code)
+            self.assertEqual('waiting_activity', response['applyingPhase'])
+            self.app.dispatch.pump()
+            self.app.emit(self.sid, 'result', {'sessionId': 'fixture-session'})
+            self.app.dispatch.pump()
+            interrupt.assert_not_called()
+        self.assertEqual(['selected'], self.bridge.sent)
+        self.assertFalse(self.app.dispatch.snapshot(self.sid)['paused'])
+        self.assertIsNone(self.app.dispatch.snapshot(self.sid)['applyingId'])
+
+    def test_waiting_activity_manual_stop_keeps_selected_request_unsent(self):
+        self.app.get(self.sid)['state'] = 'running'
+        self.bridge.interrupt_ready = False
+        selected = self.enqueue('selected')['queue'][0]
+        self.assertEqual(200, self.apply_now(selected)[0])
+        self.app.dispatch.manual_stop(self.sid)
+        self.app.emit(self.sid, 'status', {'state': 'stopped'})
+        self.app.dispatch.pump()
+        self.assertEqual([], self.bridge.sent)
+        self.assertEqual(selected['id'], self.app.dispatch.snapshot(self.sid)['queue'][0]['id'])
+        self.assertTrue(self.app.dispatch.snapshot(self.sid)['paused'])
+
     def test_saved_now_disconnect_and_manual_stop_cancel_pending_transition_without_losing_row(self):
         for kind in ('disconnect', 'manual'):
             with self.subTest(kind=kind):

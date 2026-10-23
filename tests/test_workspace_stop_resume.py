@@ -51,7 +51,16 @@ class StopResumeTests(unittest.TestCase):
         source = BASE_FIXTURE.read_text(encoding='utf-8')
         needle = "    elif subtype == 'interrupt':\n        break\n"
         self.assertEqual(1, source.count(needle))
-        self.fixture.write_text(source.replace(needle, SOFT_INTERRUPT), encoding='utf-8')
+        source = source.replace(needle, SOFT_INTERRUPT)
+        source = source.replace("    if data['type'] == 'user':\n", """    if data['type'] == 'user':
+        import time
+        deadline = time.monotonic() + 6
+        while config.get('delayActivity') and not (root / 'release-activity').exists() and time.monotonic() < deadline:
+            time.sleep(.01)
+        emit({'type': 'stream_event', 'session_id': session,
+              'event': {'type': 'message_start', 'message': {'id': str(uuid.uuid4())}}})
+""")
+        self.fixture.write_text(source, encoding='utf-8')
         command = [sys.executable, '-B', str(self.fixture)]
         self.app = LocalApp(self.root / 'state', command=command, info=probe_cli(command),
                             managed_workspace_root=self.root / 'managed')
@@ -136,6 +145,37 @@ class StopResumeTests(unittest.TestCase):
     def test_repeated_apply_preserves_remaining_queue(self):
         self.check_repeated_apply('prompt_check: the turn was stopped before its prompt was checked')
 
+    def test_rapid_apply_during_native_prompt_admission_waits_then_preserves_pid_and_queue(self):
+        bridge = self.connect(delayActivity=True)
+        identity, pid = self.item['sessionId'], bridge.process.pid
+        context = self.app.dispatch.context(self.item)
+        self.app.send(self.sid, 'wait for cancellation', [])
+        eventually(lambda: sum(row['type'] == 'user' for row in self.frames()) == 1)
+        first = self.app.dispatch.queue.enqueue(self.sid, 'wait for cancellation', context=context)
+        second = self.app.dispatch.queue.enqueue(self.sid, 'final selected', context=context)
+        remaining = self.app.dispatch.queue.enqueue(self.sid, 'keep queued', context=context)
+        for count, selected in enumerate((first, second), 2):
+            self.assertFalse(bridge.interrupt_ready)
+            response = self.app.dispatch.action(self.sid, {'action': 'apply_now', 'requestId': selected['id'],
+                'editRevision': 0, 'clientRequestId': selected['id']})
+            self.assertEqual('waiting_activity', response['applyingPhase'])
+            self.app.dispatch.pump()
+            self.assertEqual(count - 2, sum(row.get('request', {}).get('subtype') == 'interrupt' for row in self.frames()))
+            (self.root / 'release-activity').touch()
+            eventually(lambda: bridge.interrupt_ready)
+            self.app.dispatch.pump()
+            (self.root / 'release-activity').unlink()
+            self.release_stop()
+            eventually(lambda: self.app.stop_state(self.item) == 'stopped')
+            self.app.dispatch.pump()
+            eventually(lambda: sum(row['type'] == 'user' for row in self.frames()) == count)
+            self.assertNotEqual('error', self.item['state'])
+        (self.root / 'release-activity').touch()
+        eventually(lambda: self.item['state'] == 'done')
+        self.assertEqual((identity, pid), (self.item['sessionId'], bridge.process.pid))
+        self.assertEqual([remaining['id']], [row['id'] for row in self.app.dispatch.snapshot(self.sid)['queue']])
+        self.assertEqual(3, sum(row['type'] == 'user' for row in self.frames()))
+
     def test_repeated_apply_with_tool_stop_preserves_remaining_queue(self):
         self.check_repeated_apply('[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use')
 
@@ -148,6 +188,7 @@ class StopResumeTests(unittest.TestCase):
         second = self.app.dispatch.queue.enqueue(self.sid, 'final selected', context=context)
         remaining = self.app.dispatch.queue.enqueue(self.sid, 'keep queued', context=context)
         for count, selected in enumerate((first, second), 2):
+            eventually(lambda: bridge.interrupt_ready)
             self.app.dispatch.action(self.sid, {'action': 'apply_now', 'requestId': selected['id'],
                 'editRevision': 0, 'clientRequestId': selected['id']})
             self.release_stop()
@@ -177,6 +218,7 @@ class StopResumeTests(unittest.TestCase):
                 last = self.app.dispatch.queue.enqueue(self.sid, 'last remaining', context=context)
                 action = {'action': 'apply_now', 'requestId': selected['id'], 'editRevision': 0,
                           'clientRequestId': selected['id']}
+                eventually(lambda: bridge.interrupt_ready)
                 self.app.dispatch.action(self.sid, action)
                 self.assertTrue(self.app.dispatch.action(self.sid, action)['alreadyApplied'])
                 self.app.dispatch.pump()

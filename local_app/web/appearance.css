@@ -87,14 +87,15 @@
 .app .work-area{background:var(--chat-canvas)}
 .app .composer{background:var(--chat-composer);border:1px solid var(--chat-rule);box-shadow:0 3px 14px #1c304208}
 .app .message.user{background:var(--chat-bubble);border-color:var(--chat-rule)}
-.mode-switch{display:flex;align-items:stretch;gap:4px;padding:4px;margin:0 0 12px;border:1px solid var(--theme-line,#dce1ea);border-radius:12px;background:var(--theme-surface,#eef1f7);flex:none}
-.mode-switch button{position:relative;display:flex;justify-content:center;align-items:center;gap:4px;min-height:34px;min-width:0;flex:1;border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:12px;line-height:20px;white-space:nowrap;cursor:pointer;padding:6px 24px 6px 4px}
+.mode-switch{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch;gap:4px;padding:4px;margin:0 0 12px;border:1px solid var(--theme-line,#dce1ea);border-radius:12px;background:var(--theme-surface,#eef1f7);flex:none}
+.mode-switch button{position:relative;display:flex;justify-content:center;align-items:center;gap:4px;min-height:34px;min-width:0;flex:1;border:0;border-radius:8px;background:transparent;color:var(--muted);font:inherit;font-size:12px;line-height:20px;white-space:nowrap;cursor:pointer;padding:6px 4px}
+/* Reserve badge room only when there is a count; empty tabs center their icon and label. */
+.mode-switch button:where(:has(.mode-state:not([hidden]))){padding-right:24px}
 .mode-switch button>span{flex:none;white-space:nowrap}
 .mode-switch button[aria-pressed=true]{background:var(--theme-surface-hover,#fff);color:var(--accent-ink);box-shadow:0 1px 4px #2832470c;font-weight:650}
 .mode-switch .icon{width:16px;height:16px;flex:none}
 .mode-state{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:grid;place-items:center;min-width:16px;height:16px;border-radius:5px;font-size:10px;line-height:16px;font-variant-numeric:tabular-nums;white-space:nowrap;background:var(--theme-tint,#e1e4f5);color:var(--accent-ink)}
 .mode-state.needs-response{background:var(--theme-warning-tint,#f4e9ce);color:var(--theme-warning,#805f2d)}
-/* Button padding reserves one digit even when the activity badge is hidden. */
 .mode-state[hidden]{display:none}
 .mode-switch button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 /* One reading scale across navigation, folders and conversations. */
@@ -134,7 +135,7 @@
 .session-row:hover .session-rename,.session-row:focus-within .session-rename{opacity:1}
 .session-rename:hover{background:var(--theme-surface-hover,#dfe3f4);color:var(--accent-ink)}
 .session-rename:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
-.sidebar-collapsed .mode-switch{flex-direction:column;border:0;background:transparent;padding:0;gap:4px;width:42px}
+.sidebar-collapsed .mode-switch{display:flex;flex-direction:column;border:0;background:transparent;padding:0;gap:4px;width:42px}
 .sidebar-collapsed .mode-switch button{position:relative;min-height:36px;width:42px;flex:none;padding:6px}
 .sidebar-collapsed .mode-switch button>span{display:none}
 .sidebar-collapsed .mode-state{position:absolute;right:0;top:0;transform:none;font-size:9px;line-height:13px;min-width:13px;height:13px}
