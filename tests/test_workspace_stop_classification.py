@@ -190,6 +190,48 @@ class StopClassificationTests(unittest.TestCase):
         self.assertFalse(any(kind in {'assistant', 'result'} for kind, _ in events))
         self.assertIsNone(bridge.process)
 
+    def test_null_stop_reason_requires_actual_matching_stop_attempt(self):
+        diagnostic = STOP_DIAGNOSTIC.replace('stop_reason=tool_use', 'stop_reason=null')
+        for stopping, attempt_session in ((False, None), (True, None), (True, 'another-session')):
+            with self.subTest(stopping=stopping, attempt_session=attempt_session):
+                bridge, native_id, events = self.session(stopping=stopping)
+                if attempt_session:
+                    bridge._stop_attempt = {'phase': 'waiting', 'session': attempt_session,
+                                            'changed': threading.Event()}
+                bridge.handle(result_frame(native_id, result=diagnostic))
+                self.assertTrue(any(kind == 'error' for kind, _ in events))
+                bridge._stop_attempt = None
+
+    def test_terminal_diagnostic_is_bounded_protocol_metadata_without_free_text(self):
+        bridge, native_id, events = self.session()
+        secret = 'PRIVATE-PROMPT-TOKEN-PATH'
+        diagnostic = f'[ede_diagnostic] result_type=user last_content_type={secret} stop_reason=null'
+        bridge.handle(result_frame(native_id, result='', errors=[diagnostic, secret],
+                                   subtype='error_during_execution'))
+        metadata = next(data['terminalDiagnostic'] for kind, data in events if kind == 'error')
+        self.assertNotIn(secret, json.dumps(metadata))
+        self.assertEqual('other', metadata['signature']['last_content_type'])
+        self.assertEqual('null', metadata['signature']['stop_reason'])
+        self.assertEqual('error_during_execution', metadata['resultSubtype'])
+        self.assertFalse(metadata['interruptRequested'])
+        self.assertFalse(metadata['interruptAcknowledged'])
+        self.assertLess(len(json.dumps(metadata)), 512)
+
+    def test_null_stop_diagnostic_does_not_hide_mixed_errors_or_other_signatures(self):
+        diagnostic = STOP_DIAGNOSTIC.replace('stop_reason=tool_use', 'stop_reason=null')
+        for result, errors in ((diagnostic, ['permission denied']),
+                               ('actual error', [diagnostic]),
+                               (diagnostic + '\nactual error', []),
+                               (diagnostic.replace('result_type=user', 'result_type=assistant'), []),
+                               (diagnostic.replace('last_content_type=n/a', 'last_content_type=text'), [])):
+            with self.subTest(result=result, errors=errors):
+                bridge, native_id, events = self.session(stopping=True)
+                bridge._stop_attempt = {'phase': 'waiting', 'session': native_id,
+                    'changed': threading.Event(), 'terminal_error': False, 'ack': True}
+                bridge.handle(result_frame(native_id, result=result, errors=errors))
+                self.assertTrue(any(kind == 'error' for kind, _ in events))
+                self.assertTrue(bridge._stop_attempt['terminal_error'])
+
     def test_requested_stop_releases_turn_without_error_answer_or_completion(self):
         for fields in ({}, {'result': '', 'errors': [STOP_DIAGNOSTIC]}):
             with self.subTest(fields=fields):
@@ -488,6 +530,22 @@ class StopProtocolProcessTests(unittest.TestCase):
                 self.assertEqual(native_id, self.bridge.session_id)
                 self.assertFalse(any(kind == 'error' for kind, _ in self.events))
         self.assertEqual(4, sum(row['type'] == 'user' for row in self.wire()))
+
+    def test_null_stop_reason_ack_and_terminal_in_either_order_keep_same_child(self):
+        for order in ('ack-first', 'result-first'):
+            with self.subTest(order=order):
+                self.configure(order=order, error=STOP_DIAGNOSTIC.replace('stop_reason=tool_use', 'stop_reason=null'))
+                pid, native_id = self.bridge.process.pid, self.bridge.session_id
+                self.start_turn('wait ' + order)
+                self.bridge.interrupt()
+                self.wait(lambda: self.bridge.stop_state == 'stopped')
+                self.assertTrue(self.bridge._stop_attempt['ack'])
+                self.assertTrue(self.bridge._stop_attempt['terminal'])
+                self.assertFalse(self.bridge.closed)
+                self.bridge.send('followup ' + order)
+                self.wait(lambda: not self.bridge.busy)
+                self.assertEqual((pid, native_id), (self.bridge.process.pid, self.bridge.session_id))
+                self.assertFalse(any(kind == 'error' for kind, _ in self.events))
 
     def test_approval_is_drained_and_repeated_stop_does_not_duplicate_interrupt(self):
         self.configure(delay=.15)

@@ -2,6 +2,7 @@
 
 globalThis.WorkspaceWorkflow = (() => {
   let snapshot = null, readGeneration = 0, controller = null, editor = null, trustReturn = null;
+  let dispatchRead = null, dispatchReadAgain = false;
   let overview = null, overviewController = null, overviewGeneration = 0, overviewPage = 0, overviewFocus = null, overviewNavigating = false;
   let overviewFingerprint = "", queueFingerprint = "", scheduleFingerprint = "", queueDrag = null;
   const overviewPageSize = 15;
@@ -179,10 +180,21 @@ globalThis.WorkspaceWorkflow = (() => {
     if(queueDrag&&current(queueDrag))return;
     const overviewRead=refreshOverview();
     if (!active || appClosed || globalThis.WorkspaceModes?.isChat()) return overviewRead;
-    const context=capture(),ticket=++readGeneration;if(controller)controller.abort();controller=new AbortController();
-    try {const value=await api(`/api/dispatch?id=${encodeURIComponent(context.id)}`,undefined,controller.signal);if(ticket===readGeneration)apply(value,context);}
-    catch(err){if(err.name!=="AbortError"&&current(context)&&$("workflow-dialog").open)$("workflow-message").textContent=err.message;}
-    finally {await overviewRead;}
+    // Aborting every status refresh only cancels the browser's wait: the server
+    // may still be taking a snapshot. Keep one read in flight and combine later
+    // invalidations into one trailing read so clicks can reach the same server.
+    if(dispatchRead){dispatchReadAgain=true;await dispatchRead;await overviewRead;return;}
+    const context=capture(),ticket=++readGeneration,request=new AbortController();controller=request;
+    const read=(async()=>{
+      do {
+        dispatchReadAgain=false;
+        try {const value=await api(`/api/dispatch?id=${encodeURIComponent(context.id)}`,undefined,request.signal);if(ticket===readGeneration&&!request.signal.aborted)apply(value,context);}
+        catch(err){if(err.name!=="AbortError"&&current(context)&&$("workflow-dialog").open)$("workflow-message").textContent=err.message;}
+      } while(dispatchReadAgain&&ticket===readGeneration&&!request.signal.aborted&&current(context)&&!queueDrag);
+    })();
+    dispatchRead=read;
+    try {await read;}
+    finally {if(dispatchRead===read){dispatchRead=null;controller=null;dispatchReadAgain=false;}await overviewRead;}
   }
   function renderOverview() {
     if(!$("schedule-overview-dialog")?.open)return;
@@ -414,7 +426,7 @@ globalThis.WorkspaceWorkflow = (() => {
     } finally {$("request-editor-save").disabled=false;}
   }
   function contextChanged() {
-    queueFingerprint="";queueDrag=null;readGeneration++;controller?.abort();snapshot=null;editor=null;trustReturn=null;
+    queueFingerprint="";queueDrag=null;readGeneration++;controller?.abort();controller=null;dispatchRead=null;dispatchReadAgain=false;snapshot=null;editor=null;trustReturn=null;
     if($("request-editor-dialog").open)$("request-editor-dialog").close();
     if($("workflow-dialog").open)$("workflow-dialog").close();
     render();

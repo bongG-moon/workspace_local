@@ -9,6 +9,8 @@ const web=path.resolve('local_app/web');
 const output=process.argv.includes('--output')?path.resolve(process.argv[process.argv.indexOf('--output')+1]):null;
 const heavy=process.argv.includes('--heavy');
 const benchmark=process.argv.includes('--benchmark'), baseline=process.argv.includes('--baseline');
+const backlog=process.argv.includes('--backlog');
+const cpuRate=process.argv.includes('--cpu-rate')?Number(process.argv[process.argv.indexOf('--cpu-rate')+1]):1;
 const baselineFiles=baseline?Object.fromEntries(['app.js','workflow.js','inline-controls.js'].map(name=>[name,require('node:child_process').execFileSync('git',['show',`HEAD:local_app/web/${name}`])])):{};
 if(output)fs.mkdirSync(output,{recursive:true});
 const allErrors=[];
@@ -17,7 +19,8 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const row=(id,title,kind='work')=>({id,kind,title,workspace:'C:/fixture/'+id,state:'idle',trusted:true,created:1,updated:1,seq:0,messages:[],requests:[],artifacts:[],toolActivity:[],executions:[],connection:null});
 async function fixture(browser){
  const context=await browser.newContext({viewport:{width:1440,height:1000},deviceScaleFactor:1});
- const page=await context.newPage(),calls=[],errors=[],drafts=new Map();
+ const page=await context.newPage(),calls=[],errors=[],drafts=new Map(),eventBatches=[];
+ let dispatchReads=0,activeDispatchReads=0,maxDispatchReads=0;
  let dispatch={revision:1,queue:[{id:'q0',text:'첫 줄\n두 번째 줄',state:'queued',editRevision:0},{id:'q1',text:'다음 요청',state:'queued',editRevision:0},{id:'q2',text:'마지막 요청',state:'queued',editRevision:0}],schedules:[],steer:{supported:true}};
  const rows=[...Array.from({length:8},(_,i)=>row('group-'+(i+1),['보고서 초안 정리','분기 실적 확인','발표 자료 요약','회의 후속 요청','현장 개선 아이디어','장기 검토 항목','숨겨진 일곱 번째 업무','폴더의 마지막 긴 업무 이름이 바깥으로 나오지 않도록 확인합니다'][i])),row('five-1','정확히 다섯 개 폴더 1'),row('five-2','정확히 다섯 개 폴더 2'),row('five-3','정확히 다섯 개 폴더 3'),row('five-4','정확히 다섯 개 폴더 4'),row('five-5','정확히 다섯 개 폴더 5'),row('outside','폴더 밖에서 옮길 업무'),row('chat-1','처음 시작한 일반 대화','chat')];
  if(heavy){
@@ -55,6 +58,10 @@ async function fixture(browser){
   else if(p==='/api/files')result={files:[]};
   else if(p==='/api/results')result={artifacts:[],lastRunId:null};
   else if(p==='/api/dispatch'){
+   if(backlog&&req.method()==='GET'){
+    dispatchReads++;activeDispatchReads++;maxDispatchReads=Math.max(maxDispatchReads,activeDispatchReads);
+    await sleep(200);activeDispatchReads--;
+   }
    if(body.action==='cancel')dispatch.queue=dispatch.queue.filter(r=>r.id!==body.requestId);
    if(body.action==='reorder')dispatch.queue=body.order.map(id=>dispatch.queue.find(r=>r.id===id));
    if(body.action==='apply_now')dispatch.queue=dispatch.queue.filter(r=>r.id!==body.requestId);
@@ -62,20 +69,57 @@ async function fixture(browser){
    if(body.action)dispatch.revision++;
    result=dispatch;
   }
-  else if(p==='/api/events'){await sleep(150);result={events:[]};}
+  else if(p==='/api/events'){await sleep(150);result={events:eventBatches.shift()||[]};}
   await route.fulfill({status:result?200:404,json:clone(result||{error:'not found'})});
  });
  await page.goto('http://workspace.test/#token=fixture');
  await page.waitForFunction(()=>globalThis.WorkspaceStartupHealth?.snapshot().missing.length===0);
  await page.evaluate(()=>document.fonts.ready);
  page.setDefaultTimeout(8000);
- return {page,calls,rows,errors,resetQueue:()=>{dispatch.queue=Array.from({length:3},(_,i)=>({id:'q'+i,text:'request '+i,state:'queued',editRevision:0}));dispatch.revision++;},getGroups:()=>groups,finish:async()=>{allErrors.push(...errors);assert.deepEqual(errors,[]);await page.evaluate(()=>{appClosed=true;pollController?.abort();});await page.unrouteAll({behavior:'ignoreErrors'});await context.close();}};
+ return {page,calls,rows,errors,enqueueEvents:events=>eventBatches.push(events),readMetrics:()=>({dispatchReads,maxDispatchReads}),resetQueue:()=>{dispatch.queue=Array.from({length:3},(_,i)=>({id:'q'+i,text:'request '+i,state:'queued',editRevision:0}));dispatch.revision++;},getGroups:()=>groups,finish:async()=>{allErrors.push(...errors);assert.deepEqual(errors,[]);await page.evaluate(()=>{appClosed=true;pollController?.abort();});await page.unrouteAll({behavior:'ignoreErrors'});await context.close();}};
 }
 
 
 (async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{const f=await fixture(browser),p=f.page;
 await p.locator('#sessions [data-session-id="group-1"] .session').click();await p.waitForFunction(()=>active?.id==='group-1');
 await p.evaluate(async()=>{active.state='running';active.trusted=true;setStatus('running');await WorkspaceWorkflow.refresh();});await p.waitForTimeout(450);
+if(backlog){
+ const cdp=await p.context().newCDPSession(p);await cdp.send('Emulation.setCPUThrottlingRate',{rate:cpuRate});
+ await p.evaluate(()=>{
+  $('prompt').value='보존할 작성 중 내용';attachments=['C:/fixture/draft.csv'];
+  globalThis.queueBacklogMetrics={received:[],gaps:[],last:performance.now(),start:null,end:null};
+  const previous=handleEvent;
+  handleEvent=event=>{const m=queueBacklogMetrics;if(event.seq>=10000){m.start??=performance.now();m.received.push(event.seq);}previous(event);if(event.seq===10799){m.end=performance.now();m.completionGap=m.end-m.last;}};
+  globalThis.queueBacklogTimer=setInterval(()=>{const m=queueBacklogMetrics,now=performance.now();if(m.start&&!m.end)m.gaps.push(now-m.last);m.last=now;},16);
+ });
+ const first=await p.locator('.inline-queue-delete').first().boundingBox();
+ f.enqueueEvents(Array.from({length:800},(_,i)=>({seq:10000+i,type:'status',data:{state:'running',label:'Claude가 다른 작업 처리중입니다 '+i,runId:'run-backlog'}})));
+ await sleep(180);
+ const clickStart=Date.now();await p.mouse.click(first.x+first.width/2,first.y+first.height/2);
+ while(!f.calls.some(call=>call.body.action==='cancel')&&Date.now()-clickStart<12000)await sleep(20);
+ const clickToRequestMs=Date.now()-clickStart;
+ const actionCount=action=>f.calls.filter(call=>call.body.action===action).length;
+ assert.equal(actionCount('cancel'),1);
+ await p.waitForFunction(()=>!WorkspaceWorkflow.isSubmitting());
+ const applyBox=await p.locator('.inline-queue-apply').first().boundingBox();
+ const applyStart=Date.now();await p.mouse.click(applyBox.x+applyBox.width/2,applyBox.y+applyBox.height/2);await p.waitForFunction(()=>!WorkspaceWorkflow.isSubmitting());
+ const applyResponseMs=Date.now()-applyStart,applyAtEvent=await p.evaluate(()=>queueBacklogMetrics.received.length);
+ const reorderStart=Date.now();await p.locator('.inline-queue-handle').first().focus();await p.keyboard.press('Alt+ArrowDown');await p.waitForFunction(()=>!WorkspaceWorkflow.isSubmitting());
+ const reorderResponseMs=Date.now()-reorderStart,reorderAtEvent=await p.evaluate(()=>queueBacklogMetrics.received.length);
+ await p.waitForFunction(()=>queueBacklogMetrics.end!==null,null,{timeout:30000});
+ const samples=await p.evaluate(()=>{
+  clearInterval(queueBacklogTimer);const m=queueBacklogMetrics;
+  return {count:m.received.length,ordered:m.received.every((seq,i)=>seq===10000+i),elapsedMs:m.end-m.start,
+   maximumTimerGapMs:Math.max(0,...m.gaps,m.completionGap||0),draft:$('prompt').value,attachments:[...attachments]};
+ });
+ await p.waitForTimeout(450);
+ const result={baseline,cpuRate,clickToRequestMs,applyResponseMs,reorderResponseMs,applyAtEvent,reorderAtEvent,...samples,...f.readMetrics(),actions:{cancel:actionCount('cancel'),apply:actionCount('apply_now'),reorder:actionCount('reorder')},errors:f.errors};
+ console.log(JSON.stringify(result));if(output)fs.writeFileSync(path.join(output,'backlog-report.json'),JSON.stringify(result,null,2));
+ assert.equal(samples.count,800);assert.equal(samples.ordered,true);assert.equal(samples.draft,'보존할 작성 중 내용');assert.deepEqual(samples.attachments,['C:/fixture/draft.csv']);
+ assert.equal(result.actions.apply,1);assert.equal(result.actions.reorder,1);
+ if(!baseline){assert.ok(clickToRequestMs<1500,'a queued action should not wait for the complete event backlog');assert.equal(result.maxDispatchReads,1);assert.ok(applyAtEvent<800&&reorderAtEvent<800,'apply and reorder also remain interactive while events are arriving');}
+ await f.finish();return;
+}
 if(benchmark){
  const measurements=await p.evaluate(()=>{
   const samples=[];

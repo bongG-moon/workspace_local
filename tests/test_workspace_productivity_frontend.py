@@ -284,6 +284,131 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'남겨둘 초안');assert.deepEqual([...attachments],['C:/draft.txt']);
         })()""", ("workflow",))
 
+    def test_status_burst_coalesces_dispatch_reads_without_delaying_cancel(self):
+        self.run_case(r"""(async()=>{
+          const state={revision:1,queue:[{id:'q1',text:'보관된 요청',state:'queued'}],schedules:[],steer:{supported:true}};
+          api=async()=>state;await WorkspaceWorkflow.refresh();
+          const reads=[],writes=[];let activeReads=0,maxReads=0;
+          api=(path,body,signal)=>{
+            if(body){writes.push(body);return Promise.resolve({...state,revision:2,queue:[]});}
+            activeReads++;maxReads=Math.max(maxReads,activeReads);
+            return new Promise(resolve=>reads.push({signal,finish(value){activeReads--;resolve(value);}}));
+          };
+          const pending=WorkspaceWorkflow.refresh();
+          for(let i=0;i<100;i++)void WorkspaceWorkflow.refresh();
+          assert.equal(reads.length,1);assert.equal(reads[0].signal.aborted,false);
+          $('prompt').value='작성 중인 내용';attachments=['draft.csv'];
+          await $('inline-queue-list').children[0].children[2].onclick();
+          assert.equal(writes.length,1);assert.equal(writes[0].action,'cancel');
+          assert.equal($('inline-queue').hidden,true);
+          // The older read must not resurrect the cancelled row.
+          reads[0].finish(state);await settle();assert.equal(reads.length,2);
+          assert.equal($('inline-queue').hidden,true);
+          reads[1].finish({...state,revision:2,queue:[]});await pending;
+          assert.equal(maxReads,1);assert.equal(reads.length,2);
+          assert.equal($('prompt').value,'작성 중인 내용');assert.equal(attachments[0],'draft.csv');
+        })()""", ("workflow",))
+
+    def test_coalesced_dispatch_read_cannot_leak_across_task_switch(self):
+        self.run_case(r"""(async()=>{
+          const reads=[];
+          api=(path,body,signal)=>new Promise(resolve=>reads.push({path,signal,resolve}));
+          const old=WorkspaceWorkflow.refresh();void WorkspaceWorkflow.refresh();
+          WorkspaceWorkflow.contextChanged();active={...active,id:'B'};selectionGeneration++;
+          const fresh=WorkspaceWorkflow.refresh();
+          assert.equal(reads.length,2);assert.equal(reads[0].signal.aborted,true);
+          reads[1].resolve({revision:1,queue:[{id:'b',text:'B 요청',state:'queued'}],schedules:[]});await fresh;
+          reads[0].resolve({revision:99,queue:[{id:'a',text:'이전 A 요청',state:'queued'}],schedules:[]});await old;
+          assert.equal(reads.length,2);assert.equal($('inline-queue-list').children[0].dataset.requestId,'b');
+        })()""", ("workflow",))
+
+    def test_event_backlog_yields_to_clicks_without_reordering_or_dropping_events(self):
+        self.run_case(r"""(async()=>{
+          const abort=new AbortController(),events=Array.from({length:80},(_,i)=>({seq:i+1,type:'status',data:{state:'running'}}));
+          let calls=0,clickedAt=null;const received=[];
+          handleEvent=event=>received.push(event.seq);
+          api=async path=>{if(++calls===1)return {events};assert.match(path,/after=80$/);abort.abort();return {events:[]};};
+          const reading=poll('A',0,abort.signal);await settle();
+          assert.ok(received.length>0&&received.length<=16);
+          setTimeout(()=>{clickedAt=received.length;$('prompt').value='click accepted';},0);
+          for(let i=0;i<10&&!abort.signal.aborted;i++){flushTimers();await settle();}
+          await reading;
+          assert.ok(clickedAt<events.length,'click must run before the backlog is exhausted');
+          assert.deepEqual(received,events.map(event=>event.seq));
+          assert.equal($('prompt').value,'click accepted');assert.equal(calls,2);
+        })()""")
+
+    def test_event_slice_stops_on_task_switch_and_uses_time_budget_on_slow_machine(self):
+        self.run_case(r"""(async()=>{
+          const abort=new AbortController(),received=[];let clock=0;
+          globalThis.performance={now:()=>clock};
+          handleEvent=event=>{received.push(event.seq);clock+=3;};
+          api=async()=>({events:Array.from({length:60},(_,i)=>({seq:i+1}))});
+          const reading=poll('A',0,abort.signal);await settle();
+          assert.equal(received.length,3,'slow processing yields on elapsed time before the count limit');
+          active={id:'B',state:'idle'};flushTimers();await reading;
+          assert.deepEqual(received,[1,2,3]);
+        })()""")
+
+    def test_event_poll_recovers_transport_and_server_errors_at_last_delivered_sequence(self):
+        self.run_case(r"""(async()=>{
+          const abort=new AbortController(),received=[],reads=[];let calls=0;
+          handleEvent=event=>received.push(event.seq);
+          fetch=async(path,options)=>{
+            reads.push(path);assert.equal(options.method,undefined,'recovery may only read events');
+            if(++calls===1)return {ok:true,json:async()=>({events:[{seq:1},{seq:2}]})};
+            if(calls===2)throw new TypeError('temporary local transport reset');
+            if(calls===3)return {ok:false,status:503,json:async()=>({error:'temporarily busy'})};
+            if(calls===4)return {ok:true,json:async()=>({events:[{seq:3}]})};
+            abort.abort();return {ok:true,json:async()=>({events:[]})};
+          };
+          const reading=poll('A',0,abort.signal);await settle();
+          assert.deepEqual(received,[1,2]);assert.equal(timers.size,1);
+          flushTimers();await settle();assert.equal(timers.size,1);
+          flushTimers();await reading;
+          assert.equal(calls,5);assert.deepEqual(received,[1,2,3]);
+          assert.ok(reads[1].endsWith('after=2')&&reads[2].endsWith('after=2')&&reads[3].endsWith('after=2'));
+          assert.equal($('error-banner').textContent,'');
+        })()""")
+
+    def test_event_poll_retries_are_bounded_and_abort_releases_delay(self):
+        self.run_case(r"""(async()=>{
+          const abort=new AbortController();let calls=0;
+          fetch=async()=>{calls++;throw new TypeError('offline');};
+          const reading=poll('A',0,abort.signal);await settle();
+          for(let i=0;i<4;i++){flushTimers();await settle();}
+          await reading;assert.equal(calls,5);assert.equal(timers.size,0);
+          assert.match($('error-banner').textContent,/앱 연결/);
+          calls=0;const next=new AbortController(),pending=poll('A',0,next.signal);await settle();
+          assert.equal(timers.size,1);next.abort();await pending;
+          assert.equal(calls,1);assert.equal(timers.size,0);
+        })()""")
+
+    def test_event_poll_retries_truncated_success_body_but_not_invalid_json_or_auth(self):
+        self.run_case(r"""(async()=>{
+          const abort=new AbortController();let calls=0;
+          fetch=async()=>{if(++calls===1)return {ok:true,status:200,json:async()=>{throw new TypeError('body stream reset');}};
+            abort.abort();return {ok:true,json:async()=>({events:[]})};};
+          const reading=poll('A',0,abort.signal);await settle();assert.equal(timers.size,1);
+          flushTimers();await reading;assert.equal(calls,2);
+          for(const [ok,status,Failure] of [[true,200,SyntaxError],[false,403,TypeError]]){
+            calls=0;fetch=async()=>{calls++;return {ok,status,json:async()=>{throw new Failure('bad response');}};};
+            await poll('A',0,new AbortController().signal);assert.equal(calls,1);assert.equal(timers.size,0);
+          }
+        })()""")
+
+    def test_event_poll_does_not_retry_auth_missing_session_or_render_failures(self):
+        self.run_case(r"""(async()=>{
+          for(const status of [400,401,403,404,409,410]){
+            let calls=0;fetch=async()=>{calls++;return {ok:false,status,json:async()=>({error:'request rejected'})};};
+            await poll('A',0,new AbortController().signal);assert.equal(calls,1);assert.equal(timers.size,0);
+          }
+          let calls=0;fetch=async()=>{calls++;return {ok:true,json:async()=>({events:[{seq:1}]})};};
+          handleEvent=()=>{throw new TypeError('render failure');};
+          await poll('A',0,new AbortController().signal);assert.equal(calls,1);assert.equal(timers.size,0);
+          assert.match($('error-banner').textContent,/render failure/);
+        })()""")
+
     def test_slow_cancel_is_immediate_deduplicated_and_allows_other_cancels(self):
         self.run_case(r"""(async()=>{
           const queue=[{id:'q1',text:'첫 요청',state:'queued'},{id:'q2',text:'둘째 요청',state:'queued'}];

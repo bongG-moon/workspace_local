@@ -556,7 +556,7 @@ class ScheduleFrontendRegressionTests(unittest.TestCase):
 
     def test_explicitly_paused_completed_once_edit_preserves_pause(self):
         self.run_case(r"""(async()=>{
-          active.state='done';
+          active.state='done';$('workflow-dialog').open=true;
           const paused={id:'paused-once',kind:'once',text:'keep paused',attachments:[],
             enabled:false,pausedByUser:true,runAt:Date.now()/1000-3600,nextRunAt:null,lastRun:{status:'done'}};
           api=async()=>({queue:[],schedules:[paused],revision:1});await WorkspaceWorkflow.refresh();

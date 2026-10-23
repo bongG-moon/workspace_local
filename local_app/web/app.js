@@ -154,8 +154,8 @@ async function api(path,data,signal,capacityRetried=false){
   try{
     const options={headers:{Authorization:`Bearer ${token}`},signal};
     if(data!==undefined){options.method="POST";options.headers["Content-Type"]="application/json";options.body=JSON.stringify(data);}
-    let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;throw new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");}
-    const value=await response.json();
+    let response;try{response=await fetch(path,options);}catch(e){if(e.name==="AbortError")throw e;const failure=new Error("앱 연결을 확인할 수 없어요. ‘연결 다시 확인’을 눌러 주세요. 요청을 자동으로 다시 보내지는 않습니다.");failure.transportFailure=true;throw failure;}
+    let value;try{value=await response.json();}catch(e){e.httpStatus=response.status;if(response.ok&&e.name==="TypeError")e.transportFailure=true;throw e;}
     if(!response.ok&&value.code==="connection_capacity_wait"&&value.replacement&&!capacityRetried&&data?.automatic!==true){
       const proposal=value.replacement;
       const stillCurrent=()=>!appClosed&&!signal?.aborted&&selectionGeneration===requestSelection&&
@@ -167,7 +167,7 @@ async function api(path,data,signal,capacityRetried=false){
       if(!accepted||!stillCurrent()){const cancelled=new Error("연결 교체를 취소했어요. 입력한 내용과 첨부파일은 유지됩니다.");cancelled.code="connection_replacement_cancelled";throw cancelled;}
       return await api(path,{...data,replacementToken:proposal.token},signal,true);
     }
-    if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;if(value.connection)failure.connection=value.connection;for(const field of ["stopState","cleanupRetryable","connectionStopped"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];if(path==="/api/upgrade")failure.upgrade=value.upgrade;if(Array.isArray(value.shutdownIssues))failure.shutdownIssues=value.shutdownIssues;for(const field of ["closing","closed","shutdownState"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];throw failure;}return value;
+    if(!response.ok){const failure=new Error(value.error||"연결을 확인해 주세요.");failure.code=value.code;failure.httpStatus=response.status;if(value.connection)failure.connection=value.connection;for(const field of ["stopState","cleanupRetryable","connectionStopped"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];if(path==="/api/upgrade")failure.upgrade=value.upgrade;if(Array.isArray(value.shutdownIssues))failure.shutdownIssues=value.shutdownIssues;for(const field of ["closing","closed","shutdownState"])if(Object.prototype.hasOwnProperty.call(value,field))failure[field]=value[field];throw failure;}return value;
   }finally{finish?.();}
 }
 function setStatus(state,label,runId){
@@ -604,7 +604,48 @@ async function selectSession(id,{keepDraft=false}={}){
   taskHeader();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
 function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
-async function poll(id,after,signal){while(!appClosed&&!signal.aborted&&active?.id===id){try{const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);if(appClosed||signal.aborted||active?.id!==id)return;for(const event of result.events){handleEvent(event);after=event.seq;}}catch(e){if(e.name==="AbortError")return;error(e.message);return;}}}
+async function poll(id,after,signal){
+  const current=()=>!appClosed&&!signal.aborted&&active?.id===id;
+  const now=()=>globalThis.performance?.now?.()??Date.now();
+  let failures=0;
+  while(current()){
+    let receiving=true;
+    try{
+      const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);
+      receiving=false;failures=0;
+      if(!current())return;
+      let sliceStart=now(),handled=0;
+      for(const event of result.events){
+        if(!current())return;
+        handleEvent(event);after=event.seq;
+        // A slow machine may receive hundreds of tool/status records at once.
+        // Preserve their order but give pointer, keyboard and paint tasks a turn
+        // between small slices; a resolved Promise alone would not do that.
+        if(++handled>=16||now()-sliceStart>=8){
+          await new Promise(resolve=>setTimeout(resolve,0));
+          if(!current())return;
+          handled=0;sliceStart=now();
+        }
+      }
+    }catch(e){
+      if(e.name==="AbortError"||!current())return;
+      const transient=receiving&&(e.transportFailure===true||(e.httpStatus>=500&&e.httpStatus<=599));
+      if(transient&&failures<4){
+        // Retry only this read, from its last delivered sequence. Never replay
+        // a prompt, reconnect Claude, or retry auth/session/validation failures.
+        const delay=250*(2**failures++);
+        await new Promise(resolve=>{
+          let timer;
+          const finish=()=>{clearTimeout(timer);signal.removeEventListener?.('abort',finish);resolve();};
+          timer=setTimeout(finish,delay);signal.addEventListener?.('abort',finish,{once:true});
+          if(signal.aborted)finish();
+        });
+        continue;
+      }
+      error(e.message);return;
+    }
+  }
+}
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=!globalThis.WorkspaceStream&&area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
   if(["connected","connection_restart_finished","status","permission_mode_changed","control_restore_changed"].includes(event.type))applyPermissionNotices(d);

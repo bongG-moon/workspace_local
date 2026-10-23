@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from copy import deepcopy
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -518,7 +519,7 @@ class LocalApp:
         with self.progress_logs.lock:
             for suffix in ('.sqlite3', '.sqlite3-wal', '.sqlite3-shm', '.sqlite3-journal'):
                 safe(self.state / 'progress' / (sid + suffix)).unlink(missing_ok=True)
-            self.progress_logs.failures.discard(sid)
+            self.progress_logs.forget(sid)
         safe(self.state / 'history-sessions' / (sid + '.json')).unlink(missing_ok=True)
         self.chat_spaces.remove_space(sid)
         self.chat_spaces.finish_delete(sid)
@@ -1672,6 +1673,8 @@ class LocalApp:
     def _emit_bridge(self, sid, bridge, kind, data):
         # A retired child's delayed status/init must not change a replacement
         # connection for the same task.
+        if kind == 'progress_record':
+            return self._emit_progress(sid, data, bridge=bridge)
         with self.lock:
             item = self.sessions.get(sid)
             if self._shutdown_state == 'closed' or item is None or item.get('_deleting') or sid in self.chat_spaces.pending or item.get('bridge') is not bridge or item.get('_idleReleasing'):
@@ -1712,7 +1715,63 @@ class LocalApp:
                     item.pop('_choiceAnswerClaim', None)
                     self.dispatch.request_retention()
 
+    def _emit_progress(self, sid, data, *, bridge=None):
+        # Detailed evidence is synchronous/durable for the CLI reader, but its
+        # disk commit must not monopolize queue controls for every open task.
+        # Keep the same bridge/run admission before I/O and recheck before
+        # publishing so a late record cannot become the next turn's event.
+        io_done = threading.Event()
+        with self.lock:
+            item = self.sessions.get(sid)
+            if (self._shutdown_state == 'closed' or item is None or item.get('_deleting')
+                    or sid in self.chat_spaces.pending or self.session_visibility.contains(sid)
+                    or item.get('_idleReleasing') or not isinstance(data, dict)
+                    or not item.get('lastRunId') or data.get('runId') != item['lastRunId']
+                    or item.get('state') not in {'starting', 'running', 'approval', 'question'}
+                    or bridge is not None and (item.get('bridge') is not bridge
+                        or getattr(bridge, '_tool_activity_run_id', None) != item['lastRunId'])):
+                return
+            run_id = item['lastRunId']
+            tracked = item.get('kind') == 'chat'
+            if tracked:
+                self._chat_io.setdefault(sid, set()).add(io_done)
+        try:
+            # Prime committed metadata outside app.lock even for the first row.
+            self.progress_logs.metadata(sid)
+            metadata = self.progress_logs.append(sid, data)
+            with self.lock:
+                if (metadata is None or self.sessions.get(sid) is not item
+                        or self._shutdown_state == 'closed' or item.get('_deleting')
+                        or sid in self.chat_spaces.pending or self.session_visibility.contains(sid)
+                        or item.get('lastRunId') != run_id
+                        or item.get('state') not in {'starting', 'running', 'approval', 'question'}
+                        or bridge is not None and item.get('bridge') is not bridge):
+                    return
+                item['seq'] += 1
+                item['events'] = [event for event in item['events'] if event['type'] != 'progress_changed']
+                item['events'].append({'seq': item['seq'], 'type': 'progress_changed',
+                                       'data': {'runId': run_id, 'progress': metadata}})
+                item['events'] = item['events'][-300:]
+        finally:
+            if tracked:
+                with self.lock:
+                    self._chat_io.get(sid, set()).discard(io_done)
+                    if not self._chat_io.get(sid):
+                        self._chat_io.pop(sid, None)
+                    io_done.set()
+
+    def progress_page(self, sid, **filters):
+        # As with attachment reads, deletion waits for this chat's I/O only.
+        # A slow disk/page must not block unrelated cancel/reorder requests.
+        with self.chat_io(sid):
+            result = self.progress_logs.page(sid, **filters)
+            with self.lock:
+                self.get(sid)  # Do not disclose a task archived during the read.
+            return result
+
     def emit(self, sid, kind, data):
+        if kind == 'progress_record':
+            return self._emit_progress(sid, data)
         with self.lock:
             if (self._shutdown_state == 'closed' or sid not in self.sessions or self.sessions[sid].get('_deleting')
                     or sid in self.chat_spaces.pending or self.session_visibility.contains(sid)):
@@ -1732,24 +1791,6 @@ class LocalApp:
                 item['seq'] += 1
                 item['events'] = [event for event in item['events'] if event['type'] != 'run_activity']
                 item['events'].append({'seq': item['seq'], 'type': kind, 'data': clean})
-                item['events'] = item['events'][-300:]
-                return
-            if kind == 'progress_record':
-                # Never relabel a late callback as the new request, and never
-                # retain detail in the normal history/event mirror.
-                if (not isinstance(data, dict) or not item.get('lastRunId')
-                        or data.get('runId') != item['lastRunId']
-                        or item.get('state') not in {'starting', 'running', 'approval', 'question'}):
-                    return
-                metadata = self.progress_logs.append(sid, data)
-                if metadata is None:
-                    return
-                item['seq'] += 1
-                # One pending metadata notification is enough. Coalescing keeps
-                # high-volume tools from evicting approvals or terminal events.
-                item['events'] = [event for event in item['events'] if event['type'] != 'progress_changed']
-                item['events'].append({'seq': item['seq'], 'type': 'progress_changed',
-                                       'data': {'runId': item['lastRunId'], 'progress': metadata}})
                 item['events'] = item['events'][-300:]
                 return
             if kind in {'request', 'choice'} or kind == 'status' and data.get('state') in {'starting', 'running'}:
@@ -2459,16 +2500,19 @@ class Handler(BaseHTTPRequestHandler):
                         events = [row for row in item["events"] if row["seq"] > after]
                         if events or time.monotonic() >= deadline:
                             # Full bounded messages on recovery only, otherwise deltas.
-                            return self.reply({"events": events, "state": item["state"], "seq": item["seq"]})
+                            # Connection events share nested state with the live
+                            # session. Freeze the bounded event snapshot before
+                            # a slow client writes it outside the app lock.
+                            response = {"events": deepcopy(events), "state": item["state"], "seq": item["seq"]}
+                            break
                     time.sleep(.15)
+                return self.reply(response)
             if route.path == "/api/session":
                 return self.reply(app.public(app.get(sid)))
             if route.path == '/api/progress':
-                with app.lock:
-                    app.get(sid)  # Same visibility/session boundary as /api/session.
-                    return self.reply(app.progress_logs.page(sid,
-                        before=query.get('before', [None])[0], limit=query.get('limit', ['50'])[0],
-                        run_id=query.get('runId', [None])[0]))
+                return self.reply(app.progress_page(sid,
+                    before=query.get('before', [None])[0], limit=query.get('limit', ['50'])[0],
+                    run_id=query.get('runId', [None])[0]))
             if route.path == '/api/customizations':
                 app.require_work(sid)
                 if app.demo or not app.command:

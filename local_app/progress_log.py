@@ -101,6 +101,10 @@ class ProgressStore:
         self.directory = Path(directory)
         self.max_bytes = max(8192, max_bytes)
         self.lock = threading.RLock()
+        # Only small committed counters are cached. Readers of the task state
+        # must not wait behind SQLite commits on redirected/VDI storage.
+        self._metadata_lock = threading.Lock()
+        self._metadata_cache = {}
         self.failures = set()
 
     def _path(self, sid):
@@ -149,7 +153,22 @@ class ProgressStore:
         revision, cut, _, count, last = db.execute('SELECT revision,truncated,total,count,last_seq FROM metadata WHERE singleton=1').fetchone()
         return dict(count=count, lastSeq=last, revision=revision, truncated=bool(cut), available=True)
 
+    def _remember_metadata(self, sid, result):
+        with self._metadata_lock:
+            self._metadata_cache[sid] = dict(result)
+        return result
+
+    def forget(self, sid):
+        """Caller serializes file deletion with lock; IDs are never reused."""
+        with self._metadata_lock:
+            self._metadata_cache.pop(sid, None)
+        self.failures.discard(sid)
+
     def metadata(self, sid):
+        with self._metadata_lock:
+            cached = self._metadata_cache.get(sid)
+            if cached is not None:
+                return dict(cached, truncated=cached['truncated'] or sid in self.failures)
         with self.lock:
             try:
                 db = self._connect(sid)
@@ -157,10 +176,13 @@ class ProgressStore:
                     result = self._metadata(db)
                 if sid in self.failures:
                     result['truncated'] = True
-                return result
+                return self._remember_metadata(sid, result)
             except (OSError, ValueError, sqlite3.Error, TypeError):
                 self.failures.add(sid)
-                return dict(count=0, lastSeq=0, revision=0, truncated=True, available=False)
+                # An unavailable drive must not be reopened by every task-state
+                # poll. Append/page still retry storage and refresh this value.
+                return self._remember_metadata(sid,
+                    dict(count=0, lastSeq=0, revision=0, truncated=True, available=False))
 
     def append(self, sid, value):
         """Insert/update a normalized block. Return metadata only, never content."""
@@ -216,7 +238,7 @@ class ProgressStore:
                     result = self._metadata(db)
                 if sid in self.failures:
                     result['truncated'] = True
-                return result
+                return self._remember_metadata(sid, result)
             except (OSError, ValueError, sqlite3.Error, TypeError):
                 self.failures.add(sid)
                 return self.metadata(sid)
@@ -257,6 +279,7 @@ class ProgressStore:
                 if sid in self.failures:
                     result['progress']['truncated'] = True
                     result['notice'] = _ERROR_NOTICE
+                self._remember_metadata(sid, result['progress'])
                 return result
             except (OSError, ValueError, sqlite3.Error, TypeError):
                 self.failures.add(sid)

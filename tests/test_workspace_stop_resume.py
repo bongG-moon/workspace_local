@@ -179,6 +179,36 @@ class StopResumeTests(unittest.TestCase):
     def test_repeated_apply_with_tool_stop_preserves_remaining_queue(self):
         self.check_repeated_apply('[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use')
 
+    def test_repeated_apply_with_native_text_stop_null_reason_preserves_remaining_queue(self):
+        self.check_repeated_apply('[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null')
+
+    def test_real_queued_failure_stays_for_review_and_does_not_replay_or_consume_next_row(self):
+        source = self.fixture.read_text(encoding='utf-8')
+        source = source.replace("    if data['type'] == 'user':\n", """    if data['type'] == 'user':
+        if data['message']['content'] == 'fail queued turn':
+            emit({'type': 'result', 'session_id': session, 'is_error': True,
+                  'result': '[ede_diagnostic] result_type=assistant last_content_type=text stop_reason=end_turn'})
+            continue
+""")
+        self.fixture.write_text(source, encoding='utf-8')
+        bridge = self.connect()
+        context = self.app.dispatch.context(self.item)
+        failed = self.app.dispatch.queue.enqueue(self.sid, 'fail queued turn', context=context)
+        selected = self.app.dispatch.queue.enqueue(self.sid, 'keep unsent', context=context)
+        self.app.dispatch.pump()
+        eventually(lambda: self.item['state'] == 'error')
+        with self.assertRaisesRegex(ValueError, '전송 여부를 확인할 요청'):
+            self.app.dispatch.action(self.sid, {'action': 'apply_now', 'requestId': selected['id'],
+                'editRevision': 0, 'clientRequestId': selected['id']})
+        self.app.dispatch.pump()
+        queue = self.app.dispatch.snapshot(self.sid)
+        self.assertEqual([(failed['id'], 'needs_review'), (selected['id'], 'queued')],
+                         [(row['id'], row['status']) for row in queue['queue']])
+        self.assertTrue(queue['paused'])
+        self.assertEqual(['fail queued turn'],
+                         [row['message']['content'] for row in self.frames() if row['type'] == 'user'])
+        self.assertIs(bridge, self.item['bridge'])
+
     def check_repeated_apply(self, diagnostic):
         bridge = self.connect(stopDiagnostic=diagnostic)
         context = self.app.dispatch.context(self.item)

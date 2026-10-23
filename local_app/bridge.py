@@ -797,13 +797,51 @@ class ClaudeSession:
         if not isinstance(errors, list):
             return False
         details = [value for value in [data.get('result', ''), *errors] if value != '']
-        expected = {'result_type=user', 'last_content_type=n/a', 'stop_reason=tool_use'}
+        expected = {'result_type=user', 'last_content_type=n/a'}
+        attempt = self._stop_attempt
+        matching_attempt = bool(attempt and attempt.get('phase') == 'waiting'
+                                and attempt.get('session') == previous_session)
+        signatures = [expected | {'stop_reason=tool_use'}]
+        if matching_attempt:
+            # Claude 2.1.306 emits this exact signature when interrupting a
+            # root text response. It is a stopped turn, not an execution error.
+            # Still wait for the matching ACK and terminal before admitting a
+            # new request; unrequested, mixed or unknown errors remain failures.
+            signatures.append(expected | {'stop_reason=null'})
         return bool(details) and all(
             isinstance(value, str) and (
                 value.strip() == 'prompt_check: the turn was stopped before its prompt was checked'
-                or (len(parts := value.split()) == 4
-                    and parts[0] == '[ede_diagnostic]' and set(parts[1:]) == expected))
+                or (len(parts := value.split()) == 4 and parts[0] == '[ede_diagnostic]'
+                    and set(parts[1:]) in signatures))
             for value in details)
+
+    def _terminal_diagnostic(self, data, attempt):
+        """Small protocol metadata only; never persist prompts or raw stderr."""
+        result = {'turnSubmitted': self._turn_submitted is True,
+                  'turnActivitySeen': self._turn_activity_seen,
+                  'interruptRequested': attempt is not None,
+                  'interruptAcknowledged': bool(attempt and attempt.get('ack')),
+                  'interruptPhase': (attempt.get('phase') if attempt and attempt.get('phase') in
+                                     {'waiting', 'fallback', 'stopped'} else None)}
+        subtype = data.get('subtype')
+        if isinstance(subtype, str) and subtype in {'success', 'error_during_execution', 'error_max_turns', 'error_max_budget_usd',
+                       'error_max_structured_output_retries'}:
+            result['resultSubtype'] = subtype
+        errors = data.get('errors')
+        details = [data.get('result'), *(errors[:8] if isinstance(errors, list) else [])]
+        allowed = {'result_type': {'user', 'assistant', 'system', 'n/a'},
+                   'last_content_type': {'text', 'tool_use', 'tool_result', 'thinking', 'n/a'},
+                   'stop_reason': {'tool_use', 'end_turn', 'max_tokens', 'stop_sequence', 'pause_turn',
+                                   'refusal', 'n/a', 'null'}}
+        for detail in details:
+            if not isinstance(detail, str) or len(detail) > 512:
+                continue
+            match = re.fullmatch(r'\[ede_diagnostic\]\s+result_type=(\S+)\s+last_content_type=(\S+)\s+stop_reason=(\S+)', detail.strip())
+            if match:
+                result['signature'] = {key: value if value in allowed[key] else 'other'
+                                       for key, value in zip(allowed, match.groups())}
+                break
+        return result
 
     def start(self):
         with self.lock:
@@ -1557,6 +1595,7 @@ class ClaudeSession:
                     return
                 self.emit("error", {"code": 'cli_turn_incomplete' if diagnostic else "task_failed",
                     "nextAction": '현재 결과를 확인한 뒤 같은 대화에서 후속 요청' if diagnostic else "자료와 연결 상태를 확인하고 다시 요청",
+                    'terminalDiagnostic': self._terminal_diagnostic(data, stop_attempt),
                     **({'resumeSessionId': self.resume_id, 'diagnosticCode': 'ede_diagnostic'} if diagnostic else {}),
                     "message": ('Claude가 도구 처리 뒤 최종 답변을 완료하지 못했어요. 지금까지의 대화와 파일 변경은 남아 있습니다. '
                                 '결과를 확인한 뒤 같은 대화에서 계속 요청할 수 있어요. 이전 요청을 자동으로 재실행하지 않습니다. '
