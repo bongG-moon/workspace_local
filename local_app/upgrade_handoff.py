@@ -1,6 +1,6 @@
-"""Cooperative restart: drain work, preserve unsent drafts, then close normally.
+"""Cooperative restart: preserve drafts, then wait or explicitly stop owned work.
 
-This protocol never terminates an external process or writes Claude settings.
+This protocol never terminates an unrelated process or writes Claude settings.
 All state transitions are protected by the application's session lock. The
 commit barrier takes that lock before the short-lived lifecycle condition.
 """
@@ -110,20 +110,20 @@ class UpgradeHandoff:
                 nonce(value.get('requestId'))
                 version(value.get('targetVersion'))
                 saved = snapshot(value.get('snapshot'))
-                if value['status'] == 'ready' and value['targetVersion'] == self.version:
-                    self.restore = {'requestId': value['requestId'], 'snapshot': saved}
+                if value['status'] == 'ready':
+                    # Recovery is gated by the validated snapshot schema, not
+                    # the version originally chosen by an interrupted upgrade.
+                    self.restore = {'requestId': value['requestId'], 'snapshot': saved,
+                                    'savedTargetVersion': value['targetVersion']}
                     # Older handoffs remain restorable without claiming an update.
                     try:
                         source = value.get('sourceVersion')
                         source_parts = tuple(map(int, version(source).split('-')[0].split('.')))
                         target_parts = tuple(map(int, version(self.version).split('-')[0].split('.')))
-                        if source_parts < target_parts:
+                        if value['targetVersion'] == self.version and source_parts < target_parts:
                             self.restore.update(sourceVersion=source, targetVersion=self.version)
                     except (ValueError, TypeError):
                         pass
-                elif value['status'] == 'ready':
-                    self.warning = ('작성 중이던 내용을 ' + value['targetVersion']
-                                    + ' 버전에 보관했습니다. 해당 버전을 실행해 내용을 먼저 복원해 주세요.')
         except (OSError, ValueError, TypeError, AttributeError, RecursionError):
             self.warning = '이전 창의 작성 내용을 확인하지 못했습니다. 저장 기록은 보존했습니다.'
 
@@ -146,10 +146,11 @@ class UpgradeHandoff:
         if app.dispatch.steering or app.dispatch.error:
             return True
         for item in app.sessions.values():
-            if (item.get('state') in {'starting', 'running', 'approval', 'question'}
-                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_removingFromList'))
+            if (item.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_restarting',
+                                                     '_stopAdmission', '_dispatchClaim', '_choiceAnswerClaim', '_removingFromList'))
                     or item.get('requests') or item.get('choice')
-                    or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}):
+                    or (item.get('verification') or {}).get('state') == 'checking'):
                 return True
             bridge = item.get('bridge')
             if bridge and (getattr(bridge, 'busy', False) or getattr(bridge, 'pending', None)
@@ -160,10 +161,16 @@ class UpgradeHandoff:
                 return True
         return False
 
+    def blocks_work(self):
+        """An explicit stop choice reserves the captured snapshot until commit/cancel."""
+        pending = self.pending
+        return bool(pending and pending.get('stopRequested')
+                    and pending['stage'] in {'captured', 'committing', 'closed'})
+
     def invalidate(self):
         """An admitted user action/work event wins over a prepared restart."""
         pending = self.pending
-        if pending and pending['stage'] in {'capture', 'captured'}:
+        if pending and not pending.get('stopRequested') and pending['stage'] in {'capture', 'captured'}:
             self._stage(pending, 'waiting', snapshot=None, captureDeadline=None)
 
     def _refresh(self):
@@ -173,6 +180,10 @@ class UpgradeHandoff:
         now = self.clock()
         if now >= pending['deadline']:
             self._stage(pending, 'expired', snapshot=None)
+            return
+        # The explicit stop action already persisted its snapshot. Running
+        # work is expected here; commit closes admission and drains it safely.
+        if self.blocks_work():
             return
         with self.app._lifecycle:
             admitted = self.app._active_operations > 0
@@ -204,6 +215,8 @@ class UpgradeHandoff:
             public = None if not pending else {key: pending[key] for key in ('requestId', 'targetVersion', 'stage', 'revision')}
             if pending:
                 public['sourceVersion'] = self.version
+                public['canStop'] = pending['stage'] in {'waiting', 'capture'}
+                public['stopRequested'] = pending.get('stopRequested') is True
             if pending and pending.get('executionMode'):
                 public['executionMode'] = pending['executionMode']
             if pending and pending.get('error'):
@@ -218,6 +231,10 @@ class UpgradeHandoff:
             self._refresh()
             if action == 'restored':
                 if self.restore and self.restore['requestId'] == request_id:
+                    stored = read(safe(self.path), MAX_SNAPSHOT + 4096)
+                    if (not isinstance(stored, dict) or stored.get('requestId') != request_id or stored.get('status') != 'ready'
+                            or stored.get('snapshot') != self.restore['snapshot']):
+                        raise ValueError('보관된 초안 기록이 바뀌었습니다. 앱을 다시 열어 최신 기록을 확인해 주세요.')
                     safe(self.path).unlink(missing_ok=True)
                     self.restore = None
                 elif self.restore:
@@ -247,6 +264,27 @@ class UpgradeHandoff:
                 if pending['stage'] in {'committing', 'closed'}:
                     raise ValueError('종료를 마무리하고 있어 버전 전환을 취소할 수 없습니다.')
                 self._stage(pending, 'cancelled', snapshot=None)
+                return {'ok': True, **self.status()}
+            if action == 'stop':
+                if data.get('confirmed') is not True:
+                    raise ValueError('작업 중지 후 업데이트를 먼저 선택해 주세요.')
+                clean = snapshot(data.get('snapshot'))
+                if pending.get('stopRequested') and pending['stage'] == 'captured':
+                    if clean != pending['snapshot'] or data.get('revision') != pending.get('captureRevision'):
+                        raise ValueError('보관할 작성 내용이 바뀌었습니다. 전환을 취소하고 다시 선택해 주세요.')
+                    return {'ok': True, **self.status()}
+                if pending['stage'] not in {'waiting', 'capture'} or data.get('revision') != pending['revision']:
+                    return {'ok': False, 'closed': False, **self.status()}
+                # No child is stopped and no admission is closed until this
+                # exact screen snapshot is durably saved and acknowledged.
+                pending['snapshot'] = clean
+                try:
+                    self._write(pending, 'captured')
+                except (OSError, ValueError):
+                    pending['snapshot'] = None
+                    raise
+                pending['captureRevision'] = pending['revision']
+                self._stage(pending, 'captured', stopRequested=True)
                 return {'ok': True, **self.status()}
             if action == 'capture':
                 if pending['stage'] == 'captured':
@@ -288,8 +326,9 @@ class UpgradeHandoff:
             # Capture and work completion can race a second launch. Admission
             # remains open during prepare; the winner of this barrier owns it.
             with self.app._lifecycle:
-                if (pending['stage'] != 'captured' or self.app._active_operations
-                        or self.app._shutdown_state != 'running' or self.busy()):
+                stop_requested = pending.get('stopRequested') is True
+                if (pending['stage'] != 'captured' or self.app._shutdown_state != 'running'
+                        or not stop_requested and (self.app._active_operations or self.busy())):
                     self.invalidate()
                     return {'ok': False, 'closed': False, **self.status()}
                 # Make the exact snapshot recoverable BEFORE closing admission
@@ -305,12 +344,12 @@ class UpgradeHandoff:
                 self._stage(pending, 'committing')
         # Reader callbacks need app.lock while normal CLI cleanup is draining.
         try:
-            closed = self.app.close() is True
+            closed = (self.app.close(force=True) if stop_requested else self.app.close()) is True
         except Exception:
             closed = False
         with self.app.lock:
             if closed:
                 self._stage(pending, 'closed')
                 return {'ok': True, 'closed': True, **self.status()}
-            self._stage(pending, 'failed', error='기존 연결의 종료를 확인하지 못했습니다. 작업은 강제 종료하지 않았습니다.')
+            self._stage(pending, 'failed', error='기존 연결의 종료를 확인하지 못해 업데이트를 진행하지 않았습니다. 보관된 초안은 유지됩니다. 앱 종료 상태를 확인해 주세요.')
             return {'ok': False, 'closed': False, **self.status()}

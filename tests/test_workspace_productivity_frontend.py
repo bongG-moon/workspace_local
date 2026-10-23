@@ -248,6 +248,21 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:transfer});assert.equal(attachments.length,1);
         })()""", ("attachments",))
 
+    def test_folder_arrow_opens_but_drag_attaches_without_sending(self):
+        self.run_case(r"""(async()=>{
+          Object.getPrototypeOf($('files')).getAttribute=function(name){return this.attributes[name]??null;};
+          const calls=[];api=async(path)=>{calls.push(path);return {directory:'',parent:null,files:[{name:'자료',path:'C:/fixture/A/자료',relativePath:'자료',kind:'directory'}]};};
+          $('prompt').value='작성 중인 요청';await refreshFiles();
+          const row=$('files').children[0],folder=row.children[0],arrow=row.children[1];
+          assert.equal(folder.draggable,true);assert.match(arrow.title,/폴더 열기/);
+          await arrow.onclick();assert.equal(attachments.length,0);assert.equal(calls.length,2);
+          const transfer={types:['application/x-company-workspace-file'],value:'',setData(type,value){this.value=value;},getData(){return this.value;}};
+          const current=$('files').children[0].children[0];current.ondragstart({dataTransfer:transfer});
+          await WorkspaceAttachments.drop({preventDefault(){},dataTransfer:transfer});
+          assert.equal(attachments[0],'C:/fixture/A/자료');assert.equal($('prompt').value,'작성 중인 요청');
+          assert.equal(calls.length,2);
+        })()""", ("attachments",))
+
     def test_drop_limits_reject_without_upload_or_losing_existing_draft(self):
         self.run_case(r"""(async()=>{
           $('prompt').value='그대로';attachments=['C:/keep'];let calls=0;fetch=async()=>{calls++;};

@@ -711,12 +711,6 @@ function materialIcon(name){
   const icon=document.createElementNS?.("http://www.w3.org/2000/svg","svg")||el("svg"),use=document.createElementNS?.("http://www.w3.org/2000/svg","use")||el("use");
   icon.classList.add("icon");icon.setAttribute("aria-hidden","true");use.setAttribute("href","#i-"+name);icon.append(use);return icon;
 }
-function attachMaterial(path,id,generation){
-  if(appClosed||active?.id!==id||selectionGeneration!==generation)return;
-  if(sending||choiceSubmission||globalThis.WorkspaceAttachments?.isUploading())return toast("자료 준비가 끝난 뒤 추가해 주세요.");
-  if(!attachments.includes(path)&&attachments.length>=12)return toast("자료는 한 번에 12개까지 추가할 수 있습니다.");
-  attachments=[...new Set([...attachments,path])];renderAttachments();saveDraft();toast("요청할 자료에 추가했어요.");
-}
 async function refreshFiles(directory){
   if(isGeneralChat())return;
   const request=beginFileRefresh("files");if(!request)return;
@@ -744,9 +738,9 @@ async function refreshFiles(directory){
       globalThis.WorkspaceAttachments?.makeDraggable(button,file.path,id);
       button.onclick=()=>{if(!currentFileLocation(id,generation))return;if(folder)return refreshFiles(file.relativePath);return preview(file.path).catch(e=>error(e.message));};
       if(folder){
-        const row=el("div",null,"material-folder-row"),add=el("button",null,"icon-button material-attach");
-        add.type="button";add.append(materialIcon("plus"));add.title=file.name+" 폴더를 자료에 추가";add.setAttribute("aria-label",add.title);add.onclick=()=>attachMaterial(file.path,id,generation);
-        row.append(button,add);$("files").append(row);
+        const row=el("div",null,"material-folder-row"),open=el("button",null,"icon-button material-open");
+        open.type="button";open.append(materialIcon("arrow"));open.title=file.name+" 폴더 열기";open.setAttribute("aria-label",open.title);open.onclick=button.onclick;
+        row.append(button,open);$("files").append(row);
       }else $("files").append(button);
     }
     if(result.limited||result.errors)$("files").append(el("p","목록 일부만 확인했어요. 필요한 자료는 @ 검색이나 자료 추가로 선택해 주세요.","material-list-note"));
@@ -1308,6 +1302,14 @@ async function restoreScreenRecovery(snapshot){
   if(currentMode==="work"&&!drafts.has("home")&&drafts.has("home:work"))drafts.set("home",drafts.get("home:work"));
   restoreDraft(homeDraftKey());return {missingSession:!!id&&!exists,conflicts:conflicts()};
 }
+function addRecoveredDraft(row){
+  if(appClosed||quitting||sending||choiceSubmission||globalThis.WorkspaceAttachments?.isUploading()||globalThis.WorkspaceUpgrade?.isLocked())throw new Error("현재 전송이나 전환이 끝난 뒤 초안을 복원해 주세요.");
+  const before=$("prompt").value,combined=before&&row.text?before+"\n\n"+row.text:before||row.text;
+  const seen=new Set(),paths=[...attachments,...row.attachments].filter(path=>{const key=path.replace(/\\/g,"/").toLowerCase();if(seen.has(key))return false;seen.add(key);return true;});
+  const policy=isGeneralChat()?boot.chatAttachmentPolicy:boot.attachmentPolicy,max=policy?.maxAttachments||12;
+  if(combined.length>($("prompt").maxLength>0?$("prompt").maxLength:32000)||paths.length>max)throw new Error("현재 입력과 합치면 글자 또는 첨부 개수 제한을 넘어요. 필요한 내용을 복사해 나누어 복원해 주세요.");
+  $("prompt").value=combined;attachments=paths;renderAttachments();saveDraft();
+}
 globalThis.WorkspaceDraftPersistence?.attach({api,notify:toast,selected:()=>active?.id||homeDraftKey(),
   stashes:()=>globalThis.WorkspaceShortcuts?.exportStashes()||[],
   restoreStashes:rows=>globalThis.WorkspaceShortcuts?.restoreStashes(rows,{includeArchived:true})});
@@ -1324,8 +1326,10 @@ globalThis.WorkspaceStartupHealth?.attach({
 globalThis.WorkspaceUpgrade?.attach({
   api:(path,data)=>api(path,data),capture:captureScreenRecovery,restore:restoreScreenRecovery,
   canCapture:()=>!restartingConnections.size&&!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
-  openRecovery:id=>showDialog(id),taskTitle:id=>sessions.find(row=>row.id===id)?.title,
-  confirmRecovery:()=>confirmAction({title:"이전 초안 보관을 해제할까요?",message:"필요한 내용을 복사했는지 확인해 주세요. 이전 창에서 별도로 보관한 초안 기록만 지우며, 현재 화면의 입력 내용과 대화·파일은 유지합니다.",confirmLabel:"보관 해제"}),
+  canStopCapture:()=>!restartingConnections.size&&!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
+  confirmStopForUpdate:()=>confirmAction({title:"작업을 중지하고 업데이트할까요?",message:"이 앱의 진행 중인 작업과 승인·응답 대기를 중지한 뒤 새 버전으로 다시 시작합니다. 작성 중인 내용과 첨부 자료, 대화·파일·이어 할 일은 보관합니다. 중지한 요청은 자동으로 재실행하지 않습니다.",confirmLabel:"작업 중지 후 업데이트",danger:true}),
+  openRecovery:id=>showDialog(id),taskTitle:id=>sessions.find(row=>row.id===id)?.title,addRecoveredDraft,
+  confirmRecovery:()=>confirmAction({title:"이전 초안 보관 기록을 지울까요?",message:"이전 창에서 별도로 보관한 초안 기록만 지웁니다. 현재 입력창에 복원한 내용과 작성 중인 내용, 대화·파일은 유지합니다.",confirmLabel:"기록 지우기",danger:true}),
   failed:message=>toast(message),restored:outcome=>toast(outcome?.missingSession?"작성 중이던 내용을 업무 홈에 복원했어요.":"이전 창의 작성 내용과 첨부 자료를 이어서 사용할 수 있어요.")
 });
 globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,signal),

@@ -100,15 +100,12 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
           active={...active,id:'B'};await actions.children[2].onclick();assert.equal(calls.length,2);
         })()""")
 
-    def test_late_attachment_picker_and_manual_path_cannot_leak_into_other_task(self):
+    def test_late_attachment_picker_cannot_leak_into_other_task(self):
         self.run_case(r"""(async()=>{
           let reply;api=()=>new Promise(resolve=>reply=resolve);const pending=$('attach').onclick();
           active={...active,id:'B',workspace:'C:/fixture/B'};selectionGeneration++;attachments=['C:/fixture/B/original.csv'];
           reply({paths:['C:/fixture/A/late.csv']});await pending;
           assert.equal(attachments.length,1);assert.equal(attachments[0],'C:/fixture/B/original.csv');assert.equal($('attach').disabled,false);
-          $('attach-path').onclick();$('path-input').value='C:/fixture/B/manual.csv';
-          active={...active,id:'C'};selectionGeneration++;$('path-form').onsubmit({submitter:{value:'ok'}});
-          assert.equal(attachments.length,1);
         })()""")
 
 

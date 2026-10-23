@@ -4,9 +4,11 @@
 // until an authenticated, acknowledged local handoff has preserved them.
 globalThis.WorkspaceUpgrade = (() => {
   const MAX_BYTES=256*1024, ignored=new Set(), requests=new Set();
-  let hooks=null, ready=false, current=null, locked=false, capturing=false, cancelling=false;
+  let hooks=null, ready=false, current=null, locked=false, capturing=false, cancelling=false, stopping=false;
+  let stopUncertainRevision=null;
   let restoredId=null, serial=0, focusBefore=null, localError="", latestRevision=-1;
-  let recovery=null, recoveryNotice="", releasing=false;
+  let recovery=null, recoveryNotice="", releasing=false, adding=false;
+  const addedRows=new Set();
   const $=id=>document.getElementById(id);
   const dialog=()=>$("upgrade-dialog");
   const safeId=id=>typeof id==="string"&&/^[a-f0-9]{32}$/i.test(id);
@@ -17,10 +19,11 @@ globalThis.WorkspaceUpgrade = (() => {
     for(let i=0;i<3;i++)if(source[i]!==target[i])return target[i]>source[i];return false;
   };
   const unattended=path=>/^\/api\/(?:events(?:\?|$)|attention(?:\/|\?|$)|ui-health(?:\?|$)|drafts(?:\?|$)|upgrade(?:\?|$)|window\/presence(?:\?|$))/.test(path);
+  const canStopForUpdate=()=>!!current?.canStop&&["waiting","capture"].includes(current.stage)&&!stopping&&!cancelling&&!capturing&&stopUncertainRevision===null;
   function begin(path,mutation){
     if(locked&&mutation&&!unattended(path))throw new Error("새 버전으로 전환하고 있어요. 잠시 기다리거나 전환을 취소해 주세요.");
     if(unattended(path))return ()=>{};
-    const request={};requests.add(request);return ()=>requests.delete(request);
+    const request={mutation};requests.add(request);return ()=>requests.delete(request);
   }
   function freeze(value){
     if(locked===value)return;
@@ -47,19 +50,22 @@ globalThis.WorkspaceUpgrade = (() => {
       ?modeLabel?`현재 작업과 응답을 마치면 ${modeLabel}으로 다시 시작해요.`:`현재 작업과 응답을 마치면 새 버전${target}으로 자동 전환해요.`
       :current?.stage==="failed"?(current.error||"버전 전환을 마치지 못했어요. 작성 중인 내용은 이 창에 유지하고 있습니다.")
       :modeLabel?`작성 중인 내용과 첨부 자료를 보관한 뒤 ${modeLabel}으로 다시 시작해요.`:"작성 중인 내용과 첨부 자료를 보관한 뒤 새 버전으로 전환해요.");
-    $("upgrade-notice-cancel").hidden=!current;$("upgrade-notice-cancel").disabled=cancelling||current?.stage==="committing";
+    $("upgrade-stop").hidden=!current?.canStop||!["waiting","capture"].includes(current.stage);
+    $("upgrade-stop").disabled=!canStopForUpdate();
+    $("upgrade-stop").textContent=stopping?"중지 준비 중…":"작업 중지 후 업데이트";
+    $("upgrade-notice-cancel").hidden=!current;$("upgrade-notice-cancel").disabled=cancelling||stopping||["committing","closed"].includes(current?.stage);
     const restarting=["committing","closed"].includes(current?.stage);
     $("upgrade-title").textContent=localError?"전환 상태를 확인하고 있어요":modeLabel?`${modeLabel}으로 다시 시작하고 있어요`:restarting?"새 버전으로 다시 시작합니다":"다시 시작할 준비를 하고 있어요";
-    $("upgrade-detail").textContent=localError||(restarting?"앱이 잠시 닫힌 뒤 자동으로 열려요. 업데이트 안내창에서 진행 상태를 계속 확인할 수 있습니다."
-      :current?.stage==="captured"?"작성 중인 내용과 첨부 자료를 보관했어요. 잠시 후 새 버전으로 다시 시작합니다."
+    $("upgrade-detail").textContent=localError||(restarting?current?.stopRequested?"진행 중인 작업과 연결을 중지하고 새 버전으로 다시 시작합니다. 대화와 파일, 이어 할 일은 유지하며 중지한 요청은 자동 재실행하지 않습니다.":"앱이 잠시 닫힌 뒤 자동으로 열려요. 업데이트 안내창에서 진행 상태를 계속 확인할 수 있습니다."
+      :current?.stage==="captured"?current?.stopRequested?"작성 중인 내용과 첨부 자료를 보관했어요. 진행 중인 작업을 중지한 뒤 새 버전으로 다시 시작합니다.":"작성 중인 내용과 첨부 자료를 보관했어요. 잠시 후 새 버전으로 다시 시작합니다."
       :"작성 중인 내용과 첨부 자료를 보관하고 있어요. 잠시만 기다려 주세요.");
     $("upgrade-dialog").dataset.stage=current?.stage||"capture";
-    $("upgrade-cancel").disabled=cancelling||restarting;
+    $("upgrade-cancel").disabled=cancelling||stopping||restarting;
     $("upgrade-cancel").textContent=cancelling?"취소 확인 중…":"전환 취소";
   }
-  function clear(){current=null;serial++;capturing=false;cancelling=false;latestRevision=-1;freeze(false);render();}
+  function clear(){current=null;serial++;capturing=false;cancelling=false;stopping=false;stopUncertainRevision=null;latestRevision=-1;freeze(false);render();}
   async function cancel(){
-    if(!current||cancelling||current.stage==="committing")return false;
+    if(!current||cancelling||stopping||["committing","closed"].includes(current.stage))return false;
     const owner=current.requestId,ticket=serial;cancelling=true;render();
     try{
       const response=await hooks.api("/api/upgrade",{action:"cancel",requestId:owner});
@@ -72,9 +78,47 @@ globalThis.WorkspaceUpgrade = (() => {
       return false;
     }finally{if(ticket===serial){cancelling=false;render();}}
   }
+  async function stopForUpdate(){
+    if(!canStopForUpdate()||!hooks.confirmStopForUpdate)return false;
+    const owner=current.requestId,ticket=serial;let submitted=false,submittedRevision=null;
+    stopping=true;render();
+    try{
+      if(!await hooks.confirmStopForUpdate()||ticket!==serial||current?.requestId!==owner)return false;
+      if(!current.canStop||!["waiting","capture"].includes(current.stage))return false;
+      if([...requests].some(request=>request.mutation)||hooks.canStopCapture?.()!==true||document.querySelector("dialog[open]:not(#app-update-dialog)"))throw new Error("현재 자료 선택이나 전송 준비를 마친 뒤 다시 시도해 주세요. 진행 중인 작업은 아직 중지하지 않았습니다.");
+      freeze(true);localError="";render();
+      const payload={action:"stop",requestId:owner,revision:current.revision,confirmed:true,snapshot:hooks.capture()};
+      if(new TextEncoder().encode(JSON.stringify(payload)).length>MAX_BYTES)throw new Error("작성 중인 내용이 많아 중지 후 업데이트를 진행하지 않았어요. 초안을 나누어 보관한 뒤 다시 시도해 주세요.");
+      await globalThis.WorkspaceDraftPersistence?.flush();
+      submitted=true;submittedRevision=payload.revision;const response=await hooks.api("/api/upgrade",payload);
+      if(ticket!==serial||current?.requestId!==owner)return false;
+      if(response.ok!==true||response.upgrade?.requestId!==owner||response.upgrade.stage!=="captured"||response.upgrade.stopRequested!==true){
+        const failure=new Error(response.upgrade?.error||"작업 중지 후 전환 준비를 확인하지 못했어요. 현재 창과 입력 내용을 유지합니다.");
+        if(response.ok!==true)failure.upgrade=response.upgrade;
+        throw failure;
+      }
+      if((response.upgrade.revision||0)>=latestRevision){current=response.upgrade;latestRevision=Math.max(latestRevision,current.revision||0);}
+      stopUncertainRevision=null;
+      render();return true;
+    }catch(error){
+      if(ticket===serial){
+        localError=error.message||"작업 중지 후 업데이트를 준비하지 못했어요.";
+        const rejected=error.upgrade;
+        if(rejected?.requestId===owner&&["waiting","capture"].includes(rejected.stage)&&Number.isInteger(rejected.revision)&&rejected.revision>=latestRevision){
+          current=rejected;latestRevision=rejected.revision;stopUncertainRevision=null;freeze(false);
+        }else if(!submitted)freeze(false);
+        else if(latestRevision<=submittedRevision){
+          stopUncertainRevision=submittedRevision;
+          localError+=" 전환 상태가 불확실합니다. ‘전환 취소’를 눌러 확인한 뒤 다시 시도해 주세요.";
+        }else if(["waiting","capture"].includes(current?.stage))freeze(false);
+        render();
+      }
+      return false;
+    }finally{if(ticket===serial){stopping=false;render();}}
+  }
   function canCapture(){
     const ownUpdate=globalThis.WorkspaceAppUpdates?.canYieldForHandoff(current)===true;
-    return ready&&hooks&&!locked&&!capturing&&!cancelling&&!requests.size&&hooks.canCapture()
+    return ready&&hooks&&!locked&&!capturing&&!cancelling&&!stopping&&!requests.size&&hooks.canCapture()
       &&!document.querySelector(ownUpdate?"dialog[open]:not(#app-update-dialog)":"dialog[open]");
   }
   async function capture(){
@@ -110,16 +154,20 @@ globalThis.WorkspaceUpgrade = (() => {
   }
   async function observe(value,attention){
     if(!ready||!hooks)return;
-    if(!value){if(current)clear();return;}
+    if(!value){if(current&&!((stopping&&locked)||stopUncertainRevision!==null))clear();return;}
     if(!safeId(value.requestId)||ignored.has(value.requestId))return;
     if(current?.requestId!==value.requestId){clear();current=value;localError="";}
     const revision=Number.isInteger(value.revision)?value.revision:0,previousRevision=latestRevision;
     if(revision<latestRevision)return;
     latestRevision=revision;current=value;
+    if(stopUncertainRevision!==null&&revision>stopUncertainRevision)stopUncertainRevision=null;
     if(["cancelled","expired"].includes(value.stage)){ignored.add(value.requestId);localError="";clear();return;}
-    if(["waiting","failed"].includes(value.stage)){freeze(false);render();return;}
+    // Attention may still report waiting/capture while the explicit stop
+    // snapshot is being flushed or its POST is in flight. Keep that snapshot
+    // frozen until the attempt finishes; a stale heartbeat must not admit edits.
+    if(["waiting","failed"].includes(value.stage)){if((!stopping&&stopUncertainRevision===null)||value.stage==="failed")freeze(false);render();return;}
     if(["captured","committing","closed"].includes(value.stage)){freeze(true);render();return;}
-    if(value.stage==="capture"&&revision>previousRevision)freeze(false);
+    if(value.stage==="capture"&&revision>previousRevision&&!stopping&&stopUncertainRevision===null)freeze(false);
     render();
     // The server is authoritative, but a just-rendered human question must not
     // be covered by a handoff modal while its attention response catches up.
@@ -131,13 +179,13 @@ globalThis.WorkspaceUpgrade = (() => {
     const restore=value?.upgradeRestore;
     if(!restore||!safeId(restore.requestId)||restoredId===restore.requestId||!hooks){ready=true;return;}
     if(!restore.snapshot||!Array.isArray(restore.snapshot.drafts)){ready=true;return;}
-    recovery=restore;
+    recovery=restore;addedRows.clear();
     try{
       // Existing drafts (including explicit edits to empty) win in the shared
       // screen-recovery hook. Restoring never executes an AI request.
       const outcome=await hooks.restore(restore.snapshot);
       if(outcome?.selectionChanged||outcome?.conflicts?.length){
-        recoveryNotice="새 창의 입력 내용은 유지했어요. 덮어쓰지 않은 이전 초안도 별도로 보관했으니 확인해 주세요.";
+        recoveryNotice="현재 입력과 겹치는 이전 초안을 별도로 보관했어요. ‘복원·정리’에서 확인해 주세요.";
         render();return;
       }
       await globalThis.WorkspaceDraftPersistence?.flush();
@@ -145,7 +193,7 @@ globalThis.WorkspaceUpgrade = (() => {
       if(response.ok!==true)throw new Error("restore acknowledgement missing");
       restoredId=restore.requestId;recovery=null;recoveryNotice="";render();
       if(!globalThis.WorkspaceAppUpdates?.completed(restore))hooks.restored?.(outcome);
-    }catch(error){localError="이전 창의 입력 내용 복원을 마치지 못했어요. 창을 다시 열면 다시 확인합니다.";render();}
+    }catch(error){localError="이전 초안의 복원을 마치지 못했어요. ‘복원·정리’에서 내용을 확인할 수 있습니다.";render();}
     finally{ready=true;}
   }
   const recoveryRows=()=>recovery?[...recovery.snapshot.drafts,...(recovery.snapshot.stashes||[]).map(row=>({...row,stashed:true}))]:[];
@@ -153,6 +201,21 @@ globalThis.WorkspaceUpgrade = (() => {
     const row=recoveryRows()[Number($("upgrade-recovery-task").value)||0];
     $("upgrade-recovery-text").value=row?.text||"";
     $("upgrade-recovery-files").textContent=row?.attachments?.length?row.attachments.join("\n"):"첨부 자료 없음";
+    const add=$("upgrade-recovery-restore");
+    add.disabled=adding||releasing||!row||(!row.text&&!row.attachments.length)||addedRows.has(Number($("upgrade-recovery-task").value)||0);
+    add.textContent=adding?"복원 중…":addedRows.has(Number($("upgrade-recovery-task").value)||0)?"입력창에 복원됨":"이 초안 복원";
+  }
+  async function addSelected(){
+    if(!recovery||adding||releasing||!hooks.addRecoveredDraft)return;
+    const owner=recovery,index=Number($("upgrade-recovery-task").value)||0,row=recoveryRows()[index];
+    if(!row||addedRows.has(index)||(!row.text&&!row.attachments.length))return;
+    adding=true;recoveryRow();$("upgrade-recovery-release").disabled=true;
+    try{
+      hooks.addRecoveredDraft(row);addedRows.add(index);
+      await globalThis.WorkspaceDraftPersistence?.flush();
+      if(recovery===owner)$("upgrade-recovery-message").textContent="현재 입력창에 내용을 추가했어요. 요청은 자동으로 보내지 않습니다. 확인을 마치면 보관 기록을 지울 수 있어요.";
+    }catch(error){if(recovery===owner)$("upgrade-recovery-message").textContent=error.message||"복원을 마치지 못했어요. 이전 초안 기록은 유지합니다.";}
+    finally{adding=false;if(recovery===owner){recoveryRow();$("upgrade-recovery-release").disabled=releasing;}}
   }
   function openRecovery(){
     if(!recovery)return;
@@ -162,10 +225,11 @@ globalThis.WorkspaceUpgrade = (() => {
     if(hooks.openRecovery)hooks.openRecovery("upgrade-recovery-dialog");else $("upgrade-recovery-dialog").showModal();
   }
   async function releaseRecovery(){
-    if(!recovery||releasing||!hooks.confirmRecovery)return;
+    if(!recovery||releasing||adding||!hooks.confirmRecovery)return;
     const owner=recovery;releasing=true;$("upgrade-recovery-release").disabled=true;
     try{
       if(!await hooks.confirmRecovery()||recovery!==owner)return;
+      await globalThis.WorkspaceDraftPersistence?.flush();
       const response=await hooks.api("/api/upgrade",{action:"restored",requestId:owner.requestId});
       if(response.ok!==true)throw new Error("보관 해제를 확인하지 못했어요.");
       if(recovery!==owner)return;
@@ -176,9 +240,11 @@ globalThis.WorkspaceUpgrade = (() => {
   function attach(value){
     hooks=value;
     $("upgrade-notice-cancel").onclick=$("upgrade-cancel").onclick=cancel;
+    $("upgrade-stop").onclick=stopForUpdate;
     $("upgrade-recovery-open").onclick=openRecovery;
     $("upgrade-recovery-close").onclick=()=>$("upgrade-recovery-dialog").close();
     $("upgrade-recovery-task").onchange=recoveryRow;
+    $("upgrade-recovery-restore").onclick=addSelected;
     $("upgrade-recovery-select").onclick=()=>{$("upgrade-recovery-text").focus();$("upgrade-recovery-text").select();};
     $("upgrade-recovery-release").onclick=releaseRecovery;
     dialog().oncancel=event=>{event.preventDefault();void cancel();};
@@ -193,5 +259,5 @@ globalThis.WorkspaceUpgrade = (() => {
     event.preventDefault();event.stopImmediatePropagation();
   }
   for(const type of ["keydown","click","submit","drop","paste","beforeinput"])globalThis.addEventListener?.(type,guard,true);
-  return {attach,bootstrap,observe,begin,cancel,isLocked:()=>locked};
+  return {attach,bootstrap,observe,begin,cancel,stopForUpdate,canStopForUpdate,isLocked:()=>locked};
 })();

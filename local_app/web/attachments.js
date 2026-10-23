@@ -77,7 +77,7 @@ globalThis.WorkspaceAttachments = (() => {
     const directory = [...(event.dataTransfer.items || [])].some(item => {
       try {return item.kind === "file" && item.webkitGetAsEntry?.()?.isDirectory === true;} catch (_) {return false;}
     });
-    if (directory) return toast("폴더는 우측 자료 목록의 + 버튼이나 목록에서 입력창으로 끌어 추가해 주세요.");
+    if (directory) return toast("폴더는 우측 자료 목록에서 입력창으로 끌어 추가해 주세요. 폴더 이름이나 화살표를 누르면 내부 자료가 열립니다.");
     const files = [...(event.dataTransfer.files || [])];
     if (!files.length) return toast("폴더 대신 파일을 끌어 주세요. 업무 폴더의 자료는 @ 검색으로 선택할 수 있습니다.");
     if (attachments.length + files.length > maxAttachments()) return toast(`자료는 한 번에 ${maxAttachments()}개까지 추가할 수 있습니다.`);

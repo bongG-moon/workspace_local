@@ -3,7 +3,7 @@ import unittest
 import json
 import subprocess
 
-import test_workspace_frontend_state as frontend
+from tests import test_workspace_frontend_state as frontend
 
 
 @unittest.skipUnless(frontend.NODE, 'Node.js is required for shipped UI checks')
@@ -42,7 +42,7 @@ class WorkspaceShutdownFrontendTests(unittest.TestCase):
           let calls=0;api=async()=>{calls++;throw new Error('must not call');};
           await submit();await reconnect();await $('stop').onclick();
           await setModel('other');await setPermissionMode(null);await setEffort('high');
-          await $('attach').onclick();await $('attach-path').onclick();
+          await $('attach').onclick();
           await $('new-chat').onclick();assert.equal(await selectSession('A'),false);
           assert.equal(calls,0);assert.equal($('prompt').value,'keep draft');
           assert.deepEqual(attachments,['keep.csv']);

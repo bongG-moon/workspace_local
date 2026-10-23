@@ -73,7 +73,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     if(snapshot.status==="downloading")return "업데이트를 다운로드하고 있어요. 현재 업무를 계속할 수 있습니다.";
     if(snapshot.status==="ready")return "다운로드를 마쳤어요. 안전하게 전환할 준비를 하고 있습니다.";
     if(snapshot.status==="launching")return handoff?.stage==="waiting"
-      ?"진행 중인 업무와 응답을 마치면 자동으로 다시 시작해요. 작업을 계속할 수 있습니다."
+      ?handoff.canStop?"진행 중인 업무가 있어요. 완료를 기다리거나 작업을 중지한 뒤 업데이트할 수 있습니다.":"진행 중인 업무와 응답을 마치면 자동으로 다시 시작해요. 작업을 계속할 수 있습니다."
       :"새 버전으로 다시 시작할 준비를 하고 있어요. 잠시만 기다려 주세요.";
     if(snapshot.release)return `새 버전 ${snapshot.release.version}을 사용할 수 있어요.`;
     if(snapshot.status==="current")return "최신 버전을 사용하고 있어요.";
@@ -112,10 +112,13 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-notes").textContent=release?.notes||"업데이트 내용을 확인하고 있어요.";
     $("app-update-release-link").hidden=!release?.url;
     $("app-update-release-link").setAttribute("href",release?.url||"#");
-    $("app-update-install").hidden=!available;
+    const stopChoice=available&&handoff?.targetVersion===release.version&&handoff.canStop&&["waiting","capture"].includes(handoff.stage);
+    $("app-update-stop").hidden=!stopChoice;
+    $("app-update-stop").disabled=!globalThis.WorkspaceUpgrade?.canStopForUpdate();
+    $("app-update-install").hidden=!available||stopChoice;
     $("app-update-install").disabled=!available||!snapshot.canInstall||isBusy||installSubmitted||installUncertain;
     $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"다시 시작 준비 중…":installSubmitted&&pending?"업데이트 요청 중…":"업데이트하고 다시 시작";
-    $("app-update-dismiss").textContent=transferring?"작업으로 돌아가기":"다음에 하기";
+    $("app-update-dismiss").textContent=stopChoice?"기다리며 작업 계속":transferring?"작업으로 돌아가기":"다음에 하기";
     $("app-update-dismiss").title=transferring?"이 창만 닫습니다. 업데이트는 계속됩니다.":"";
     $("app-update-install-note").hidden=!available||snapshot.canInstall||transfers.has(snapshot.status);
     const failed=!!localError||snapshot.status==="error";
@@ -245,6 +248,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError?read():check();
     $("app-update-auto").onchange=()=>request({action:"configure",autoCheck:$("app-update-auto").checked});
     $("app-update-sidebar-badge").onclick=$("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
+    $("app-update-stop").onclick=()=>globalThis.WorkspaceUpgrade?.stopForUpdate();
     $("app-update-activity-open").onclick=()=>openNotes();
     $("app-update-close").onclick=$("app-update-dismiss").onclick=()=>$("app-update-dialog").close();
     $("app-update-dialog").oncancel=event=>{event.preventDefault();$("app-update-dialog").close();};

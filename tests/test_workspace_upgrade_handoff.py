@@ -71,7 +71,7 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(self.draft, restored.restore['snapshot'])
         self.assertEqual(self.rid, restored.restore['requestId'])
         self.assertEqual([], self.app.get(self.sid)['messages'])
-        self.assertIsNone(UpgradeHandoff(self.app, '98.0.0').restore)
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, '98.0.0').restore['snapshot'])
         with self.assertRaises(ValueError):
             restored.action({'action': 'restored', 'requestId': uuid.uuid4().hex})
         self.assertTrue(restored.path.exists())
@@ -103,7 +103,7 @@ class HandoffTests(unittest.TestCase):
         item = self.app.sessions[other]
         for field, value in [('state', 'starting'), ('state', 'running'), ('state', 'approval'), ('state', 'question'),
                              ('requests', {'r': {}}), ('choice', {'id': 'choice'}),
-                             ('verification', {'state': 'checking'}), ('verification', {'state': 'needs-review'}),
+                             ('verification', {'state': 'checking'}),
                              ('_connecting', True), ('_modelUpdating', True), ('_dispatchClaim', 'claim'),
                              ('_choiceAnswerClaim', 'claim'), ('_removingFromList', True)]:
             with self.subTest(field=field, value=value):
@@ -117,6 +117,135 @@ class HandoffTests(unittest.TestCase):
                     item.pop(field, None)
                 else:
                     item[field] = previous
+
+    def stop_for_update(self):
+        return self.action('stop', confirmed=True, revision=self.upgrade.status()['upgrade']['revision'],
+                           snapshot=deepcopy(self.draft))
+
+    def test_historical_needs_review_does_not_block_idle_upgrade(self):
+        item = self.app.sessions[self.sid]
+        item.update(state='error', verification={'state': 'needs-review', 'message': 'past result'})
+        self.assertEqual('capture', self.prepare()['upgrade']['stage'])
+        self.assertEqual('needs-review', item['verification']['state'])
+        self.capture()
+        self.assertTrue(self.action('commit')['closed'])
+
+    def test_running_approval_and_question_can_capture_after_explicit_stop_choice(self):
+        for state in ('running', 'approval', 'question'):
+            with self.subTest(state=state):
+                item = self.app.sessions[self.sid]
+                item.update(state=state, requests={'permission': {}}, choice={'id': 'question'})
+                prepared = self.prepare()
+                self.assertTrue(prepared['upgrade']['canStop'])
+                self.assertEqual('waiting', prepared['upgrade']['stage'])
+                with patch.object(self.app, 'close') as close:
+                    result = self.stop_for_update()
+                    close.assert_not_called()
+                self.assertEqual('captured', result['upgrade']['stage'])
+                self.assertTrue(result['upgrade']['stopRequested'])
+                self.assertEqual(self.draft, json.loads(self.upgrade.path.read_text(encoding='utf-8'))['snapshot'])
+                self.assertFalse(self.app.shutdown_status()['closing'])
+                self.action('cancel')
+                item.update(requests={}, choice=None)
+
+    def test_stop_requires_confirmation_revision_and_valid_snapshot(self):
+        self.app.sessions[self.sid]['state'] = 'running'
+        prepared = self.prepare()
+        revision = prepared['upgrade']['revision']
+        with patch.object(self.app, 'close') as close:
+            with self.assertRaises(ValueError):
+                self.action('stop', revision=revision, snapshot=self.draft)
+            with self.assertRaises(ValueError):
+                self.action('stop', confirmed=True, revision=revision, snapshot={})
+            self.assertFalse(self.action('stop', confirmed=True, revision=revision-1, snapshot=self.draft)['ok'])
+            close.assert_not_called()
+        self.assertEqual('waiting', self.upgrade.status()['upgrade']['stage'])
+        self.assertFalse(self.upgrade.path.exists())
+
+    def test_stop_capture_write_failure_does_not_block_or_stop_work(self):
+        self.app.sessions[self.sid]['state'] = 'running'
+        self.prepare()
+        with patch.object(self.upgrade, '_write', side_effect=OSError('disk full')), patch.object(self.app, 'close') as close:
+            with self.assertRaises(OSError):
+                self.stop_for_update()
+            close.assert_not_called()
+        self.assertFalse(self.upgrade.blocks_work())
+        with self.app.operation(upgrade_change=True):
+            pass
+
+    def test_stop_capture_reserves_work_admission_and_cancel_restores_it(self):
+        self.app.sessions[self.sid]['state'] = 'running'
+        self.prepare()
+        captured = self.stop_for_update()
+        with self.assertRaises(AppClosing):
+            with self.app.operation(upgrade_change=True):
+                self.fail('new mutation admitted')
+        with self.app.operation():
+            self.assertEqual(captured['upgrade'], self.upgrade.status()['upgrade'])
+        self.app.emit(self.sid, 'status', {'state': 'running'})
+        self.assertEqual('captured', self.upgrade.status()['upgrade']['stage'])
+        with patch.object(self.app.dispatch.queue, 'tick') as tick:
+            self.app.dispatch.pump()
+            tick.assert_not_called()
+        self.action('cancel')
+        self.assertFalse(self.upgrade.blocks_work())
+        with self.app.operation(upgrade_change=True):
+            pass
+        self.assertEqual('running', self.app.sessions[self.sid]['state'])
+
+    def test_stop_commit_closes_owned_child_and_preserves_pending_queue_and_schedule(self):
+        import time
+        from local_app.work_queue import WorkQueue
+        item = self.app.sessions[self.sid]
+        bridge = SimpleNamespace(busy=True, pending={'p': {}}, close=Mock(return_value=True))
+        item.update(state='running', bridge=bridge)
+        context = self.app.dispatch.context(item)
+        queued = self.app.dispatch.queue.enqueue(self.sid, '나중에 할 일', [], context)
+        scheduled = self.app.dispatch.queue.add_schedule(self.sid, '예약 업무', [], kind='once', run_at=time.time()+3600, context=context)
+        self.prepare()
+        self.stop_for_update()
+        self.assertTrue(self.action('commit')['closed'])
+        bridge.close.assert_called_once_with()
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
+        stored = WorkQueue(self.app.state).snapshot(self.sid)
+        self.assertTrue(stored['paused'])
+        self.assertEqual(queued['id'], stored['queue'][0]['id'])
+        self.assertEqual(scheduled['id'], stored['schedules'][0]['id'])
+        self.assertEqual([], item['messages'])
+
+    def test_stop_commit_drains_admitted_operation_by_closing_its_owned_child(self):
+        entered, release = threading.Event(), threading.Event()
+        item = self.app.sessions[self.sid]
+        bridge = SimpleNamespace(busy=True, close=Mock(side_effect=lambda: release.set() or True))
+        item.update(state='running', bridge=bridge)
+        def held_request():
+            with self.app.operation(upgrade_change=True):
+                entered.set()
+                release.wait(5)
+        worker = threading.Thread(target=held_request)
+        worker.start()
+        self.assertTrue(entered.wait(2))
+        try:
+            self.prepare()
+            self.stop_for_update()
+            self.assertTrue(self.action('commit')['closed'])
+            self.assertEqual(0, self.app._active_operations)
+        finally:
+            release.set()
+            worker.join(5)
+
+    def test_stop_cleanup_failure_keeps_recovery_and_does_not_claim_success(self):
+        item = self.app.sessions[self.sid]
+        bridge = SimpleNamespace(busy=True, close=Mock(return_value=False))
+        item.update(state='running', bridge=bridge)
+        self.prepare()
+        self.stop_for_update()
+        result = self.action('commit')
+        self.assertFalse(result['closed'])
+        self.assertEqual('failed', result['upgrade']['stage'])
+        self.assertEqual('failed', self.app.shutdown_status()['shutdownState'])
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
+        bridge.close.return_value = True
 
     def test_active_lifecycle_operation_prevents_commit(self):
         self.prepare()
@@ -161,17 +290,44 @@ class HandoffTests(unittest.TestCase):
             self.assertEqual(captured, self.upgrade.status()['upgrade'])
         self.assertEqual(captured, self.upgrade.status()['upgrade'])
 
-    def test_other_version_draft_record_cannot_be_overwritten(self):
+    def test_other_version_draft_can_be_recovered_but_not_overwritten_before_ack(self):
         self.prepare()
         self.capture()
         self.action('commit')
         previous = self.upgrade.path.read_bytes()
         mismatch = UpgradeHandoff(self.app, '98.0.0')
-        self.assertIn(self.target, mismatch.warning)
-        self.assertIsNone(mismatch.restore)
+        self.assertIsNone(mismatch.warning)
+        self.assertEqual(self.draft, mismatch.restore['snapshot'])
+        self.assertEqual(self.target, mismatch.restore['savedTargetVersion'])
+        self.assertNotIn('targetVersion', mismatch.restore)
         with self.assertRaises(ValueError):
             mismatch.action({'action': 'prepare', 'requestId': uuid.uuid4().hex, 'targetVersion': '100.0.0'})
         self.assertEqual(previous, self.upgrade.path.read_bytes())
+
+    def test_02328_draft_is_recoverable_in_02330_and_removed_only_after_ack(self):
+        saved = {'schemaVersion': 1, 'requestId': self.rid, 'sourceVersion': '0.23.27',
+                 'targetVersion': '0.23.28', 'status': 'ready', 'snapshot': self.draft}
+        self.upgrade.path.write_text(json.dumps(saved), encoding='utf-8')
+        restored = UpgradeHandoff(self.app, '0.23.30')
+        self.assertIsNone(restored.warning)
+        self.assertEqual(self.draft, restored.restore['snapshot'])
+        self.assertNotIn('sourceVersion', restored.restore)  # Recovery is not an update-completed claim.
+        self.assertTrue(restored.path.exists())
+        self.assertTrue(restored.action({'action': 'restored', 'requestId': self.rid})['ok'])
+        self.assertFalse(restored.path.exists())
+        self.assertIsNone(UpgradeHandoff(self.app, '0.23.30').restore)
+
+    def test_recovery_ack_cannot_delete_a_replaced_record(self):
+        self.prepare()
+        self.capture()
+        self.action('commit')
+        restored = UpgradeHandoff(self.app, '100.0.0')
+        saved = json.loads(restored.path.read_text(encoding='utf-8'))
+        saved['requestId'] = uuid.uuid4().hex
+        restored.path.write_text(json.dumps(saved), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, '바뀌었습니다'):
+            restored.action({'action': 'restored', 'requestId': self.rid})
+        self.assertEqual(saved, json.loads(restored.path.read_text(encoding='utf-8')))
 
     def test_cli_work_event_invalidates_capture_before_it_finishes(self):
         self.prepare()

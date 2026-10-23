@@ -533,8 +533,8 @@ dialog.path-picker .path-picker-location .quiet-button{
 #files .material-folder-row .file{min-width:0;flex:1;min-height:44px;padding:7px 3px;gap:8px;border:0}
 #files .material-folder-row .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #files .file-extension .icon{width:18px;height:18px}
-#files .material-attach{flex:0 0 28px;width:28px;height:28px;min-height:28px;padding:5px;border-radius:7px}
-#files .material-attach .icon{width:16px;height:16px}
+#files .material-open{flex:0 0 28px;width:28px;height:28px;min-height:28px;padding:5px;border-radius:7px}
+#files .material-open .icon{width:16px;height:16px}
 .material-location{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:0 0 8px;min-width:0;padding:4px 0}
 .material-location .text-button{flex-shrink:0;font-size:12px;min-height:28px;padding:3px 5px}
 .material-location>span{flex-basis:100%;padding:0 5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;color:var(--theme-text-muted)}

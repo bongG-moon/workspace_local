@@ -230,6 +230,9 @@ class DispatchController:
     def pump(self):
         if self.stopped.is_set() or self.error:
             return
+        with self.app.lock:
+            if self.app.upgrade.blocks_work():
+                return
         self.queue.tick()
         with self.app.lock:
             # Most remembered tasks have no queued work. Scanning all of them
@@ -243,6 +246,8 @@ class DispatchController:
                 return
             with self.app.operation():
                 with self.app.lock:
+                    if self.app.upgrade.blocks_work():
+                        return
                     # Queue eligibility needs only navigation/runtime metadata.
                     # Hydrate the bounded UI mirror only when send actually runs.
                     item = self.app.sessions.get(sid)
@@ -287,6 +292,8 @@ class DispatchController:
                     # failed cleanup must leave the request safely queued.
                     with connection_slot(self.app, sid):
                         with self.app.lock:
+                            if self.app.upgrade.blocks_work():
+                                return
                             if item.get('_idleReleasing') or item.get('_stopAdmission'):
                                 continue
                             claim = self.queue.claim(sid, item, self.context(item))

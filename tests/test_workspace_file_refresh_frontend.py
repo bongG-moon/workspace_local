@@ -55,7 +55,7 @@ class FileRefreshFrontendTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_folder_navigation_is_lazy_refreshes_current_folder_and_adds_one_reference(self):
+    def test_folder_arrow_opens_lazily_without_adding_an_attachment(self):
         self.run_case(r"""(async()=>{
           const calls=[];saveDraft=()=>{};
           api=async path=>{calls.push(path);return path.includes('directory=')
@@ -63,16 +63,15 @@ class FileRefreshFrontendTests(unittest.TestCase):
             :{directory:'',files:[{name:'docs',relativePath:'docs',path:'C:/task/A/docs',kind:'directory'}]};};
           await refreshFiles();assert.equal(calls.length,1);
           const row=$('files').children[0];
-          row.children[1].onclick();assert.deepEqual(attachments,['C:/task/A/docs']);
-          row.children[1].onclick();assert.equal(attachments.length,1);
-          await row.children[0].onclick();
+          assert.match(row.children[1].title,/폴더 열기/);
+          await row.children[1].onclick();assert.deepEqual(attachments,[]);
           assert.equal(calls[1],'/api/files?id=A&directory=docs');
           assert.equal($('files').children[1].title,'C:/task/A/docs/setup.exe');
           await refreshFiles();assert.equal(calls[2],calls[1]);
           await $('files').children[0].children[0].onclick();
           assert.equal(calls[3],'/api/files?id=A');
           active={...active,id:'B'};selectionGeneration++;
-          row.children[1].onclick();assert.equal(attachments.length,1);
+          await row.children[1].onclick();assert.equal(attachments.length,0);assert.equal(calls.length,4);
           await refreshFiles();assert.equal(calls[4],'/api/files?id=B');
         })()""")
 

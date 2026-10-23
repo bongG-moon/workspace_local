@@ -1,0 +1,52 @@
+/* Real Edge UI against the isolated LocalApp started by the Python companion. */
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {chromium}=require('playwright');
+const fixture=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+(async()=>{
+ const progress=message=>fs.appendFileSync(path.join(fixture.output,'browser-progress.log'),message+'\n');
+ const browser=await chromium.launch({headless:true,executablePath:process.env.WORKSPACE_BROWSER||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'});
+ try{
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];
+  page.setDefaultTimeout(12000);progress('browser created');
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(fixture.url);
+  progress('loaded');
+  await page.waitForFunction(()=>globalThis.WorkspaceStartupHealth?.snapshot().missing.length===0);
+  await page.evaluate(id=>selectSession(id),fixture.sid);
+  progress('selected');
+  await page.locator('#prompt').fill(fixture.draft);
+  const request={requestId:(fixture.requestId[0]==='a'?'b':'a')+fixture.requestId.slice(1),targetVersion:fixture.target};
+  await page.evaluate(async request=>api('/api/upgrade',{action:'prepare',...request}),request);
+  progress('prepared');
+  await page.locator('#upgrade-stop').waitFor({state:'visible'});
+  await page.locator('#upgrade-stop').click();
+  progress('stop clicked');
+  await page.locator('#action-dialog').waitFor({state:'visible'});
+  assert.match(await page.locator('#action-title').textContent(),/작업을 중지/);
+  await page.locator('#action-cancel').click();
+  progress('confirm cancelled');
+  assert.equal(await page.locator('#prompt').inputValue(),fixture.draft);
+  let status=await page.evaluate(()=>api('/api/upgrade'));
+  assert.equal(status.upgrade.stage,'waiting');assert.equal(status.upgrade.stopRequested,false);
+  await page.locator('#upgrade-notice-cancel').click();
+  progress('whole handoff cancelled');
+  await page.waitForFunction(()=>document.getElementById('upgrade-notice').hidden);
+  assert.equal(await page.locator('#prompt').inputValue(),fixture.draft);
+  request.requestId=fixture.requestId;
+  await page.evaluate(async request=>api('/api/upgrade',{action:'prepare',...request}),request);
+  progress('prepared again');
+  await page.locator('#upgrade-stop').waitFor({state:'visible'});
+  await page.locator('#upgrade-stop').click();
+  await page.locator('#action-dialog').waitFor({state:'visible'});
+  await page.locator('#action-dialog').screenshot({path:path.join(fixture.output,'stop-update-confirm.png')});
+  await page.locator('#action-confirm').click();
+  await page.waitForFunction(()=>document.getElementById('upgrade-dialog').dataset.stage==='captured');
+  status=await page.evaluate(()=>api('/api/upgrade'));
+  assert.equal(status.upgrade.stopRequested,true);
+  assert.equal(await page.locator('#prompt').inputValue(),fixture.draft);
+  await page.locator('#upgrade-dialog').screenshot({path:path.join(fixture.output,'stop-update-preserved.png')});
+  assert.deepEqual(errors,[]);
+  progress('all UI assertions passed');
+  console.log(JSON.stringify({passed:true,checks:['real Edge startup','confirmation cancel preserves input and running work','whole handoff cancellation','explicit stop confirmation captures draft','captured modal shown'],pageErrors:errors}));
+ }finally{progress('closing owned page');for(const context of browser.contexts())for(const page of context.pages())await page.close({runBeforeUnload:false});progress('closing owned browser');await browser.close();progress('owned browser closed');}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -24,7 +24,7 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
             "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,TextEncoder,",
         ).replace(
             "querySelector:selector=>get(selector)",
-            "querySelector:selector=>selector==='dialog[open]'?[...nodes.values()].find(n=>n.open)||null:get(selector)",
+            "querySelector:selector=>selector.startsWith('dialog[open]')?[...nodes.entries()].find(([id,n])=>n.open&&(!selector.includes(':not')||id!=='app-update-dialog'))?.[1]||null:get(selector)",
         ).replace(
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
             "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context,{filename:'upgrade-handoff.js'});\n"
@@ -289,6 +289,143 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.deepEqual(calls.map(row=>row.data.action),['restored']);
           assert.equal($('upgrade-recovery-dialog').open,false);assert.equal($('prompt').value,'new edit');
           assert.equal($('upgrade-notice').hidden,true);
+        })()""")
+
+    def test_conflicting_old_version_draft_can_be_added_once_then_record_cleared(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='현재 작성 중';attachments=['new.csv'];
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,savedTargetVersion:'0.23.28',snapshot:{sessionId:null,drafts:[
+            {id:'home',text:'이전 초안',attachments:['old.csv','NEW.csv']}]}}});
+          assert.equal(calls.length,0);assert.equal($('prompt').value,'현재 작성 중');
+          $('upgrade-recovery-open').onclick();
+          await $('upgrade-recovery-restore').onclick();await $('upgrade-recovery-restore').onclick();
+          assert.equal($('prompt').value,'현재 작성 중\\n\\n이전 초안');
+          assert.deepEqual(attachments,['new.csv','old.csv']);assert.equal(calls.length,0);
+          assert.equal($('upgrade-recovery-restore').disabled,true);
+          confirmAction=async()=>true;await $('upgrade-recovery-release').onclick();
+          assert.deepEqual(calls.map(row=>row.data.action),['restored']);
+          assert.equal($('upgrade-notice').hidden,true);assert.equal($('prompt').value,'현재 작성 중\\n\\n이전 초안');
+        })()""")
+
+    def test_selected_recovery_preserves_input_on_limit_and_while_sending(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='x'.repeat(32000);attachments=['keep.csv'];
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[{id:'home',text:'old',attachments:['old.csv']}]}}});
+          $('upgrade-recovery-open').onclick();await $('upgrade-recovery-restore').onclick();
+          assert.equal($('prompt').value.length,32000);assert.deepEqual(attachments,['keep.csv']);assert.equal(calls.length,0);
+          assert.match($('upgrade-recovery-message').textContent,/제한/);
+          $('prompt').value='keep';sending=true;await $('upgrade-recovery-restore').onclick();
+          assert.equal($('prompt').value,'keep');assert.deepEqual(attachments,['keep.csv']);assert.equal(calls.length,0);
+          sending=false;await $('upgrade-recovery-restore').onclick();assert.equal($('prompt').value,'keep\\n\\nold');
+        })()""")
+
+    def test_delete_recovery_waits_for_durable_save_and_retains_record_on_failure(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='keep';
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[{id:'home',text:'old',attachments:[]}]}}});
+          $('upgrade-recovery-open').onclick();confirmAction=async()=>true;
+          globalThis.WorkspaceDraftPersistence={keepForRecovery:()=>true,flush:async()=>{throw Error('저장 실패');}};
+          await $('upgrade-recovery-release').onclick();
+          assert.equal(calls.length,0);assert.equal($('upgrade-recovery-dialog').open,true);assert.equal($('prompt').value,'keep');
+          assert.match($('upgrade-recovery-message').textContent,/저장 실패/);
+        })()""")
+
+    def test_stop_update_requires_explicit_confirmation_and_preserves_snapshot(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'question',choice:{id:'question'}};$('requests').append(el('div','승인 대기'));
+          $('prompt').value='작성 중';attachments=['keep.csv'];
+          const waiting={...captureState,stage:'waiting',canStop:true};
+          await WorkspaceUpgrade.observe(waiting,{items:[{id:'question'}],total:1});
+          assert.equal(calls.length,0);assert.equal($('upgrade-stop').hidden,false);
+          confirmAction=async()=>false;assert.equal(await $('upgrade-stop').onclick(),false);
+          assert.equal(calls.length,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
+          confirmAction=async()=>true;api=async(path,data)=>{calls.push({path,data});return {ok:true,upgrade:{...capturedState,stopRequested:true,canStop:false}};};
+          assert.equal(await $('upgrade-stop').onclick(),true);assert.equal(calls.length,1);
+          assert.equal(calls[0].data.action,'stop');assert.equal(calls[0].data.confirmed,true);assert.equal(calls[0].data.revision,1);
+          assert.deepEqual(calls[0].data.snapshot.drafts.find(row=>row.id==='A'),{id:'A',text:'작성 중',attachments:['keep.csv']});
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('prompt').value,'작성 중');
+          assert.match($('upgrade-detail').textContent,/작업을 중지/);assert.equal($('upgrade-stop').hidden,true);
+        })()""")
+
+    def test_stop_update_save_failure_and_inflight_mutation_leave_work_and_input_alone(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'running'};$('prompt').value='keep';confirmAction=async()=>true;
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting',canStop:true},{});
+          const finish=WorkspaceUpgrade.begin('/api/dispatch',true);
+          assert.equal(await WorkspaceUpgrade.stopForUpdate(),false);assert.equal(calls.length,0);finish();
+          globalThis.WorkspaceDraftPersistence={keepForRecovery:()=>true,flush:async()=>{throw Error('저장 실패');}};
+          assert.equal(await WorkspaceUpgrade.stopForUpdate(),false);assert.equal(calls.length,0);
+          assert.equal(WorkspaceUpgrade.isLocked(),false);assert.equal($('prompt').value,'keep');
+          assert.match($('upgrade-notice-text').textContent,/저장 실패/);
+        })()""")
+
+    def test_stop_update_is_not_repeated_and_lost_ack_keeps_input_locked_until_status(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'running'};confirmAction=async()=>true;
+          const waiting={...captureState,stage:'waiting',canStop:true};await WorkspaceUpgrade.observe(waiting,{});
+          let reject;api=(path,data)=>{calls.push({path,data});return new Promise((resolve,fail)=>reject=fail);};
+          const pending=WorkspaceUpgrade.stopForUpdate();for(let i=0;i<8;i++)await Promise.resolve();
+          assert.equal(await WorkspaceUpgrade.stopForUpdate(),false);assert.equal(calls.length,1);
+          reject(Error('응답 확인 실패'));await pending;assert.equal(WorkspaceUpgrade.isLocked(),true);
+          await WorkspaceUpgrade.observe(waiting,{});assert.equal(WorkspaceUpgrade.isLocked(),true);
+          await WorkspaceUpgrade.observe(null,{});assert.equal(WorkspaceUpgrade.isLocked(),true);
+          assert.equal(calls.length,1);assert.equal(WorkspaceUpgrade.canStopForUpdate(),false);
+          assert.match($('upgrade-notice-text').textContent,/전환 취소/);
+          api=async(path,data)=>{calls.push({path,data});return {ok:true,upgrade:{...waiting,stage:'cancelled',revision:2}};};
+          assert.equal(await WorkspaceUpgrade.cancel(),true);assert.equal(WorkspaceUpgrade.isLocked(),false);
+          assert.deepEqual(calls.map(row=>row.data.action),['stop','cancel']);
+        })()""")
+
+    def test_stop_update_preserves_newer_commit_state_after_delayed_ack(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'running'};confirmAction=async()=>true;
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting',canStop:true},{});
+          let reply;api=()=>new Promise(resolve=>reply=resolve);const pending=WorkspaceUpgrade.stopForUpdate();
+          for(let i=0;i<8;i++)await Promise.resolve();
+          await WorkspaceUpgrade.observe({...capturedState,stage:'committing',stopRequested:true,revision:3},{});
+          reply({ok:true,upgrade:{...capturedState,stopRequested:true}});await pending;
+          assert.equal($('upgrade-dialog').dataset.stage,'committing');assert.equal($('upgrade-cancel').disabled,true);
+          assert.equal(WorkspaceUpgrade.isLocked(),true);
+        })()""")
+
+    def test_stop_snapshot_stays_frozen_during_flush_and_pending_post_heartbeats(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'running'};$('prompt').value='captured draft';confirmAction=async()=>true;
+          const waiting={...captureState,stage:'waiting',canStop:true};await WorkspaceUpgrade.observe(waiting,{});
+          let flush,reply;
+          globalThis.WorkspaceDraftPersistence={keepForRecovery:()=>true,flush:()=>new Promise(resolve=>flush=resolve)};
+          api=(path,data)=>{calls.push({path,data});return new Promise(resolve=>reply=resolve);};
+          const pending=WorkspaceUpgrade.stopForUpdate();for(let i=0;i<8;i++)await Promise.resolve();
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal(calls.length,0);
+          await WorkspaceUpgrade.observe(waiting,{});
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('upgrade-dialog').open,true);
+          flush();for(let i=0;i<8;i++)await Promise.resolve();
+          assert.equal(calls.length,1);await WorkspaceUpgrade.observe(waiting,{});
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('upgrade-dialog').open,true);
+          assert.equal(calls[0].data.snapshot.drafts.find(row=>row.id==='A').text,'captured draft');
+          reply({ok:true,upgrade:{...capturedState,stopRequested:true,canStop:false}});
+          assert.equal(await pending,true);assert.equal(WorkspaceUpgrade.isLocked(),true);
+        })()""")
+
+    def test_stop_snapshot_stays_frozen_if_work_finishes_during_flush(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          active={id:'A',state:'running'};confirmAction=async()=>true;
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting',canStop:true},{});
+          let flush;globalThis.WorkspaceDraftPersistence={keepForRecovery:()=>true,flush:()=>new Promise(resolve=>flush=resolve)};
+          api=async(path,data)=>{calls.push({path,data});return {ok:false,upgrade:{...captureState,revision:2,canStop:true}};};
+          const pending=WorkspaceUpgrade.stopForUpdate();for(let i=0;i<8;i++)await Promise.resolve();
+          await WorkspaceUpgrade.observe({...captureState,revision:2,canStop:true},{});
+          assert.equal(WorkspaceUpgrade.isLocked(),true);assert.equal($('upgrade-dialog').open,true);
+          flush();assert.equal(await pending,false);
+          // A definite rejection reopens editing without waiting for a newer
+          // revision; the submitted snapshot was never accepted by the server.
+          assert.equal(WorkspaceUpgrade.isLocked(),false);assert.equal(calls.length,1);
+        })()""")
+
+    def test_old_server_without_stop_capability_never_shows_or_submits_stop(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          await WorkspaceUpgrade.observe({...captureState,stage:'waiting'},{});
+          assert.equal($('upgrade-stop').hidden,true);assert.equal(await WorkspaceUpgrade.stopForUpdate(),false);assert.equal(calls.length,0);
         })()""")
 
     def test_shipped_page_loads_handoff_before_app_and_reuses_attention_loop(self):

@@ -48,7 +48,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.30"
+WORKSPACE_VERSION = "0.23.31"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -847,6 +847,8 @@ class LocalApp:
             with self._lifecycle:
                 if self._shutdown_state != 'running':
                     raise AppClosing('앱을 종료하고 있습니다. 종료가 끝난 뒤 실행 아이콘으로 다시 열어 주세요.')
+                if upgrade_change and self.upgrade.blocks_work():
+                    raise AppClosing('작업 중지 후 업데이트를 준비하고 있습니다. 전환을 취소하면 다시 작업할 수 있어요.')
                 self._active_operations += 1
                 if upgrade_change:
                     self.upgrade.invalidate()

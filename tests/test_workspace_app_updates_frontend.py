@@ -572,7 +572,7 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.assertIn('/app-updates.css', page)
         self.assertIn('aria-labelledby="app-update-title"', page)
         self.assertIn('id="app-update-release-link" class="app-update-release-link" target="_blank" rel="noopener noreferrer"', page)
-        self.assertIn('진행 중인 업무를 마친 뒤 전환합니다. 작성 중인 내용은 보관합니다.', page)
+        self.assertIn('진행 중인 업무가 있으면 완료를 기다리거나, ‘작업 중지 후 업데이트’를 선택할 수 있습니다. 작성 중인 내용과 첨부 자료는 보관합니다.', page)
         self.assertIn('white-space:pre-wrap', css)
         self.assertNotIn('innerHTML', script)
         self.assertNotIn('setInterval(', script)
