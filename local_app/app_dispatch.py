@@ -255,7 +255,7 @@ class DispatchController:
                     if (item is None or item.get('_removingFromList') or
                             self.app.session_visibility.contains(sid)):
                         continue
-                    if item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False):
+                    if item.get('_observationPending') or item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False):
                         continue  # Keep queued work unclaimed until a settings ACK resolves.
                     pending = self.steering.get(sid)
                     if pending:
@@ -320,7 +320,7 @@ class DispatchController:
                         with self.app.lock:
                             if self.app.upgrade.blocks_work():
                                 return
-                            if item.get('_idleReleasing') or item.get('_stopAdmission'):
+                            if item.get('_idleReleasing') or item.get('_stopAdmission') or item.get('_observationPending'):
                                 continue
                             claim = self.queue.claim(sid, item, self.context(item))
                             if claim is not None:
@@ -434,7 +434,7 @@ class DispatchController:
             if action in {'enqueue', 'steer'}:
                 if action == 'steer' and self.app.demo:
                     raise ValueError('체험 모드에서는 끝나고 이어서 보내기를 사용해 주세요.')
-                if item.get('_dispatchClaim') or item.get('_connecting') or item.get('_modelUpdating') or item.get('_permissionUpdating'):
+                if item.get('_dispatchClaim') or item.get('_connecting') or item.get('_modelUpdating') or item.get('_permissionUpdating') or action == 'steer' and item.get('_observationPending'):
                     raise ValueError('연결을 준비하고 있습니다. 잠시 뒤 다시 보내 주세요.')
                 if action == 'steer' and sid in self.steering:
                     raise ValueError('앞서 보낸 요청으로 전환하고 있습니다. 잠시 기다려 주세요.')

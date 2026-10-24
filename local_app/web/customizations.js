@@ -48,6 +48,7 @@ globalThis.WorkspaceCustomizations = (() => {
       select.value = kind === "skills" ? row.override || "inherit" : (row.override ?? row.enabled) ? "on" : "off";
       select.disabled = changing || row.locked;
       select.onchange = () => change(current, row, select.value);
+      globalThis.WorkspaceAppearance?.enhanceSelect?.(select);
       card.append(text, select);
       if (kind === "skills" && select.value === "inherit" && !row.locked) {
         const hint = el("small", "이 범위의 별도 지정만 해제해요. 스킬은 삭제하지 않습니다.", "customization-state-hint");

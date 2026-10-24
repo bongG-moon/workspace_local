@@ -22,12 +22,13 @@ import webbrowser
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, safe
+from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
 from .build_identity import BUILD_ID
 from .session_order import SessionOrder
 from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
-from .artifacts import available_artifacts, changes, linked, snapshot, list_materials
+from .artifacts import Snapshot, available_artifacts, changes, linked, snapshot, list_materials
 from .file_preview import build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .capabilities import catalog
@@ -49,7 +50,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.31"
+WORKSPACE_VERSION = "0.23.32"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -146,6 +147,7 @@ class LocalApp:
         self._execution_peer = None
         self._lifecycle = threading.Condition()
         self._active_operations = 0
+        self._active_observations = 0
         self._shutdown_state = 'running'
         self._shutdown_issues = []
         self._close_lock = threading.Lock()
@@ -302,6 +304,7 @@ class LocalApp:
             item.update(pinned=False, trusted=self.workspace_preferences.approved(item['workspace']), state='idle', seq=0, events=[], requests={},
                         bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
                         importedConfigRoot=str(Path(runtime_context(self.command)['configRoot']).resolve()))
+            reset_display(item)
             self.sessions[sid] = item
             try:
                 self.save(sid)
@@ -326,6 +329,7 @@ class LocalApp:
                 approvals[item['workspace']] = self.workspace_preferences.approved(item['workspace'])
             item.update(bridge=None, requests={}, events=[], seq=0,
                         trusted=item.get('kind') == 'chat' or approvals[item['workspace']], state='idle')
+            reset_display(item)
             if item.get('kind') != 'chat':
                 remembered = self.workspace_preferences.mode(item)
                 if remembered.get('inherit'):
@@ -409,12 +413,13 @@ class LocalApp:
                     break
                 bridge = old.get('bridge')
                 if (old['id'] == sid or not old.get('_historySaved')
-                        or any(old.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                        or any(old.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_observationPending'))
                         or old.get('requests')
                         or old.get('state') in {'starting', 'running', 'question', 'approval'}
                         or bridge and (not bridge.closed or getattr(bridge, 'cleanup_complete', False) is not True)
                         or self.history.migrate or self.history.warning):
                     continue
+                old.pop('_displayStreams', None)
                 self.history.compact(old)
                 loaded.remove(old)
             return item
@@ -553,7 +558,7 @@ class LocalApp:
                 if self.history.warning or self.chat_spaces.warning:
                     raise ValueError(self.history.warning or self.chat_spaces.warning)
                 self.chat_spaces.validate(sid, item['workspace'])
-                if any(item.get(key) for key in ('_connecting', '_restarting', '_modelUpdating', '_permissionUpdating', '_idleReleasing', '_capacityReservation')):
+                if any(item.get(key) for key in ('_connecting', '_restarting', '_modelUpdating', '_permissionUpdating', '_idleReleasing', '_capacityReservation', '_observationPending')):
                     raise ValueError('연결 변경이 끝난 뒤 대화를 삭제해 주세요.')
                 item['_deleting'] = True
             inflight = list(self._chat_io.get(sid, ()))
@@ -590,6 +595,11 @@ class LocalApp:
     def stop_state(item):
         bridge = item.get('bridge')
         state = getattr(bridge, 'stop_state', None)
+        if state == 'stopped' and (item.get('state') == 'stopping'
+                or (item.get('_observationPending') or {}).get('phase') == 'finish'):
+            # Native stop acknowledgement precedes the app's file/result
+            # commit. Keep stop admission closed until that terminal publishes.
+            return 'stopping'
         if state in {'stopping', 'failed', 'stopped'}:
             return state
         # Older injected bridges still expose the original admission signals.
@@ -598,6 +608,10 @@ class LocalApp:
         return None
 
     def _check_stopping(self, item, *, allow_stop_admission=False):
+        if item.get('_observationPending'):
+            raise BridgeError('file_observation_pending',
+                '이 요청의 파일 변경을 확인하고 있습니다. 잠시 후 이어서 실행해 주세요.',
+                '파일 확인이 끝난 뒤 이어서 실행')
         if item.get('_idleReleasing') or (item.get('_capacityReservation') and item['_capacityReservation'] != threading.get_ident()):
             raise ValueError('업무 연결을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.')
         state = self.stop_state(item)
@@ -629,8 +643,9 @@ class LocalApp:
             "requests": list(item.get("requests", {}).values())}
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
-        result['connectionStopped'] = bridge is None or getattr(bridge, 'cleanup_complete', False) is True
         result['stopState'] = self.stop_state(item)
+        result['connectionStopped'] = (result['stopState'] != 'stopping'
+            and (bridge is None or getattr(bridge, 'cleanup_complete', False) is True))
         result['cleanupRetryable'] = getattr(bridge, 'cleanup_retryable', False) is True
         if result['stopState'] == 'stopping':
             result['state'] = 'stopping'
@@ -778,7 +793,7 @@ class LocalApp:
             if (item.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
                     or item.get('requests') or item.get('choice')
                     or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_restarting',
-                                                     '_stopAdmission', '_dispatchClaim', '_choiceAnswerClaim'))
+                                                     '_stopAdmission', '_dispatchClaim', '_choiceAnswerClaim', '_observationPending'))
                     or getattr(bridge, 'busy', False) is True
                     or getattr(bridge, 'stopping', False) is True and self.stop_state(item) == 'stopping'
                     or isinstance(pending, dict) and bool(pending)
@@ -1064,7 +1079,7 @@ class LocalApp:
             if self.session_visibility.warning:
                 raise ValueError(self.session_visibility.warning)
             if (item.get('state') in {'starting', 'running', 'approval', 'question'}
-                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim'))
+                    or any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_observationPending'))
                     or item.get('requests') or item.get('choice')
                     or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}
                     or sid in self.dispatch.steering):
@@ -1112,18 +1127,107 @@ class LocalApp:
             with self.lock:
                 item.pop('_removingFromList', None)
 
-    def _finish_observation(self, item):
-        before = item.pop('_artifactSnapshot', None)
-        if before is None:
-            return
-        root = Path(item['workspace'])
-        self.file_diffs.finish(root, item['lastRunId'])
-        after = snapshot(root)
-        found = changes(root, before, after, item['lastRunId'], time.time())
-        item['artifacts'] = (item.get('artifacts', []) + found)[-MAX_ARTIFACTS:]
-        item['artifactObservation'] = after.public() | {'limited': before.limited or after.limited,
-                                                       'errors': before.errors + after.errors,
-                                                       'retainedLimit': MAX_ARTIFACTS}
+    def _begin_observation(self, item, phase, run_id):
+        """Reserve one run boundary under app.lock, without changing its result."""
+        ticket = {'phase': phase, 'runId': run_id, 'workspace': item['workspace'],
+                  'bridge': item.get('bridge'), 'done': threading.Event()}
+        item['_observationPending'] = ticket
+        with self._lifecycle:
+            self._active_observations += 1
+        return ticket
+
+    def _end_observation(self, item, ticket):
+        with self.lock:
+            if item.get('_observationPending') is ticket:
+                item.pop('_observationPending', None)
+            ticket['done'].set()
+        with self._lifecycle:
+            self._active_observations -= 1
+            self._lifecycle.notify_all()
+
+    def _observation_current(self, item, ticket):
+        sid = item['id']
+        return (self.sessions.get(sid) is item and self._shutdown_state != 'closed'
+                and item.get('_observationPending') is ticket
+                and item['workspace'] == ticket['workspace']
+                and item.get('bridge') is ticket['bridge']
+                and not item.get('_deleting') and sid not in self.chat_spaces.pending
+                and not self.session_visibility.contains(sid))
+
+    def _finish_observation(self, root, run_id, before):
+        """Finite filesystem work; caller must not hold app.lock."""
+        after = self._capture_observation(root, run_id, finishing=True)
+        found = changes(root, before, after, run_id, time.time())
+        observation = after.public() | {'limited': before.limited or after.limited,
+                                       'errors': before.errors + after.errors,
+                                       'retainedLimit': MAX_ARTIFACTS}
+        return found, observation
+
+    def _capture_observation(self, root, run_id, *, finishing=False):
+        # File review is best effort and must not turn a successful Claude
+        # result into a hung request when a drive/cache becomes unavailable.
+        failed = False
+        if finishing:
+            try:
+                self.file_diffs.finish(root, run_id)
+            except (OSError, ValueError, RuntimeError):
+                failed = True
+        try:
+            captured = snapshot(root)
+        except (OSError, ValueError, RuntimeError):
+            captured = Snapshot(errors=1, limited=True)
+        if not finishing:
+            try:
+                self.file_diffs.start(root, run_id)
+            except (OSError, ValueError, RuntimeError):
+                failed = True
+        if failed:
+            captured.errors += 1
+            captured.limited = True
+        return captured
+
+    def _emit_terminal(self, sid, kind, data, *, bridge=None, origin=None):
+        ticket = None
+        with self.lock:
+            item = self.sessions.get(sid)
+            if not self._event_current(sid, bridge, origin):
+                return
+            run_id = item.get('lastRunId')
+        # Concurrent EOF/stop callbacks may share a run. Wait only for that
+        # run's capture; never retain the app lock while it touches storage.
+        while ticket is None:
+            with self.lock:
+                if (not self._event_current(sid, bridge, origin) or self.sessions.get(sid) is not item
+                        or item.get('lastRunId') != run_id):
+                    return
+                pending = item.get('_observationPending')
+                if pending and pending['phase'] == 'start':
+                    # No prompt was written yet. A real stop/disconnect during
+                    # preparation invalidates admission, not a future request.
+                    pending['cancelled'] = True
+                    return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+                if pending is None:
+                    before = item.get('_artifactSnapshot')
+                    if before is None or kind == 'result' and self.stop_state(item) == 'stopping':
+                        return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+                    ticket = self._begin_observation(item, 'finish', run_id)
+            if ticket is None:
+                pending['done'].wait()
+        try:
+            found, observation = self._finish_observation(Path(ticket['workspace']), run_id, before)
+            with self.lock:
+                if (not self._observation_current(item, ticket) or item.get('lastRunId') != run_id
+                        or item.get('_artifactSnapshot') is not before):
+                    return
+                item.pop('_artifactSnapshot', None)
+                item['artifacts'] = (item.get('artifacts', []) + found)[-MAX_ARTIFACTS:]
+                item['artifactObservation'] = observation
+                item.pop('_observationPending', None)
+                # Publish state/history/queue completion together, after the
+                # scan. The next request cannot run on a premature "done".
+                return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+        finally:
+            self._end_observation(item, ticket)
 
     def results(self, sid):
         with self.lock:
@@ -1165,6 +1269,7 @@ class LocalApp:
             item.update(bridge=None, requests={}, events=[], seq=0, state='idle',
                         trusted=self.workspace_preferences.approved(item['workspace']),
                         attachments=[], artifacts=[], lastRunId=None)
+            reset_display(item)
             item['title'] = self.unique_title(item['title'][:100])
             self.sessions[item['id']] = item
             try:
@@ -1221,7 +1326,7 @@ class LocalApp:
             workspace_folder(item)
             if not item.get('trusted'):
                 raise ValueError('업무 폴더의 설정·후크·MCP 실행에 동의한 뒤 연결을 재시작해 주세요.')
-            if (any(item.get(key) for key in ('_restarting', '_connecting', '_modelUpdating', '_permissionUpdating',
+            if (any(item.get(key) for key in ('_restarting', '_connecting', '_modelUpdating', '_permissionUpdating', '_observationPending',
                                              '_dispatchClaim', '_choiceAnswerClaim')) or sid in self.dispatch.steering):
                 raise BridgeError('restart_transition_busy', '연결이나 설정을 변경하고 있습니다. 끝난 뒤 다시 시작해 주세요.', '현재 변경이 끝난 뒤 재시작')
             old = item.get('bridge')
@@ -1263,10 +1368,12 @@ class LocalApp:
                 # retired bridge owns that identity even though callbacks are ignored.
                 if old is not None and getattr(old, 'session_id', None):
                     item['sessionId'] = old.session_id
+            if busy:
+                # The stopped request is never replayed. Observe its files
+                # outside the app lock before preparing a replacement child.
+                self.emit(sid, 'status', {'state': 'stopped', 'label': '현재 요청을 중지했어요 · Claude 연결을 다시 준비합니다'})
+            with self.lock:
                 if busy:
-                    # The stopped request is never replayed. Delivered queued
-                    # work remains marked for review instead of being requeued.
-                    self.emit(sid, 'status', {'state': 'stopped', 'label': '현재 요청을 중지했어요 · Claude 연결을 다시 준비합니다'})
                     if previous_hold:
                         self.dispatch.queue.pause(sid, previous_hold)
                     elif not workflow_paused:
@@ -1685,7 +1792,10 @@ class LocalApp:
             if kind in {'tool_activity', 'progress_record', 'run_activity'} and (not getattr(bridge, '_tool_activity_run_id', None)
                     or bridge._tool_activity_run_id != item.get('lastRunId')):
                 return  # Connection preparation is not a submitted user turn.
-            self.emit(sid, kind, data)
+            origin = (item, item.get('lastRunId'))
+        # Terminal observation must not inherit this validation lock. emit()
+        # repeats the owned-child check before and after its filesystem work.
+        self.emit(sid, kind, data, _bridge=bridge, _origin=origin)
 
     def answer_choice(self, sid, choice_id, *, option_id=None, text=None):
         from .choices import answer
@@ -1751,7 +1861,7 @@ class LocalApp:
                 item['events'] = [event for event in item['events'] if event['type'] != 'progress_changed']
                 item['events'].append({'seq': item['seq'], 'type': 'progress_changed',
                                        'data': {'runId': run_id, 'progress': metadata}})
-                item['events'] = item['events'][-300:]
+                trim_events(item)
         finally:
             if tracked:
                 with self.lock:
@@ -1769,14 +1879,28 @@ class LocalApp:
                 self.get(sid)  # Do not disclose a task archived during the read.
             return result
 
-    def emit(self, sid, kind, data):
+    def _event_current(self, sid, bridge=None, origin=None):
+        item = self.sessions.get(sid)
+        return (self._shutdown_state != 'closed' and item is not None and not item.get('_deleting')
+                and sid not in self.chat_spaces.pending and not self.session_visibility.contains(sid)
+                and (origin is None or item is origin[0] and item.get('lastRunId') == origin[1])
+                and (bridge is None or item.get('bridge') is bridge and not item.get('_idleReleasing')))
+
+    def emit(self, sid, kind, data, *, _bridge=None, _origin=None):
         if kind == 'progress_record':
-            return self._emit_progress(sid, data)
+            return self._emit_progress(sid, data, bridge=_bridge)
+        if kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped':
+            return self._emit_terminal(sid, kind, data, bridge=_bridge, origin=_origin)
+        return self._emit_event(sid, kind, data, _bridge=_bridge, _origin=_origin)
+
+    def _emit_event(self, sid, kind, data, *, _bridge=None, _origin=None):
         with self.lock:
-            if (self._shutdown_state == 'closed' or sid not in self.sessions or self.sessions[sid].get('_deleting')
-                    or sid in self.chat_spaces.pending or self.session_visibility.contains(sid)):
+            if not self._event_current(sid, _bridge, _origin):
                 return
             item = self.get(sid, _internal=True)
+            if (_bridge is not None and kind == 'status' and data.get('state') == 'stopped'
+                    and data.get('runId') and data['runId'] != item.get('lastRunId')):
+                return
             if kind == 'run_activity':
                 from .tool_activity import normalize_run_activity
                 if (not isinstance(data, dict) or data.get('runId') != item.get('lastRunId')
@@ -1791,7 +1915,7 @@ class LocalApp:
                 item['seq'] += 1
                 item['events'] = [event for event in item['events'] if event['type'] != 'run_activity']
                 item['events'].append({'seq': item['seq'], 'type': kind, 'data': clean})
-                item['events'] = item['events'][-300:]
+                trim_events(item)
                 return
             if kind in {'request', 'choice'} or kind == 'status' and data.get('state') in {'starting', 'running'}:
                 self.upgrade.invalidate()
@@ -1919,7 +2043,7 @@ class LocalApp:
                 # A terminal frame can race the interrupt acknowledgement.
                 # Preserve its conversation identity without announcing a
                 # completed request while the stop still awaits confirmation.
-                if self.stop_state(item) == 'stopping':
+                if self.stop_state(item) == 'stopping' or item.get('state') == 'stopping':
                     if data.get('sessionId'):
                         item['sessionId'] = data['sessionId']
                     self.save(sid)
@@ -1947,7 +2071,6 @@ class LocalApp:
                 item['executions'] = normalize_executions(item.get('executions', []), interrupted=True)
                 item['toolActivity'] = normalize_activities(item.get('toolActivity', []), interrupted=True)
                 data['toolActivity'] = list(item['toolActivity'])
-                self._finish_observation(item)
                 data['artifacts'] = list(item.get('artifacts', []))
                 data['lastRunId'] = item.get('lastRunId')
             if kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal:
@@ -1956,9 +2079,10 @@ class LocalApp:
                         'model_changed', 'effort_changed', 'status', 'result', 'error'}:
                 data = dict(data, permissionDefaultNotice=item.get('permissionDefaultNotice') or '',
                             permissionPreferenceNotice=item.get('permissionPreferenceNotice') or '')
+            track_display_event(item, kind, data)
             item["seq"] += 1
             item["events"].append({"seq": item["seq"], "type": kind, "data": data})
-            item["events"] = item["events"][-300:]
+            trim_events(item)
             if kind in {'execution', 'tool_activity'}:
                 self._save_progress_history(sid)
             elif kind in {"assistant", "connected", "result", "error", "model_changed", 'choice', 'permission_mode_changed'} or terminal:
@@ -2115,69 +2239,103 @@ class LocalApp:
                 paths = self.validate_session_attachments(item, attachments)
             if self.error:
                 raise ValueError(self.error)
-            if not self.demo:
-                bridge = item.get("bridge")
-                if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
-                    raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
-                if bridge is None or bridge.closed:
-                    if not self.connection_capacity_available(item):
-                        raise ValueError(f"연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.")
-                    resume_options = self._resume_options(item)
-                    bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
-                                           lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
-                                           **runtime_options,
-                                           **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
-                    item["bridge"] = bridge
-                    item['modelOverride'] = None
-                    item.pop('connection', None)  # no stale init evidence during reconnect
-            if item.get('choice'):
-                self.emit(sid, 'choice_closed', {'id': item['choice']['id']})
-            item.pop('_choiceSourceKey', None)
-            item.pop('verification', None)
-            item["trusted"] = True
-            item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
-            if not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
-                item["title"] = self.unique_title(text.strip().splitlines()[0][:35], sid)
-            item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
-            if chat:
-                item['messages'][-1]['attachmentReads'] = notices
-                item['attachmentReads'] = notices
-            if _dispatch_claim is not None:
-                item['messages'][-1]['requestId'] = _dispatch_claim
-            item["state"] = "starting"
-            item['updated'] = time.time()
-            item['lastRunId'] = uuid.uuid4().hex
-            item.pop('runActivity', None)
-            item['messages'][-1]['runId'] = item['lastRunId']
+            start_ticket = None
+            run_id = uuid.uuid4().hex
             if not chat:
-                item['_artifactSnapshot'] = snapshot(Path(item['workspace']))
-                self.file_diffs.start(Path(item['workspace']), item['lastRunId'])
-                item['artifactObservation'] = item['_artifactSnapshot'].public()
-            self.save(sid)
-            if _dispatch_claim is not None:
-                self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
-            # No copied files, skill hardcode, auxiliary inference or rewritten user intent.
-            prompt = text.strip()
-            if chat:
-                prompt = chat_content
-            elif paths:
-                label = "사용자가 선택한 원본 파일·폴더 경로(JSON):" if any(Path(value).is_dir() for value in paths) else "사용자가 선택한 원본 파일 경로(JSON):"
-                prompt += "\n\n" + label + "\n" + json.dumps(paths, ensure_ascii=False)
-            if self.demo:
+                start_ticket = self._begin_observation(item, 'start', run_id)
+                start_ticket.update(previousRunId=item.get('lastRunId'), previousState=item['state'])
+                # Reserve the same task before releasing the lock. Other tasks'
+                # controls remain available, while no second prompt can enter.
+                item['state'] = 'starting'
+        send_error = None
+        try:
+            if start_ticket:
+                captured = self._capture_observation(Path(start_ticket['workspace']), run_id)
+            with self.lock:
+                if start_ticket:
+                    if (not self._observation_current(item, start_ticket) or start_ticket.get('cancelled')
+                            or item.get('lastRunId') != start_ticket['previousRunId']
+                            or item.get('_dispatchClaim') != _dispatch_claim):
+                        raise BridgeError('send_preparation_cancelled',
+                            '요청 준비가 중지되어 Claude에 보내지 않았습니다. 입력 내용을 확인한 뒤 다시 보내 주세요.',
+                            '중지 후 요청 내용 확인')
+                    self._require_running()
+                if not self.demo:
+                    bridge = item.get("bridge")
+                    if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
+                        raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
+                    if bridge is None or bridge.closed:
+                        if not self.connection_capacity_available(item):
+                            raise ValueError(f"연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.")
+                        resume_options = self._resume_options(item)
+                        bridge = ClaudeSession(self.command, self.info, Path(item["workspace"]),
+                                               lambda kind, data: self._emit_bridge(sid, bridge, kind, data), resume_options.pop('resume'), **resume_options,
+                                               **runtime_options,
+                                               **({'allow_bypass_permissions': True} if item.get('_allowBypass') else {}))
+                        item["bridge"] = bridge
+                        item['modelOverride'] = None
+                        item.pop('connection', None)  # no stale init evidence during reconnect
+                if item.get('choice'):
+                    self.emit(sid, 'choice_closed', {'id': item['choice']['id']})
+                item.pop('_choiceSourceKey', None)
+                item.pop('verification', None)
+                item["trusted"] = True
+                item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
+                if not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
+                    item["title"] = self.unique_title(text.strip().splitlines()[0][:35], sid)
+                item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
                 if chat:
-                    self.emit(sid, 'connected', {'model': '화면 체험 · AI 미호출', 'skills': [], 'tools': [], 'mcp': []})
-                    self.emit(sid, 'assistant', {'text': '일반 대화 화면 체험입니다. 첨부 사본의 형식과 읽기 범위를 확인했으며 실제 AI에는 전달하지 않았어요.'})
-                    self.emit(sid, 'result', {})
+                    item['messages'][-1]['attachmentReads'] = notices
+                    item['attachmentReads'] = notices
+                if _dispatch_claim is not None:
+                    item['messages'][-1]['requestId'] = _dispatch_claim
+                item["state"] = "starting"
+                item['updated'] = time.time()
+                item['lastRunId'] = run_id
+                track_display_event(item, 'status', {'state': 'starting'})
+                item.pop('runActivity', None)
+                item['messages'][-1]['runId'] = item['lastRunId']
+                if not chat:
+                    item['_artifactSnapshot'] = captured
+                    item['artifactObservation'] = item['_artifactSnapshot'].public()
+                if start_ticket:
+                    item.pop('_observationPending', None)
+                self.save(sid)
+                if _dispatch_claim is not None:
+                    self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
+                # No copied files, skill hardcode, auxiliary inference or rewritten user intent.
+                prompt = text.strip()
+                if chat:
+                    prompt = chat_content
+                elif paths:
+                    label = "사용자가 선택한 원본 파일·폴더 경로(JSON):" if any(Path(value).is_dir() for value in paths) else "사용자가 선택한 원본 파일 경로(JSON):"
+                    prompt += "\n\n" + label + "\n" + json.dumps(paths, ensure_ascii=False)
+                if self.demo:
+                    if chat:
+                        self.emit(sid, 'connected', {'model': '화면 체험 · AI 미호출', 'skills': [], 'tools': [], 'mcp': []})
+                        self.emit(sid, 'assistant', {'text': '일반 대화 화면 체험입니다. 첨부 사본의 형식과 읽기 범위를 확인했으며 실제 AI에는 전달하지 않았어요.'})
+                        self.emit(sid, 'result', {})
+                    else:
+                        from .demo import run
+                        threading.Thread(target=run, args=(self, sid, text), daemon=True).start()
                 else:
-                    from .demo import run
-                    threading.Thread(target=run, args=(self, sid, text), daemon=True).start()
-            else:
-                try:
-                    bridge._tool_activity_run_id = item['lastRunId']
-                    bridge.send(prompt)
-                except (ValueError, OSError, subprocess.SubprocessError) as exc:
-                    self.emit(sid, 'error', {'message': str(exc), 'code': 'send_failed'})
-                    raise
+                    try:
+                        bridge._tool_activity_run_id = item['lastRunId']
+                        bridge.send(prompt)
+                    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                        send_error = exc
+            if send_error is not None:
+                # Error observation also runs outside the request admission lock.
+                self.emit(sid, 'error', {'message': str(send_error), 'code': 'send_failed'}, _origin=(item, run_id))
+                raise send_error
+        finally:
+            if start_ticket:
+                with self.lock:
+                    if (item.get('_observationPending') is start_ticket
+                            and not start_ticket.get('cancelled') and item['state'] == 'starting'):
+                        item['state'] = start_ticket['previousState']
+                self._end_observation(item, start_ticket)
+
 
     def respond(self, sid, rid, allow, answers=None, permission_choice_id=None):
         if type(allow) is not bool:
@@ -2204,28 +2362,37 @@ class LocalApp:
             if item.get('_stopAdmission'):
                 raise BridgeError('stop_in_progress', '현재 작업을 중지하고 있습니다.', '중지 완료 후 이어서 보내기')
             self.dispatch.manual_stop(sid)
+            preparing = item.get('_observationPending')
+            if preparing and preparing['phase'] == 'start':
+                preparing['cancelled'] = True
+                # Preparation has not written a prompt. Cancel its admission
+                # immediately; do not interrupt an idle reusable connection.
+                self._emit_event(sid, 'status', {'state': 'stopped', 'label': '요청 준비를 중지했어요'})
+                if not disconnect:
+                    return {'ok': True, 'session': self.public(item)}
             bridge = item.get('bridge')
-            marker = secrets.token_hex(16) if bridge else None
-            if marker:
-                # Admit no new turn between capturing this exact child and
-                # interrupt() acquiring its own lock outside the app lock.
-                item['_stopAdmission'] = marker
+            marker = secrets.token_hex(16)
+            origin = (item, item.get('lastRunId'))
+            # Reserve even an empty connection: a late no-bridge stopped event
+            # must not cancel a new request admitted after this click.
+            item['_stopAdmission'] = marker
             if not bridge:
                 if item.get('_capacityReservation'):
                     item['_capacityCancelled'] = True
-                self.emit(sid, "status", {"state": "stopped", "label": "중지했어요"})
-        if bridge:
-            # Capture the target before releasing admission. A concurrent
-            # restart must never turn this click into stopping its new child.
-            try:
+        try:
+            if not bridge:
+                self.emit(sid, "status", {"state": "stopped", "label": "중지했어요"}, _origin=origin)
+            else:
+                # Capture the target before releasing admission. A concurrent
+                # restart must never turn this click into stopping its new child.
                 if disconnect:
                     bridge.interrupt(disconnect=True)
                 else:
                     bridge.interrupt()
-            finally:
-                with self.lock:
-                    if item.get('_stopAdmission') == marker:
-                        item.pop('_stopAdmission', None)
+        finally:
+            with self.lock:
+                if item.get('_stopAdmission') == marker:
+                    item.pop('_stopAdmission', None)
         with self.lock:
             return {'ok': True, 'session': self.public(self.get(sid))}
 
@@ -2334,10 +2501,10 @@ class LocalApp:
                 close_bridges()
             deadline = time.monotonic() + SHUTDOWN_DRAIN_TIMEOUT
             with self._lifecycle:
-                while self._active_operations:
+                while self._active_operations or self._active_observations:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        issues.append({'code': 'operations_pending'})
+                        issues.append({'code': 'operations_pending' if self._active_operations else 'file_observation_pending'})
                         break
                     self._lifecycle.wait(remaining)
             # A previously admitted operation may publish its bridge while the
@@ -2497,6 +2664,10 @@ class Handler(BaseHTTPRequestHandler):
                 while True:
                     with app.lock:
                         item = app.get(sid)
+                        if needs_recovery(item, after):
+                            response = {"events": [], "state": item["state"], "seq": item["seq"],
+                                        "recovery": snapshot_recovery(item, app.public(item), after)}
+                            break
                         events = [row for row in item["events"] if row["seq"] > after]
                         if events or time.monotonic() >= deadline:
                             # Full bounded messages on recovery only, otherwise deltas.

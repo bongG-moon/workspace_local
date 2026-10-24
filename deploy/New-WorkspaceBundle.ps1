@@ -17,7 +17,7 @@ $files = @(
     'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'docs\WORKSPACE_CHAT_MODES.md',
     'local_app\customizations.py', 'local_app\web\customizations.js',
     'local_app\workspace_preferences.py', 'local_app\session_groups.py', 'local_app\web\session-groups.js',
-    'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\history_writer.py', 'local_app\web\drafts.js',
+    'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\history_writer.py', 'local_app\event_recovery.py', 'local_app\web\drafts.js',
     'local_app\web\attachment-storage.js', 'local_app\web\attachment-storage.css',
     'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',
     'local_app\appearance.py', 'local_app\layout_preferences.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',

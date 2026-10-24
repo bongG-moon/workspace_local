@@ -77,6 +77,7 @@ globalThis.WorkspaceReleaseHistory = (() => {
       select.replaceChildren(...options);
     }
     select.value=selectedVersion;select.disabled=!rows.length;
+    globalThis.WorkspaceAppearance?.enhanceSelect?.(select);
     $("release-history-content").hidden=!row;$("release-history-empty").hidden=!!row;
     text("release-history-source",snapshot.source.label);
     text("release-history-help",separated&&catalog==="bundled"?"설치본에 포함된 기본 변경사항입니다. 사내에서 작성한 배포 설명과는 별도입니다.":snapshot.source.provider==="gitlab"

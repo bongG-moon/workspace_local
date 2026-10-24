@@ -84,6 +84,11 @@ globalThis.WorkspaceWorkflow = (() => {
     $("workflow-context").textContent = active ? `${active.title} · ${basename(active.workspace)}` : "업무를 선택해 주세요.";
     $("workflow-policy").textContent = `${queuePolicy} ${snapshot?.policy?.message || "예약은 앱이 켜져 있을 때 실행됩니다. 앱 종료·절전으로 놓친 실행은 다시 확인한 뒤 이어갑니다."}`;
     const uncertain = queue.some(item=>item.state === "needs_review");
+    const notice = uncertain ? "전송 여부 확인이 필요해 실행을 멈췄어요."
+      : snapshot?.paused ? "이어 할 일이 일시 정지됐어요. 확인 후 이어서 실행할 수 있어요." : "";
+    $("inline-queue-notice").hidden = !notice || !queue.length;
+    if($("inline-queue-notice-text").textContent!==notice)$("inline-queue-notice-text").textContent=notice;
+    $("inline-queue-review").title = uncertain ? "전송 여부와 대화 결과를 확인하고 대기 요청 정리하기" : "대기 요청이 멈춘 이유 확인하고 이어 실행하기";
     $("workflow-paused").hidden = !snapshot?.paused && !uncertain;
     $("workflow-paused").textContent = uncertain ? "전송 여부를 확인할 요청이 있습니다. 대화에서 결과를 확인하고 해당 항목을 대기에서 제거한 뒤 이어 실행해 주세요. 확인 없이 자동 재전송하지 않습니다."
       : snapshot?.pauseReason || "오류·중지·연결 종료 또는 앱 재시작으로 대기 요청을 멈췄습니다. 내용을 확인하고 이어 실행해 주세요.";
@@ -93,7 +98,7 @@ globalThis.WorkspaceWorkflow = (() => {
     const context = capture(), detailsOpen = $("workflow-dialog").open;
     // Status/stream refreshes must not replace a pressed button before click.
     const nextQueueFingerprint = JSON.stringify([context, queue, detailsOpen, blocked, active?.trusted, busy(),
-      active?.state, !!active?.choice, snapshot?.paused, snapshot?.warning, snapshot?.applyingId, snapshot?.applyingPhase, snapshot?.steer?.supported, queue.map(item=>cancelling(item.id))]);
+      active?.state, !!active?.choice, snapshot?.paused, snapshot?.pauseReason, snapshot?.warning, snapshot?.applyingId, snapshot?.applyingPhase, snapshot?.steer?.supported, snapshot?.steer?.reason, queue.map(item=>cancelling(item.id))]);
     if (queueFingerprint !== nextQueueFingerprint) {
     queueFingerprint = nextQueueFingerprint;
     $("queue-list").replaceChildren();$("queue-empty").hidden = queue.length > 0;
@@ -115,7 +120,15 @@ globalThis.WorkspaceWorkflow = (() => {
       const awaitingActivity=applying&&snapshot?.applyingPhase==="waiting_activity";
       const nowLabel=awaitingActivity?"접수 확인 중…":applying?"전환 중…":busy()?"지금 반영":"지금 실행";
       const nowDisabled=blocked||item.state!=="queued"||!active?.trusted||uncertain||(busy()&&snapshot?.steer?.supported!==true);
-      const nowTitle=awaitingActivity?"Claude의 현재 요청 접수를 확인한 뒤 선택한 요청으로 이어갑니다.":busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
+      const nowTitle=awaitingActivity?"Claude의 현재 요청 접수를 확인한 뒤 선택한 요청으로 이어갑니다."
+        : applying?"선택한 요청으로 전환 중입니다. 완료될 때까지 기다려 주세요."
+        : uncertain?"전송 여부 확인이 필요한 요청이 있습니다. ‘확인하기’에서 대화 결과를 확인해 주세요."
+        : item.state==="dispatching"?"요청을 전송 중입니다. 접수가 끝날 때까지 기다려 주세요."
+        : !active?.trusted?"업무 폴더 접근을 확인한 뒤 실행할 수 있습니다."
+        : stopBlocked()?"현재 요청의 중지 여부를 확인 중입니다."
+        : busy()&&snapshot?.steer?.supported!==true?snapshot?.steer?.reason||"현재 연결은 작업 도중 바로 반영을 지원하지 않습니다. 정상 완료 후 이어서 실행됩니다."
+        : blocked?"진행 중인 요청 처리가 끝난 뒤 실행할 수 있습니다."
+        : busy()?"현재 요청을 중지한 뒤 이 요청으로 같은 대화를 이어갑니다.":"이 요청을 대기 목록의 맨 앞으로 옮겨 실행합니다.";
       if(detailsOpen){
       const row = el("article",null,"workflow-row");
       row.append(el("span",item.state === "dispatching" ? "전송 중" : item.state === "needs_review" ? "전송 확인 필요" : `${index+1}번째 · ${waitLabel}`,"workflow-state"),el("p",item.text,"workflow-request"));
@@ -124,7 +137,7 @@ globalThis.WorkspaceWorkflow = (() => {
       function action(label,fn,disabled=false) {const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||item.state==="dispatching"||disabled;button.onclick=()=>{if(current(context)&&!button.disabled)return fn();};actions.append(button);return button;}
       const now = action(nowLabel,()=>applyQueuedNow(item,context),nowDisabled);
       now.className="quiet-button queue-apply-now";now.setAttribute("aria-busy",String(applying));
-      now.title=nowTitle;
+      now.title=nowTitle;now.setAttribute("aria-description",nowTitle);
       action("위로",()=>reorder(position,position-1),position<=0);action("아래로",()=>reorder(position,position+1),position<0||position===reorderable.length-1);
       action("수정",()=>openEditor("queue",item),item.state!=="queued");
       const cancel=action(cancelling(item.id)?"삭제 중…":item.state==="needs_review"?"대기에서 제거":"취소",()=>cancelRequest(item,context));
@@ -138,7 +151,8 @@ globalThis.WorkspaceWorkflow = (() => {
         const title=el('span',item.text,'inline-queue-text');title.title=`${item.text}\n${waitLabel}${item.attachments?.length?` · 자료 ${item.attachments.length}개`:''}`;
         const mark=el('span',null,'inline-queue-mark');mark.setAttribute('aria-hidden','true');mark.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v12a3 3 0 0 0 3 3h12m-4-4 4 4-4 4M10 6h9M10 11h6"/></svg>';
         copy.append(mark,title);
-        const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':nowLabel;apply.type='button';apply.disabled=nowDisabled;apply.title=nowTitle;apply.setAttribute('aria-busy',String(applying));
+        if(item.state==='needs_review')copy.append(el('span','확인 필요','inline-queue-state'));
+        const apply=existing?.children[1]||el('button',null,'inline-queue-apply');apply.textContent=cancelling(item.id)?'삭제 중…':nowLabel;apply.type='button';apply.disabled=nowDisabled;apply.title=nowTitle;apply.setAttribute('aria-description',nowTitle);apply.setAttribute('aria-busy',String(applying));
         const turn=el('span',null,'inline-queue-turn');turn.setAttribute('aria-hidden','true');turn.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v5a3 3 0 0 0 3 3h12m-5-5 5 5-5 5"/></svg>';apply.append(turn);
         apply.onclick=()=>{if(current(context)&&!apply.disabled)return applyQueuedNow(item,context);};bindQueuePointer(apply);
         const remove=existing?.children[2]||el('button',null,'inline-queue-delete');if(!existing)remove.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7"/></svg>';remove.type='button';remove.title='대기 요청 삭제';remove.setAttribute('aria-label',`대기 요청 삭제: ${item.text}`);
@@ -433,7 +447,7 @@ globalThis.WorkspaceWorkflow = (() => {
   }
   $("followup-now").onclick=()=>send("steer");
   $("workflow-open").onclick=()=>{$("workflow-message").textContent="";showDialog("workflow-dialog");render();refresh();};
-  $('inline-queue-manage').onclick=$('inline-queue-more').onclick=()=>$('workflow-open').onclick();
+  $('inline-queue-manage').onclick=$('inline-queue-more').onclick=$('inline-queue-review').onclick=()=>{if(active&&!appClosed)return $('workflow-open').onclick();};
   $("workflow-close").onclick=() => $("workflow-dialog").close();
   $("workflow-dialog").addEventListener("close",render);
   $("workflow-resume").onclick=()=>requestResume();

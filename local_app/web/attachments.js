@@ -26,6 +26,17 @@ globalThis.WorkspaceAttachments = (() => {
       drafts.set(context.id, {...draft,attachments:merge(draft.attachments || [],paths,context.kind)});
     }
   }
+  // Existing workspace paths use the same merge and draft persistence as drops.
+  // Keep this synchronous so a result click cannot attach to a newer selection.
+  function addPath(path, context=capture()) {
+    if (appClosed || !context.id || context.id !== active?.id || context.generation !== selectionGeneration
+      || hiddenSessionIds.has(context.id) || hidingSessionIds.has(context.id)) return "stale";
+    if (locked()) {toast("요청 또는 자료 전송이 끝난 뒤 자료를 추가해 주세요.");return "locked";}
+    if (typeof path !== "string" || !path.trim()) return "invalid";
+    if (attachments.some(value=>pathKey(value)===pathKey(path))) {toast("이미 첨부한 자료예요. 원하는 요청 내용을 입력하세요.");return "duplicate";}
+    if (attachments.length >= maxAttachments(context.kind)) {toast(`자료는 한 번에 ${maxAttachments(context.kind)}개까지 추가할 수 있습니다. 기존 첨부를 제거한 뒤 다시 추가해 주세요.`);return "limit";}
+    attach([path],context);return "added";
+  }
   function makeDraggable(node, path, sessionId) {
     node.draggable = true;
     node.setAttribute("aria-description", "입력창으로 끌어 자료에 추가할 수 있습니다.");
@@ -71,8 +82,7 @@ globalThis.WorkspaceAttachments = (() => {
     const key = event.dataTransfer.getData(mime);
     if (key) {
       if (!drag || key !== drag.key || drag.sessionId !== context.id || drag.generation !== context.generation) return toast("현재 업무의 자료를 다시 끌어 주세요.");
-      if (!attachments.some(path=>pathKey(path)===pathKey(drag.path)) && attachments.length>=maxAttachments()) return toast(`자료는 한 번에 ${maxAttachments()}개까지 추가할 수 있습니다.`);
-      attach([drag.path],context);drag=null;toast("원본 경로를 자료에 추가했습니다.");return;
+      const added=addPath(drag.path,context);drag=null;if(added==="added")toast("원본 경로를 자료에 추가했습니다.");return;
     }
     const directory = [...(event.dataTransfer.items || [])].some(item => {
       try {return item.kind === "file" && item.webkitGetAsEntry?.()?.isDirectory === true;} catch (_) {return false;}
@@ -109,5 +119,5 @@ globalThis.WorkspaceAttachments = (() => {
   document.addEventListener?.("dragover",event=>{if(accepts(event))event.preventDefault();});
   document.addEventListener?.("drop",event=>{if(accepts(event)&&!zone.contains?.(event.target)){event.preventDefault();toast("파일을 아래 입력창에 끌어 놓아 주세요.");}});
   const forgetSession=id=>{for(const [path,entry] of copies)if(entry.sessionId===id)copies.delete(path);};
-  return {drop,uploadFiles,makeDraggable,renderNote,forgetSession,isUploading:()=>uploading,isCopy:path=>copies.has(pathKey(path)),attach};
+  return {drop,uploadFiles,makeDraggable,renderNote,forgetSession,isUploading:()=>uploading,isCopy:path=>copies.has(pathKey(path)),attach,addPath};
 })();

@@ -91,6 +91,7 @@ globalThis.WorkspaceCapabilities = (() => {
     const exists = folders.some(item => pathKey(item.workspace) === pathKey(selectedFolder));
     selectFolder(exists ? selectedFolder : chooseDefault ? folders[0]?.workspace : "", folders);
     select.value = selectedFolder; select.disabled = folders.length === 0;
+    globalThis.WorkspaceAppearance?.enhanceSelect?.(select);
   }
   function syncConnections() {
     const rows = sessionFolders().flatMap(folder => folder.sessions);
@@ -108,6 +109,7 @@ globalThis.WorkspaceCapabilities = (() => {
       }
     }
     select.value = commonSession?.id || ""; select.disabled = rows.length === 0;
+    globalThis.WorkspaceAppearance?.enhanceSelect?.(select);
   }
   const emptyFolderNotice = () => sessionFolders().length
     ? "목록을 확인할 업무 폴더를 드롭다운에서 선택해 주세요."

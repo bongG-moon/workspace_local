@@ -563,7 +563,7 @@ class StopProtocolProcessTests(unittest.TestCase):
     def test_idle_stop_preserves_connection_without_protocol_or_forced_cleanup(self):
         process = self.bridge.process
         self.bridge.interrupt()
-        self.assertEqual('stopped', self.bridge.stop_state)
+        self.wait(lambda: self.bridge.stop_state == 'stopped')
         self.assertFalse(self.bridge.closed)
         self.assertIsNone(process.poll())
         self.assertFalse(any(row.get('request', {}).get('subtype') == 'interrupt' for row in self.wire()))
@@ -613,7 +613,7 @@ class StopProtocolProcessTests(unittest.TestCase):
             self.bridge.send('cancelled before submission')
             pending = worker.call_args
         self.bridge.interrupt()
-        self.assertEqual('stopped', self.bridge.stop_state)
+        self.wait(lambda: self.bridge.stop_state == 'stopped')
         self.assertFalse(self.bridge.closed)
         self.bridge.send('explicit next turn')
         pending.kwargs['target'](*pending.kwargs['args'])

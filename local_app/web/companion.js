@@ -22,7 +22,7 @@
     wrap.append(el('span',label));if(type!=='textarea'&&type!=='select')n.type=type;
     n.value=value;n.setAttribute('aria-label',label);if(type==='textarea'){n.rows=3;n.maxLength=6000;}wrap.append(n);parent.append(wrap);return n;
   }
-  function select(parent,label,items,value) {const n=field(parent,label,'','select');for(const [v,t] of items){const o=el('option',t);o.value=v;n.append(o);}n.value=value;return n;}
+  function select(parent,label,items,value) {const n=field(parent,label,'','select');for(const [v,t] of items){const o=el('option',t);o.value=v;n.append(o);}n.value=value;globalThis.WorkspaceAppearance?.enhanceSelect?.(n);return n;}
   function checkbox(parent,label,checked=false){const wrap=el('label',null,'companion-check'),n=el('input');n.type='checkbox';n.checked=checked;wrap.append(n,el('span',label));parent.append(wrap);return n;}
   async function action(value){if(!sid||active?.id!==sid)throw new Error('작업 폴더가 바뀌었습니다. 도우미를 다시 열어 주세요.');return api('/api/companion',{id:sid,...(selectedScope()?{storageScope:selectedScope()}:{}),...value});}
   async function load(){

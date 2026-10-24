@@ -96,6 +96,7 @@ class HistoryCacheTests(unittest.TestCase):
         app = self.app()
         target = app.get(rows[0]['id'])
         target.update(trusted=True, state='done', seq=23,
+                      _displayStreams={('partial', 0): {'_chunks': ['unfinished response']}},
                       _sessionControls={'model': 'selected', 'permissionMode': 'plan'},
                       _allowBypass=True, events=[{'seq': 23, 'type': 'result', 'data': {}}],
                       choice={'id': 'current-choice'}, attachments=['keep-runtime-reference.txt'])
@@ -107,6 +108,7 @@ class HistoryCacheTests(unittest.TestCase):
         self.assertTrue(target['_historyUnloaded'])
         self.assertNotIn('messages', target)
         self.assertNotIn('artifacts', target)
+        self.assertNotIn('_displayStreams', target)
         self.assertEqual(1, target['_artifactCount'])
         for key, value in preserved.items(): self.assertEqual(value, target[key])
         loaded = app.get(target['id'])

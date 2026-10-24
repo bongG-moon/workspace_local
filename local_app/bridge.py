@@ -1805,28 +1805,31 @@ class ClaudeSession:
                 # prompt after Stop or after the user's next explicit turn.
                 self._turn_epoch += 1
                 self.busy = False
-            self._stop_confirmed = idle
-            self.stopping = not idle
+            self._stop_confirmed = False
+            self.stopping = True
             attempt = {'id': 'stop-' + uuid.uuid4().hex, 'session': self.session_id,
                        'runId': getattr(self, '_tool_activity_run_id', None),
                        'ack': False, 'terminal': False, 'terminal_error': False,
                        'failed': disconnect, 'phase': 'waiting', 'changed': threading.Event()}
             self._stop_attempt = attempt
         self._interrupt_executions()
-        if idle:
-            self._emit_stopped(attempt, preserved=True)
-            return True
         self.emit('status', {'state': 'stopping', 'stopState': 'stopping',
                             'label': '현재 요청을 중지하고 있어요'})
+        if idle:
+            # Nothing was submitted, so no CLI acknowledgement is necessary.
+            # Use the same finite stop worker as an active turn: its terminal
+            # callback can perform file review without inheriting a caller's
+            # queue/admission lock. A repeated click shares this attempt.
+            with self.lock:
+                attempt['ack'] = attempt['terminal'] = True
+            threading.Thread(target=lambda: self._finish_stop(attempt), daemon=True).start()
+            return True
         if self.process is None:
-            if self.close():
-                # start() may have been inside Popen while we observed None.
-                # close() waits for that owner; report only its actual result.
-                label = ("시작 전에 중지했어요" if self.process is None else
-                         "앱의 CLI 연결을 중지했어요 · 이미 만들어진 파일은 유지됩니다")
-                self.stopping = False
-                self._stop_confirmed = True
-                self.emit("status", {"state": "stopped", "stopState": 'stopped', "label": label})
+            # start() may be inside Popen. The existing worker's close() waits
+            # for that owner; HTTP/queue admission does not wait under app.lock.
+            with self.lock:
+                attempt['failed'] = True
+            threading.Thread(target=lambda: self._finish_stop(attempt), daemon=True).start()
             return True
         try:
             if not disconnect:

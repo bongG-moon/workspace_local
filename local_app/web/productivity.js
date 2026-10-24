@@ -77,6 +77,7 @@ globalThis.WorkspaceProductivityActions = (() => {
       runs = (response.runs || []).slice(0, 8);
       for(const run of runs) { const option = el("option", `${when(run.finishedAt || run.startedAt)} · ${run.runId.slice(0,8)}`); option.value = run.runId; $("changes-run").append(option); }
       $("changes-run").disabled = !runs.length;
+      globalThis.WorkspaceAppearance?.enhanceSelect?.($("changes-run"));
       $("changes-run").onchange = () => renderRun(ticket);
       renderRun(ticket);
       if(response.errors) $("changes-summary").textContent += " · 일부 기록을 읽지 못했어요";

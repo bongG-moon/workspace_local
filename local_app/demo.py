@@ -16,8 +16,10 @@ def run(app, sid, text):
 
 
 def respond(app, sid, rid, allow, answers):
+    terminal = None
     with app.lock:
         item = app.get(sid)
+        origin = (item, item.get('lastRunId'))
         request = item["requests"].get(rid)
         if not request:
             raise ValueError("이미 처리되었거나 만료된 질문입니다.")
@@ -26,11 +28,13 @@ def respond(app, sid, rid, allow, answers):
         app.emit(sid, "request_closed", {"id": rid})
         if not allow:
             app.emit(sid, "assistant", {"text": "이번 요청을 취소했어요. 실제 파일이나 권한은 변경하지 않았습니다."})
-            app.emit(sid, "result", {})
+            terminal = {}
         elif request["tool"] == "AskUserQuestion":
             app.emit(sid, "request", {"id": "demo-approval-" + uuid.uuid4().hex, "tool": "가상 보고서 파일 생성",
                 "title": "승인 화면 체험", "description": "승인해도 실제 파일 생성·AI 호출은 발생하지 않습니다.",
                 "input": {"작업": "정리 방식 선택 → 파일 생성 승인 → 결과 확인", "선택": answers}})
         else:
             app.emit(sid, "assistant", {"text": "화면 체험을 마쳤어요.\n\n✓ 질문에 답변하기\n✓ 실행 내용을 보고 이번만 승인하기\n✓ 결과를 확인하고 같은 대화 이어가기\n\n실사용 모드에서는 이 자리에 기존 Claude Code의 실제 응답이 표시됩니다. 결과 파일 생성은 이번 체험에서 검증하지 않았습니다."})
-            app.emit(sid, "result", {"durationMs": 0, "usage": {}})
+            terminal = {"durationMs": 0, "usage": {}}
+    if terminal is not None:
+        app.emit(sid, "result", terminal, _origin=origin)

@@ -500,9 +500,11 @@ function effortOptions(){return (Array.isArray(active?.connection?.availableEffo
 function renderConnectionOptions(){
   const model=$("model-select"),previousModel=model.value;model.replaceChildren();const custom=el("option","직접 입력");custom.value="";model.append(custom);
   const seen=new Set();for(const item of modelOptions()){if(seen.has(item.value))continue;seen.add(item.value);const option=el("option",item.displayName||item.value);option.value=item.value;model.append(option);}model.value=seen.has(previousModel)?previousModel:"";
+  globalThis.WorkspaceAppearance?.enhanceSelect?.(model);
   $("model-list-note").textContent=seen.size?"현재 연결이 제공한 모델 목록입니다. 사용할 모델 이름을 직접 입력할 수도 있어요.":"연결에서 모델 목록을 제공하지 않았어요. 연결에서 사용할 모델 이름을 직접 입력할 수 있어요.";
   const mode=$("permission-mode-select"),previousMode=mode.value;mode.replaceChildren();const inherit=el("option","기존 설정 사용");inherit.value="";mode.append(inherit);
   for(const item of permissionOptions()){const option=el("option",item.displayName||item.value);option.value=item.value;mode.append(option);}mode.value=permissionOptions().some(item=>item.value===previousMode)?previousMode:"";
+  globalThis.WorkspaceAppearance?.enhanceSelect?.(mode);
 }
 function updateModelControls(){const capable=!!active?.connection?.capabilities?.setModel,disabled=connectionLocked()||!capable;$("model-apply").disabled=disabled;$("model-reset").disabled=disabled||(!active?.modelOverride&&!hasControlRestoreIssue("model"));$("model-input").disabled=disabled;$("model-select").disabled=disabled;$("model-message").textContent=modelChanging?"모델 변경을 확인하고 있어요.":!active?"업무를 시작하면 이 대화에서 사용할 모델을 확인할 수 있어요.":!capable?"현재 연결에서 모델 변경을 확인하지 못했어요. 기존 모델을 그대로 사용합니다.":busyStates.has(active.state)?"진행 중인 요청이 끝나면 모델을 바꿀 수 있어요.":`현재: ${active.connection?.model||"기존 모델"} · 이 연결에만 적용하며 Claude 기본 설정은 바꾸지 않아요.`;}
 function updatePermissionControls(){
@@ -554,12 +556,12 @@ async function submitWorkspaceChoice(answer,expectedKey){
   if(!active.trusted){chooseFolder(true);$("folder-form").dataset.afterTrust="choice";return toast("업무 폴더를 다시 확인한 뒤 디자인을 선택해 주세요.");}
   const sid=view.sessionId,ticket=selectionGeneration;choiceSubmission=view;setStatus(active.state);error("");
   // Reserve the message position without displaying an unacknowledged answer.
-  const anchor=el("article",null,"message user");anchor.hidden=true;$("conversation").append(anchor);
+  const anchor=el("article",null,"message user");anchor.hidden=true;anchor.dataset.previousRunId=active.lastRunId||"";anchor.dataset.choiceId=view.choiceId;$("conversation").append(anchor);
   try{
     const response=await api("/api/choice",{id:sid,choiceId:view.choiceId,...answer});answeredChoices.add(view.key);
     if(active?.id===sid&&selectionGeneration===ticket){
       const message=[...(response.session?.messages||[])].reverse().find(item=>item.role==="user");
-      if(message){anchor.hidden=false;anchor.append(el("div","나","message-label"));const body=el("div",null,"message-body");renderText(body,message.text);anchor.append(body);}else anchor.remove();
+      if(message&&anchor.dataset.recoveredConfirmed!=="true"){anchor.hidden=false;anchor.append(el("div","나","message-label"));const body=el("div",null,"message-body");renderText(body,message.text);anchor.append(body);}else anchor.remove();
       if(active.choice?.id===view.choiceId)active.choice=null;renderWorkspaceChoice();
     }
   }catch(e){anchor.remove();if(active?.id===sid&&selectionGeneration===ticket)error(e.message);}
@@ -604,8 +606,64 @@ async function selectSession(id,{keepDraft=false}={}){
   taskHeader();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
 function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
+function restoreEventSnapshot(next,id){
+  if(!next||next.id!==id||active?.id!==id||!Array.isArray(next.messages)||!Array.isArray(next.requests)||!Number.isSafeInteger(next.seq))throw new Error("대화 화면의 복원 정보를 확인하지 못했어요. 업무를 다시 선택해 주세요.");
+  const area=$("work-area"),conversation=$("conversation"),top=area.scrollTop;
+  const following=globalThis.WorkspaceStream?.isFollowing?.()??(area.scrollHeight-top-area.clientHeight<120);
+  const oldMessages=[...conversation.children].filter(node=>node.classList.contains("message"));
+  const areaTop=area.getBoundingClientRect?.().top??0;
+  const anchor=oldMessages.find(node=>(node.getBoundingClientRect?.().bottom??-1)>areaTop);
+  const anchorText=anchor?.querySelector(".message-body")?.textContent?.slice(0,160),anchorRun=anchor?.dataset.runId;
+  const anchorOffset=anchor?.getBoundingClientRect?.().top-areaTop;
+  // Keep pending POST callbacks attached to their original bubble. The same
+  // snapshot may already contain that user message before its POST returns.
+  const pending=oldMessages.filter(node=>node.classList.contains("pending")||node.hidden&&choiceSubmission);
+  const pendingUser=pending.find(node=>node.classList.contains("pending"));
+  let acknowledged=-1;
+  if(pendingUser&&sending){
+    const confirmedRun=pendingUser.dataset.recoveredRunId;
+    for(let i=next.messages.length-1;i>=0;i--){const message=next.messages[i];if(message.role==="user"){
+      const ownedRun=confirmedRun?message.runId===confirmedRun:message.runId&&message.runId===next.lastRunId&&message.runId!==pendingUser.dataset.previousRunId;
+      if(ownedRun&&message.text===$("prompt").value.trim()&&JSON.stringify(message.files||[])===JSON.stringify(attachments)){acknowledged=i;break;}
+      if(!confirmedRun)break;
+    }}
+  }
+  const pendingChoice=pending.find(node=>node.hidden&&node.dataset.choiceId);
+  const latestUser=[...next.messages].reverse().find(message=>message.role==="user");
+  if(pendingChoice&&latestUser?.runId&&latestUser.runId===next.lastRunId&&latestUser.runId!==pendingChoice.dataset.previousRunId&&next.choice?.id!==pendingChoice.dataset.choiceId)pendingChoice.dataset.recoveredConfirmed="true";
+  globalThis.WorkspaceStream?.reset();if(!following)globalThis.WorkspaceStream?.pause();
+  if(globalThis.WorkspaceCapabilities?.isOpen())globalThis.WorkspaceStream?.suspend();
+  globalThis.WorkspaceRichContent?.reset(id);globalThis.WorkspaceExecutionView?.reset(id);globalThis.WorkspaceToolActivity?.reset(id);
+  streaming.clear();Object.assign(active,next);applyStopState(next);conversation.replaceChildren();renderedQueuedRequests.clear();
+  const partials=Array.isArray(next.streams)?next.streams:[];
+  delete active.streams; // The mounted stream owns this prefix after recovery.
+  const renderPartials=index=>{for(const part of partials)if(part.afterMessage===index){
+    applyDelta(part);
+    if(part.interrupted){const key=streamKey(part),node=streaming.get(key);if(node){node.classList.remove("streaming");node.append(el("small",next.state==="stopped"?"중지 전까지 받은 내용":"연결 중단 전까지 받은 내용","message-interrupted"));streaming.delete(key);}}
+  }};
+  renderPartials(-1);
+  next.messages.forEach((message,index)=>{
+    if(index===acknowledged){pendingUser.dataset.recoveredConfirmed="true";pendingUser.dataset.recoveredRunId=message.runId;conversation.append(pendingUser);}else renderMessage(message);
+    if(message.requestId)renderedQueuedRequests.add(message.requestId);renderPartials(index);
+  });
+  for(const node of pending)if(node!==pendingUser||acknowledged<0)conversation.append(node);
+  globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);
+  // A surviving approval is the same form, including typed answers, scope,
+  // in-flight submission and keyboard focus. Only expired cards are removed.
+  const requestIds=new Set(next.requests.map(request=>request.id));
+  for(const card of [...$("requests").children])if(!requestIds.has(card.dataset.requestId))card.remove();
+  next.requests.forEach(renderRequest);
+  globalThis.WorkspaceProgressView?.metadata(next.progress);renderConnection(next.connection);setStatus(next.state,next.statusLabel,next.lastRunId);
+  if(next.displayError)error(next.displayError);else if(next.state!=="error")error("");
+  taskHeader();renderSessions();refreshInspector();globalThis.WorkspaceWorkflow?.refresh();globalThis.WorkspaceStream?.changed();
+  if(!following){
+    const replacement=[...conversation.children].find(node=>node.dataset.runId===anchorRun&&node.querySelector(".message-body")?.textContent?.slice(0,160)===anchorText);
+    area.scrollTop=replacement&&Number.isFinite(anchorOffset)?area.scrollTop+replacement.getBoundingClientRect().top-areaTop-anchorOffset:top;
+  }
+}
 async function poll(id,after,signal){
-  const current=()=>!appClosed&&!signal.aborted&&active?.id===id;
+  const generation=selectionGeneration;
+  const current=()=>!appClosed&&!signal.aborted&&active?.id===id&&selectionGeneration===generation;
   const now=()=>globalThis.performance?.now?.()??Date.now();
   let failures=0;
   while(current()){
@@ -614,10 +672,14 @@ async function poll(id,after,signal){
       const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);
       receiving=false;failures=0;
       if(!current())return;
+      if(result.recovery){
+        if(result.recovery.session?.seq!==result.seq)throw new Error("대화 화면의 복원 순서를 확인하지 못했어요. 업무를 다시 선택해 주세요.");
+        restoreEventSnapshot(result.recovery.session,id);after=result.seq;active.seq=after;continue;
+      }
       let sliceStart=now(),handled=0;
       for(const event of result.events){
         if(!current())return;
-        handleEvent(event);after=event.seq;
+        handleEvent(event);after=event.seq;active.seq=after;
         // A slow machine may receive hundreds of tool/status records at once.
         // Preserve their order but give pointer, keyboard and paint tasks a turn
         // between small slices; a resolved Promise alone would not do that.
@@ -793,7 +855,7 @@ async function refreshFiles(directory){
   }finally{finishFileRefresh("files",request);}
 }
 function currentFileLocation(id,generation){return !appClosed&&active?.id===id&&selectionGeneration===generation;}
-async function refreshResults(reveal=false){if(isGeneralChat())return;const request=beginFileRefresh("results");if(!request)return;const {id}=request;try{const result=await api(`/api/results?id=${encodeURIComponent(id)}`,undefined,request.controller.signal);if(!currentFileRefresh("results",request))return;globalThis.WorkspaceExecutionView?.results(result.lastRunId,result.artifacts);$("results-list").replaceChildren();const items=(result.artifacts||[]).filter(file=>file.runId===result.lastRunId);$("result-count").textContent=items.length;$("empty-results").hidden=items.length>0;for(const file of items){const card=el("article",null,"result-card"),heading=el("div",null,"result-file-heading"),name=file.name||basename(file.path),extension=(name.match(/\.([a-z0-9]{1,8})$/i)?.[1]||"FILE").toUpperCase(),kind=el("span",extension,"result-file-type"),meta=el("div",null,"result-meta-row");kind.setAttribute("aria-hidden","true");heading.append(kind,el("strong",name,"result-file-name"));meta.append(el("span",file.change==="created"?"새로 확인한 파일":"변경된 파일","result-change"),el("span",when(file.observedAt),"result-meta"));card.append(heading,meta);card.title=file.path;globalThis.WorkspaceAttachments?.makeDraggable(card,file.path,id);const actions=el("div",null,"result-actions"),open=el("button","미리보기","quiet-button"),external=el("button","기본 앱에서 열기","text-button"),folder=el("button","폴더에서 보기","text-button"),follow=el("button","이 결과로 요청","text-button");const context={sessionId:id,path:file.path};open.onclick=()=>{if(active?.id===id)preview(file.path).catch(e=>error(e.message));};external.onclick=()=>openFileAction("open",context);folder.onclick=()=>openFileAction("reveal",context);external.disabled=folder.disabled=!!boot.demo;external.hidden=!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx|png|jpe?g|webp|zip)$/i.test(file.path);folder.hidden=false;follow.onclick=()=>{if(active?.id!==id)return;if(sending||choiceSubmission)return toast("요청 전송이 끝난 뒤 자료를 추가해 주세요.");attachments=[...new Set([...attachments,file.path])].slice(0,12);renderAttachments();$("prompt").focus();toast("요청할 자료에 추가했어요. 원하는 수정 내용을 입력하세요.");};actions.append(open,external,folder,follow);card.append(actions);if(/\.html?$/i.test(file.path))card.append(el("p","기본 앱에서 열면 원본의 스크립트와 외부 연결이 동작할 수 있어요.","external-file-note"));$("results-list").append(card);}if(items.length)$("results-list").append(el("p","요청 전후 이 공간에서 확인한 파일 변경입니다. 다른 프로그램의 변경이 포함될 수 있어요.","result-observation"));if(result.observation?.limited||result.observation?.errors)$("results-list").append(el("p","확인 범위에 제한이 있어요. 필요한 파일은 자료 목록에서도 확인하세요.","result-observation"));if(result.availability?.limited||result.availability?.errors)$("results-list").append(el("p","일부 파일의 현재 상태를 확인하지 못했어요. 잠시 후 새로고침해 주세요.","result-observation"));if(reveal&&items.length)setPanel("results");}catch(e){if(e.name!=="AbortError"&&currentFileRefresh("results",request))toast(e.message);}finally{finishFileRefresh("results",request);}}
+async function refreshResults(reveal=false){if(isGeneralChat())return;const request=beginFileRefresh("results");if(!request)return;const {id}=request;try{const result=await api(`/api/results?id=${encodeURIComponent(id)}`,undefined,request.controller.signal);if(!currentFileRefresh("results",request))return;globalThis.WorkspaceExecutionView?.results(result.lastRunId,result.artifacts);$("results-list").replaceChildren();const items=(result.artifacts||[]).filter(file=>file.runId===result.lastRunId);$("result-count").textContent=items.length;$("empty-results").hidden=items.length>0;for(const file of items){const card=el("article",null,"result-card"),heading=el("div",null,"result-file-heading"),name=file.name||basename(file.path),extension=(name.match(/\.([a-z0-9]{1,8})$/i)?.[1]||"FILE").toUpperCase(),kind=el("span",extension,"result-file-type"),meta=el("div",null,"result-meta-row");kind.setAttribute("aria-hidden","true");heading.append(kind,el("strong",name,"result-file-name"));meta.append(el("span",file.change==="created"?"새로 확인한 파일":"변경된 파일","result-change"),el("span",when(file.observedAt),"result-meta"));card.append(heading,meta);card.title=file.path;globalThis.WorkspaceAttachments?.makeDraggable(card,file.path,id);const actions=el("div",null,"result-actions"),open=el("button","미리보기","quiet-button"),external=el("button","기본 앱에서 열기","text-button"),folder=el("button","폴더에서 보기","text-button"),follow=el("button","이 결과로 요청","text-button");const context={sessionId:id,path:file.path};open.onclick=()=>{if(active?.id===id)preview(file.path).catch(e=>error(e.message));};external.onclick=()=>openFileAction("open",context);folder.onclick=()=>openFileAction("reveal",context);external.disabled=folder.disabled=!!boot.demo;external.hidden=!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx|png|jpe?g|webp|zip)$/i.test(file.path);folder.hidden=false;follow.onclick=()=>{const added=globalThis.WorkspaceAttachments?.addPath(file.path,{id,generation:request.generation,kind:"work"});if(added==="added"||added==="duplicate")$("prompt").focus();if(added==="added")toast("요청할 자료에 추가했어요. 원하는 수정 내용을 입력하세요.");};actions.append(open,external,folder,follow);card.append(actions);if(/\.html?$/i.test(file.path))card.append(el("p","기본 앱에서 열면 원본의 스크립트와 외부 연결이 동작할 수 있어요.","external-file-note"));$("results-list").append(card);}if(items.length)$("results-list").append(el("p","요청 전후 이 공간에서 확인한 파일 변경입니다. 다른 프로그램의 변경이 포함될 수 있어요.","result-observation"));if(result.observation?.limited||result.observation?.errors)$("results-list").append(el("p","확인 범위에 제한이 있어요. 필요한 파일은 자료 목록에서도 확인하세요.","result-observation"));if(result.availability?.limited||result.availability?.errors)$("results-list").append(el("p","일부 파일의 현재 상태를 확인하지 못했어요. 잠시 후 새로고침해 주세요.","result-observation"));if(reveal&&items.length)setPanel("results");}catch(e){if(e.name!=="AbortError"&&currentFileRefresh("results",request))toast(e.message);}finally{finishFileRefresh("results",request);}}
 function closePreview(){globalThis.WorkspaceHtmlPreview?.close();previewGeneration++;previewContext=null;previewPath=null;previewData=null;$("preview-content").replaceChildren();$("preview-modes").hidden=true;if($("preview-dialog").open)$("preview-dialog").close();}
 function renderHtmlPreview(mode="screen"){
   if(!previewContext||active?.id!==previewContext.sessionId||previewData?.kind!=="html")return;
@@ -862,17 +924,17 @@ async function submit(){
   if(!isGeneralChat()&&globalThis.WorkspaceComposer?.beforeSubmit()===false)return;
   const owner=active,sid=active.id,ticket=selectionGeneration,stopRevision=globalThis.WorkspaceStop?.revision(active.id)||0,text=$("prompt").value.trim(),files=[...attachments];sending=true;setStatus(active.state);renderAttachments();error("");
   $("conversation").querySelector(".conversation-empty")?.remove();
-  const pending=renderMessage({role:"user",text,files,pending:true});pending.classList.add("pending");pending.querySelector(".message-label").textContent="전송 중";globalThis.WorkspaceStream?.jump();
+  const pending=renderMessage({role:"user",text,files,pending:true});pending.classList.add("pending");pending.dataset.previousRunId=active.lastRunId||"";pending.querySelector(".message-label").textContent="전송 중";globalThis.WorkspaceStream?.jump();
   try{
     await api("/api/send",{id:sid,text,attachments:files,trusted:active.trusted});
-    owner.messages=owner.messages||[];owner.messages.push({role:"user",text,files});
+    owner.messages=owner.messages||[];if(pending.dataset.recoveredConfirmed!=="true")owner.messages.push({role:"user",text,files});
     pending.classList.remove("pending");pending.querySelector(".message-label").textContent="나";if(active?.id===sid&&globalThis.WorkspaceRichContent&&files.length){pending.querySelector(".message-files")?.remove();WorkspaceRichContent.files(pending,files,{sessionId:sid,workspace:active.workspace});}drafts.delete(sid);
     if(active?.id===sid){$("prompt").value="";attachments=[];renderAttachments();globalThis.WorkspaceInputKeys?.reset();globalThis.WorkspaceShortcuts?.afterSend(sid);await refreshSessionMeta();}
     else globalThis.WorkspaceShortcuts?.afterSend(sid);
     // Keep the existing event cursor and streamed text. Re-selecting here could
     // discard partial messages received before the POST acknowledgement.
   }catch(e){
-    pending.remove();
+    if(pending.dataset.recoveredConfirmed==="true"){pending.classList.remove("pending");pending.querySelector(".message-label").textContent="나";}else pending.remove();
     if(globalThis.WorkspaceStop?.handleFailure(e,sid,stopRevision)){
       if(active?.id===sid&&selectionGeneration===ticket&&!appClosed)saveDraft();
     }else if(e.code==="control_restore_required"&&globalThis.WorkspaceInlineControls){
@@ -1002,7 +1064,7 @@ $("shortcuts-dialog").onclose=()=>{
   if(target?.isConnected&&!target.disabled&&!target.closest?.("[hidden],[inert]")&&(!owner||owner.open))target.focus();
   else if(!appClosed)$("shortcuts-open").focus();
 };
-function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 트레이로 보내면 이 창을 숨기고 나중에 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
+function openSettings(){$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. ‘최소화하기’를 누르면 창을 숨기고 작업 표시줄의 알림 영역(트레이)에서 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
 $("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();};
 function restartConnectionLocked(allowedDialog=null,item=active){

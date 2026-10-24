@@ -222,6 +222,7 @@ globalThis.WorkspaceUpgrade = (() => {
     const select=$("upgrade-recovery-task");select.replaceChildren();
     recoveryRows().forEach((row,index)=>{const option=document.createElement("option");option.value=String(index);option.textContent=(row.id==="home:chat"?"일반 대화 홈":["home","home:work"].includes(row.id)?"업무 홈":hooks.taskTitle?.(row.id)||"이전 업무 "+row.id.slice(0,8))+(row.stashed?" · 임시 보관":"");select.append(option);});
     select.value="0";recoveryRow();$("upgrade-recovery-message").textContent="확인 전까지 이전 초안 기록을 유지합니다.";
+    globalThis.WorkspaceAppearance?.enhanceSelect?.(select);
     if(hooks.openRecovery)hooks.openRecovery("upgrade-recovery-dialog");else $("upgrade-recovery-dialog").showModal();
   }
   async function releaseRecovery(){

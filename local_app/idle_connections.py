@@ -30,7 +30,7 @@ def replacement_candidate(app, target):
         if (item is target or bridge is None or bridge.closed
                 or item.get('branch', {}).get('status') == 'pending'
                 or any(item.get(key) for key in ('_connecting', '_restarting', '_modelUpdating',
-                    '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_stopAdmission',
+                    '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim', '_stopAdmission', '_observationPending',
                     '_removingFromList', '_deleting', '_chatPreparing', '_capacityReservation', '_idleReleasing', '_controlRestore'))
                 or item['id'] in app.dispatch.steering
                 or any(getattr(bridge, key, False) for key in ('stopping', '_control_active',
@@ -84,7 +84,7 @@ def idle_candidate(app, target):
                 or not getattr(bridge, '_initialized', False)
                 or any(item.get(key) for key in ('requests', 'choice', '_connecting', '_restarting',
                     '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim',
-                    '_stopAdmission', '_removingFromList', '_deleting', '_chatPreparing', '_capacityReservation', '_idleReleasing',
+                    '_stopAdmission', '_removingFromList', '_deleting', '_chatPreparing', '_capacityReservation', '_idleReleasing', '_observationPending',
                     '_controlRestore', '_needsControlRestore', '_idleReleaseFailed'))
                 or item['id'] in app.dispatch.steering
                 or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
@@ -132,21 +132,28 @@ def _finish_release(app, candidate, old, resumable, *, explicit=False):
     except (OSError, ValueError, RuntimeError):
         cleaned = False
     with app.lock:
+        terminal = None
         if not cleaned:
             if explicit:
                 candidate['bridge'] = old
-                app.emit(candidate['id'], 'error', {'code': 'connection_replacement_cleanup_failed',
+                terminal = ('error', {'code': 'connection_replacement_cleanup_failed',
                     'message': '연결 종료를 확인하지 못했어요. 이 업무의 연결 상태를 확인해 주세요. 이어 할 일과 예약은 일시정지됩니다.',
                     'resumeSessionId': old.session_id if resumable else None})
             candidate['_idleReleaseFailed'] = True
-            return False
-        if explicit:
+        elif explicit:
             candidate['bridge'] = old
             for request_id in list(candidate.get('requests', {})):
                 app.emit(candidate['id'], 'request_closed', {'id': request_id})
             if candidate.get('choice'):
                 app.emit(candidate['id'], 'choice_closed', {'id': candidate['choice']['id']})
-            app.emit(candidate['id'], 'status', {'state': 'stopped', 'label': '새 업무 연결을 위해 중지했어요 · 이어 할 일과 예약은 일시정지됩니다'})
+            terminal = ('status', {'state': 'stopped', 'label': '새 업무 연결을 위해 중지했어요 · 이어 할 일과 예약은 일시정지됩니다'})
+    # The replacement reservation remains in place while file review runs.
+    # Do not carry app.lock into the terminal observation of a busy candidate.
+    if terminal is not None:
+        app.emit(candidate['id'], *terminal)
+    if not cleaned:
+        return False
+    with app.lock:
         candidate['sessionId'] = old.session_id if resumable else None
         candidate['_idleReleased'] = True
         candidate['_requireResumeIdentity'] = resumable

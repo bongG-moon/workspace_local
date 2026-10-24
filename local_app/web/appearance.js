@@ -6,6 +6,16 @@ globalThis.WorkspaceAppearance = (() => {
   const root=document.documentElement, valid=value=>["light","dark","system"].includes(value);
   const media=globalThis.matchMedia?.("(prefers-color-scheme: dark)");
   let preference=valid(root.dataset.appearance)?root.dataset.appearance:"light", busy=false, ready=false;
+  const supportsSelect=!!globalThis.CSS?.supports?.("appearance","base-select");
+  function enhanceSelect(select){
+    if(!select||!supportsSelect||select.multiple||select.hasAttribute("size")
+        ||select.firstElementChild?.tagName==="BUTTON")return;
+    // The browser keeps selectedcontent in sync with the actual option/value.
+    // A bounded content box lets long folder/model names ellipsize without
+    // duplicating values, change handlers, keyboard handling or observers.
+    const button=document.createElement("button");button.type="button";
+    button.append(document.createElement("selectedcontent"));select.prepend(button);
+  }
   function render(){
     const dark=preference==="dark"||(preference==="system"&&media?.matches);
     root.dataset.theme=dark?"dark":"light";root.dataset.appearance=preference;
@@ -43,6 +53,7 @@ globalThis.WorkspaceAppearance = (() => {
   function start(value){
     if(valid(value?.theme))preference=value.theme;
     ready=true;
+    document.querySelectorAll?.("select")?.forEach(enhanceSelect);
     const select=document.getElementById("appearance-select");
     if(select)select.onchange=()=>change(select.value);
     const toggle=document.getElementById("appearance-toggle");
@@ -50,5 +61,5 @@ globalThis.WorkspaceAppearance = (() => {
     render();
   }
   render();
-  return {start, systemChanged:()=>{if(preference==="system")render();}};
+  return {start, enhanceSelect, systemChanged:()=>{if(preference==="system")render();}};
 })();

@@ -355,8 +355,15 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 #settings-dialog .settings-control-note:empty,#settings-dialog #model-message:empty,#settings-dialog #permission-mode-message:empty{display:none}
 #settings-dialog .settings-heading .settings-control-note{margin:0}
 #settings-dialog .settings-status{padding:10px 12px;font-size:12px;line-height:1.7;background:var(--theme-surface,#edf0f7);border-radius:9px}
-#settings-dialog .appearance-options{max-width:none;display:grid;grid-template-columns:minmax(60px,1fr) minmax(140px,240px);align-items:center;gap:12px;margin-top:12px}
+#settings-dialog .appearance-options{max-width:380px;display:grid;grid-template-columns:minmax(0,1fr);gap:6px;margin-top:12px}
 #settings-dialog .appearance-options>label{margin:0}
+/* Keep the native select interaction, with a consistent inset caret. */
+#settings-dialog .settings-select{position:relative;width:100%;max-width:380px;min-width:0;color:var(--muted)}
+#settings-dialog .settings-select::after{content:"";position:absolute;right:15px;top:50%;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-70%) rotate(45deg);pointer-events:none}
+#settings-dialog .settings-select>select[id]{display:block;width:100%;appearance:none;padding-right:40px;text-overflow:ellipsis}
+#settings-dialog .settings-select:has(select:disabled){opacity:.6}
+#settings-dialog .input-row:has(#permission-mode-select),#settings-dialog .input-row:has(#model-input){max-width:380px}
+#settings-dialog .input-row>.settings-select{flex:1}
 #settings-dialog .settings-explainer{margin-top:10px;font-size:12px;line-height:1.7}
 #settings-dialog :is(.settings-explainer,.settings-detail)>summary{cursor:pointer;padding:7px 0;color:var(--muted);font-size:12px;font-weight:500;line-height:20px}
 #settings-dialog .settings-explainer>p{font-size:12px;line-height:1.75;margin:8px 0;color:var(--muted)}
@@ -447,7 +454,17 @@ dialog.path-picker .path-picker-location .quiet-button{
 }
 /* Follow the composer width when the results panel expands, not the window width. */
 .composer-heading .workflow-toolbar:not(:has(button:not([hidden]))){display:none}
-.composer-heading #stop{white-space:nowrap}
+.composer-heading .status{flex-wrap:wrap;row-gap:6px}
+.composer-heading #status-text{flex:1;min-width:100px}
+.composer-heading #stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;min-height:28px;padding:3px 9px;border:1px solid var(--theme-line-accent,#b8b9de);border-radius:8px;background:var(--accent-tint);color:var(--accent-ink);font-size:11px;font-weight:550;line-height:20px;white-space:nowrap;box-shadow:0 1px 2px #00000008}
+.composer-heading #stop::before{content:"";width:8px;height:8px;flex:none;border-radius:2px;background:currentColor}
+.composer-heading #stop:hover:not(:disabled){border-color:var(--accent-ink);background:color-mix(in srgb,var(--accent-ink) 18%,var(--surface));box-shadow:0 1px 3px #00000012}
+.composer-heading #stop:active:not(:disabled){box-shadow:none}
+@media(forced-colors:active){
+ #settings-dialog .settings-select>select[id]{appearance:auto;padding-right:11px}
+ #settings-dialog .settings-select::after{display:none}
+ .composer-heading #stop{border-color:ButtonText;background:ButtonFace;color:ButtonText;box-shadow:none}
+}
 @container composer (max-width:640px){
  .composer-heading{flex-wrap:wrap;gap:6px}
  .composer-heading .status{flex-basis:100%}
@@ -580,3 +597,40 @@ dialog.path-picker .path-picker-location .quiet-button{
 
 /* Preview cleanup immediately releases iframe content and resize observers. */
 #preview-dialog:not([open]){transition:none}
+
+/* Style the browser-owned picker as well as its trigger. No mirrored option
+   state, observers or polling; unsupported engines keep their native picker. */
+@supports (appearance:base-select){
+ :root select:not([multiple]):not([size]),
+ :root select:not([multiple]):not([size])::picker(select){appearance:base-select!important}
+ :root select:not([multiple]):not([size]){display:flex;align-items:center;gap:12px;padding-inline-end:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-align:left}
+ :root select>button{all:unset;display:flex;flex:1;min-width:0;overflow:hidden;cursor:inherit}
+ :root select selectedcontent{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ :root select:not([multiple]):not([size]):disabled{cursor:not-allowed;opacity:.55}
+ :root select:not([multiple]):not([size]):hover:not(:disabled){border-color:var(--theme-line-accent,#b8b9d9)}
+ :root select:not([multiple]):not([size]):open{border-color:var(--accent-ink)}
+ :root select:not([multiple]):not([size])::picker-icon{content:"";width:7px;height:7px;flex:none;margin:0 3px 3px auto;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);color:var(--muted)}
+ :root select:not([multiple]):not([size]):open::picker-icon{transform:translateY(3px) rotate(225deg)}
+ :root select:not([multiple]):not([size])::picker(select){box-sizing:border-box;min-inline-size:anchor-size(self-inline);max-inline-size:calc(100vw - 24px);max-block-size:min(320px,60dvh);overflow:auto;overscroll-behavior:contain;margin-block:6px;padding:5px;border:1px solid var(--line);border-radius:12px;background:var(--theme-surface-raised,#fbfcff);color:var(--ink);box-shadow:0 8px 28px #00000020,0 2px 6px #0000000a;font-family:inherit;font-size:12px;line-height:20px;scrollbar-width:thin}
+ :root select:not([multiple]):not([size]) option{display:flex;align-items:center;gap:10px;min-height:34px;padding:7px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--ink);font-size:12px;font-weight:400;line-height:20px;white-space:normal;overflow-wrap:anywhere;cursor:pointer}
+ :root select:not([multiple]):not([size]) option:checked{background:var(--accent-tint);color:var(--accent-ink);font-weight:600}
+ :root select:not([multiple]):not([size]) option:hover:not(:disabled){background:var(--theme-surface-hover,#edf0f7)}
+ :root select:not([multiple]):not([size]) option:focus-visible{outline:2px solid var(--accent-ink);outline-offset:-2px;background:var(--theme-surface-hover,#edf0f7)}
+ :root select:not([multiple]):not([size]) option::checkmark{order:1;flex:none;margin-left:auto;color:var(--accent-ink);font-size:13px}
+ :root select:not([multiple]):not([size]) option:disabled{color:var(--muted);opacity:.55;cursor:not-allowed}
+ :root select:not([multiple]):not([size]) optgroup{padding:5px 0;font-size:11px;color:var(--muted)}
+ #settings-dialog .settings-select::after{display:none}
+ #settings-dialog .settings-select>select[id]{display:flex;padding-right:12px}
+ @media(forced-colors:active){
+  :root select:not([multiple]):not([size])::picker(select){background:Canvas;color:CanvasText;border-color:ButtonBorder;box-shadow:none}
+  :root select:not([multiple]):not([size]) option:checked{background:Highlight;color:HighlightText;forced-color-adjust:none}
+  :root select:not([multiple]):not([size]) option:checked::checkmark{color:HighlightText}
+ }
+}
+/* Composer menus retain their richer descriptions with the same selection cue. */
+#composer-controls-panel{border-radius:12px;box-shadow:0 8px 28px #00000020,0 2px 6px #0000000a}
+.runtime-option[aria-pressed=true]{background:var(--accent-tint);color:var(--accent-ink)}
+
+/* Guide links share the book mark; inline icons follow the link's text color. */
+.manual-link-icon{display:inline-block;width:16px;height:16px;flex:none;margin-inline-start:4px;vertical-align:-3px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.help-resource-label{align-items:center}
