@@ -1,4 +1,4 @@
-# AX Workspace 0.23.30
+# AX Workspace 0.23.32
 
 **내 업무와 AI가 만나는 공간**
 
@@ -10,11 +10,11 @@
 
 화면은 중앙 뉴트럴과 기존 좌우 패널 색상을 조합한 A2 구성입니다. 사이드바의 글자·아이콘·행 간격을 줄여 목록을 간결하게 표시하며 라이트·다크 모드를 함께 지원합니다.
 
-**현재 소스와 배포 버전은 0.23.30입니다.**
+**현재 소스와 배포 버전은 0.23.32입니다.** 2026-10-25 수정본에는 선택 설치형 확장을 위한 범용 연결부가 포함됩니다. 확장을 설치하지 않으면 추가 메뉴·화면 자산·worker·네트워크 요청이 생기지 않습니다.
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.30/AX-Workspace-0.23.30-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.30/AX-Workspace-0.23.30-vbs.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.32/AX-Workspace-0.23.32-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.32/AX-Workspace-0.23.32-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.32/workspace-local-0.23.32-source.zip)**
 
 [NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
@@ -22,19 +22,30 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.30-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.30.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.32-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.32.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 배포를 추가했습니다.** GitHub 0.23.30 Release의 `AX-Workspace-0.23.30-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.30.exe`, `Company-Workspace-0.23.30.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP은 그대로 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 파일을 권장합니다.** GitHub 0.23.32 Release의 `AX-Workspace-0.23.32-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.32.exe`, `Company-Workspace-0.23.32.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP의 사용 방식은 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 
 기존 ZIP 방식도 계속 사용할 수 있습니다. 새 ZIP을 별도 폴더에 풀어 실행하면 버전 전환을 준비합니다. 같은 버전·같은 빌드이거나 더 최신 버전이 이미 실행 중이면 기존 창을 엽니다. 같은 버전의 다른 빌드나 빌드를 확인할 수 없는 이전 앱이 실행 중이면 WS-48로 완전 종료 후 새 EXE 실행을 안내합니다. 창의 X는 앱을 트레이에 남깁니다.
 
+이미 0.23.32를 사용하는 경우에도 이전 설치 파일에는 확장 연결부가 없을 수 있습니다. 트레이에서 **완전 종료**한 뒤 최신 설치 파일로 다시 설치하세요. 버전 숫자만으로 이번 빌드 적용 여부를 판단하지 않습니다.
+
 **답변 중지**는 현재 요청만 멈추며, Claude가 중지를 확인하면 같은 연결과 대화에서 새 요청을 보낼 수 있습니다. 이미 수행한 파일 변경은 되돌리지 않습니다. 연결을 닫으려면 **설정 → 업무 연결 종료**, 앱까지 끝내려면 **설정 → 완전히 종료** 또는 **트레이 → 완전 종료**를 선택하세요. [중지 후 이어서 하기](docs/WORKSPACE_USER_GUIDE.html#productivity)
+
+## 0.23.32 변경
+
+- 수신이 밀린 응답 화면을 현재 대화 상태로 복원하고, 파일 확인 중 다른 업무의 버튼이 기다리는 구간을 줄였습니다.
+- 결과 파일 첨부의 초안 저장·한도 확인, 이어 할 일 안내·배치, 답변 중지 버튼과 설정·사용 안내 화면을 개선했습니다.
+- **2026-10-25 선택 확장 지원:** 공통 앱에 범용 확장 연결부를 추가했습니다. 확장 화면은 메뉴를 선택했을 때 열리며 기존 업무·대화·작성 중인 내용은 유지됩니다.
+- 조직용 **P&T AI Square**는 [ai_square 저장소](https://github.com/bongG-moon/ai_square)의 별도 확장 설치 파일과 플랫폼 배포본으로 제공합니다. 공통 앱에 서버 주소·개인 KEY·조직 기능을 넣지 않습니다. 해당 기능이 필요한 사용자만 별도로 설치합니다.
+
+[0.23.32 변경 내용](docs/RELEASE_NOTES_0.23.32.md) · [범용 확장 규격](docs/WORKSPACE_EXTENSIONS.md)
 
 ## 0.23.30 변경
 

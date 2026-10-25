@@ -6,7 +6,7 @@ globalThis.WorkspaceSessionImport = (() => {
   function busy(value){loading=value;$("import-find").disabled=value;$("import-refresh").disabled=value;$("import-apply").disabled=value||!selected||selected.workspaceAvailable===false;}
   function reset(){selected=null;preview.replaceChildren();$("import-apply").disabled=true;}
   function render(){
-    const shown=!!active?.imported&&!globalThis.WorkspaceCapabilities?.isOpen();
+    const shown=!!active?.imported&&!globalThis.WorkspaceCapabilities?.isOpen() && !globalThis.WorkspaceExtensions?.isOpen?.();
     $("imported-context").hidden=!shown;
     if(!shown)return;
     const connected=!!active.connection&&active.connection.connected!==false;

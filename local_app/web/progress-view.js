@@ -33,7 +33,7 @@ globalThis.WorkspaceProgressView = (() => {
   function reset(id=null,value=null,runId=null){close();sessionId=clean(id,160)||null;currentRun=clean(runId,160)||null;filter=null;metadata=normalizeMetadata(value);updateSummary();}
   function isBottom(){return !view||view.scroller.scrollHeight-view.scroller.scrollTop-view.scroller.clientHeight<72;}
   function revealWithinWorkArea(){
-    if(globalThis.WorkspaceCapabilities?.isOpen())return;
+    if((globalThis.WorkspaceCapabilities?.isOpen()||globalThis.WorkspaceExtensions?.isOpen?.()))return;
     const area=document.getElementById("work-area");if(!area||!host)return;
     const frame=area.getBoundingClientRect(),panel=host.getBoundingClientRect();
     const top=frame.top+(area.clientTop||0),height=area.clientHeight,bottom=top+height;
@@ -170,9 +170,9 @@ globalThis.WorkspaceProgressView = (() => {
     const advanced=next.lastSeq>metadata.lastSeq||next.revision>metadata.revision;metadata=next;return advanced;
   }
   function changed(value){const advanced=acceptMetadata(value);updateSummary();renderState();if(advanced&&expanded)schedule();}
-  function activate(){if(globalThis.WorkspaceCapabilities?.isOpen()){close();return;}if(expanded||!sessionId)return;globalThis.WorkspaceStream?.pause();expanded=true;mount();void load("latest",true);}
+  function activate(){if((globalThis.WorkspaceCapabilities?.isOpen()||globalThis.WorkspaceExtensions?.isOpen?.())){close();return;}if(expanded||!sessionId)return;globalThis.WorkspaceStream?.pause();expanded=true;mount();void load("latest",true);}
   function open(runId=null){
-    if(!sessionId||!detail||globalThis.WorkspaceCapabilities?.isOpen())return false;const next=clean(runId,160)||null;
+    if(!sessionId||!detail||(globalThis.WorkspaceCapabilities?.isOpen()||globalThis.WorkspaceExtensions?.isOpen?.()))return false;const next=clean(runId,160)||null;
     if(filter!==next){close();filter=next;}detail.open=true;updateSummary();activate();summary.focus({preventScroll:true});revealWithinWorkArea();return true;
   }
   function attach(value){

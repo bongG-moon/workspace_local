@@ -9,7 +9,7 @@ globalThis.WorkspaceStream = (() => {
   let observer = null, observing = false, suspended = false, readingTop = 0;
   let intentUntil = 0, direction = 0, dragging = false, touchY = null;
   const atBottom = () => area.scrollHeight - area.scrollTop - area.clientHeight <= 4;
-  const visible = () => !!active && !suspended && !globalThis.WorkspaceCapabilities?.isOpen();
+  const visible = () => !!active && !suspended && !globalThis.WorkspaceCapabilities?.isOpen() && !globalThis.WorkspaceExtensions?.isOpen?.();
   function badge() { latest.hidden = !visible() || following; }
   function cancelScroll() {
     if (scrollFrame !== null) globalThis.cancelAnimationFrame?.(scrollFrame);

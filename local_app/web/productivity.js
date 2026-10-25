@@ -8,11 +8,11 @@ globalThis.WorkspaceProductivityActions = (() => {
   const canBranch = () => !!active?.sessionId && active?.branch?.status !== "pending" && ["idle", "done"].includes(active.state) && !boot.demo && !sending;
   function update() {
     if($("branch-origin")) {
-      $("branch-origin").hidden = !active?.branch || !!globalThis.WorkspaceCapabilities?.isOpen();
+      $("branch-origin").hidden = !active?.branch || (!!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.());
       $("branch-origin-status").textContent = active?.branch?.status === "pending" ? "분기 준비 · 첫 요청부터 독립된 Claude 대화로 이어가요" : "원본 대화에서 분기한 업무";
       $("branch-source-open").hidden = !sessions.some(row => row.id === active?.branch?.sourceTaskId);
     }
-    $("branch-open").hidden = !active || !!globalThis.WorkspaceCapabilities?.isOpen();
+    $("branch-open").hidden = !active || (!!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.());
     $("branch-open").disabled = !canBranch();
     $("changes-open").disabled = !active;
   }

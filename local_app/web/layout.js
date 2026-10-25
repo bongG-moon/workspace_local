@@ -263,7 +263,7 @@ globalThis.WorkspaceLayout = (() => {
   function renderTransition(old, focused) {
     globalThis.WorkspaceInlineControls?.close?.({focus:false});
     globalThis.WorkspaceComposer?.close?.();
-    if (preferences.miniMode && app.classList.contains("catalog-open")) globalThis.WorkspaceCapabilities?.close?.();
+    if (preferences.miniMode && app.classList.contains("catalog-open")) { globalThis.WorkspaceCapabilities?.close?.(); globalThis.WorkspaceExtensions?.close?.(); }
     const state = render();
     // Keep the textarea and its selection untouched. Only recover focus when
     // its old surface disappeared, including CSS-only controls in mini mode.

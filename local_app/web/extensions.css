@@ -1,0 +1,15 @@
+/* Loaded only for installed extensions. Reuse the catalog page layout. */
+.app.chat-mode .sidebar .primary-nav.workspace-extension-navigation{display:flex}
+.extension-open .work-area{display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.extension-open #welcome,.extension-open #task-view,.extension-open #branch-origin,.extension-open #imported-context{display:none!important}
+.workspace-extension-page{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;width:100%;overflow:hidden;background:var(--surface-raised)}
+.workspace-extension-utility{display:flex;align-items:center;justify-content:space-between;gap:16px;flex:none;padding:12px 32px;border-bottom:1px solid var(--line)}
+.workspace-extension-utility small{font-size:11px;line-height:18px;color:var(--muted)}
+.workspace-extension-back{display:inline-flex;align-items:center;gap:7px;font-size:12px;min-height:32px;padding:4px 0}
+.workspace-extension-back .icon{width:16px;height:16px;transform:rotate(180deg)}
+.workspace-extension-body{position:relative;min-height:0;flex:1;display:flex;overflow:hidden}
+.workspace-extension-frame{display:block;flex:1;width:100%;height:100%;min-width:0;min-height:0;border:0;background:var(--surface-raised);color-scheme:normal}
+.workspace-extension-loading{position:absolute;inset:0;display:grid;place-content:center;margin:0;padding:28px;font-size:13px;line-height:22px;color:var(--muted);text-align:center;pointer-events:none;white-space:pre-wrap}
+.workspace-extension-status,.workspace-extension-external{flex:none;margin:0;padding:6px 32px;border-bottom:1px solid var(--line);font-size:11px;line-height:18px;background:var(--surface);color:var(--muted)}
+.workspace-extension-external{color:var(--accent-ink);text-decoration:underline;text-underline-offset:3px}.workspace-extension-status[hidden],.workspace-extension-external[hidden]{display:none}
+@media(max-width:700px){.workspace-extension-utility{padding:8px 18px}.workspace-extension-status,.workspace-extension-external{padding:6px 18px}.workspace-extension-menu{min-width:0}.workspace-extension-menu>span{max-width:160px}}

@@ -38,6 +38,7 @@ from .picker_channel import private_picker_directory
 from .windows_paths import desktop_folder, workspace_path, DESKTOP_UNAVAILABLE
 from .windows_process import powershell_path
 from .owned_process import run_owned, CancelledError
+from .extensions import ExtensionHost, ExtensionError, UI_CSP
 from .attention import AttentionNotifier, snapshot as attention_snapshot
 from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_policy
 from .drafts import DraftStore, MAX_REQUEST as MAX_DRAFT_REQUEST
@@ -137,6 +138,7 @@ class LocalApp:
         from .managed_launcher import entry_details
         self.appearance = Appearance(state)
         self.layout_preferences = LayoutPreferences(state)
+        self.extensions = ExtensionHost(state)
         self.launcher_details = entry_details(WORKSPACE_VERSION)
         self.token = secrets.token_urlsafe(32)
         from .ui_health import UiHealthLog
@@ -675,6 +677,7 @@ class LocalApp:
         return result
 
     def bootstrap(self):
+        extension_catalog = self.extensions.snapshot()
         with self.lock:
             sessions = self.session_order.ordered(self.visible_sessions())
             order = self.session_order.snapshot()
@@ -704,6 +707,8 @@ class LocalApp:
                     "upgradeWarning": self.upgrade.warning,
                     "appearance": self.appearance.snapshot(),
                     "layout": self.layout_preferences.snapshot(),
+                    "extensions": extension_catalog['extensions'],
+                    "extensionWarnings": extension_catalog['warnings'],
                     "launcher": self.launcher_details,
                     "executionMode": self.execution_mode,
                     "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
@@ -2481,6 +2486,8 @@ class LocalApp:
             if hasattr(self, 'dispatch'):
                 self.dispatch.stop()
             issues = []
+            if not self.extensions.close():
+                issues.append({'code': 'extension_cleanup_pending'})
             cleaned = {}
             def close_bridges():
                 with self.lock:
@@ -2640,6 +2647,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.appearance.snapshot())
             if route.path == "/api/bootstrap":
                 return self.reply(app.bootstrap())
+            if route.path == '/api/extensions':
+                return self.reply(app.extensions.snapshot(refresh=True))
+            extension_view = re.fullmatch(r'/extension-ui/([a-z0-9.-]+)', route.path)
+            if extension_view:
+                if not self.execution_access():
+                    return self.reply({'error': '이 창의 연결 권한을 확인할 수 없습니다.'}, 403)
+                html = app.extensions.consume_view(extension_view.group(1), query.get('ticket', [''])[0])
+                return self.reply(html, content_type='text/html; charset=utf-8', csp=UI_CSP)
             if route.path == '/api/app-update':
                 return self.reply(app.app_updates.check())
             if route.path == '/api/app-update-history':
@@ -2784,6 +2799,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/release-history.css": ("release-history.css", "text/css; charset=utf-8"),
                       "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
                       "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
+                      "/extensions.js": ("extensions.js", "text/javascript; charset=utf-8"),
+                      "/extensions.css": ("extensions.css", "text/css; charset=utf-8"),
                       "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
                       "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
                       "/rendering.js": ("rendering.js", "text/javascript; charset=utf-8"),
@@ -2817,6 +2834,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(payload, content_type=mime)
             return self.reply({"error": "없는 화면입니다."}, 404)
         except (ValueError, OSError, KeyError) as exc:
+            if isinstance(exc, ExtensionError):
+                return self.reply({'error': str(exc), 'code': exc.code}, exc.status)
             return self.reply({"error": str(exc)}, 400)
 
     def do_POST(self):
@@ -2888,6 +2907,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.dispatch_post(route, data)
         except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             payload = {"error": str(exc)}
+            if isinstance(exc, ExtensionError):
+                payload.update(code=exc.code, verificationRequired=exc.verification_required)
+                return self.reply(payload, exc.status)
             if getattr(exc, 'code', None):
                 payload['code'] = exc.code
             if getattr(exc, 'next_action', None):
@@ -2960,6 +2982,36 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory)', route)
+        if extension_route:
+            extension_id, operation = extension_route.groups()
+            if operation == 'view':
+                if data:
+                    raise ValueError('확장 화면 요청의 항목을 확인해 주세요.')
+                return self.reply(app.extensions.view(extension_id))
+            if operation == 'directory':
+                if data:
+                    raise ValueError('설치 폴더는 폴더 선택 창에서 선택해 주세요.')
+                return self.reply(app.extensions.pick_directory(extension_id, app.pick))
+            if set(data) - {'action', 'payload', 'sessionId', 'directoryToken'} or 'action' not in data:
+                raise ValueError('확장 실행 요청의 항목을 확인해 주세요.')
+            workspace = None
+            session_id = data.get('sessionId')
+            if session_id is not None:
+                if not isinstance(session_id, str):
+                    raise ValueError('확장에 연결할 업무를 확인해 주세요.')
+                with app.lock:
+                    item = app.sessions.get(session_id)
+                    if item is None or app.session_visibility.contains(session_id):
+                        raise ValueError('확장에 연결할 업무를 찾을 수 없습니다.')
+                    if item.get('kind', 'work') == 'work':
+                        app._validate_remembered_trust(item)
+                        if item.get('trusted'):
+                            workspace = str(item['workspace'])
+            context = {'workspace': workspace}
+            if 'directoryToken' in data:
+                context.update(app.extensions.directory_context(extension_id, data['directoryToken']))
+            return self.reply(app.extensions.action(extension_id, data['action'], data.get('payload', {}), context=context))
         if route == '/api/session-groups':
             return self.reply(app.change_session_groups(data))
         if route == '/api/drafts':

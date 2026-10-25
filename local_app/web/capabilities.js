@@ -416,6 +416,7 @@ globalThis.WorkspaceCapabilities = (() => {
   }
   function open() {
     if(globalThis.WorkspaceModes?.isChat())return;
+    globalThis.WorkspaceExtensions?.close();
     if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     globalThis.WorkspaceStream?.suspend();
     opened = true; app().classList.add("catalog-open");globalThis.WorkspaceLayout?.refresh();
