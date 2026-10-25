@@ -473,3 +473,26 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 
 /* Preserve readable paragraphs in confirmation dialogs, including connection replacement. */
 #action-message{white-space:pre-line;overflow-wrap:anywhere;line-height:1.7}
+
+/* Optional extension import: shared controls, no external or startup assets. */
+.extension-import-dialog{width:min(580px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;overflow:hidden;flex-direction:column}
+.extension-import-dialog[open]{display:flex}
+.extension-import-dialog>.dialog-head{padding:18px 24px;flex:none}
+.extension-import-dialog .dialog-head h2{font-size:18px}
+.extension-import-dialog .dialog-scroll-body{padding:0 24px 20px;overflow:auto}
+.extension-import-summary{margin:0;display:grid;gap:12px;font-size:13px;line-height:1.6}
+.extension-import-summary>div{display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px}
+.extension-import-summary>div[hidden]{display:none}
+.extension-import-summary dt{color:var(--theme-text-muted);font-size:12px}
+.extension-import-summary dd{margin:0;overflow-wrap:anywhere;color:var(--ink)}
+.extension-import-summary>div:first-child dd{font-weight:600}
+.extension-import-trust{padding:14px 0 0;margin:16px 0 0;border-top:1px solid var(--theme-line);font-size:12px;line-height:1.8;color:var(--theme-text-secondary)}
+.extension-import-warnings{margin:12px 0;padding:10px 12px 10px 28px;border:1px solid var(--theme-line);border-radius:10px;font-size:12px;line-height:1.8;color:var(--theme-text-secondary)}
+.extension-import-details{margin-top:14px;font-size:11px;color:var(--theme-text-muted)}
+.extension-import-details summary{cursor:pointer;padding:3px 0}
+.extension-import-details p{margin:8px 0 4px;font-size:11px}
+.extension-import-details code{display:block;overflow-wrap:anywhere;font-size:10px}
+.extension-import-result{margin:14px 0 0;font-size:12px;line-height:1.8;color:var(--theme-text-secondary);overflow-wrap:anywhere}
+.extension-import-dialog .dialog-actions{padding:16px 24px;margin-top:0;border-top:1px solid var(--theme-line);flex:none}
+.extension-import-dialog .dialog-actions button{min-height:32px;font-size:12px;padding:6px 14px}
+@media(max-width:480px){.extension-import-dialog .dialog-scroll-body{padding:0 18px 18px}.extension-import-summary>div{grid-template-columns:68px minmax(0,1fr);gap:8px}.extension-import-dialog .dialog-actions{padding:14px 18px}}

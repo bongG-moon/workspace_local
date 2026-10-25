@@ -1081,7 +1081,7 @@ function renderExtensionWarning(){
 }
 function openSettings(){renderExtensionWarning();$("hide-window").hidden=boot.window?.hideSupported!==true;$("window-behavior-note").textContent=boot.window?.hideSupported===true?"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. ‘최소화하기’를 누르면 창을 숨기고 작업 표시줄의 알림 영역(트레이)에서 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.":"창을 닫아도 진행 중인 업무와 예약은 계속됩니다. 실행기로 다시 열 수 있습니다. 작업을 멈추고 앱을 종료하려면 ‘완전히 종료’를 선택하세요.";$("model-input").value=active?.modelOverride||"";renderConnection(active?.connection);$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";$("permission-mode-select").value=active?.connection?.permissionModeOverride||"";updatePermissionControls();showDialog("settings-dialog");globalThis.WorkspaceAppUpdates?.settingsOpened();}
 $("settings-open").onclick=$("connection-settings").onclick=openSettings;$("settings-close").onclick=()=>$("settings-dialog").close();
-$("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();};
+$("settings-dialog").onclose=()=>{globalThis.WorkspaceAppUpdates?.settingsClosed();globalThis.WorkspaceExtensionImport?.settingsClosed();};
 function restartConnectionLocked(allowedDialog=null,item=active){
   return !item||stopState(item)==="stopping"||stopRequests.has(item?.id)||boot.demo||appClosed||quitting||restartingConnections.has(item?.id)||item?.connection?.restarting===true||connectionPreparing||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||nativeOpening||attachmentPicking||pendingRequestAnswers.has(item?.id)||!!pendingConfirmation||!!globalThis.WorkspaceAttachments?.isUploading()||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceComposer?.waitForPreparation?.()||!!globalThis.WorkspaceInlineControls?.waitForPreparation?.()||!!globalThis.WorkspaceCapabilities?.isPreparing?.(item?.id)||modalStack.some(dialog=>dialog.open&&dialog!==$("settings-dialog")&&dialog!==allowedDialog);
 }
@@ -1317,6 +1317,7 @@ function enterShutdown(state,issues=[]){
   $("settings-dialog").close();
   globalThis.WorkspaceCapabilities?.close();
   globalThis.WorkspaceExtensions?.stop();
+  globalThis.WorkspaceExtensionImport?.stop();
   globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceReleaseHistory?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
   if(pollController)pollController.abort();
   for(const id of ["new-chat","choose-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
@@ -1456,14 +1457,33 @@ globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,
 globalThis.WorkspaceReleaseHistory?.attach({api:(path,data,signal)=>api(path,data,signal),openDialog:id=>showDialog(id)});
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
   canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
+let extensionImportLoad;
+$("extension-import-open").onclick=async()=>{
+  if(appClosed||$("extension-import-open").disabled)return;
+  $("extension-import-open").disabled=true;
+  try{
+    if(!extensionImportLoad)extensionImportLoad=new Promise((resolve,reject)=>{
+      const script=document.createElement("script");script.src="/extension-import.js";script.async=true;
+      script.onload=resolve;script.onerror=()=>{extensionImportLoad=null;script.remove();reject(Error("확장 가져오기 화면을 불러오지 못했어요. 다시 시도해 주세요."));};
+      document.head.append(script);
+    });
+    await extensionImportLoad;
+    if(appClosed||!$("settings-dialog").open)return;
+    if(!globalThis.WorkspaceExtensionImport)throw Error("확장 가져오기 화면을 불러오지 못했어요. 앱을 다시 열어 주세요.");
+    globalThis.WorkspaceExtensionImport.attach({api,openDialog:showDialog,isClosed:()=>appClosed,
+      refresh:async()=>{const catalog=await api("/api/extensions");if(appClosed)return;boot.extensions=catalog.extensions;boot.extensionWarnings=catalog.warnings;renderExtensionWarning();await loadExtensions(catalog.extensions,true);}});
+    await globalThis.WorkspaceExtensionImport.open();
+  }catch(e){if(!appClosed){$("extension-import-status").textContent=e.message;$("extension-import-status").hidden=false;}}
+  finally{$("extension-import-open").disabled=appClosed||!!globalThis.WorkspaceExtensionImport?.isBusy();}
+};
 let extensionsLoad;
-function loadExtensions(entries){
+function loadExtensions(entries,strict=false){
   // Optional extensions impose no asset request, listener, timer, or layout
   // change on installations that do not contain an extension.
   if(!Array.isArray(entries)||!entries.length||appClosed)return;
   if(!extensionsLoad)extensionsLoad=new Promise((resolve,reject)=>{
     const script=document.createElement("script");script.src="/extensions.js";script.async=true;
-    script.onload=resolve;script.onerror=()=>reject(Error("추가 기능 화면을 불러오지 못했어요. 앱을 다시 열어 주세요."));
+    script.onload=resolve;script.onerror=()=>{extensionsLoad=null;script.remove();reject(Error("추가 기능 화면을 불러오지 못했어요. 앱을 다시 열어 주세요."));};
     document.head.append(script);
   });
   return extensionsLoad.then(()=>{
@@ -1472,7 +1492,7 @@ function loadExtensions(entries){
       beforeOpen:()=>{saveDraft();globalThis.WorkspaceCapabilities?.close();if(globalThis.WorkspaceLayout?.snapshot?.()?.miniMode)globalThis.WorkspaceLayout.setMiniMode(false);globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceInlineControls?.close?.({focus:false});globalThis.WorkspaceComposer?.close?.();globalThis.WorkspaceStream?.suspend();},
       viewChanged:opened=>{taskHeader();globalThis.WorkspaceLayout?.refresh();if(!opened)globalThis.WorkspaceStream?.resume();},
       getContext:()=>({sessionId:active?.id||"",kind:isGeneralChat()?"chat":"work",workspace:active?.workspace||"",title:active?.title||""})});
-  }).catch(e=>{if(!appClosed)toast(e.message);});
+  }).catch(e=>{if(strict)throw e;if(!appClosed)toast(e.message);});
 }
 async function init(){try{
   boot=await api("/api/bootstrap");globalThis.WorkspaceLayout?.hydrate(boot.layout);globalThis.WorkspaceExecutionMode?.configure({api});globalThis.WorkspaceExecutionMode?.start(boot.executionMode,boot.launcher);globalThis.WorkspaceAppearance?.start(boot.appearance);const shutdown=bootstrapShutdownState(boot);

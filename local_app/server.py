@@ -2800,6 +2800,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
                       "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
                       "/extensions.js": ("extensions.js", "text/javascript; charset=utf-8"),
+                      "/extension-import.js": ("extension-import.js", "text/javascript; charset=utf-8"),
                       "/extensions.css": ("extensions.css", "text/css; charset=utf-8"),
                       "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
                       "/app-updates.css": ("app-updates.css", "text/css; charset=utf-8"),
@@ -2982,6 +2983,9 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        extension_import = re.fullmatch(r'/api/extensions/import/(prepare|confirm|cancel)', route)
+        if extension_import:
+            return self.reply(app.extensions.import_package(extension_import.group(1), data, app.pick))
         extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory)', route)
         if extension_route:
             extension_id, operation = extension_route.groups()

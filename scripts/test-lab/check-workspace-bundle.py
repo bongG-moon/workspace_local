@@ -38,7 +38,7 @@ expected.update({'local_app/appearance.py', 'local_app/managed_launcher.py',
                  'local_app/web/appearance.js', 'local_app/web/appearance.css'})
 expected.add('local_app/web/focus-navigation.js')
 expected.add('local_app/layout_preferences.py')
-expected.update({'local_app/extensions.py', 'local_app/web/extensions.js', 'local_app/web/extensions.css'})
+expected.update({'local_app/extensions.py', 'local_app/extension_install.py', 'local_app/web/extensions.js', 'local_app/web/extensions.css', 'local_app/web/extension-import.js'})
 expected.update({'local_app/build_identity.py', 'local_app/workspace_preferences.py'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})

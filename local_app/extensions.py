@@ -7,6 +7,7 @@ Worker jobs are finite, independently serialized and own their descendants.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 import hashlib
 import itertools
 import json
@@ -24,6 +25,7 @@ from .owned_process import CancelledError, run_owned
 
 HOST_API = 1
 MAX_EXTENSIONS = 16
+MAX_CATALOG_ENTRIES = 128
 MAX_MANIFEST = 128 * 1024
 MAX_FILES = 512
 MAX_PACKAGE = 64 * 1024 * 1024
@@ -51,11 +53,33 @@ class ExtensionError(ValueError):
         self.verification_required = verification_required
 
 
+def fs_path(path):
+    """Use Win32 extended paths consistently for IO, without changing UI paths."""
+    value = os.path.abspath(path)
+    if os.name == 'nt' and not value.startswith('\\\\?\\'):
+        value = '\\\\?\\UNC\\' + value[2:] if value.startswith('\\\\') else '\\\\?\\' + value
+    return Path(value)
+
+
+def check_worker_directory(path):
+    value = os.path.abspath(path)
+    if value.startswith('\\\\?\\UNC\\'):
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    # Extended paths support payload files, but CreateProcess/SetCurrentDirectory
+    # still reject an overlong working directory on supported Windows hosts.
+    if os.name == 'nt' and len(value) >= 260:
+        raise ExtensionError('확장 실행 폴더 경로가 Windows의 260자 제한을 넘었습니다. '
+                             '앱 데이터 저장 위치를 더 짧은 경로로 지정하도록 관리자에게 문의해 주세요. '
+                             '기존 파일과 설정은 변경하지 않았습니다.', code='extension_path_too_long')
+
+
 def no_links(path):
     path = Path(os.path.abspath(path))
     for candidate in (path, *path.parents):
         try:
-            info = candidate.lstat()
+            info = fs_path(candidate).lstat()
         except FileNotFoundError:
             continue
         if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
@@ -100,16 +124,57 @@ class ExtensionHost:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._active = set()
+        self._installing = set()
+        self._importer = None
         self._closing = False
         self._cancel = threading.Event()
         self._tickets = {}
         self._directories = {}
 
+    def import_package(self, operation, data, picker):
+        """Load installation code only after an explicit, authenticated action."""
+        fields = {'prepare': set(), 'confirm': {'token', 'confirmed'}, 'cancel': {'token'}}
+        if operation not in fields or set(data) != fields[operation]:
+            raise ExtensionError('확장 설치 요청의 항목을 확인해 주세요.')
+        if operation != 'prepare' and not isinstance(data.get('token'), str):
+            raise ExtensionError('확장 설치 확인 정보를 다시 받아 주세요.')
+        with self._lock:
+            if self._closing:
+                raise ExtensionError('앱 종료 중에는 확장을 설치할 수 없습니다.', status=409)
+            if self._importer is None:
+                from .extension_install import ExtensionImporter
+                self._importer = ExtensionImporter(self)
+            importer = self._importer
+        if operation == 'prepare':
+            return importer.prepare(picker)
+        if operation == 'confirm':
+            return importer.confirm(data['token'], data['confirmed'])
+        return importer.cancel(data['token'])
+
+    @contextmanager
+    def installing(self, extension_id):
+        # Serialize only this extension; chat and other extension jobs do not
+        # wait on ZIP reads, file verification or disk writes.
+        with self._condition:
+            if self._closing or extension_id in self._active:
+                raise ExtensionError('확장 작업이 끝난 뒤 설치를 다시 시도하세요.', code='extension_busy', status=409)
+            self._active.add(extension_id)
+            self._installing.add(extension_id)
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._active.discard(extension_id)
+                self._installing.discard(extension_id)
+                self._tickets = {key: item for key, item in self._tickets.items() if item[1] != extension_id}
+                self._catalog = None
+                self._condition.notify_all()
+
     def _manifest(self, extension_id):
         if (not isinstance(extension_id, str) or not ID.fullmatch(extension_id) or '..' in extension_id
                 or extension_id.split('.')[0] in RESERVED):
             raise ExtensionError('확장 ID를 확인해 주세요.')
-        directory = no_links(self.root / extension_id)
+        directory = fs_path(no_links(self.root / extension_id))
         path = no_links(directory / 'extension.json')
         try:
             if not path.is_file() or path.stat().st_size > MAX_MANIFEST:
@@ -149,6 +214,32 @@ class ExtensionHost:
             raise ExtensionError('확장 시작 파일을 확인할 수 없습니다.')
         return directory, value
 
+    def _catalog_candidates(self):
+        root = fs_path(self.root)
+        if not root.exists():
+            return [], False
+        no_links(root)
+        with os.scandir(root) as entries:
+            candidates = list(itertools.islice(entries, MAX_CATALOG_ENTRIES + 1))
+        return sorted(candidates[:MAX_CATALOG_ENTRIES], key=lambda entry: entry.name), len(candidates) > MAX_CATALOG_ENTRIES
+
+    def check_install_capacity(self):
+        """Count supported extensions, not harmless stray files, within a bound."""
+        candidates, truncated = self._catalog_candidates()
+        if truncated or len(candidates) >= MAX_CATALOG_ENTRIES:
+            raise ExtensionError('확장 설치 폴더에 항목이 너무 많습니다. 운영자에게 문의해 주세요.')
+        count = 0
+        for entry in candidates:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            try:
+                self._manifest(entry.name)
+            except ExtensionError:
+                continue
+            count += 1
+            if count >= MAX_EXTENSIONS:
+                raise ExtensionError('설치할 수 있는 확장 수를 넘었습니다.')
+
     def snapshot(self, *, refresh=False):
         with self._lock:
             if self._catalog is not None and not refresh:
@@ -157,20 +248,20 @@ class ExtensionHost:
         try:
             # An absent directory is one cheap existence check, without mkdir,
             # recursive walks, worker imports, thread creation or network I/O.
-            if self.root.exists():
-                no_links(self.root)
-                with os.scandir(self.root) as entries:
-                    candidates = list(itertools.islice(entries, MAX_EXTENSIONS + 1))
-                if len(candidates) > MAX_EXTENSIONS:
-                    raise ExtensionError('설치된 확장 수가 지원 한도를 넘었습니다.')
-                for entry in candidates:
-                    if not entry.is_dir(follow_symlinks=False):
-                        continue
-                    try:
-                        _, item = self._manifest(entry.name)
-                        rows.append({key: deepcopy(item[key]) for key in ('id', 'name', 'version', 'hostApi', 'actions')})
-                    except ExtensionError:
-                        warnings.append('호환되지 않거나 손상된 확장 하나를 불러오지 않았습니다.')
+            candidates, truncated = self._catalog_candidates()
+            if truncated:
+                warnings.append('설치 폴더의 항목이 많아 일부만 확인했습니다. 기존 채팅은 계속 사용할 수 있습니다.')
+            for entry in candidates:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                try:
+                    _, item = self._manifest(entry.name)
+                    if len(rows) >= MAX_EXTENSIONS:
+                        warnings.append('설치된 확장 수가 지원 한도를 넘어 일부만 표시합니다.')
+                        break
+                    rows.append({key: deepcopy(item[key]) for key in ('id', 'name', 'version', 'hostApi', 'actions')})
+                except ExtensionError:
+                    warnings.append('호환되지 않거나 손상된 확장 하나를 불러오지 않았습니다.')
         except (OSError, ExtensionError):
             warnings.append('확장 설치 위치를 확인하지 못했습니다. 기존 채팅은 계속 사용할 수 있습니다.')
         result = {'extensions': sorted(rows, key=lambda row: (row['name'], row['id'])), 'warnings': warnings}
@@ -241,6 +332,8 @@ class ExtensionHost:
         with self._lock:
             if self._closing:
                 raise ExtensionError('앱 종료 중에는 확장을 열 수 없습니다.', status=409)
+            if extension_id in self._installing:
+                raise ExtensionError('확장 설치가 끝난 뒤 다시 열어 주세요.', code='extension_busy', status=409)
             self._tickets = {key: value for key, value in self._tickets.items() if value[0] > now}
             # One live view ticket per extension; reopening invalidates the old
             # unconsumed URL instead of retaining multiple large HTML bodies.
@@ -274,7 +367,7 @@ class ExtensionHost:
         if selected.get('status') != 'success' or not isinstance(paths, list) or len(paths) != 1:
             raise ExtensionError('선택한 폴더를 확인하지 못했습니다. 다시 선택해 주세요.')
         path = self._directory(paths[0])
-        info = path.stat()
+        info = fs_path(path).stat()
         now, token = self.clock(), secrets.token_urlsafe(32)
         with self._lock:
             if self._closing:
@@ -291,7 +384,7 @@ class ExtensionHost:
         if not isinstance(value, str) or not Path(value).is_absolute() or '..' in Path(value).parts:
             raise ExtensionError('폴더 선택 창에서 설치할 폴더를 다시 선택해 주세요.')
         path = no_links(value)
-        if not path.is_dir() or path == Path(path.anchor):
+        if not fs_path(path).is_dir() or path == Path(path.anchor):
             raise ExtensionError('드라이브 전체 대신 설치할 폴더를 선택해 주세요.')
         return path
 
@@ -303,7 +396,7 @@ class ExtensionHost:
         if not record or record[0] <= self.clock() or record[1] != extension_id:
             raise ExtensionError('설치 폴더 선택이 만료되었습니다. 폴더를 다시 선택해 주세요.', status=403)
         path = self._directory(record[2])
-        info = path.stat()
+        info = fs_path(path).stat()
         if (info.st_dev, info.st_ino) != record[3:]:
             raise ExtensionError('선택한 폴더가 변경되었습니다. 다시 선택해 주세요.', status=403)
         return {'selectedDirectory': str(path), 'selectedDirectoryIdentity': [info.st_dev, info.st_ino], 'directoryToken': token}
@@ -323,6 +416,7 @@ class ExtensionHost:
             raise ExtensionError('확장 설치 파일을 읽지 못했습니다.') from None
         if action not in manifest['actions']:
             raise ExtensionError('확장이 지원하지 않는 동작입니다.')
+        check_worker_directory(directory)
         with self._condition:
             if self._closing:
                 raise ExtensionError('앱 종료 중에는 확장을 실행할 수 없습니다.', status=409)
@@ -330,7 +424,7 @@ class ExtensionHost:
                 raise ExtensionError('확장에서 이전 요청을 처리 중입니다. 완료 후 다시 시도하세요.', code='extension_busy', status=409)
             self._active.add(extension_id)
         try:
-            data = no_links(self.data_root / extension_id)
+            data = fs_path(no_links(self.data_root / extension_id))
             data.mkdir(parents=True, exist_ok=True)
             request = {'protocol': HOST_API, 'action': action, 'payload': payload,
                        'dataDirectory': str(data), 'context': context or {'workspace': None}}
