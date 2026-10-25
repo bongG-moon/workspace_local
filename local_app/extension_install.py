@@ -290,6 +290,80 @@ class ExtensionImporter:
         self.host = host
         self._lock = threading.Lock()
         self._pending = None
+        self._incoming = None
+        self._scratch = None
+        self._expiry = None
+
+    def _clear(self):
+        self._pending = self._incoming = None
+        timer, self._expiry = self._expiry, None
+        if timer is not None:
+            timer.cancel()
+        scratch, self._scratch = self._scratch, None
+        if scratch is not None:
+            try:
+                scratch.cleanup()
+            except OSError:
+                pass  # OS/antivirus may briefly retain an already invalid copy.
+
+    def _expire(self):
+        with self._lock:
+            if self._pending and self._pending['expires'] <= self.host.clock():
+                self._clear()
+
+    def close(self):
+        with self._lock:
+            self._clear()
+
+    def status(self):
+        # The ordinary attention refresh must never wait for ZIP verification.
+        if not self._lock.acquire(blocking=False):
+            return None
+        try:
+            if self._pending and self._pending['expires'] <= self.host.clock():
+                self._clear()
+            return {'requestId': self._incoming['requestId']} if self._incoming else None
+        finally:
+            self._lock.release()
+
+    def pending_review(self, request_id):
+        with self._lock:
+            if (not self._incoming or self._incoming['requestId'] != request_id
+                    or self._pending['expires'] <= self.host.clock()):
+                raise ExtensionError('설치 확인이 만료되었습니다. 확장 파일을 다시 열어 주세요.', status=409)
+            return deepcopy(self._incoming['review'])
+
+    def receive(self, raw):
+        """Accept bytes, never a web-supplied local path. Keep one owned copy."""
+        if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_ARCHIVE:
+            raise ExtensionError('확장 파일의 크기를 확인해 주세요.', status=413)
+        if not self._lock.acquire(blocking=False):
+            raise ExtensionError('다른 확장 설치 확인을 마친 뒤 다시 열어 주세요.', status=409)
+        try:
+            self._open()
+            if self._pending and self._pending['expires'] > self.host.clock():
+                raise ExtensionError('열려 있는 확장 설치 창에서 설치 또는 취소한 뒤 다시 열어 주세요.', status=409)
+            self._clear()
+            # This directory is created only after an explicit file-open. Its
+            # lifetime belongs to the host, not to the short-lived launcher.
+            self._scratch = tempfile.TemporaryDirectory(prefix='ax-extension-open-')
+            path = Path(self._scratch.name) / 'package.axextension'
+            try:
+                path.write_bytes(raw)
+                review = self._prepare_path(path)
+            except BaseException:
+                self._clear()
+                raise
+            request_id = secrets.token_urlsafe(24)
+            self._incoming = {'requestId': request_id, 'review': review}
+            # One expiry deadline only while a file is awaiting review. No
+            # polling and no retained package when the UI never opens.
+            self._expiry = threading.Timer(REVIEW_TTL, self._expire)
+            self._expiry.daemon = True
+            self._expiry.start()
+            return {'accepted': True, 'requestId': request_id, 'protocol': 1}
+        finally:
+            self._lock.release()
 
     def _open(self):
         with self.host._lock:
@@ -301,47 +375,52 @@ class ExtensionImporter:
             raise ExtensionError('다른 확장 설치 확인을 마친 뒤 다시 시도하세요.', status=409)
         try:
             self._open()
-            self._pending = None
+            if self._incoming and self._pending['expires'] > self.host.clock():
+                raise ExtensionError('열려 있는 확장 설치 확인을 먼저 마쳐 주세요.', status=409)
+            self._clear()
             selected = picker('files')
             if selected.get('status') == 'cancel':
                 return {'cancelled': True}
             paths = selected.get('paths')
             if (selected.get('status') != 'success' or not isinstance(paths, list) or len(paths) != 1
-                    or not isinstance(paths[0], str) or not Path(paths[0]).is_absolute() or Path(paths[0]).suffix.lower() != '.zip'):
-                raise ExtensionError('확장 ZIP 파일 하나를 선택해 주세요.')
+                    or not isinstance(paths[0], str) or not Path(paths[0]).is_absolute() or Path(paths[0]).suffix.lower() not in {'.zip', '.axextension'}):
+                raise ExtensionError('AX 확장(.axextension) 또는 ZIP 파일 하나를 선택해 주세요.')
             path = no_links(paths[0])
-            package = load_package(path)
-            identifier = package['manifest']['id']
-            destination = no_links(self.host.root / identifier)
-            check_worker_directory(destination)
-            owner, fingerprint = owned_state(destination, package)
-            _, preset_hash, existing_preset = _preset_state(self.host, identifier)
-            existing_data = fs_path(no_links(self.host.data_root / identifier)).is_dir()
-            self._open()
-            token = secrets.token_urlsafe(32)
-            self._pending = {'token': token, 'expires': self.host.clock() + REVIEW_TTL, 'path': str(path),
-                             'sha': package['rawHash'], 'target': fingerprint, 'preset': preset_hash,
-                             'id': identifier}
-            warnings = ['확장은 현재 Windows 사용자 권한으로 실행됩니다. 신뢰할 수 있는 배포자의 ZIP만 설치하세요.']
-            if existing_data:
-                warnings.append('표시된 주소는 초기 연결용 기본값입니다. 기존 확장의 개인 설정과 연결 KEY는 변경하지 않습니다.')
-            if existing_preset is not None and package['connection'] != existing_preset:
-                warnings.append('기존 서버 주소와 연결 KEY를 유지합니다. 새 ZIP의 주소로 자동 전환하지 않습니다.')
-            server_url = (existing_preset or package['connection'] or {}).get('baseUrl')
-            if server_url and server_url.startswith('http://'):
-                warnings.append('HTTP 연결에서는 KEY와 통신 내용이 암호화되지 않습니다. 조직에서 안내한 서버 주소인지 확인하세요.')
-            return {'cancelled': False, 'token': token,
-                    'extension': {key: package['manifest'][key] for key in ('id', 'name', 'version')},
-                    'destination': str(destination), 'packageSha256': package['rawHash'], 'scope': 'user',
-                    'serverUrl': server_url,
-                    'replacing': owner is not None, 'warnings': warnings}
+            return self._prepare_path(path)
         finally:
             self._lock.release()
+
+    def _prepare_path(self, path):
+        package = load_package(path)
+        identifier = package['manifest']['id']
+        destination = no_links(self.host.root / identifier)
+        check_worker_directory(destination)
+        owner, fingerprint = owned_state(destination, package)
+        _, preset_hash, existing_preset = _preset_state(self.host, identifier)
+        existing_data = fs_path(no_links(self.host.data_root / identifier)).is_dir()
+        self._open()
+        token = secrets.token_urlsafe(32)
+        self._pending = {'token': token, 'expires': self.host.clock() + REVIEW_TTL, 'path': str(path),
+                         'sha': package['rawHash'], 'target': fingerprint, 'preset': preset_hash,
+                         'id': identifier}
+        warnings = ['확장은 현재 Windows 사용자 권한으로 실행됩니다. 신뢰할 수 있는 배포자의 ZIP만 설치하세요.']
+        if existing_data:
+            warnings.append('표시된 주소는 초기 연결용 기본값입니다. 기존 확장의 개인 설정과 연결 KEY는 변경하지 않습니다.')
+        if existing_preset is not None and package['connection'] != existing_preset:
+            warnings.append('기존 서버 주소와 연결 KEY를 유지합니다. 새 ZIP의 주소로 자동 전환하지 않습니다.')
+        server_url = (existing_preset or package['connection'] or {}).get('baseUrl')
+        if server_url and server_url.startswith('http://'):
+            warnings.append('HTTP 연결에서는 KEY와 통신 내용이 암호화되지 않습니다. 조직에서 안내한 서버 주소인지 확인하세요.')
+        return {'cancelled': False, 'token': token,
+                'extension': {key: package['manifest'][key] for key in ('id', 'name', 'version')},
+                'destination': str(destination), 'packageSha256': package['rawHash'], 'scope': 'user',
+                'serverUrl': server_url,
+                'replacing': owner is not None, 'warnings': warnings}
 
     def cancel(self, token):
         with self._lock:
             if self._pending and secrets.compare_digest(str(token), self._pending['token']):
-                self._pending = None
+                self._clear()
         return {'cancelled': True}
 
     def confirm(self, token, confirmed):
@@ -349,11 +428,14 @@ class ExtensionImporter:
             raise ExtensionError('확장 정보와 설치 위치를 확인한 뒤 설치를 선택해 주세요.')
         if not self._lock.acquire(blocking=False):
             raise ExtensionError('다른 확장 설치를 처리하고 있습니다.', code='extension_busy', status=409)
+        consumed = False
         try:
-            record, self._pending = self._pending, None
-            if (not record or not isinstance(token, str) or not secrets.compare_digest(token, record['token'])
-                    or record['expires'] <= self.host.clock()):
+            record = self._pending
+            if not record or not isinstance(token, str) or not secrets.compare_digest(token, record['token']):
                 raise ExtensionError('설치 확인이 만료되었습니다. ZIP을 다시 선택해 주세요.', status=409)
+            consumed = True
+            if record['expires'] <= self.host.clock():
+                raise ExtensionError('설치 확인이 만료되었습니다. 확장 파일을 다시 열어 주세요.', status=409)
             identifier = record['id']
             with self.host.installing(identifier):
                 package = load_package(record['path'])
@@ -377,6 +459,8 @@ class ExtensionImporter:
                     'extensions': result['extensions'], 'warnings': result['warnings'],
                     'existingDataPreserved': existing_data}
         finally:
+            if consumed:
+                self._clear()
             self._lock.release()
 
     def _install(self, destination, owner, package, preset_path):

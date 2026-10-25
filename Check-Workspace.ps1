@@ -26,7 +26,7 @@ $report = [ordered]@{
     notTested = @('original_vbs_process', 'original_profile_startup', 'original_launch_failure', 'primary_token_duplication', 'restricted_token_creation', 'child_process_launch', 'claude_or_python')
 }
 $expected = [ordered]@{
-    'deploy/Start-CompanyWorkspace.ps1' = '55e3c203d295d5671015edfafd50db178e3a94626e2b170799fc580b450eb07d'
+    'deploy/Start-CompanyWorkspace.ps1' = 'cda7f9259d68da3ef6efb8cd34ab0ee17b24af95f51f93a4fb534f361cf09246'
     'deploy/CompanyWorkspace.Startup.ps1' = '8f75f7d99480daa8d473c7255f1f216c875a2c491539914de7b188e5b2c882f7'
     'deploy/CompanyWorkspace.NormalToken.cs' = 'e16198c7f9b4c62155e18810d8136f9331dbe54d3a82ab9d9301a3c2e332bb2c'
     'deploy/CompanyAgent.UserContext.ps1' = 'a687f50745c3b4e4917fee050be001fa50f7406f7036cc189e21b05de60a8f5f'

@@ -703,6 +703,7 @@ class LocalApp:
                     "workspaceLocationError": self.workspace_location_error,
                     "windowTitle": self.notifier.window_title,
                     "window": self.window_state(),
+                    "extensionImportProtocol": 1, "extensionImport": self.extensions.pending_import(),
                     "upgradeProtocol": 1, "upgradeRestore": self.upgrade.restore,
                     "upgradeWarning": self.upgrade.warning,
                     "appearance": self.appearance.snapshot(),
@@ -775,6 +776,7 @@ class LocalApp:
                         'nativeAvailable': bool((self._desktop_window and self._desktop_window.notification_available)
                                                 or (self.tray and self.tray.available))},
                     'navigation': self._navigation,
+                    'extensionImport': self.extensions.pending_import(),
                     'upgrade': self.upgrade.status()['upgrade'] if hasattr(self, 'upgrade') else None}
 
     def shutdown_status(self):
@@ -2839,6 +2841,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error': str(exc), 'code': exc.code}, exc.status)
             return self.reply({"error": str(exc)}, 400)
 
+    def upload_extension(self):
+        # The launcher transfers a bounded copy. No HTTP request may name a
+        # local file for the host to read, and no receipt approves installation.
+        self.close_connection = True
+        if (not self.valid_request() or self.headers.get('Content-Type') != 'application/octet-stream'
+                or self.headers.get('Transfer-Encoding')):
+            return self.reply({'error': '허용되지 않은 확장 열기 요청입니다.'}, 403)
+        try:
+            from .extension_install import MAX_ARCHIVE
+            length = int(self.headers.get('Content-Length', '0'))
+            if not 0 < length <= MAX_ARCHIVE:
+                return self.reply({'error': '확장 파일의 크기를 확인해 주세요.'}, 413)
+            self.connection.settimeout(15)
+            raw = self.rfile.read(length)
+            if len(raw) != length:
+                raise ValueError('확장 파일을 모두 받지 못했습니다. 다시 열어 주세요.')
+            with self.server.app.operation():
+                return self.reply(self.server.app.extensions.receive_package(raw))
+        except ExtensionError as exc:
+            return self.reply({'error': str(exc), 'code': exc.code}, exc.status)
+        except (ValueError, OSError):
+            return self.reply({'error': '확장 파일을 준비하지 못했습니다. 파일을 다시 열어 주세요.'}, 400)
+
     def do_POST(self):
         if self.valid_request() and not self.execution_access(identity_only=urlsplit(self.path).path == '/api/window/open'):
             self.close_connection = True
@@ -2850,6 +2875,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
         if urlsplit(self.path).path == '/api/attachments/upload':
             return self.upload_attachment()
+        if urlsplit(self.path).path == '/api/extensions/import/file':
+            return self.upload_extension()
         if not self.valid_request() or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             # Closing a socket with an unread POST body can reset the response
             # on Windows. Discard only a small, declared body; never parse it or
@@ -2983,7 +3010,7 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
-        extension_import = re.fullmatch(r'/api/extensions/import/(prepare|confirm|cancel)', route)
+        extension_import = re.fullmatch(r'/api/extensions/import/(prepare|confirm|cancel|pending)', route)
         if extension_import:
             return self.reply(app.extensions.import_package(extension_import.group(1), data, app.pick))
         extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory)', route)

@@ -35,11 +35,11 @@ class StandaloneBootstrapTests(unittest.TestCase):
         cls.root = Path(cls.temp.name)
         cls.counter = 0
         cls.script = (
-            'param([string]$PythonCommand="auto", [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot)\n'
+            'param([string]$PythonCommand="auto", [switch]$NoBrowser, [switch]$Demo, [string]$StateRoot, [string]$ExtensionPackage)\n'
             '$ErrorActionPreference="Stop"\n'
             '@{ python=$PythonCommand; pythonOverride=$PSBoundParameters.ContainsKey("PythonCommand"); '
             'noBrowser=[bool]$NoBrowser; demo=[bool]$Demo; '
-            'state=$StateRoot; cwd=(Get-Location).Path; config=$env:CLAUDE_CONFIG_DIR; '
+            'state=$StateRoot; extensionPackage=$ExtensionPackage; relaunch=$env:COMPANY_WORKSPACE_RELAUNCH_COMMAND; cwd=(Get-Location).Path; config=$env:CLAUDE_CONFIG_DIR; '
             'model=$env:ANTHROPIC_MODEL; path=$env:PATH; entry=$env:COMPANY_AGENT_CLAUDE } '
             '| ConvertTo-Json -Compress | Set-Content -LiteralPath $env:WORKSPACE_BOOTSTRAP_RESULT -Encoding UTF8\n'
             '[Console]::Out.WriteLine("private-profile-output-not-for-ui")\n'
@@ -428,6 +428,37 @@ class FinalizeProbe {
         # prepend its application cache, which would alter existing wrappers.
         self.assertNotIn(str(self.target()).lower(), value['path'].lower())
         self.assertNotIn(b'private-profile-', result.stdout + result.stderr)
+
+    def test_extension_path_with_spaces_is_one_literal_and_never_pinned(self):
+        package = self.case / "설치 & key's $(name) 패키지.AXEXTENSION"
+        package.write_bytes(b'fixture: validation belongs to the importer')
+        record = self.case / 'extension-args.json'
+        env = {**os.environ, 'WORKSPACE_BOOTSTRAP_RESULT': str(record)}
+        result = self.run_exe(None, '--import-extension', str(package), env=env)
+        self.assertEqual(0, result.returncode, result.stderr)
+        value = json.loads(record.read_text(encoding='utf-8-sig'))
+        self.assertEqual(str(package), value['extensionPackage'])
+        self.assertNotIn('--import-extension', value['relaunch'])
+        self.assertNotIn(str(package), value['relaunch'])
+        self.assertEqual(b'fixture: validation belongs to the importer', package.read_bytes())
+
+    def test_invalid_extension_argument_is_rejected_before_extract_or_launch(self):
+        wrong = self.case / 'not-extension.txt'
+        wrong.write_text('preserve')
+        package = self.case / 'package.zip'
+        package.touch()
+        record = self.case / 'invalid-extension.json'
+        env = {**os.environ, 'WORKSPACE_BOOTSTRAP_RESULT': str(record)}
+        for arguments in [('--import-extension',), ('--import-extension', 'relative.axextension'),
+                          ('--import-extension', str(wrong)), ('--import-extension', str(self.case)),
+                          ('--import-extension', str(self.case / 'missing.axextension')),
+                          ('--import-extension', str(package), '--verify-only'),
+                          ('--import-extension', str(package), '--import-extension', str(package))]:
+            with self.subTest(arguments=arguments):
+                result = self.run_exe(None, *arguments, env=env)
+                self.assertEqual(50, result.returncode, result.stderr)
+                self.assertFalse(record.exists())
+                self.assertFalse(self.cache.exists())
 
     def test_explicit_existing_python_path_is_one_literal_argument(self):
         directory = self.case / '기존 Python -Demo & $literal; (폴더)'

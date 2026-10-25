@@ -69,6 +69,7 @@ X로 창을 닫거나 지원되는 창에서 **트레이로 보내기**를 선�
 | 옵션 | 범위 |
 | --- | --- |
 | `--python <절대 경로>` | 이미 설치된 Python 실행 파일 지정 |
+| `--import-extension <절대 경로>` | `.axextension` 또는 확장 ZIP을 실행 중인 같은 사용자 앱의 설치 확인창으로 전달. 자동 설치·실행·업무 중지는 하지 않음 |
 | `--execution-mode normal` / `--execution-mode administrator` | 현재 Windows 권한이 지정 값과 일치하는지 검사. 승격·권한 변경·Windows 승인창 호출은 하지 않음 |
 | `--state <절대 경로>` | 별도 앱 상태 폴더 |
 | `--cache-root <절대 경로>` | 별도 앱 파일 캐시 폴더 |

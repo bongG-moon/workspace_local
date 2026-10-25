@@ -3,7 +3,7 @@
   "use strict";
   const $ = id => document.getElementById(id);
   let hooks, attached = false, stopped = false, generation = 0;
-  let phase = "idle", review = null;
+  let phase = "idle", review = null, external = false;
   const busy = () => phase !== "idle";
   const available = () => !stopped && !hooks?.isClosed?.();
   const message = (id, text) => { $(id).textContent = text; $(id).hidden = !text; };
@@ -23,7 +23,7 @@
     if (phase === "installing") return;
     generation++;
     const token = review?.token;
-    review = null; phase = "idle";
+    review = null; phase = "idle"; external = false;
     if ($("extension-import-dialog").open) $("extension-import-dialog").close();
     controls();
     void discard(token);
@@ -55,6 +55,7 @@
   }
   async function open() {
     if (!available() || busy() || !$("settings-dialog").open) return;
+    external = false;
     const request = ++generation;
     phase = "preparing"; controls();
     message("extension-import-status", "설치할 확장 ZIP을 선택해 주세요.");
@@ -77,6 +78,28 @@
         message("extension-import-status", error.message || "확장 ZIP을 확인하지 못했어요. 다시 선택해 주세요.");
       }
     } finally { if (request === generation) controls(); }
+  }
+  async function openPending(requestId) {
+    if (!available() || busy() || hooks.canOpenExternal?.() === false) return false;
+    external = true;
+    const request = ++generation;
+    phase = "preparing"; controls();
+    try {
+      const result = await hooks.api("/api/extensions/import/pending", {requestId});
+      if (request !== generation || !available()) return false;
+      if (hooks.canOpenExternal?.() === false) {
+        phase = "idle"; external = false; controls();
+        return false; // Keep the server review for the next ordinary refresh.
+      }
+      if (!result?.token || typeof result.extension?.name !== "string" || typeof result.destination !== "string") {
+        throw Error("확장 정보를 확인하지 못했어요. 확장 파일을 다시 열어 주세요.");
+      }
+      review = result; phase = "review"; renderReview(result);
+      return true;
+    } catch (error) {
+      if (request === generation) { phase = "idle"; external = false; controls(); }
+      throw error;
+    }
   }
   async function confirm() {
     if (!available() || phase !== "review" || !review) return;
@@ -115,7 +138,7 @@
     }
   }
   function settingsClosed() {
-    if (phase !== "installing") dismiss();
+    if (!external && phase !== "installing") dismiss();
   }
   function attach(options) {
     hooks = options;
@@ -133,5 +156,5 @@
     if ($("extension-import-dialog").open) $("extension-import-dialog").close();
     controls(); void discard(token);
   }
-  globalThis.WorkspaceExtensionImport = {attach, open, settingsClosed, stop, isBusy:busy};
+  globalThis.WorkspaceExtensionImport = {attach, open, openPending, settingsClosed, stop, isBusy:busy};
 })();

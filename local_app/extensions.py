@@ -133,10 +133,12 @@ class ExtensionHost:
 
     def import_package(self, operation, data, picker):
         """Load installation code only after an explicit, authenticated action."""
-        fields = {'prepare': set(), 'confirm': {'token', 'confirmed'}, 'cancel': {'token'}}
+        fields = {'prepare': set(), 'confirm': {'token', 'confirmed'}, 'cancel': {'token'}, 'pending': {'requestId'}}
         if operation not in fields or set(data) != fields[operation]:
             raise ExtensionError('확장 설치 요청의 항목을 확인해 주세요.')
-        if operation != 'prepare' and not isinstance(data.get('token'), str):
+        if operation in {'confirm', 'cancel'} and not isinstance(data.get('token'), str):
+            raise ExtensionError('확장 설치 확인 정보를 다시 받아 주세요.')
+        if operation == 'pending' and (not isinstance(data.get('requestId'), str) or len(data['requestId']) > 64):
             raise ExtensionError('확장 설치 확인 정보를 다시 받아 주세요.')
         with self._lock:
             if self._closing:
@@ -149,7 +151,24 @@ class ExtensionHost:
             return importer.prepare(picker)
         if operation == 'confirm':
             return importer.confirm(data['token'], data['confirmed'])
+        if operation == 'pending':
+            return importer.pending_review(data['requestId'])
         return importer.cancel(data['token'])
+
+    def receive_package(self, raw):
+        with self._lock:
+            if self._closing:
+                raise ExtensionError('앱 종료 중에는 확장을 열 수 없습니다.', status=409)
+            if self._importer is None:
+                from .extension_install import ExtensionImporter
+                self._importer = ExtensionImporter(self)
+            importer = self._importer
+        return importer.receive(raw)
+
+    def pending_import(self):
+        # No importer, disk scan, package read or timer for ordinary users.
+        importer = self._importer
+        return importer.status() if importer is not None else None
 
     @contextmanager
     def installing(self, extension_id):
@@ -469,4 +488,8 @@ class ExtensionHost:
             self._tickets.clear()
             self._directories.clear()
             self._cancel.set()
-            return self._condition.wait_for(lambda: not self._active, timeout=timeout)
+            complete = self._condition.wait_for(lambda: not self._active, timeout=timeout)
+            importer = self._importer
+        if importer is not None:
+            importer.close()
+        return complete

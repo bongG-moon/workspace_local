@@ -88,7 +88,7 @@ namespace CompanyAgent {
         }
 
         private sealed class Options {
-            internal string StateRoot, CacheRoot, PythonPath, ExecutionMode;
+            internal string StateRoot, CacheRoot, PythonPath, ExecutionMode, ExtensionPackage;
             internal bool NoBrowser, Demo, VerifyOnly;
         }
 
@@ -105,6 +105,15 @@ namespace CompanyAgent {
                     if (++i >= args.Length || (args[i] != "auto" && args[i] != "normal" && args[i] != "administrator")) throw new StandaloneFailure(50);
                     value.ExecutionMode = args[i];
                 }
+                else if (name == "--import-extension") {
+                    if (++i >= args.Length) throw new StandaloneFailure(50);
+                    string package = AbsolutePath(args[i]);
+                    string extension = Path.GetExtension(package);
+                    if ((!String.Equals(extension, ".axextension", StringComparison.OrdinalIgnoreCase) &&
+                         !String.Equals(extension, ".zip", StringComparison.OrdinalIgnoreCase)) || !File.Exists(package))
+                        throw new StandaloneFailure(50);
+                    value.ExtensionPackage = package;
+                }
                 else if (name == "--state" || name == "--cache-root" || name == "--python") {
                     if (++i >= args.Length) throw new StandaloneFailure(50);
                     string path = AbsolutePath(args[i]);
@@ -117,6 +126,7 @@ namespace CompanyAgent {
                     }
                 } else throw new StandaloneFailure(50);
             }
+            if (value.VerifyOnly && value.ExtensionPackage != null) throw new StandaloneFailure(50);
             return value;
         }
 
@@ -343,6 +353,7 @@ namespace CompanyAgent {
             if (options.Demo) command += " -Demo";
             if (options.StateRoot != null) command += " -StateRoot " + Quote(options.StateRoot);
             if (options.ExecutionMode != null) command += " -ExecutionMode " + options.ExecutionMode;
+            if (options.ExtensionPackage != null) command += " -ExtensionPackage " + Quote(options.ExtensionPackage);
             ProcessStartInfo start = new ProcessStartInfo(powershell, command);
             start.UseShellExecute = false;
             start.CreateNoWindow = true;
@@ -378,11 +389,13 @@ namespace CompanyAgent {
                 catch (System.ComponentModel.Win32Exception) { throw new StandaloneFailure(56); }
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
-                if (!WaitForLauncher(process, 90000)) throw new StandaloneFailure(57);
+                // Imports may wait for another first launch before the bounded
+                // authenticated handoff. No package is retained in taskbar pins.
+                if (!WaitForLauncher(process, options.ExtensionPackage == null ? 90000 : 180000)) throw new StandaloneFailure(57);
                 int code = process.ExitCode;
                 // 20 means the existing launcher already displayed its reason.
                 if (code == 0 || code == 20) return code;
-                if (options.NoBrowser && code >= 22 && code <= 48) {
+                if (options.NoBrowser && code >= 22 && code <= 49) {
                     Console.Error.WriteLine("AX Workspace 실행 환경을 확인하지 못했습니다. 오류 코드: WS-" + code);
                     return code;
                 }

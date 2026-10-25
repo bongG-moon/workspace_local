@@ -1458,23 +1458,44 @@ globalThis.WorkspaceReleaseHistory?.attach({api:(path,data,signal)=>api(path,dat
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
   canOfferUpdate:()=>!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
 let extensionImportLoad;
+async function extensionImporter(){
+  if(!extensionImportLoad)extensionImportLoad=new Promise((resolve,reject)=>{
+    const script=document.createElement("script");script.src="/extension-import.js";script.async=true;
+    script.onload=resolve;script.onerror=()=>{extensionImportLoad=null;script.remove();reject(Error("확장 가져오기 화면을 불러오지 못했어요. 다시 시도해 주세요."));};
+    document.head.append(script);
+  });
+  await extensionImportLoad;
+  if(appClosed)return null;
+  if(!globalThis.WorkspaceExtensionImport)throw Error("확장 가져오기 화면을 불러오지 못했어요. 앱을 다시 열어 주세요.");
+  globalThis.WorkspaceExtensionImport.attach({api,openDialog:showDialog,isClosed:()=>appClosed,canOpenExternal:extensionExternalAllowed,
+    refresh:async()=>{const catalog=await api("/api/extensions");if(appClosed)return;boot.extensions=catalog.extensions;boot.extensionWarnings=catalog.warnings;renderExtensionWarning();await loadExtensions(catalog.extensions,true);}});
+  return globalThis.WorkspaceExtensionImport;
+}
 $("extension-import-open").onclick=async()=>{
   if(appClosed||$("extension-import-open").disabled)return;
   $("extension-import-open").disabled=true;
-  try{
-    if(!extensionImportLoad)extensionImportLoad=new Promise((resolve,reject)=>{
-      const script=document.createElement("script");script.src="/extension-import.js";script.async=true;
-      script.onload=resolve;script.onerror=()=>{extensionImportLoad=null;script.remove();reject(Error("확장 가져오기 화면을 불러오지 못했어요. 다시 시도해 주세요."));};
-      document.head.append(script);
-    });
-    await extensionImportLoad;
-    if(appClosed||!$("settings-dialog").open)return;
-    if(!globalThis.WorkspaceExtensionImport)throw Error("확장 가져오기 화면을 불러오지 못했어요. 앱을 다시 열어 주세요.");
-    globalThis.WorkspaceExtensionImport.attach({api,openDialog:showDialog,isClosed:()=>appClosed,
-      refresh:async()=>{const catalog=await api("/api/extensions");if(appClosed)return;boot.extensions=catalog.extensions;boot.extensionWarnings=catalog.warnings;renderExtensionWarning();await loadExtensions(catalog.extensions,true);}});
-    await globalThis.WorkspaceExtensionImport.open();
-  }catch(e){if(!appClosed){$("extension-import-status").textContent=e.message;$("extension-import-status").hidden=false;}}
+  try{const importer=await extensionImporter();if($("settings-dialog").open)await importer?.open();}
+  catch(e){if(!appClosed){$("extension-import-status").textContent=e.message;$("extension-import-status").hidden=false;}}
   finally{$("extension-import-open").disabled=appClosed||!!globalThis.WorkspaceExtensionImport?.isBusy();}
+};
+let extensionOpenBusy=false,extensionOpenSeen="";
+function extensionExternalAllowed(){
+  return !appClosed&&!globalThis.WorkspaceUpgrade?.isLocked()&&!pendingConfirmation&&!choiceSubmission&&
+    !document.querySelector("dialog[open]")&&
+    !(active?.choice&&!answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length;
+}
+globalThis.WorkspaceOpenExtension=async notice=>{
+  const id=notice?.requestId;
+  if(typeof id!=="string"||!id||id.length>64||id===extensionOpenSeen||appClosed||extensionOpenBusy||
+      globalThis.WorkspaceExtensionImport?.isBusy()||!extensionExternalAllowed())return;
+  extensionOpenBusy=true;
+  try{
+    const importer=await extensionImporter();
+    // Another confirmation may have appeared while the lazy asset loaded.
+    if(!extensionExternalAllowed())return;
+    if(await importer?.openPending(id))extensionOpenSeen=id;
+  }catch(e){extensionOpenSeen=id;if(!appClosed)toast(e.message);}
+  finally{extensionOpenBusy=false;}
 };
 let extensionsLoad;
 function loadExtensions(entries,strict=false){

@@ -7,6 +7,35 @@ from tests.test_workspace_frontend_state import HARNESS, NODE, ROOT
 
 @unittest.skipUnless(NODE, "Node.js is required for frontend import checks")
 class WorkspaceExtensionImportFrontendTests(unittest.TestCase):
+    def test_new_confirmation_during_pending_fetch_defers_without_cancelling(self):
+        self.run_case("""(async()=>{
+          $('settings-dialog').open=false;let allowed=true,resolve;
+          WorkspaceExtensionImport.attach({api:async()=>new Promise(r=>resolve=r),
+            openDialog:id=>$(id).showModal(),isClosed:()=>false,canOpenExternal:()=>allowed});
+          const pending=WorkspaceExtensionImport.openPending('incoming');await flush();
+          allowed=false;resolve(preview);assert.equal(await pending,false);
+          assert.ok(!$('extension-import-dialog').open);
+          assert.equal(WorkspaceExtensionImport.isBusy(),false);
+          allowed=true;const retry=WorkspaceExtensionImport.openPending('incoming');await flush();
+          resolve(preview);assert.equal(await retry,true);
+          assert.equal($('extension-import-dialog').open,true);
+        })()""")
+
+    def test_file_open_review_works_without_settings_and_never_auto_installs(self):
+        self.run_case("""(async()=>{
+          $('settings-dialog').open=false;responder=async()=>preview;
+          assert.equal(await WorkspaceExtensionImport.openPending('file-open'),true);
+          assert.equal(calls[0].path,'/api/extensions/import/pending');
+          assert.equal($('extension-import-dialog').open,true);
+          assert.equal(calls.filter(x=>x.path.endsWith('/confirm')).length,0);
+          WorkspaceExtensionImport.settingsClosed();
+          assert.equal($('extension-import-dialog').open,true);
+          assert.equal(draft.text,'작성 중인 요청');assert.equal(queue.length,2);
+          await $('extension-import-cancel').onclick();await flush();
+          assert.equal(calls[1].path,'/api/extensions/import/cancel');
+          assert.equal(WorkspaceExtensionImport.isBusy(),false);
+        })()""")
+
     def run_case(self, scenario, *, app=False):
         setup = """
           const $=id=>document.getElementById(id),calls=[];

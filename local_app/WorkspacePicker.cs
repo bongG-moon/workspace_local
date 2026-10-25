@@ -153,11 +153,12 @@ namespace WorkspacePicker {
                     dialog.SetFileNameLabel("파일 이름:");
                     // Selection only. The server revalidates references; no file is executed or extracted.
                     FilterSpec[] filters = new FilterSpec[] {
-                        new FilterSpec("지원하는 모든 자료", "*.7z;*.adoc;*.alz;*.bash;*.bat;*.bz2;*.c;*.cab;*.cc;*.cfg;*.cjs;*.cmd;*.conf;*.cpp;*.cs;*.css;*.csv;*.cts;*.cxx;*.dart;*.docx;*.egg;*.ex;*.exe;*.exs;*.fs;*.fsx;*.go;*.gql;*.graphql;*.gz;*.h;*.hpp;*.htm;*.html;*.hxx;*.ini;*.ipynb;*.java;*.jpeg;*.jpg;*.js;*.json;*.jsonc;*.jsx;*.kt;*.kts;*.less;*.log;*.lua;*.lz;*.lz4;*.lzma;*.markdown;*.md;*.mjs;*.mts;*.pdf;*.php;*.pl;*.png;*.pptx;*.properties;*.proto;*.ps1;*.psd1;*.psm1;*.py;*.pyi;*.pyw;*.r;*.rar;*.rb;*.rmd;*.rs;*.rst;*.sass;*.scss;*.sh;*.sql;*.svelte;*.swift;*.tar;*.tbz;*.tbz2;*.tex;*.tgz;*.toml;*.ts;*.tsv;*.tsx;*.txt;*.txz;*.tzst;*.vb;*.vbs;*.vue;*.webp;*.xlsx;*.xml;*.xz;*.yaml;*.yml;*.zip;*.zsh;*.zst"),
+                        new FilterSpec("지원하는 모든 자료", "*.7z;*.axextension;*.adoc;*.alz;*.bash;*.bat;*.bz2;*.c;*.cab;*.cc;*.cfg;*.cjs;*.cmd;*.conf;*.cpp;*.cs;*.css;*.csv;*.cts;*.cxx;*.dart;*.docx;*.egg;*.ex;*.exe;*.exs;*.fs;*.fsx;*.go;*.gql;*.graphql;*.gz;*.h;*.hpp;*.htm;*.html;*.hxx;*.ini;*.ipynb;*.java;*.jpeg;*.jpg;*.js;*.json;*.jsonc;*.jsx;*.kt;*.kts;*.less;*.log;*.lua;*.lz;*.lz4;*.lzma;*.markdown;*.md;*.mjs;*.mts;*.pdf;*.php;*.pl;*.png;*.pptx;*.properties;*.proto;*.ps1;*.psd1;*.psm1;*.py;*.pyi;*.pyw;*.r;*.rar;*.rb;*.rmd;*.rs;*.rst;*.sass;*.scss;*.sh;*.sql;*.svelte;*.swift;*.tar;*.tbz;*.tbz2;*.tex;*.tgz;*.toml;*.ts;*.tsv;*.tsx;*.txt;*.txz;*.tzst;*.vb;*.vbs;*.vue;*.webp;*.xlsx;*.xml;*.xz;*.yaml;*.yml;*.zip;*.zsh;*.zst"),
                         new FilterSpec("문서", "*.pptx;*.docx;*.xlsx;*.csv;*.tsv;*.pdf;*.txt;*.md;*.markdown;*.html;*.htm"),
                         new FilterSpec("이미지", "*.png;*.jpg;*.jpeg;*.webp"),
                         new FilterSpec("압축 파일", "*.7z;*.alz;*.bz2;*.cab;*.egg;*.gz;*.lz;*.lz4;*.lzma;*.rar;*.tar;*.tbz;*.tbz2;*.tgz;*.txz;*.tzst;*.xz;*.zip;*.zst"),
-                        new FilterSpec("실행 파일 (EXE)", "*.exe")
+                        new FilterSpec("실행 파일 (EXE)", "*.exe"),
+                        new FilterSpec("AX Workspace 확장", "*.axextension;*.zip")
                     };
                     dialog.SetFileTypes((uint)filters.Length, filters);
                     dialog.SetFileTypeIndex(1);

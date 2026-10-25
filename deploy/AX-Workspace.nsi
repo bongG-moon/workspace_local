@@ -18,6 +18,7 @@ SetDatablockOptimize on
   !define PRODUCT_NAME "AX Workspace"
 !endif
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_ID}"
+!define EXTENSION_PROGID "AX.Workspace.Extension"
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\${PRODUCT_NAME}"
@@ -83,6 +84,31 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
+Function RegisterExtensionPackage
+  ; Only the regular application owns the custom type. Test/diagnostic builds
+  ; must never replace the user's working file association or claim .zip.
+  !if "${PRODUCT_ID}" == "AX.Workspace.Desktop"
+    StrCpy $2 '$\"$INSTDIR\AX-Workspace.exe$\" --import-extension $\"%1$\"'
+    ReadRegStr $0 HKCU "Software\Classes\${EXTENSION_PROGID}\shell\open\command" ""
+    ${If} $0 == ""
+    ${OrIf} $0 == $2
+      WriteRegStr HKCU "Software\Classes\${EXTENSION_PROGID}" "" "AX Workspace 확장 패키지"
+      WriteRegStr HKCU "Software\Classes\${EXTENSION_PROGID}\DefaultIcon" "" '$\"$INSTDIR\AX-Workspace.exe$\",0'
+      WriteRegStr HKCU "Software\Classes\${EXTENSION_PROGID}\shell\open\command" "" $2
+      WriteRegStr HKCU "Software\Classes\.axextension\OpenWithProgids" "${EXTENSION_PROGID}" ""
+      ReadRegStr $0 HKCU "Software\Classes\.axextension" ""
+      ${If} $0 == ""
+      ${OrIf} $0 == "${EXTENSION_PROGID}"
+        WriteRegStr HKCU "Software\Classes\.axextension" "" "${EXTENSION_PROGID}"
+      ${EndIf}
+      ; Preserve a user's explicit UserChoice and any other application default.
+      System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+    ${Else}
+      DetailPrint "확장 파일 연결은 기존 프로그램 설정을 유지합니다. 앱의 확장 설치에서 파일을 선택할 수 있습니다."
+    ${EndIf}
+  !endif
+FunctionEnd
+
 Section "AX Workspace (필수)" MainSection
   SectionIn RO
   InitPluginsDir
@@ -131,6 +157,7 @@ Section "AX Workspace (필수)" MainSection
     SetErrorLevel 2
     Abort
   ${EndIf}
+  Call RegisterExtensionPackage
   nsExec::ExecToStack /TIMEOUT=15000 '"$PLUGINSDIR\InstallerSupport.exe" shortcut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\AX-Workspace.exe" "${PRODUCT_ID}"'
   Pop $0
   Pop $1
@@ -165,6 +192,25 @@ Function un.onInit
   ${EndIf}
 FunctionEnd
 
+Function un.UnregisterExtensionPackage
+  !if "${PRODUCT_ID}" == "AX.Workspace.Desktop"
+    StrCpy $2 '$\"$INSTDIR\AX-Workspace.exe$\" --import-extension $\"%1$\"'
+    ReadRegStr $0 HKCU "Software\Classes\${EXTENSION_PROGID}\shell\open\command" ""
+    ${If} $0 == $2
+      ; Never remove an association taken over by another location/application.
+      ReadRegStr $1 HKCU "Software\Classes\.axextension" ""
+      ${If} $1 == "${EXTENSION_PROGID}"
+        DeleteRegValue HKCU "Software\Classes\.axextension" ""
+      ${EndIf}
+      DeleteRegValue HKCU "Software\Classes\.axextension\OpenWithProgids" "${EXTENSION_PROGID}"
+      DeleteRegKey /ifempty HKCU "Software\Classes\.axextension\OpenWithProgids"
+      DeleteRegKey /ifempty HKCU "Software\Classes\.axextension"
+      DeleteRegKey HKCU "Software\Classes\${EXTENSION_PROGID}"
+      System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+    ${EndIf}
+  !endif
+FunctionEnd
+
 Section "Uninstall"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
@@ -184,6 +230,7 @@ Section "Uninstall"
     SetErrorLevel 2
     Abort
   ${EndIf}
+  Call un.UnregisterExtensionPackage
   nsExec::ExecToStack /TIMEOUT=15000 '"$PLUGINSDIR\InstallerSupport.exe" remove-shortcut "$SMPROGRAMS\${PRODUCT_NAME}.lnk" "$INSTDIR\AX-Workspace.exe" "${PRODUCT_ID}"'
   Pop $0
   Pop $1
