@@ -35,13 +35,17 @@ MAX_PAYLOAD = 240 * 1024
 ACTION_TIMEOUT = 120
 TICKET_TTL = 30
 DIRECTORY_TTL = 15 * 60
+FILE_TTL = 15 * 60
+MAX_PUBLISH_FILE = 64 * 1024 * 1024
+PUBLISH_FILE_SUFFIXES = frozenset({'.zip', '.md', '.axextension', '.exe', '.msi', '.ps1'})
+FILE_ACTIONS = frozenset({'inspectPublishSource', 'preparePublish'})
 ID = re.compile(r'[a-z0-9][a-z0-9.-]{0,62}[a-z0-9]|[a-z0-9]')
 ACTION = re.compile(r'[a-z][a-zA-Z0-9_.-]{0,63}')
 SHA = re.compile(r'[0-9a-f]{64}')
 VERSION = re.compile(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?')
 RESERVED = {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10)), *(f'lpt{i}' for i in range(1, 10))}
 UI_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-          "img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; "
+          "img-src data:; connect-src 'none'; font-src 'self'; object-src 'none'; "
           "frame-src 'none'; frame-ancestors 'self'; form-action 'none'; base-uri 'none'")
 
 
@@ -130,6 +134,7 @@ class ExtensionHost:
         self._cancel = threading.Event()
         self._tickets = {}
         self._directories = {}
+        self._files = {}
 
     def import_package(self, operation, data, picker):
         """Load installation code only after an explicit, authenticated action."""
@@ -385,7 +390,81 @@ class ExtensionHost:
         paths = selected.get('paths')
         if selected.get('status') != 'success' or not isinstance(paths, list) or len(paths) != 1:
             raise ExtensionError('선택한 폴더를 확인하지 못했습니다. 다시 선택해 주세요.')
-        path = self._directory(paths[0])
+        return self._directory_choice(extension_id, paths[0])
+
+    def list_workspaces(self, extension_id, rows):
+        self._verified(extension_id)
+        with self._lock:
+            if self._closing:
+                raise ExtensionError('앱 종료 중에는 업무를 선택할 수 없습니다.', status=409)
+        # Only metadata already loaded by the host is listed. Do not walk each
+        # task's filesystem or start its Claude connection to populate a picker.
+        return {'items': [{'id': row['id'], 'title': str(row.get('title') or '')[:200],
+                           'workspace': str(row['workspace'])} for row in rows
+                          if isinstance(row.get('workspace'), (str, Path))
+                          and Path(row['workspace']).is_absolute()
+                          and Path(row['workspace']) != Path(Path(row['workspace']).anchor)]}
+
+    def pick_file(self, extension_id, picker):
+        """Grant only the single file explicitly selected in the native picker."""
+        self._verified(extension_id)
+        with self._lock:
+            if self._closing:
+                raise ExtensionError('앱 종료 중에는 파일을 선택할 수 없습니다.', status=409)
+        selected = picker('files')
+        if selected.get('status') == 'cancel':
+            return {'cancelled': True}
+        paths = selected.get('paths')
+        if selected.get('status') != 'success' or not isinstance(paths, list) or len(paths) != 1:
+            raise ExtensionError('등록할 배포 파일 한 개를 선택해 주세요. ZIP·MD·AX 확장·EXE·MSI·PS1을 지원합니다.')
+        path, identity = self._publish_file(paths[0])
+        now, token = self.clock(), secrets.token_urlsafe(32)
+        with self._lock:
+            if self._closing:
+                raise ExtensionError('앱 종료 중에는 파일을 선택할 수 없습니다.', status=409)
+            self._files = {key: value for key, value in self._files.items()
+                           if value[0] > now and value[1] != extension_id}
+            if len(self._files) >= MAX_EXTENSIONS:
+                raise ExtensionError('열린 확장 화면을 정리한 뒤 다시 선택해 주세요.', status=409)
+            self._files[token] = (now + FILE_TTL, extension_id, str(path), identity)
+        return {'cancelled': False, 'fileToken': token, 'name': path.name, 'size': identity[2]}
+
+    @staticmethod
+    def _publish_file(value):
+        if not isinstance(value, str) or not Path(value).is_absolute() or '..' in Path(value).parts:
+            raise ExtensionError('파일 선택 창에서 등록할 파일을 다시 선택해 주세요.')
+        try:
+            path = no_links(value)
+            info = fs_path(path).stat()
+            if not stat.S_ISREG(info.st_mode) or path.suffix.lower() not in PUBLISH_FILE_SUFFIXES:
+                raise ExtensionError('등록할 배포 파일 한 개를 선택해 주세요. ZIP·MD·AX 확장·EXE·MSI·PS1을 지원합니다.')
+            if not 0 < info.st_size <= MAX_PUBLISH_FILE:
+                raise ExtensionError('등록 파일은 비어 있지 않은 64 MiB 이하의 배포 파일이어야 합니다.')
+        except OSError:
+            raise ExtensionError('선택한 파일에 접근할 수 없습니다. 파일을 다시 선택해 주세요.') from None
+        return path, (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+    def file_context(self, extension_id, token, action):
+        if action not in FILE_ACTIONS:
+            raise ExtensionError('선택한 파일은 등록 내용 확인과 등록 준비에만 사용할 수 있습니다.', status=403)
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            raise ExtensionError('등록 파일 선택이 만료되었습니다. 파일을 다시 선택해 주세요.', status=403)
+        with self._lock:
+            record = self._files.get(token)
+        if not record or record[0] <= self.clock() or record[1] != extension_id:
+            raise ExtensionError('등록 파일 선택이 만료되었습니다. 파일을 다시 선택해 주세요.', status=403)
+        path, identity = self._publish_file(record[2])
+        if identity != record[3]:
+            raise ExtensionError('선택한 파일이 변경되었습니다. 파일을 다시 선택해 주세요.', status=403)
+        return {'selectedFile': str(path), 'selectedFileIdentity': list(identity)}
+
+    def select_workspace(self, extension_id, row):
+        self._verified(extension_id)
+        result = self._directory_choice(extension_id, str(row['workspace']), row['id'])
+        return dict(result, title=str(row.get('title') or '')[:200], sessionId=row['id'])
+
+    def _directory_choice(self, extension_id, value, session_id=None):
+        path = self._directory(value)
         info = fs_path(path).stat()
         now, token = self.clock(), secrets.token_urlsafe(32)
         with self._lock:
@@ -395,7 +474,7 @@ class ExtensionHost:
                                  if value[0] > now and value[1] != extension_id}
             if len(self._directories) >= MAX_EXTENSIONS:
                 raise ExtensionError('열린 확장 화면을 정리한 뒤 다시 선택해 주세요.', status=409)
-            self._directories[token] = (now + DIRECTORY_TTL, extension_id, str(path), info.st_dev, info.st_ino)
+            self._directories[token] = (now + DIRECTORY_TTL, extension_id, str(path), info.st_dev, info.st_ino, session_id)
         return {'cancelled': False, 'directoryToken': token, 'path': str(path)}
 
     @staticmethod
@@ -407,16 +486,22 @@ class ExtensionHost:
             raise ExtensionError('드라이브 전체 대신 설치할 폴더를 선택해 주세요.')
         return path
 
-    def directory_context(self, extension_id, token):
+    def directory_context(self, extension_id, token, workspace_resolver=None):
         if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
             raise ExtensionError('설치 폴더 선택이 만료되었습니다. 폴더를 다시 선택해 주세요.', status=403)
         with self._lock:
             record = self._directories.get(token)
         if not record or record[0] <= self.clock() or record[1] != extension_id:
             raise ExtensionError('설치 폴더 선택이 만료되었습니다. 폴더를 다시 선택해 주세요.', status=403)
+        if record[5] is not None:
+            # A task selection must remain that same visible task and folder.
+            # A native folder selection intentionally has no task binding.
+            row = workspace_resolver(record[5]) if workspace_resolver is not None else None
+            if row is None or Path(row['workspace']) != Path(record[2]):
+                raise ExtensionError('선택한 업무 또는 업무 폴더가 변경되었습니다. 업무를 다시 선택해 주세요.', status=403)
         path = self._directory(record[2])
         info = fs_path(path).stat()
-        if (info.st_dev, info.st_ino) != record[3:]:
+        if (info.st_dev, info.st_ino) != record[3:5]:
             raise ExtensionError('선택한 폴더가 변경되었습니다. 다시 선택해 주세요.', status=403)
         return {'selectedDirectory': str(path), 'selectedDirectoryIdentity': [info.st_dev, info.st_ino], 'directoryToken': token}
 
@@ -487,6 +572,7 @@ class ExtensionHost:
             self._closing = True
             self._tickets.clear()
             self._directories.clear()
+            self._files.clear()
             self._cancel.set()
             complete = self._condition.wait_for(lambda: not self._active, timeout=timeout)
             importer = self._importer

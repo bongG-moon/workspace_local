@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
@@ -307,6 +308,68 @@ class ExtensionHostTests(unittest.TestCase):
         self.assertFalse(self.host._directories)
         with self.assertRaises(ExtensionError):
             self.host.pick_directory('example.tools', lambda _: {'status': 'success', 'paths': [self.root.anchor]})
+
+    def test_publish_file_capability_is_expiring_extension_bound_and_identity_checked(self):
+        package(self.root)
+        tick = [100.0]
+        self.host.clock = lambda: tick[0]
+        artifact = self.root / 'sample.ZIP'
+        artifact.write_bytes(b'example file')
+        picker = Mock(return_value={'status': 'success', 'paths': [str(artifact)]})
+        choice = self.host.pick_file('example.tools', picker)
+        picker.assert_called_once_with('files')
+        self.assertEqual({'cancelled', 'fileToken', 'name', 'size'}, set(choice))
+        self.assertEqual('sample.ZIP', choice['name'])
+        self.assertEqual(len(b'example file'), choice['size'])
+        context = self.host.file_context('example.tools', choice['fileToken'], 'inspectPublishSource')
+        self.assertEqual(str(artifact), context['selectedFile'])
+        self.assertEqual(4, len(context['selectedFileIdentity']))
+        for extension, action in [('other.tools', 'preparePublish'), ('example.tools', 'install')]:
+            with self.assertRaises(ExtensionError):
+                self.host.file_context(extension, choice['fileToken'], action)
+        next_choice = self.host.pick_file('example.tools', picker)
+        with self.assertRaises(ExtensionError):
+            self.host.file_context('example.tools', choice['fileToken'], 'preparePublish')
+        tick[0] += 901
+        with self.assertRaises(ExtensionError):
+            self.host.file_context('example.tools', next_choice['fileToken'], 'preparePublish')
+        changed = self.host.pick_file('example.tools', picker)
+        artifact.write_bytes(b'changed contents')
+        with self.assertRaises(ExtensionError):
+            self.host.file_context('example.tools', changed['fileToken'], 'preparePublish')
+        self.host.runner.assert_not_called()
+
+    def test_publish_file_rejects_wrong_type_size_and_multiple_paths_preserves_cancelled_selection(self):
+        package(self.root)
+        artifact = self.root / 'SKILL.md'
+        artifact.write_text('# example', encoding='utf-8')
+        choice = self.host.pick_file('example.tools', lambda _: {'status': 'success', 'paths': [str(artifact)]})
+        self.assertEqual({'cancelled': True}, self.host.pick_file('example.tools', lambda _: {'status': 'cancel'}))
+        self.assertEqual(str(artifact), self.host.file_context('example.tools', choice['fileToken'], 'preparePublish')['selectedFile'])
+        invalid = self.root / 'credentials.json'
+        invalid.write_text('{}', encoding='utf-8')
+        empty = self.root / 'empty.md'
+        empty.touch()
+        for paths in ([str(invalid)], [str(empty)], [str(artifact), str(artifact)], [str(self.root)], ['relative.md']):
+            with self.subTest(paths=paths), self.assertRaises(ExtensionError):
+                self.host.pick_file('example.tools', lambda _: {'status': 'success', 'paths': paths})
+        with patch('local_app.extensions.MAX_PUBLISH_FILE', 1), self.assertRaises(ExtensionError):
+            self.host.pick_file('example.tools', lambda _: {'status': 'success', 'paths': [str(artifact)]})
+        self.assertEqual(1, len(self.host._files))
+        self.host.close()
+        self.assertEqual({}, self.host._files)
+
+    def test_executable_distribution_selection_only_grants_read_context_never_executes(self):
+        package(self.root)
+        for suffix in ('.axextension', '.exe', '.msi', '.ps1'):
+            with self.subTest(suffix=suffix):
+                artifact = self.root / ('distribution' + suffix)
+                artifact.write_bytes(b'not executed')
+                with patch('local_app.extensions.subprocess.Popen', side_effect=AssertionError('must not execute')):
+                    choice = self.host.pick_file('example.tools', lambda _: {'status': 'success', 'paths': [str(artifact)]})
+                    context = self.host.file_context('example.tools', choice['fileToken'], 'preparePublish')
+                self.assertEqual(str(artifact), context['selectedFile'])
+        self.host.runner.assert_not_called()
         self.assertFalse(self.host._directories)
 
 
@@ -400,6 +463,114 @@ class ExtensionRoutesTests(unittest.TestCase):
         self.assertEqual({}, self.app.sessions)
         with self.assertRaises(HTTPError):
             self.post('/api/extensions/example.tools/action', {'action': 'install', 'directoryToken': 'a' * 43})
+
+    def test_publish_file_route_requires_native_selection_and_only_supplies_context(self):
+        selected = self.root / 'artifact.zip'
+        selected.write_bytes(b'archive bytes')
+        directory = self.root / 'extensions/example.tools'
+        manifest = json.loads((directory / 'extension.json').read_text(encoding='utf-8'))
+        manifest['actions'].append('preparePublish')
+        (directory / 'extension.json').write_text(json.dumps(manifest), encoding='utf-8')
+        with patch.object(self.app, 'pick', return_value={'status': 'success', 'paths': [str(selected)]}) as picker:
+            with self.assertRaises(HTTPError):
+                self.post('/api/extensions/example.tools/file', {'path': str(selected)})
+            with self.assertRaises(HTTPError):
+                self.post('/api/extensions/example.tools/file', {}, auth=False)
+            picker.assert_not_called()
+            choice = self.post('/api/extensions/example.tools/file', {})
+            picker.assert_called_once_with('files')
+        self.post('/api/extensions/example.tools/action', {
+            'action': 'preparePublish', 'fileToken': choice['fileToken'], 'payload': {'name': 'Sample'}})
+        wire = json.loads(self.app.extensions.runner.call_args.kwargs['input'])
+        self.assertEqual({'name': 'Sample'}, wire['payload'])
+        self.assertEqual(str(selected), wire['context']['selectedFile'])
+        self.assertEqual(4, len(wire['context']['selectedFileIdentity']))
+        for data in ({'action': 'install', 'fileToken': choice['fileToken']},
+                     {'action': 'preparePublish', 'fileToken': 'x' * 43},
+                     {'action': 'preparePublish', 'selectedFile': str(selected)}):
+            with self.assertRaises(HTTPError):
+                self.post('/api/extensions/example.tools/action', data)
+        self.app.extensions.runner.reset_mock()
+        selected.write_bytes(b'new bytes')
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/action', {'action': 'preparePublish', 'fileToken': choice['fileToken']})
+        self.app.extensions.runner.assert_not_called()
+
+    def test_workspaces_list_only_visible_work_metadata_without_scanning_folders(self):
+        work = self.root / 'work'; work.mkdir()
+        sid = self.app.create(str(work), True)['id']
+        original = self.app.sessions[sid]
+        original['trusted'] = False
+        original['messages'] = [{'text': 'private conversation'}]
+        hidden_id = str(uuid.uuid4())
+        for other, flags in [('chat', {'kind': 'chat'}), (hidden_id, {}),
+                             ('deleting', {'_deleting': True}), ('removing', {'_removingFromList': True})]:
+            self.app.sessions[other] = dict(original, id=other, **flags)
+        self.app.session_visibility.set_hidden(hidden_id, True)
+        with patch.object(self.app.extensions, '_directory', side_effect=AssertionError('no folder scan')):
+            result = self.post('/api/extensions/example.tools/workspaces', {})
+        self.assertEqual([sid], [row['id'] for row in result['items']])
+        self.assertEqual({'id', 'title', 'workspace'}, set(result['items'][0]))
+        self.assertEqual(str(work), result['items'][0]['workspace'])
+        self.app.extensions.runner.assert_not_called()
+        self.assertFalse(original['trusted'])
+        for route, data in [('/workspaces', {'path': str(work)}), ('/workspace', {'sessionId': None}),
+                            ('/workspace', {'sessionId': sid, 'path': str(work)})]:
+            with self.assertRaises(HTTPError):
+                self.post('/api/extensions/example.tools' + route, data)
+        with self.assertRaises(HTTPError) as caught:
+            self.post('/api/extensions/example.tools/workspaces', {}, auth=False)
+        self.assertEqual(403, caught.exception.code)
+        for value in ['chat', hidden_id, 'deleting', 'removing', 'missing']:
+            with self.subTest(value=value), self.assertRaises(HTTPError):
+                self.post('/api/extensions/example.tools/workspace', {'sessionId': value})
+
+    def test_selected_work_token_preserves_current_context_and_rejects_retarget_archive_delete(self):
+        active = self.root / 'active'; active.mkdir()
+        target = self.root / 'target'; target.mkdir()
+        changed = self.root / 'changed'; changed.mkdir()
+        active_id = self.app.create(str(active), True)['id']
+        target_id = self.app.create(str(target), True)['id']
+        task = self.app.sessions[target_id]
+        task['trusted'] = False
+        before = dict(task)
+        choice = self.post('/api/extensions/example.tools/workspace', {'sessionId': target_id})
+        self.assertEqual(target_id, choice['sessionId'])
+        self.assertEqual(str(target), choice['path'])
+        self.assertEqual(before, task)
+        request = {'action': 'install', 'sessionId': active_id, 'directoryToken': choice['directoryToken']}
+        self.post('/api/extensions/example.tools/action', request)
+        context = json.loads(self.app.extensions.runner.call_args.kwargs['input'])['context']
+        self.assertEqual(str(active), context['workspace'])
+        self.assertEqual(str(target), context['selectedDirectory'])
+        self.assertFalse(task['trusted'])
+        self.app.extensions.runner.reset_mock()
+        task['workspace'] = str(changed)
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/action', request)
+        task['workspace'] = str(target)
+        self.app.session_visibility.set_hidden(target_id, True)
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/action', request)
+        self.app.session_visibility.set_hidden(target_id, False)
+        self.app.sessions.pop(target_id)
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/action', request)
+        self.app.extensions.runner.assert_not_called()
+
+    def test_selected_work_token_rejects_replaced_or_missing_directory(self):
+        target = self.root / 'target'; target.mkdir()
+        sid = self.app.create(str(target), True)['id']
+        self.app.sessions[sid]['trusted'] = False
+        choice = self.post('/api/extensions/example.tools/workspace', {'sessionId': sid})
+        target.rename(self.root / 'moved')
+        target.mkdir()
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/action', {'action': 'install', 'directoryToken': choice['directoryToken']})
+        target.rmdir()
+        with self.assertRaises(HTTPError):
+            self.post('/api/extensions/example.tools/workspace', {'sessionId': sid})
+        self.app.extensions.runner.assert_not_called()
 
     def test_slow_extension_does_not_hold_common_app_lock_or_block_bootstrap(self):
         started, release = threading.Event(), threading.Event()

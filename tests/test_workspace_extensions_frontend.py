@@ -101,6 +101,26 @@ class WorkspaceExtensionsFrontendTests(unittest.TestCase):
           host.mount(options());await nav.children[0].onclick();const init=await ready();
           assert.equal(init.context.kind,'chat');assert.equal(init.context.workspace,'');""")
 
+    def test_publish_file_selection_transports_opaque_capability_without_path_or_bytes(self):
+        self.run_case("""extension.actions.push('preparePublish');
+          host.mount(options());await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          assert.ok(init.hostFeatures.includes('publishFiles'));
+          apiHandler=async(path,data)=>path.endsWith('/file')?{cancelled:false,fileToken:'f'.repeat(43),name:'artifact.zip',size:123}:{ok:true,result:{ready:true}};
+          await request(frame,init,'picker','host.pickFile');
+          assert.equal(response(frame,'picker').result.name,'artifact.zip');
+          assert.equal(response(frame,'picker').result.path,undefined);
+          assert.equal(calls.at(-1)[0],'/api/extensions/example.store/file');
+          await request(frame,init,'prepare','preparePublish',{fileToken:'f'.repeat(43),metadata:{name:'Sample'}});
+          assert.equal(calls.at(-1)[1].fileToken,'f'.repeat(43));
+          assert.equal(calls.at(-1)[1].payload.fileToken,undefined);
+          assert.equal(calls.at(-1)[1].payload.metadata.name,'Sample');
+          const count=calls.length;
+          await request(frame,init,'wrong-action','install',{fileToken:'f'.repeat(43)});
+          await request(frame,init,'wrong-token','preparePublish',{fileToken:'bad'});
+          await request(frame,init,'path','host.pickFile',{path:'C:/forged.zip'});
+          assert.equal(calls.length,count);assert.equal(response(frame,'wrong-action').ok,false);
+          assert.equal(response(frame,'wrong-token').ok,false);assert.equal(response(frame,'path').ok,false);""")
+
     def test_spoofed_messages_and_wrong_channel_are_ignored(self):
         self.run_case("""host.mount(options());await nav.children[0].onclick();const frame=currentFrame();
           await dispatch(frame,{type:'ax-extension-ready'},{source:{}});assert.equal(frame.contentWindow.received.length,0);
@@ -168,6 +188,21 @@ class WorkspaceExtensionsFrontendTests(unittest.TestCase):
           await request(frame,init,'choose','host.pickDirectory');await request(frame,init,'install','install');
           assert.equal(calls.length,2);assert.equal(response(frame,'install').ok,false);
           finish({cancelled:true});await flush();assert.equal(response(frame,'choose').ok,true);assert.equal(response(frame,'choose').result.cancelled,true);""")
+
+    def test_work_target_actions_use_host_metadata_and_do_not_switch_active_context(self):
+        self.run_case("""host.mount(options());await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          assert.ok(init.hostFeatures.includes('workspaces'));
+          apiHandler=async(path,data)=>path.endsWith('/workspaces')?{items:[{id:'task-9',title:'Another task',workspace:'D:/other'}]}:
+            path.endsWith('/workspace')?{cancelled:false,sessionId:data.sessionId,title:'Another task',path:'D:/other',directoryToken:'w'.repeat(43)}:{ok:true,result:{ready:true}};
+          await request(frame,init,'list','host.listWorkspaces',{path:'C:/forged'});
+          assert.equal(calls[1][0],'/api/extensions/example.store/workspaces');assert.equal(Object.keys(calls[1][1]).length,0);
+          assert.equal(response(frame,'list').result.items[0].id,'task-9');
+          await request(frame,init,'select','host.selectWorkspace',{sessionId:'task-9',path:'C:/forged'});
+          assert.equal(calls[2][0],'/api/extensions/example.store/workspace');assert.deepEqual(Object.keys(calls[2][1]),['sessionId']);
+          assert.equal(response(frame,'select').result.path,'D:/other');assert.equal(state.sessionId,'task-7');
+          await request(frame,init,'install','install',{directoryToken:'w'.repeat(43),scope:'directory'});
+          assert.equal(calls[3][1].sessionId,'task-7');assert.equal(calls[3][1].directoryToken,'w'.repeat(43));
+          await request(frame,init,'bad','host.selectWorkspace',{sessionId:null});assert.equal(calls.length,4);assert.equal(response(frame,'bad').ok,false);""")
 
     def test_view_address_must_be_exact_same_origin_ticket_endpoint(self):
         self.run_case("""host.mount(options());

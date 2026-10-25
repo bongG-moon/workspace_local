@@ -68,7 +68,7 @@ globalThis.WorkspaceExtensions = (() => {
       if (owner.initialized) return;
       owner.initialized = true;
       const {workspace, title, kind} = owner.context;
-      post(owner, {type: "ax-extension-init", hostApi: 1, theme: theme(), context: {workspace, title, kind}});
+      post(owner, {type: "ax-extension-init", hostApi: 1, hostFeatures: ["workspaces", "publishFiles"], theme: theme(), context: {workspace, title, kind}});
       owner.loading.remove();
       return;
     }
@@ -80,7 +80,7 @@ globalThis.WorkspaceExtensions = (() => {
     try { length = JSON.stringify(data).length; } catch (_) { return; }
     if (length > MAX_MESSAGE || (data.payload !== undefined && !plain(data.payload))) return respond({ok: false, error: "확장 요청이 너무 크거나 형식이 올바르지 않아요."});
     if (owner.requests.size >= MAX_REQUESTS) return respond({ok: false, error: "확장 화면을 닫고 다시 열어 주세요."});
-    if (typeof data.action !== "string" || (!["host.openExternal", "host.pickDirectory"].includes(data.action) && !owner.extension.actions.includes(data.action)))
+    if (typeof data.action !== "string" || (!["host.openExternal", "host.pickDirectory", "host.pickFile", "host.listWorkspaces", "host.selectWorkspace"].includes(data.action) && !owner.extension.actions.includes(data.action)))
       return respond({ok: false, error: "이 확장에서 제공하지 않는 기능이에요."});
     owner.requests.add(data.requestId);
     if (data.action === "host.openExternal") {
@@ -91,7 +91,21 @@ globalThis.WorkspaceExtensions = (() => {
     if (owner.busy) return respond({ok: false, error: "앞서 요청한 확장 작업이 끝난 뒤 다시 시도해 주세요."});
     setBusy(owner, true);
     try {
-      if (data.action === "host.pickDirectory") {
+      if (data.action === "host.listWorkspaces") {
+        const listed = await hooks.api(`/api/extensions/${owner.extension.id}/workspaces`, {});
+        if (!Array.isArray(listed?.items)) throw Error("업무 목록을 확인하지 못했어요. 다시 시도해 주세요.");
+        respond({ok: true, result: listed});
+      } else if (data.action === "host.selectWorkspace") {
+        const sessionId = data.payload?.sessionId;
+        if (typeof sessionId !== "string" || !sessionId || sessionId.length > 200)
+          throw Error("설치할 업무를 목록에서 선택해 주세요.");
+        const selected = await hooks.api(`/api/extensions/${owner.extension.id}/workspace`, {sessionId});
+        if (selected?.cancelled !== false || selected.sessionId !== sessionId ||
+            typeof selected.path !== "string" || !selected.path ||
+            typeof selected.directoryToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(selected.directoryToken))
+          throw Error("선택한 업무 폴더를 확인하지 못했어요. 다시 선택해 주세요.");
+        respond({ok: true, result: selected});
+      } else if (data.action === "host.pickDirectory") {
         // The native picker is owned by the host. The child never supplies an
         // arbitrary path or a preferred starting directory.
         const selected = await hooks.api(`/api/extensions/${owner.extension.id}/directory`, {});
@@ -100,13 +114,26 @@ globalThis.WorkspaceExtensions = (() => {
             typeof selected.directoryToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(selected.directoryToken)))
           throw Error("선택한 폴더를 확인하지 못했어요. 다시 선택해 주세요.");
         respond({ok: true, result: selected});
+      } else if (data.action === "host.pickFile") {
+        if (Object.keys(data.payload || {}).length) throw Error("등록할 파일은 파일 선택 창에서 선택해 주세요.");
+        const selected = await hooks.api(`/api/extensions/${owner.extension.id}/file`, {});
+        if (selected?.cancelled !== true && (selected?.cancelled !== false ||
+            typeof selected.name !== "string" || !selected.name ||
+            !Number.isSafeInteger(selected.size) || selected.size <= 0 ||
+            typeof selected.fileToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(selected.fileToken)))
+          throw Error("선택한 파일을 확인하지 못했어요. 다시 선택해 주세요.");
+        respond({ok: true, result: selected});
       } else {
-        const payload = {...(data.payload || {})}, directoryToken = payload.directoryToken;
+        const payload = {...(data.payload || {})}, directoryToken = payload.directoryToken, fileToken = payload.fileToken;
         delete payload.directoryToken;
+        delete payload.fileToken;
         if (directoryToken !== undefined && (typeof directoryToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(directoryToken)))
           throw Error("선택한 폴더가 만료되었어요. 다시 선택해 주세요.");
+        if (fileToken !== undefined && (!["inspectPublishSource", "preparePublish"].includes(data.action) ||
+            typeof fileToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(fileToken)))
+          throw Error("등록 파일을 다시 선택한 뒤 등록 내용을 확인해 주세요.");
         const result = await hooks.api(`/api/extensions/${owner.extension.id}/action`, {
-          action: data.action, payload, sessionId: owner.context.sessionId || undefined, directoryToken
+          action: data.action, payload, sessionId: owner.context.sessionId || undefined, directoryToken, fileToken
         });
         if (result?.ok !== true) throw Error(result?.error || "확장 작업을 완료하지 못했어요. 상태를 확인한 뒤 다시 시도해 주세요.");
         respond({ok: true, result: result.result});

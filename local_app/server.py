@@ -1029,6 +1029,21 @@ class LocalApp:
     def visible_sessions(self):
         return [item for item in self.sessions.values() if not self.session_visibility.contains(item['id']) and item['id'] not in self.chat_spaces.pending and not item.get('_deleting')]
 
+    def extension_workspaces(self, session_id=None):
+        """An on-demand metadata view; never switches a task or grants trust."""
+        with self.lock:
+            rows = [item for item in self.visible_sessions()
+                    if item.get('kind', 'work') == 'work' and not item.get('_removingFromList')]
+            if session_id is not None:
+                if not isinstance(session_id, str) or not session_id:
+                    raise ValueError('설치할 업무를 목록에서 선택해 주세요.')
+                row = next((item for item in rows if item['id'] == session_id), None)
+                if row is None:
+                    raise ValueError('선택한 업무를 찾을 수 없습니다. 업무 목록을 다시 열어 주세요.')
+                return {key: row.get(key) for key in ('id', 'title', 'workspace')}
+            return [{key: row.get(key) for key in ('id', 'title', 'workspace')}
+                    for row in self.session_order.ordered(rows)]
+
     def _check_session_capacity(self, *, restoring=False):
         """The 500-task limit applies to the working list, not preserved history."""
         if self.history.warning or self.session_visibility.warning:
@@ -2619,6 +2634,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlsplit(self.path)
+        # An extension's sandbox has an opaque origin. Share only this bundled
+        # public font with it, never API responses or arbitrary local files.
+        # Reuse the browser cache instead of embedding 7 MB of base64 per view.
+        if (route.path == '/fonts/NotoSansKR-Variable.woff' and not route.query
+                and self.headers.get('Host') == self.server.origin.removeprefix('http://')
+                and self.headers.get('Origin') in (None, 'null', self.server.origin)):
+            try:
+                body = (ASSETS / 'fonts/NotoSansKR-Variable.woff').read_bytes()
+            except OSError:
+                return self.reply({'error': '글꼴 파일을 읽지 못했습니다.'}, 404)
+            self.send_response(200)
+            self.send_header('Content-Type', 'font/woff')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'private, max-age=3600')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            return
         if not self.valid_request(auth=route.path.startswith("/api/")):
             return self.reply({"error": "이 창의 연결 권한을 확인할 수 없습니다. 실행 아이콘으로 다시 열어 주세요."}, 403)
         try:
@@ -3013,7 +3050,7 @@ class Handler(BaseHTTPRequestHandler):
         extension_import = re.fullmatch(r'/api/extensions/import/(prepare|confirm|cancel|pending)', route)
         if extension_import:
             return self.reply(app.extensions.import_package(extension_import.group(1), data, app.pick))
-        extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory)', route)
+        extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory|file|workspaces|workspace)', route)
         if extension_route:
             extension_id, operation = extension_route.groups()
             if operation == 'view':
@@ -3024,7 +3061,19 @@ class Handler(BaseHTTPRequestHandler):
                 if data:
                     raise ValueError('설치 폴더는 폴더 선택 창에서 선택해 주세요.')
                 return self.reply(app.extensions.pick_directory(extension_id, app.pick))
-            if set(data) - {'action', 'payload', 'sessionId', 'directoryToken'} or 'action' not in data:
+            if operation == 'file':
+                if data:
+                    raise ValueError('등록 파일은 파일 선택 창에서 선택해 주세요.')
+                return self.reply(app.extensions.pick_file(extension_id, app.pick))
+            if operation == 'workspaces':
+                if data:
+                    raise ValueError('업무 목록 요청의 항목을 확인해 주세요.')
+                return self.reply(app.extensions.list_workspaces(extension_id, app.extension_workspaces()))
+            if operation == 'workspace':
+                if set(data) != {'sessionId'} or not isinstance(data['sessionId'], str) or not data['sessionId']:
+                    raise ValueError('설치할 업무를 목록에서 선택해 주세요.')
+                return self.reply(app.extensions.select_workspace(extension_id, app.extension_workspaces(data['sessionId'])))
+            if set(data) - {'action', 'payload', 'sessionId', 'directoryToken', 'fileToken'} or 'action' not in data:
                 raise ValueError('확장 실행 요청의 항목을 확인해 주세요.')
             workspace = None
             session_id = data.get('sessionId')
@@ -3041,7 +3090,9 @@ class Handler(BaseHTTPRequestHandler):
                             workspace = str(item['workspace'])
             context = {'workspace': workspace}
             if 'directoryToken' in data:
-                context.update(app.extensions.directory_context(extension_id, data['directoryToken']))
+                context.update(app.extensions.directory_context(extension_id, data['directoryToken'], app.extension_workspaces))
+            if 'fileToken' in data:
+                context.update(app.extensions.file_context(extension_id, data['fileToken'], data['action']))
             return self.reply(app.extensions.action(extension_id, data['action'], data.get('payload', {}), context=context))
         if route == '/api/session-groups':
             return self.reply(app.change_session_groups(data))
