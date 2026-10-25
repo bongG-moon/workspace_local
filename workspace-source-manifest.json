@@ -167,8 +167,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "4884c949b56c4baa3db732d7224ee6a1637fe095b9407abab0d2cadce0abd78a",
-      "size": 71215
+      "sha256": "b6f509ea594fc4ec96fdab3c841b1ff25d77baaa8151a634cf91832253815779",
+      "size": 72383
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -252,8 +252,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.32.md",
-      "sha256": "596c007932a556f34724c961b34b70f3fdfbf7eaeeec78e646bdccc29c9e9d11",
-      "size": 8543
+      "sha256": "9f6177bc0f2c5af6820b3ee47aa8698fa251a1276df7b80d1696d3eb6c5c20ab",
+      "size": 9702
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -1127,8 +1127,8 @@
     },
     {
       "path": "local_app/picker_channel.py",
-      "sha256": "ee97840a2bf9c2c144a270b8961a56abac2433bb9cfc72d4dd052900c8d0210a",
-      "size": 4755
+      "sha256": "7f3a47daa00150baea85484338cd7e0d2eb660f556b8f70129bda4558cf745e3",
+      "size": 5743
     },
     {
       "path": "local_app/picker_protocol.py",
@@ -2532,8 +2532,8 @@
     },
     {
       "path": "tests/test_workspace_picker.py",
-      "sha256": "10b477a3a9c4bba43d0b90e55d29df9eab28141aeaee86528d99578104b4a8de",
-      "size": 10535
+      "sha256": "33644828d9b9566b74b20a4ec696ca3155e296869a516e0a5e8708781c01dde1",
+      "size": 13985
     },
     {
       "path": "tests/test_workspace_picker_integration.py",
