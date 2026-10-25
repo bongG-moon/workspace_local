@@ -7,10 +7,19 @@ from ctypes import wintypes
 import os
 from pathlib import Path
 import shutil
+import stat
 import tempfile
 import uuid
 
 from .windows_paths import local_app_data_folder
+
+
+def _directory_identity(directory: Path):
+    info = directory.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400
+            or directory.is_symlink()):
+        raise OSError('Picker channel location changed; cleanup stopped.')
+    return info.st_dev, info.st_ino
 
 
 def _create_private_directory(path: Path):
@@ -84,12 +93,23 @@ def private_picker_directory():
         except FileExistsError:
             if attempt == 2:
                 raise
+    # Packaged Windows processes can redirect a newly created LocalAppData
+    # directory into their private LocalCache even though the parent resolved
+    # normally before creation. Resolve the actual directory once, before the
+    # picker sees it, and prove that both names identify the same ordinary
+    # directory. A reparse point is never accepted as this normalization.
+    identity = _directory_identity(directory)
+    resolved = directory.resolve(strict=True)
+    if _directory_identity(resolved) != identity:
+        raise OSError('Picker channel location changed; cleanup stopped.')
+    directory = resolved
+    parent = directory.parent
     try:
         yield directory
     finally:
-        # Refuse a substituted reparse root instead of following it on cleanup.
-        info = directory.lstat()
+        # Refuse both a substituted reparse root and an ordinary replacement
+        # directory instead of deleting anything other than our own channel.
         if (directory.parent != parent or directory.resolve(strict=True) != directory
-                or getattr(info, 'st_file_attributes', 0) & 0x400 or directory.is_symlink()):
+                or _directory_identity(directory) != identity):
             raise OSError('Picker channel location changed; cleanup stopped.')
         shutil.rmtree(directory)

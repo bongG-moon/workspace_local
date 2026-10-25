@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from local_app.picker_channel import private_picker_directory
+from local_app.picker_protocol import read_result
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +205,61 @@ $fileRules = @($fileAcl.Access | ForEach-Object {$_.IdentityReference.Translate(
             self.assertEqual({value['current'], 'S-1-5-18'}, set(value['rules']))
             self.assertEqual({value['current'], 'S-1-5-18'}, set(value['fileRules']))
         self.assertFalse(directory.exists())
+
+    def test_real_known_folder_channel_result_survives_windows_path_redirection(self):
+        # Do not patch the Known Folder: packaged Windows processes redirect the
+        # new child to LocalCache only when it is created, which caused cleanup
+        # to reject a valid native-picker result in the installed application.
+        with private_picker_directory() as directory:
+            self.assertEqual(directory, directory.resolve(strict=True))
+            selected = directory / '선택한 배포 파일.zip'
+            selected.write_bytes(b'fixture')
+            result = directory / 'result.json'
+            literal = lambda path: str(path).replace("'", "''")
+            self.run_ps(r"""
+Write-WorkspacePickerResult @{version=1; status='success'; paths=@('__SELECTED__')} '__RESULT__'
+@{written=$true} | ConvertTo-Json -Compress
+""".replace('__SELECTED__', literal(selected)).replace('__RESULT__', literal(result)))
+            self.assertEqual({'version': 1, 'status': 'success', 'paths': [str(selected)]},
+                             read_result(result, 'files'))
+        self.assertFalse(directory.exists())
+
+    def test_cleanup_does_not_delete_an_ordinary_replacement_directory(self):
+        with tempfile.TemporaryDirectory(prefix='picker-replacement-') as parent, \
+                patch('local_app.picker_channel.local_app_data_folder', return_value=Path(parent)):
+            with self.assertRaisesRegex(OSError, 'location changed'):
+                with private_picker_directory() as directory:
+                    original = directory.with_name(directory.name + '-original')
+                    directory.rename(original)
+                    directory.mkdir()
+                    (directory / 'keep.txt').write_text('replacement', encoding='utf-8')
+            self.assertTrue(original.is_dir())
+            self.assertEqual('replacement', (directory / 'keep.txt').read_text(encoding='utf-8'))
+
+    def test_cleanup_does_not_follow_a_replacement_junction(self):
+        with tempfile.TemporaryDirectory(prefix='picker-junction-') as parent, \
+                patch('local_app.picker_channel.local_app_data_folder', return_value=Path(parent)):
+            target = Path(parent) / 'unrelated-files'
+            target.mkdir()
+            (target / 'keep.txt').write_text('untouched', encoding='utf-8')
+            directory = None
+            try:
+                with self.assertRaisesRegex(OSError, 'location changed'):
+                    with private_picker_directory() as directory:
+                        original = directory.with_name(directory.name + '-original')
+                        directory.rename(original)
+                        self.run_ps(r"""
+New-Item -ItemType Junction -Path '__LINK__' -Target '__TARGET__' | Out-Null
+@{created=$true} | ConvertTo-Json -Compress
+""".replace('__LINK__', str(directory).replace("'", "''"))
+                            .replace('__TARGET__', str(target).replace("'", "''")))
+                self.assertTrue(original.is_dir())
+                self.assertEqual('untouched', (target / 'keep.txt').read_text(encoding='utf-8'))
+            finally:
+                # Remove only the junction itself; never recurse into its target.
+                if (directory is not None and directory.exists()
+                        and getattr(directory.lstat(), 'st_file_attributes', 0) & 0x400):
+                    directory.rmdir()
 
 
 if __name__ == "__main__":
