@@ -171,6 +171,23 @@ class WorkspaceExtensionsFrontendTests(unittest.TestCase):
           const anchor=created.find(x=>x.tagName==='a');assert.equal(anchor.rel,'noopener noreferrer');assert.equal(anchor.target,'_blank');
           assert.equal(anchor.hidden,false);assert.equal(anchor.href,'https://portal.example.test/local-access');""")
 
+    def test_explicit_local_homepage_only_opens_other_service_root(self):
+        self.run_case("""host.mount(options());await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          const allowed=['http://localhost:8080/','http://127.0.0.1:8080/','http://127.1:8080/',
+            'http://[::1]:8080/','http://[::ffff:127.0.0.1]:8080/','https://portal.example.test/'];
+          for(let i=0;i<allowed.length;i++){await request(frame,init,'home'+i,'host.openExternal',{url:allowed[i],homepage:true});
+            assert.equal(response(frame,'home'+i).ok,true);assert.equal(opened.at(-1)[0],new URL(allowed[i]).href);}
+          const blocked=['http://localhost:8080/api','http://localhost:8080/?view=admin','http://localhost:8080/#token=x',
+            'http://user:pass@localhost:8080/','http://127.0.0.1:8790/','http://localhost:8790/',
+            'http://127.1:8790/','http://[::1]:8790/','http://localhost.:8790/',
+            'http://[::ffff:127.0.0.1]:8790/','http://platform.localhost:8790/',
+            'https://portal.example.test/api','https://portal.example.test/?q=home','file:///C:/'];
+          for(let i=0;i<blocked.length;i++){await request(frame,init,'blocked'+i,'host.openExternal',{url:blocked[i],homepage:true});
+            assert.equal(response(frame,'blocked'+i).ok,false);}
+          for(const flag of [undefined,false,'true',1]){const id='flag'+String(flag);await request(frame,init,id,'host.openExternal',{url:'http://localhost:8080/',homepage:flag});
+            assert.equal(response(frame,id).ok,false);}
+          assert.equal(opened.length,allowed.length);assert.equal(calls.length,1);""")
+
     def test_native_directory_picker_never_accepts_child_path_and_forwards_handle_separately(self):
         self.run_case("""host.mount(options());await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
           apiHandler=async(path)=>path.endsWith('/directory')?{cancelled:false,directoryToken:'x'.repeat(43),path:'D:/chosen'}:{ok:true,result:{ready:true}};

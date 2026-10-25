@@ -34,15 +34,24 @@ globalThis.WorkspaceExtensions = (() => {
     if (isCurrent(owner) && owner.frame?.contentWindow)
       owner.frame.contentWindow.postMessage({...data, channel: owner.channel}, "*");
   }
-  function externalUrl(value) {
+  function externalUrl(value, homepage = false) {
     if (typeof value !== "string" || value.length > 2048 || /[\u0000-\u0020\\]/.test(value))
       throw Error("열 수 있는 웹 주소인지 확인해 주세요.");
     const url = new URL(value);
+    const loopback = /^(?:(?:[^.]+\.)*localhost\.?$|127\.|\[::1\]$|\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$)/i.test(url.hostname);
+    // Local platform homepages are useful during deployment checks. Only an
+    // explicit homepage action may open their root, never a local API/command
+    // path or this application's own port (including localhost/IP aliases).
+    const homepageOnly = homepage === true;
+    const port = address => address.port || (address.protocol === "https:" ? "443" : "80");
+    const localHome = homepageOnly && url.pathname === "/" && !url.search &&
+      port(url) !== port(new URL(globalThis.location.origin));
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash ||
-        /^(?:localhost$|127\.|\[?::1\]?$)/i.test(url.hostname) ||
+        (homepageOnly && (url.pathname !== "/" || url.search)) ||
+        (loopback && !localHome) || url.origin === globalThis.location.origin ||
         [...url.searchParams.keys()].some(key => /token|key|secret|authorization|password/i.test(key)))
       throw Error("인증정보가 없는 HTTP 또는 HTTPS 웹 주소만 열 수 있어요.");
-    return url.href;
+    return homepageOnly ? url.origin + "/" : url.href;
   }
   function setBusy(owner, busy) {
     owner.busy = busy;
@@ -51,7 +60,7 @@ globalThis.WorkspaceExtensions = (() => {
     owner.status.hidden = !busy;
   }
   function openExternal(owner, payload) {
-    const url = externalUrl(payload.url);
+    const url = externalUrl(payload.url, payload.homepage);
     // A real anchor is retained if a browser/runtime does not transfer user
     // activation across postMessage. It opens only on an explicit click.
     owner.external.href = url;

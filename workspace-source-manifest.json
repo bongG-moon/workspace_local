@@ -167,8 +167,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "afbff59179851b5e987c5b2a65a90caf5f437cca4b813805b4d67c57d7f194f8",
-      "size": 70188
+      "sha256": "4884c949b56c4baa3db732d7224ee6a1637fe095b9407abab0d2cadce0abd78a",
+      "size": 71215
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -252,8 +252,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.32.md",
-      "sha256": "1371f816b28ea846c4699bb403f4169b7925e88b51314a71a771401b2fe3c9b9",
-      "size": 5364
+      "sha256": "596c007932a556f34724c961b34b70f3fdfbf7eaeeec78e646bdccc29c9e9d11",
+      "size": 8543
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -1372,8 +1372,8 @@
     },
     {
       "path": "local_app/web/extensions.js",
-      "sha256": "e3298c9082e6e39bb9454572a2a54b08ecd22d085f850121998237f5accea62a",
-      "size": 15639
+      "sha256": "21ae330c321b49ce3d65a9840bca74e18876faee0c791c65803e7d3969522706",
+      "size": 16429
     },
     {
       "path": "local_app/web/focus-navigation.js",
@@ -2337,8 +2337,8 @@
     },
     {
       "path": "tests/test_workspace_extensions_frontend.py",
-      "sha256": "19441a729731cd7f56cc7a4078e56e7c24d1e4575f4c3df28db7704d215498c5",
-      "size": 24455
+      "sha256": "978b7b5ab8698cfaec8e57af799df55fb6ad7d03457601b954c75e037b3952b2",
+      "size": 26106
     },
     {
       "path": "tests/test_workspace_external_apps.py",
