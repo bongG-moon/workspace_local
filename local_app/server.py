@@ -21,7 +21,7 @@ import webbrowser
 
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
-from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, normalize_run_timing, retain_run_timings, safe
+from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, normalize_result_receipt, normalize_run_timing, retain_run_timings, safe
 from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
 from .build_identity import BUILD_ID
@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.34"
+WORKSPACE_VERSION = "0.23.35"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -430,6 +430,31 @@ class LocalApp:
         with self.lock:
             return self._public(item)
 
+    def read_result(self, sid, revision):
+        """Acknowledge only the final result the client actually displayed."""
+        if not isinstance(sid, str) or type(revision) is not int or not 0 < revision <= 9007199254740991:
+            raise ValueError('확인한 결과 정보를 다시 확인해 주세요.')
+        with self.lock:
+            item = self.get(sid)
+            receipt = normalize_result_receipt(item.get('resultReceipt'))
+            if receipt is None or revision > receipt['revision']:
+                raise ValueError('표시된 결과가 변경되었습니다. 업무를 다시 열어 확인해 주세요.')
+            if revision > receipt['seenRevision']:
+                if self.history.warning:
+                    raise ValueError(self.history.warning)
+                updated = dict(receipt, seenRevision=revision)
+                item['resultReceipt'] = updated
+                try:
+                    # The body and index use the same atomic history writer.
+                    # Invalidate any deferred snapshot before this transition,
+                    # otherwise a stale tool-progress save could restore unread.
+                    self.save(sid)
+                except (OSError, ValueError):
+                    item['resultReceipt'] = receipt
+                    raise
+                receipt = updated
+            return {'id': sid, 'resultReceipt': dict(receipt)}
+
     def require_work(self, sid):
         item = self.get(sid)
         if item.get('kind', 'work') != 'work':
@@ -668,6 +693,7 @@ class LocalApp:
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
+            'resultReceipt': normalize_result_receipt(item.get('resultReceipt')),
             'runStartedAt': self._run_started_at(item),
             'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
             'permissionPreferenceNotice': item.get('permissionPreferenceNotice') or '',
@@ -727,7 +753,7 @@ class LocalApp:
                     "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
-                                 {'kind': item.get('kind', 'work')} |
+                                 {'kind': item.get('kind', 'work'), 'resultReceipt': normalize_result_receipt(item.get('resultReceipt'))} |
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', [])),
                                   "historyDetailsPending": bool(item.get('_historyMetadataPending'))} for item in sessions],
@@ -807,7 +833,8 @@ class LocalApp:
             for item in pending['items']:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
-                    'sessions': [{'id': row['id'], 'kind': row.get('kind', 'work'), 'state': row['state']} for row in visible],
+                    'sessions': [{'id': row['id'], 'kind': row.get('kind', 'work'), 'state': row['state'],
+                                  'resultReceipt': normalize_result_receipt(row.get('resultReceipt'))} for row in visible],
                     'pendingHistoryCount': sum(bool(item.get('_historyMetadataPending')) for item in visible),
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
@@ -2131,6 +2158,15 @@ class LocalApp:
                 timing = self._finish_run_timing(item, kind, data, _terminal_clock)
                 if timing is not None:
                     data['runTiming'] = timing
+                    if (kind == 'result' and not item.get('requests') and not item.get('choice')
+                            and (item.get('verification') or {}).get('state') != 'needs-review'):
+                        previous = normalize_result_receipt(item.get('resultReceipt'))
+                        if previous is None or previous['runId'] != timing['runId']:
+                            item['resultReceipt'] = {
+                                'revision': previous['revision'] + 1 if previous else 1,
+                                'seenRevision': previous['seenRevision'] if previous else 0,
+                                'runId': timing['runId']}
+                data['resultReceipt'] = normalize_result_receipt(item.get('resultReceipt'))
             if kind in {'status', 'result', 'error'}:
                 state = self.public(item)
                 data = dict(data, **{key: state[key] for key in ('stopState', 'connectionStopped', 'cleanupRetryable')})
@@ -2886,6 +2922,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/tool-activity.js": ("tool-activity.js", "text/javascript; charset=utf-8"),
                       "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
                       "/request-timing.js": ("request-timing.js", "text/javascript; charset=utf-8"),
+                      "/result-receipts.js": ("result-receipts.js", "text/javascript; charset=utf-8"),
                       "/request-timing.css": ("request-timing.css", "text/css; charset=utf-8"),
                       "/progress-view.js": ("progress-view.js", "text/javascript; charset=utf-8"),
                       "/progress-view.css": ("progress-view.css", "text/css; charset=utf-8"),
@@ -3024,7 +3061,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Deliver completion only after cleanup, then stop accepting HTTP.
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
             read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind',
-                                  '/api/attachments/prepare', '/api/drafts'}
+                                  '/api/attachments/prepare', '/api/drafts', '/api/session/result-read'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
             with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
@@ -3236,6 +3273,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.delete_chat(sid, data['confirmed']))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
+        if route == '/api/session/result-read':
+            if set(data) != {'id', 'revision'}:
+                raise ValueError('확인한 결과 요청의 항목을 확인해 주세요.')
+            return self.reply(app.read_result(sid, data['revision']))
         if route == '/api/session/hide':
             return self.reply(app.hide_session(sid, data.get('confirmed')))
         if route == '/api/session/reorder':

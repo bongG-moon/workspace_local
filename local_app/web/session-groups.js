@@ -53,16 +53,17 @@ globalThis.WorkspaceSessionGroups = (() => {
     }catch(err){toast(err.message);return false;}
   }
   function header(group,members,query){
-    const expanded=!!query||!group.collapsed;
+    const expanded=!!query||!group.collapsed,unread=members.some(item=>globalThis.WorkspaceResultReceipts?.unread(item)===true);
     const row=el("div",null,"task-group-header"+(members.some(item=>item.id===active?.id)?" has-active":""));
     row.dataset.groupId=group.id;
     const toggle=el("button",null,"task-group-toggle");toggle.type="button";toggle.disabled=locked();
-    toggle.setAttribute("aria-label",`${group.name} · 업무 ${members.length}개${query?" · 검색 해제":expanded?" · 접기":" · 펼치기"}`);
-    toggle.title=query?"검색 중에는 폴더를 펼쳐 보여요. 누르면 검색을 해제합니다.":expanded?"폴더 접기":"폴더 펼치기";
+    toggle.setAttribute("aria-label",`${group.name} · 업무 ${members.length}개${unread?" · 새 결과 있음":""}${query?" · 검색 해제":expanded?" · 접기":" · 펼치기"}`);
+    toggle.title=(query?"검색 중에는 폴더를 펼쳐 보여요. 누르면 검색을 해제합니다.":expanded?"폴더 접기":"폴더 펼치기")+(unread?" · 확인하지 않은 완료 결과가 있어요.":"");
     toggle.setAttribute("aria-expanded",String(expanded));
     const chevron=el("span",null,"task-group-chevron"),folder=el("span",null,"task-folder-icon");
     chevron.setAttribute("aria-hidden","true");folder.setAttribute("aria-hidden","true");
     toggle.append(chevron,folder,el("span",group.name,"task-group-name"),el("span",String(members.length),"task-group-count"));
+    if(unread){const mark=el("span",null,"session-state-dot task-group-unread");mark.dataset.state="unread";mark.setAttribute("aria-hidden","true");toggle.append(mark);}
     toggle.onclick=async()=>{
       // Search reveals matches without overwriting the saved collapse preference.
       if(query){$("session-search").value="";renderSessions();return;}

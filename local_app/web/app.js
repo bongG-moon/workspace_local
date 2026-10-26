@@ -399,20 +399,29 @@ function renderSessions(){
   $("sessions").replaceChildren();$("home-recents").replaceChildren();
   if(boot.sessionOrder?.warning)$("sessions").append(el("p",boot.sessionOrder.warning,"sidebar-empty"));
   const createSidebarRow=item=>{
-    const b=el("button",null,"session"+(item.id===active?.id?" active":"")),waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;
-    b.type="button";b.setAttribute("aria-label",`${item.title} · ${stateNames[item.state]||"이어하기"}${waiting?` · 응답 대기 ${waiting}`:""}`);
+    const unread=globalThis.WorkspaceResultReceipts?.unread(item)===true;
+    const b=el("button",null,"session"+(item.id===active?.id?" active":"")+(unread?" session-unread":"")),waiting=globalThis.WorkspaceAttention?.countFor(item.id)||0;
+    const status=`${stateNames[item.state]||"이어하기"}${waiting?` · 응답 대기 ${waiting}`:""}${unread?" · 새 결과 있음":""}`;
+    b.type="button";b.setAttribute("aria-label",`${item.title} · ${status}`);
     if(item.id===active?.id)b.setAttribute("aria-current","page");
     b.append(el("strong",item.title,"session-title"));
-    if(waiting){const badge=el("span",String(waiting),"session-attention");badge.setAttribute("aria-hidden","true");b.append(badge);}
-    else if(busyStates.has(item.state)||item.state==="error"){const dot=el("span",null,"session-state-dot");dot.dataset.state=item.state;dot.setAttribute("aria-hidden","true");b.append(dot);}
-    b.title=`${item.title}\n${stateNames[item.state]||"대기"} · ${when(item.updated||item.created)}${isGeneralChat()?"":"\n"+item.workspace}`;
+    const mark=el("span",null,"session-state-mark");mark.setAttribute("aria-hidden","true");
+    if(waiting){const badge=el("span",String(waiting),"session-attention");mark.append(badge);}
+    else if(busyStates.has(item.state)||item.state==="error"||unread){const dot=el("span",null,"session-state-dot");dot.dataset.state=busyStates.has(item.state)||item.state==="error"?item.state:"unread";mark.append(dot);}
+    b.append(mark);
+    b.title=`${item.title}\n${status} · ${when(item.updated||item.created)}${isGeneralChat()?"":"\n"+item.workspace}`;
     b.onclick=async()=>{try{const selected=await selectSession(item.id);if(selected&&globalThis.WorkspaceLayout?.snapshot().sidebarOverlay)globalThis.WorkspaceLayout.closeSidebar();}catch(e){error(e.message);}};
     return sessionRow(item,b,"sessions");
   };
   const grouped=groups&&!isGeneralChat()?groups.render(items,createSidebarRow,query):false;
   if(!groups||isGeneralChat())for(const item of items)$("sessions").append(createSidebarRow(item));
   if(!items.length&&!grouped)$("sessions").append(el("p",query?(isGeneralChat()?"찾는 대화가 없어요":"찾는 업무가 없어요"):(isGeneralChat()?"시작한 대화가 여기에 모여요":"시작한 업무가 여기에 모여요"),"sidebar-empty"));
-  for(const item of items.slice(0,4)){const b=el("button",null,"recent-card");b.type="button";b.append(el("span",item.pinned?(isGeneralChat()?"고정한 대화":"고정한 업무"):"이어서 하기","recent-kicker"),el("strong",item.title),el("span",`${isGeneralChat()?"일반 대화":basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",stateNames[item.state]||"대기","recent-status"));b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(sessionRow(item,b,"home-recents"));}
+  for(const item of items.slice(0,4)){
+    const unread=globalThis.WorkspaceResultReceipts?.unread(item)===true,status=`${stateNames[item.state]||"대기"}${unread?" · 새 결과 있음":""}`;
+    const b=el("button",null,"recent-card"+(unread?" session-unread":""));b.type="button";b.setAttribute("aria-label",`${item.title} · ${status}`);
+    b.append(el("span",item.pinned?(isGeneralChat()?"고정한 대화":"고정한 업무"):"이어서 하기","recent-kicker"),el("strong",item.title,"session-title"),el("span",`${isGeneralChat()?"일반 대화":basename(item.workspace)} · ${when(item.updated||item.created)}`,"recent-meta"),el("span",status,"recent-status"));
+    b.onclick=()=>selectSession(item.id).catch(e=>error(e.message));$("home-recents").append(sessionRow(item,b,"home-recents"));
+  }
   if(!items.length){
     if(isGeneralChat()){
       const empty=el("div",null,"chat-recents-empty"),copy=el("div");
@@ -426,7 +435,12 @@ function renderSessions(){
 function renderAllSessions(){
   const query=$("task-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>sessionKind(s)===currentMode).filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query)||globalThis.WorkspaceSessionGroups?.matches(s,query));
   $("all-sessions").replaceChildren();$("tasks-empty").hidden=!!items.length;
-  for(const item of items){const button=el("button",null,"session all-session"),meta=el("span",null,"session-meta");button.type="button";button.title=isGeneralChat()?item.title:item.workspace;button.append(el("span",item.pinned?(isGeneralChat()?"고정한 대화":"고정한 업무"):(isGeneralChat()?"대화":"업무"),"session-kicker"),el("strong",item.title,"session-title"),el("span",isGeneralChat()?"일반 대화":item.workspace,"all-session-path"));meta.append(el("span",stateNames[item.state]||"대기"),el("time",when(item.updated||item.created)));button.append(meta);if(item.id===active?.id)button.setAttribute("aria-current","page");button.onclick=async()=>{const pending=selectSession(item.id),ticket=selectionGeneration;try{if(await pending&&ticket===selectionGeneration)$("tasks-dialog").close();}catch(e){if(ticket===selectionGeneration)toast(e.message);}};$("all-sessions").append(sessionRow(item,button,"all-sessions"));}
+  for(const item of items){
+    const unread=globalThis.WorkspaceResultReceipts?.unread(item)===true,status=`${stateNames[item.state]||"대기"}${unread?" · 새 결과 있음":""}`;
+    const button=el("button",null,"session all-session"+(unread?" session-unread":"")),meta=el("span",null,"session-meta");button.type="button";button.title=isGeneralChat()?item.title:item.workspace;button.setAttribute("aria-label",`${item.title} · ${status}`);
+    button.append(el("span",item.pinned?(isGeneralChat()?"고정한 대화":"고정한 업무"):(isGeneralChat()?"대화":"업무"),"session-kicker"),el("strong",item.title,"session-title"),el("span",isGeneralChat()?"일반 대화":item.workspace,"all-session-path"));meta.append(el("span",status),el("time",when(item.updated||item.created)));button.append(meta);
+    if(item.id===active?.id)button.setAttribute("aria-current","page");button.onclick=async()=>{const pending=selectSession(item.id),ticket=selectionGeneration;try{if(await pending&&ticket===selectionGeneration)$("tasks-dialog").close();}catch(e){if(ticket===selectionGeneration)toast(e.message);}};$("all-sessions").append(sessionRow(item,button,"all-sessions"));
+  }
 }
 // Untrusted model text becomes text nodes only, never HTML or remote content.
 function inlineText(parent,text){const pattern=/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;let pos=0;for(const match of text.matchAll(pattern)){parent.append(document.createTextNode(text.slice(pos,match.index)));const code=match[0][0]==="`";parent.append(el(code?"code":"strong",match[0].slice(code?1:2,code?-1:-2)));pos=match.index+match[0].length;}parent.append(document.createTextNode(text.slice(pos)));}
@@ -644,6 +658,7 @@ function pendingUserMessageIndex(next,pending,operation){
 }
 function secondaryViewOpen(){return !!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.();}
 function taskHeader(){
+  globalThis.WorkspaceResultReceipts?.changed();
   // Keep the task mounted for background events; only its view is suspended.
   const catalog=secondaryViewOpen();
   $("task-view").hidden=!active||catalog;
@@ -653,8 +668,8 @@ async function selectSession(id,{keepDraft=false}={}){
   if(appClosed)return false;
   if(hiddenSessionIds.has(id))throw new Error("업무 목록에서 삭제한 항목입니다. 기존 세션 활용하기에서 다시 불러올 수 있어요.");
   if(hidingSessionIds.has(id))throw new Error("업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.");
-  if(!keepDraft)saveDraft();const ticket=++selectionGeneration;cancelFileRefreshes();if(pollController)pollController.abort();
-  const resumeCurrent=()=>{if(ticket===selectionGeneration&&active&&!appClosed){pollController=new AbortController();poll(active.id,active.seq||0,pollController.signal);}};
+  if(!keepDraft)saveDraft();const ticket=++selectionGeneration,receiptView=globalThis.WorkspaceResultReceipts?.reset();cancelFileRefreshes();if(pollController)pollController.abort();
+  const resumeCurrent=()=>{if(ticket===selectionGeneration&&active&&!appClosed){globalThis.WorkspaceResultReceipts?.resume(receiptView);pollController=new AbortController();poll(active.id,active.seq||0,pollController.signal);}};
   let item;
   try{item=await api(`/api/session?id=${encodeURIComponent(id)}`);}catch(e){if(ticket!==selectionGeneration)return false;resumeCurrent();throw e;}
   if(ticket!==selectionGeneration||appClosed)return false;
@@ -676,7 +691,7 @@ async function selectSession(id,{keepDraft=false}={}){
   });
   if(pendingSend?.pending&&acknowledged<0)$("conversation").append(pendingSend.pending);
   globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length&&!pendingSend?.pending)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
-  taskHeader();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
+  globalThis.WorkspaceResultReceipts?.viewReady();taskHeader();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
 function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceRequestTiming?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceExtensions?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;syncTaskOperations();started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
 function restoreEventSnapshot(next,id){
@@ -727,6 +742,7 @@ function restoreEventSnapshot(next,id){
     const replacement=[...conversation.children].find(node=>node.dataset.runId===anchorRun&&node.querySelector(".message-body")?.textContent?.slice(0,160)===anchorText);
     area.scrollTop=replacement&&Number.isFinite(anchorOffset)?area.scrollTop+replacement.getBoundingClientRect().top-areaTop-anchorOffset:top;
   }
+  globalThis.WorkspaceResultReceipts?.viewReady();
 }
 async function poll(id,after,signal){
   const generation=selectionGeneration;
@@ -813,6 +829,8 @@ function handleEvent(event){
   if(event.type==="result"){if(d.lastRunId)active.lastRunId=d.lastRunId;if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus(stopState()==="stopped"?"stopped":"done");refreshInspector(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
   if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshInspector();}if(event.type==="notice")toast(d.message);
   if(d.runTiming)globalThis.WorkspaceRequestTiming?.render(d.runTiming);
+  if(Object.prototype.hasOwnProperty.call(d,"resultReceipt"))globalThis.WorkspaceResultReceipts?.completed(d.resultReceipt);
+  else if(event.type==="assistant")globalThis.WorkspaceResultReceipts?.changed({content:true});
   if(["queue_changed","schedule_changed","dispatch_changed","result","status"].includes(event.type))globalThis.WorkspaceWorkflow?.refresh();
   // Text/progress chunks cannot change the catalog's folder or connection context.
   if(["connected","model_changed","error","status","request","request_closed","result"].includes(event.type))
@@ -825,7 +843,7 @@ function revealRequest(card){
   if(!card)return;const sid=active?.id;
   requestAnimationFrame(()=>{if(active?.id===sid&&[...$("requests").children].includes(card)&&!secondaryViewOpen())card.scrollIntoView({block:"nearest",inline:"nearest"});});
 }
-function sessionMetadata(item){return {kind:sessionKind(item),runtimeProfile:item.runtimeProfile,stopState:item.stopState,cleanupRetryable:item.cleanupRetryable,connectionStopped:item.connectionStopped,id:item.id,title:item.title,workspace:item.workspace,connectionState:item.connection?.connected?"live":item.connection?"last-seen":item.connectionState||"unavailable",created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0};}
+function sessionMetadata(item){const metadata={kind:sessionKind(item),runtimeProfile:item.runtimeProfile,stopState:item.stopState,cleanupRetryable:item.cleanupRetryable,connectionStopped:item.connectionStopped,id:item.id,title:item.title,workspace:item.workspace,connectionState:item.connection?.connected?"live":item.connection?"last-seen":item.connectionState||"unavailable",created:item.created,updated:item.updated,pinned:item.pinned,state:item.state,artifactCount:item.artifactCount??item.artifacts?.length??0,resultReceipt:item.resultReceipt||null};return globalThis.WorkspaceResultReceipts?.mergeSession(metadata)||metadata;}
 async function refreshSessionMeta(){if(!active)return;const id=active.id;try{const next=await api(`/api/session?id=${encodeURIComponent(id)}`);sessions=sessions.map(s=>s.id===id?sessionMetadata(next):s);if(active?.id===id){applyPermissionNotices(next);
       const operation=taskOperations.get(id)?.get("send"),index=pendingUserMessageIndex(next,operation?.pending,operation);
       if(index>=0){const message=next.messages[index];operation.pending.dataset.runId=message.runId;operation.pending.dataset.recoveredRunId=message.runId;operation.message.runId=message.runId;}
@@ -1195,6 +1213,7 @@ function applyRestartSession(item){
   if(!item.messages?.length&&!item.toolActivity?.length)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   sessions=sessions.map(row=>row.id===item.id?sessionMetadata(item):row);taskHeader();renderConnection(item.connection);setStatus(item.state);renderSessions();
   globalThis.WorkspaceWorkflow?.refresh();globalThis.WorkspaceStream?.changed();refreshInspector();
+  globalThis.WorkspaceResultReceipts?.viewReady();
   pollController=new AbortController();void poll(item.id,item.seq||0,pollController.signal);
 }
 async function restartConnection(options={}){

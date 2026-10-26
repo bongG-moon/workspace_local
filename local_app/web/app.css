@@ -281,7 +281,15 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 .session-list .session-drag,.session-list .session-pin{height:30px;opacity:0}.session-list .session-pin[aria-pressed=true],.session-list .session-row:hover .session-drag,.session-list .session-row:hover .session-pin,.session-list .session-row:focus-within .session-drag,.session-list .session-row:focus-within .session-pin{opacity:1}
 .session-list .session-pin[aria-pressed=true]{background:transparent}.session-list .session-pin-icon{width:14px;height:14px}.session-list .session-drag-grip{width:8px;height:14px;background-size:4px 4px}
 .session-list .session-attention{flex:none;display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 5px;border-radius:6px;background:var(--theme-warning-tint, #e8decc);color:var(--theme-warning, #80572c);margin:0;font-size:10px;line-height:1}
-.session-state-dot{width:6px;height:6px;border-radius:50%;background:var(--theme-primary, #8186c8);flex:none}.session-state-dot[data-state=error]{background:var(--theme-danger-tint, #b66870)}
+/* Execution and unread results are independent: color plus title emphasis. */
+:root{--session-running:#218e52;--session-unread:#6b5bc5}
+:root[data-theme=dark]{--session-running:#6ee7a0;--session-unread:#b5a3ff}
+.session-state-mark{display:inline-flex;align-items:center;justify-content:center;width:19px;min-height:19px;flex:none}
+.session-state-dot{width:7px;height:7px;border-radius:50%;background:var(--session-running);flex:none}.session-state-dot[data-state=error]{background:var(--theme-danger, #b66870)}.session-state-dot[data-state=unread]{background:var(--session-unread)}
+.sidebar .session-list .session.session-unread .session-title,.app .home-recents .recent-card.session-unread .session-title,.all-session.session-unread .session-title{font-weight:650;color:var(--ink)}
+.sidebar .session-list .session.session-unread.active .session-title{font-weight:650;color:var(--accent-ink)}
+.task-group-unread{margin-left:2px}
+@media(forced-colors:active){.session-state-dot[data-state=unread]{background:Highlight;outline:1px solid CanvasText;outline-offset:2px}.session-state-dot[data-state=error]{background:CanvasText}}
 .sidebar-collapsed .sidebar{padding:14px 10px 12px;align-items:center}.sidebar-collapsed .sidebar-head{flex-direction:column;gap:9px;margin-bottom:14px}.sidebar-collapsed .brand-type,.sidebar-collapsed .new-chat>span,.sidebar-collapsed .nav-button>span,.sidebar-collapsed .palette-launcher>span,.sidebar-collapsed .palette-launcher kbd,.sidebar-collapsed .session-search,.sidebar-collapsed .sidebar-label,.sidebar-collapsed .session-list{display:none}
 .sidebar-collapsed .sidebar .new-chat,.sidebar-collapsed .sidebar .nav-button,.sidebar-collapsed .sidebar .palette-launcher{width:42px;min-height:40px;justify-content:center;padding:9px;margin-left:0;margin-right:0}.sidebar-collapsed .sidebar .palette-launcher{border-color:transparent;background:transparent}.sidebar-collapsed .sidebar .primary-nav{gap:5px;margin:8px 0}.sidebar-collapsed .sidebar-footer{width:42px}
 .topbar{min-height:62px;padding:9px 24px;gap:12px}.topbar-context{flex:1}h1{font-size:15px}.workspace-summary{padding-top:1px;font-size:10px;line-height:1.6;max-width:100%}.app:not(.task-open):not(.catalog-open) .workspace-summary{display:none}

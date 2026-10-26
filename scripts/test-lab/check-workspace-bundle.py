@@ -52,6 +52,7 @@ expected.update({'local_app/session_visibility.py', 'local_app/path_browser.py',
 expected.update({'local_app/tool_activity.py', 'local_app/web/tool-activity.js', 'local_app/web/tool-activity.css'})
 expected.update({'local_app/progress_log.py', 'local_app/web/progress-view.js', 'local_app/web/progress-view.css'})
 expected.update({'local_app/web/request-timing.js', 'local_app/web/request-timing.css'})
+expected.add('local_app/web/result-receipts.js')
 expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py', 'local_app/update_progress.py', 'local_app/web/upgrade-handoff.js', 'local_app/web/upgrade-handoff.css'})
 expected.update({'local_app/native_fonts/AXWorkspaceUpdate-Regular.ttf', 'local_app/native_fonts/AXWorkspaceUpdate-SemiBold.ttf',
                  'local_app/native_fonts/OFL.txt', 'local_app/native_fonts/SOURCE.json', 'local_app/native_fonts/README.md'})

@@ -19,7 +19,19 @@ MAX_SESSIONS = 500
 MAX_ARCHIVED_SESSIONS = 10000
 MAX_STORED_SESSIONS = MAX_SESSIONS + MAX_ARCHIVED_SESSIONS
 MAX_ARTIFACTS = 100
-INDEX_METADATA = ('lastRunId', 'branch', 'importedConfigRoot', 'choice', 'verification')
+INDEX_METADATA = ('lastRunId', 'branch', 'importedConfigRoot', 'choice', 'verification', 'resultReceipt')
+
+
+def normalize_result_receipt(value):
+    """Small, durable display cursor; legacy history does not imply unread work."""
+    if not isinstance(value, dict):
+        return None
+    revision, seen = value.get('revision'), value.get('seenRevision')
+    run_id = safe_run_id(value.get('runId'))
+    if (type(revision) is not int or not 0 < revision <= 9007199254740991
+            or type(seen) is not int or not 0 <= seen <= revision or run_id is None):
+        return None
+    return {'revision': revision, 'seenRevision': seen, 'runId': run_id}
 
 
 def safe(path):
@@ -147,6 +159,9 @@ def row(item):
     result['toolActivity'] = normalize_activities(item.get('toolActivity'))
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
+    receipt = normalize_result_receipt(item.get('resultReceipt'))
+    if receipt is not None:
+        result['resultReceipt'] = receipt
     if 'branch' in item:
         from .conversation_fork import normalize_branch
         result['branch'] = normalize_branch(item['branch'])

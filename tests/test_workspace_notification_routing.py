@@ -38,6 +38,7 @@ class NotificationRoutingTests(unittest.TestCase):
         self.app.tray = DeliveryStub()
         self.app._navigation = None
         self.app.notifier = SimpleNamespace(native_state={}, window_title='Workspace', theme_state={})
+        self.app.extensions = SimpleNamespace(pending_import=lambda: None)
         self.app.desktop = DesktopNotifications(self.state, notify=self.app._notify_desktop,
             is_foreground=lambda sid: False, on_open=self.app.open_task, cooldown=0)
         self.addCleanup(self.app.desktop.close)

@@ -71,6 +71,7 @@ $files = @(
     'local_app\web\upgrade-handoff.js', 'local_app\web\upgrade-handoff.css',
     'local_app\web\rich-content.js', 'local_app\web\rich-content.css', 'local_app\web\execution-view.js', 'local_app\web\execution-view.css',
     'local_app\web\request-timing.js', 'local_app\web\request-timing.css',
+    'local_app\web\result-receipts.js',
     'local_app\web\icon.svg', 'local_app\web\app-icon.ico',
     'local_app\web\app-icon-192.png', 'local_app\web\app-icon-512.png'
 )
