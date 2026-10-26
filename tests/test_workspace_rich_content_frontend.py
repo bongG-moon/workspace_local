@@ -28,7 +28,7 @@ class Observer{constructor(callback){this.callback=callback;this.nodes=[];observ
 const parent=new Element();parent.root=true;
 let clipboard='',opens=[],apiCalls=[],replies=[];
 const context={assert,console,URL,Set,Map,AbortController,encodeURIComponent,Element,all,tag,cls,parent,observers,active:{id:'A',workspace:'C:/work'},
-document:{createElement:tag=>new Element(tag),createTextNode:text=>({textContent:String(text)})},
+document:{createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),createTextNode:text=>({textContent:String(text)})},
 navigator:{clipboard:{writeText:async value=>{clipboard=value;}}},IntersectionObserver:Observer,
 setTimeout:fn=>{return 1;},api:(path,body,signal)=>{apiCalls.push(path);return new Promise((resolve,reject)=>{replies.push({resolve,reject,signal});signal?.addEventListener("abort",()=>reject(Object.assign(new Error("aborted"),{name:"AbortError"})),{once:true});});},
 preview:path=>opens.push(path),readClipboard:()=>clipboard,opens,apiCalls,replies,

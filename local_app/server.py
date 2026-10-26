@@ -21,7 +21,7 @@ import webbrowser
 
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
-from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, safe
+from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, normalize_run_timing, retain_run_timings, safe
 from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
 from .build_identity import BUILD_ID
@@ -638,6 +638,32 @@ class LocalApp:
             return value
         return None
 
+    @staticmethod
+    def _finish_run_timing(item, kind, data, terminal_clock=None):
+        """Finish only the accepted request, once, with its own terminal frame."""
+        timer = item.get('_runTimer')
+        run_id = item.get('lastRunId')
+        if (not timer or timer['runId'] != run_id
+                or data.get('runId') not in (None, run_id)
+                or item.get('_connecting') or item.get('_modelUpdating')
+                or (item.get('_observationPending') or {}).get('phase') == 'start'):
+            return None
+        finished_at, finished_clock = terminal_clock or (time.time(), time.monotonic())
+        status = 'done' if kind == 'result' else 'error' if kind == 'error' else 'stopped'
+        timing = normalize_run_timing({'runId': run_id, 'startedAt': timer['startedAt'],
+            'finishedAt': finished_at, 'durationMs': max(0, round((finished_clock - timer['monotonic']) * 1000)),
+            'status': status}, run_id)
+        item.pop('_runTimer', None)
+        if timing is None:
+            return None
+        messages = [message for message in item.get('messages', []) if message.get('runId') == run_id]
+        # Usually the user message owns this record. If the bounded transcript
+        # already trimmed it, keep one copy on the remaining last reply instead.
+        owner = next((message for message in messages if message['role'] == 'user'), messages[-1] if messages else None)
+        if owner is not None:
+            owner['runTiming'] = timing
+        return timing
+
     def _public(self, item):
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
@@ -1227,6 +1253,8 @@ class LocalApp:
             if not self._event_current(sid, bridge, origin):
                 return
             run_id = item.get('lastRunId')
+            # File reconciliation may be slow; it is not Claude execution time.
+            terminal_clock = (time.time(), time.monotonic())
         # Concurrent EOF/stop callbacks may share a run. Wait only for that
         # run's capture; never retain the app lock while it touches storage.
         while ticket is None:
@@ -1239,11 +1267,11 @@ class LocalApp:
                     # No prompt was written yet. A real stop/disconnect during
                     # preparation invalidates admission, not a future request.
                     pending['cancelled'] = True
-                    return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+                    return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin, _terminal_clock=terminal_clock)
                 if pending is None:
                     before = item.get('_artifactSnapshot')
                     if before is None or kind == 'result' and self.stop_state(item) == 'stopping':
-                        return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+                        return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin, _terminal_clock=terminal_clock)
                     ticket = self._begin_observation(item, 'finish', run_id)
             if ticket is None:
                 pending['done'].wait()
@@ -1259,7 +1287,7 @@ class LocalApp:
                 item.pop('_observationPending', None)
                 # Publish state/history/queue completion together, after the
                 # scan. The next request cannot run on a premature "done".
-                return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin)
+                return self._emit_event(sid, kind, data, _bridge=bridge, _origin=origin, _terminal_clock=terminal_clock)
         finally:
             self._end_observation(item, ticket)
 
@@ -1927,7 +1955,7 @@ class LocalApp:
             return self._emit_terminal(sid, kind, data, bridge=_bridge, origin=_origin)
         return self._emit_event(sid, kind, data, _bridge=_bridge, _origin=_origin)
 
-    def _emit_event(self, sid, kind, data, *, _bridge=None, _origin=None):
+    def _emit_event(self, sid, kind, data, *, _bridge=None, _origin=None, _terminal_clock=None):
         with self.lock:
             if not self._event_current(sid, _bridge, _origin):
                 return
@@ -1993,10 +2021,12 @@ class LocalApp:
                     return
             if kind == "assistant":
                 item["messages"].append({"role": "assistant", "text": str(data["text"])[:100000], 'runId':item.get('lastRunId')})
+                removed = item["messages"][:-150]
                 item["messages"] = item["messages"][-150:]
                 # Keep the UI mirror bounded; the CLI owns the full transcript.
                 while len(item["messages"]) > 1 and sum(len(row.get("text", "")) for row in item["messages"]) > 500000:
-                    item["messages"].pop(0)
+                    removed.append(item["messages"].pop(0))
+                retain_run_timings(item['messages'], removed)
             elif kind == 'choice':
                 from .choices import normalize
                 clean = normalize(data)
@@ -2095,6 +2125,12 @@ class LocalApp:
                 if "resumeSessionId" in data:
                     item["sessionId"] = data["resumeSessionId"]
             terminal = kind in {'result', 'error'} or kind == 'status' and data.get('state') == 'stopped'
+            if terminal:
+                data = dict(data)
+                data.pop('runTiming', None)  # Only this process can measure a request.
+                timing = self._finish_run_timing(item, kind, data, _terminal_clock)
+                if timing is not None:
+                    data['runTiming'] = timing
             if kind in {'status', 'result', 'error'}:
                 state = self.public(item)
                 data = dict(data, **{key: state[key] for key in ('stopState', 'connectionStopped', 'cleanupRetryable')})
@@ -2333,6 +2369,7 @@ class LocalApp:
                 # Runtime-only: the server owns this request even while its view is closed.
                 # A restarted app restores stopped history, not an in-flight execution.
                 item['runStartedAt'] = item['updated']
+                item['_runTimer'] = {'runId': run_id, 'startedAt': item['runStartedAt'], 'monotonic': time.monotonic()}
                 track_display_event(item, 'status', {'state': 'starting'})
                 item.pop('runActivity', None)
                 item['messages'][-1]['runId'] = item['lastRunId']
@@ -2848,6 +2885,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/execution-view.css": ("execution-view.css", "text/css; charset=utf-8"),
                       "/tool-activity.js": ("tool-activity.js", "text/javascript; charset=utf-8"),
                       "/tool-activity.css": ("tool-activity.css", "text/css; charset=utf-8"),
+                      "/request-timing.js": ("request-timing.js", "text/javascript; charset=utf-8"),
+                      "/request-timing.css": ("request-timing.css", "text/css; charset=utf-8"),
                       "/progress-view.js": ("progress-view.js", "text/javascript; charset=utf-8"),
                       "/progress-view.css": ("progress-view.css", "text/css; charset=utf-8"),
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),

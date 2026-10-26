@@ -4,6 +4,10 @@
 globalThis.WorkspaceRichContent = (() => {
   const LIMITS = {text:100000, rows:100, columns:30, images:4, imageRequests:2, records:120, imageData:11200000};
   const make = (tag, text, className) => {const n=document.createElement(tag);if(text!=null)n.textContent=String(text);if(className)n.className=className;return n;};
+  const linkIcon = name => {
+    const create=tag=>document.createElementNS("http://www.w3.org/2000/svg",tag);
+    const icon=create("svg"),use=create("use");icon.setAttribute("class","rich-link-icon");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");use.setAttribute("href",`#i-${name}`);icon.append(use);return icon;
+  };
   const button = (text, title) => {const n=make("button",text,"rich-action");n.type="button";n.title=title||text;return n;};
   const nameOf = path => String(path).split(/[\\/]/).pop() || "파일";
   const sessionIsCurrent = sid => !sid || typeof active === "undefined" || active?.id === sid;
@@ -44,7 +48,7 @@ globalThis.WorkspaceRichContent = (() => {
       if(match[3]){const strong=make("strong");plain.push(appendInline(strong,match[3],options,depth+1));parent.append(strong);continue;}
       const destination=match[6].replace(/^<|>$/g,""), remote=safeUrl(destination);
       if(match[4]) {
-        if(remote){const label=match[5]||"외부 이미지 보기",link=make("a",label,"rich-external-image");link.href=remote;link.target="_blank";link.rel="noopener noreferrer";link.title="클릭하면 외부 브라우저에서 엽니다";parent.append(link);plain.push(label);}
+        if(remote){const label=match[5]||"외부 이미지 보기",link=make("a",null,"rich-external-image");link.append(linkIcon("globe"),document.createTextNode(label));link.href=remote;link.target="_blank";link.rel="noopener noreferrer";link.title="클릭하면 외부 브라우저에서 엽니다";parent.append(link);plain.push(label);}
         else {const path=localPath(destination,options.workspace);if(path)plain.push(image(parent,path,match[5],options));else {parent.append(document.createTextNode(match[0]));plain.push(match[0]);}}
       } else if(remote) {const label=match[5]||destination,link=make("a",label);link.href=remote;link.target="_blank";link.rel="noopener noreferrer";parent.append(link);plain.push(label);}
       else {const path=localPath(destination,options.workspace);if(path&&options.sessionId){const label=match[5]||nameOf(path),link=button(label,path);link.className="rich-file-link";link.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{});parent.append(link);plain.push(label);}else {parent.append(document.createTextNode(match[0]));plain.push(match[0]);}}
@@ -149,7 +153,7 @@ globalThis.WorkspaceRichContent = (() => {
     // Status text changes as the image loads; table copy uses its stable label.
     return alt||nameOf(path);
   }
-  function fileChip(parent,path,options) {const chip=button(nameOf(path),path);chip.className="rich-file-chip";chip.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{chip.title="파일을 열 수 없습니다";});parent.append(chip);}
+  function fileChip(parent,path,options) {const chip=button(nameOf(path),path);chip.className="rich-file-chip";chip.replaceChildren(linkIcon("doc"),document.createTextNode(nameOf(path)));chip.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{chip.title="파일을 열 수 없습니다";});parent.append(chip);}
   function files(parent,paths,options={}) {
     options=context(options);prune();const wrap=make("div",null,"rich-files"),unique=[...new Set((paths||[]).map(item=>typeof item==="string"?item:item?.path).filter(Boolean))];
     for(const raw of unique.slice(0,24)){const path=localPath(raw,options.workspace);if(!path)continue;if(/\.(?:png|jpe?g|webp)$/i.test(path))image(wrap,path,"",options);else fileChip(wrap,path,options);}

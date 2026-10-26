@@ -34,6 +34,7 @@ class WorkspaceReleaseHistoryFrontendTests(unittest.TestCase):
             "setInterval(){throw Error('No permanent polling');},setTimeout(fn){const id=nextTimer++;timers.set(id,fn);return id;},clearTimeout(id){timers.delete(id);},",
         )
         setup = """
+          document.createElementNS=(_namespace,tag)=>document.createElement(tag);
           const $=id=>document.getElementById(id),calls=[];
           $('settings-dialog').tagName='DIALOG';$('settings-dialog').open=true;
           $('settings-dialog').append($('release-history-open'));

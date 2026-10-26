@@ -91,7 +91,9 @@ globalThis.WorkspaceReleaseHistory = (() => {
     text("release-history-notes",row?.notes||"");
     $("release-history-notes").dataset.empty=String(row?.emptyNotes===true);
     const link=$("release-history-link");link.hidden=!row?.url;link.setAttribute("href",row?.url||"#");
-    link.textContent=snapshot.source.provider==="gitlab"?"GitLab에서 보기 ↗":"GitHub에서 보기 ↗";
+    const createSvg=tag=>document.createElementNS("http://www.w3.org/2000/svg",tag);
+    const icon=createSvg("svg"),use=createSvg("use");icon.setAttribute("class","action-link-icon");icon.setAttribute("aria-hidden","true");icon.setAttribute("focusable","false");use.setAttribute("href","#i-globe");icon.append(use);
+    link.replaceChildren(document.createTextNode(snapshot.source.provider==="gitlab"?"GitLab에서 보기":"GitHub에서 보기"),icon);
     const loading=pending||snapshot.status==="loading",failure=localError||(snapshot.status==="error"?snapshot.error||"배포 이력을 확인하지 못했어요.":"");
     text("release-history-status",failure?(rows.length?`${failure} 저장된 변경 내역은 계속 볼 수 있어요.`:failure):loading?"배포 이력을 확인하고 있어요.":snapshot.checkedAt?`마지막 확인 · ${dateText(snapshot.checkedAt*1000)}`:rows.length?rows.some(item=>item.origin==="published")?"저장된 배포 기록을 볼 수 있어요.":"앱에 포함된 변경 내역을 볼 수 있어요.":"표시할 변경 내역이 아직 없어요.");
     $("release-history-dialog").dataset.state=failure?"error":loading?"loading":snapshot.status;

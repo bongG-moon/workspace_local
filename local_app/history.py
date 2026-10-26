@@ -44,6 +44,37 @@ def read(path, limit):
     return json.loads(raw.decode('utf-8-sig'))
 
 
+def normalize_run_timing(value, run_id):
+    """Optional completed-request evidence, never inferred from old messages."""
+    if (not isinstance(value, dict) or safe_run_id(run_id) is None
+            or value.get('runId') != run_id or not isinstance(value.get('status'), str)
+            or value['status'] not in {'done', 'stopped', 'error'}):
+        return None
+    for key in ('startedAt', 'finishedAt'):
+        stamp = value.get(key)
+        if type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 < stamp < 1e12:
+            return None
+    elapsed = value.get('durationMs')
+    if type(elapsed) is not int or not 0 <= elapsed < 1e12:
+        return None
+    # Wall clocks may change during a request. The duration is measured by the
+    # live monotonic clock, so do not derive or validate it by subtracting dates.
+    return {key: value[key] for key in ('runId', 'startedAt', 'finishedAt', 'durationMs', 'status')}
+
+
+def retain_run_timings(messages, removed):
+    """Keep one timing while any part of that bounded request is still visible."""
+    for old in removed:
+        if not isinstance(old, dict):
+            continue
+        timing = normalize_run_timing(old.get('runTiming'), old.get('runId'))
+        if timing is None:
+            continue
+        same_run = [message for message in messages if message.get('runId') == timing['runId']]
+        if same_run and not any(normalize_run_timing(message.get('runTiming'), timing['runId']) for message in same_run):
+            same_run[-1]['runTiming'] = timing
+
+
 def row(item):
     sid = str(uuid.UUID(item['id']))
     if sid != item['id']:
@@ -77,6 +108,9 @@ def row(item):
         run_id = safe_run_id(message.get('runId'))
         if run_id is not None:
             clean['runId'] = run_id
+            timing = normalize_run_timing(message.get('runTiming'), run_id)
+            if timing is not None:
+                clean['runTiming'] = timing
         if message.get('role') == 'user' and isinstance(message.get('files'),list):
             clean['files'] = [value[:4096] for value in message['files'][:12] if isinstance(value,str)]
         if message.get('role') == 'user' and isinstance(message.get('attachmentReads'), list):
@@ -89,8 +123,12 @@ def row(item):
     def size(message):
         return len(message['text']) + sum(len(value) for value in message.get('files', []))
     total = sum(size(m) for m in messages)
+    removed = item['messages'][:-150]
     while len(messages) > 1 and total > 500000:
-        total -= size(messages.pop(0))
+        previous = messages.pop(0)
+        total -= size(previous)
+        removed.append(previous)
+    retain_run_timings(messages, removed)
     result['messages'] = messages
     artifacts = []
     for artifact in (item.get('artifacts') or [])[-MAX_ARTIFACTS:]:
