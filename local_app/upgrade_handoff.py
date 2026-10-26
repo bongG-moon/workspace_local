@@ -7,6 +7,7 @@ commit barrier takes that lock before the short-lived lifecycle condition.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
@@ -15,7 +16,6 @@ from .history import HistoryStore, MAX_SESSIONS, read, safe
 
 MAX_SNAPSHOT = 256 * 1024
 LEASE_SECONDS = 2 * 60 * 60
-CAPTURE_SECONDS = 45
 _NONCE = re.compile(r'[0-9a-f]{32}\Z')
 _VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[A-Za-z0-9.-]+)?\Z')
 
@@ -94,6 +94,56 @@ def snapshot(value):
     return clean
 
 
+def _restore_record(value, current_version):
+    if (not isinstance(value, dict) or value.get('schemaVersion') != 1
+            or value.get('status') not in {'captured', 'ready'}):
+        raise ValueError('Invalid handoff record')
+    request_id = nonce(value.get('requestId'))
+    target = version(value.get('targetVersion'))
+    saved = snapshot(value.get('snapshot'))
+    if value['status'] != 'ready':
+        return None
+    restored = {'requestId': request_id, 'snapshot': saved, 'savedTargetVersion': target}
+    try:
+        source = value.get('sourceVersion')
+        source_parts = tuple(map(int, version(source).split('-')[0].split('.')))
+        target_parts = tuple(map(int, version(current_version).split('-')[0].split('.')))
+        if target == current_version and source_parts < target_parts:
+            restored.update(sourceVersion=source, targetVersion=current_version)
+    except (ValueError, TypeError):
+        pass
+    return restored
+
+
+def preserve_recovery(state, restore):
+    """Durably retain one exact previous snapshot before permitting replacement.
+
+    Shared with the new coordinator when an old server requires a restored ACK.
+    Never merges text/attachments or overwrites another revision of the same ID.
+    Archives are loaded one at a time and never increase the capture size limit.
+    """
+    if not isinstance(restore, dict):
+        raise ValueError('보관할 이전 초안을 확인하지 못했습니다.')
+    rid = nonce(restore.get('requestId'))
+    target = version(restore.get('savedTargetVersion'))
+    clean = snapshot(restore.get('snapshot'))
+    value = {'schemaVersion': 1, 'status': 'ready', 'requestId': rid,
+             'targetVersion': target, 'snapshot': clean}
+    path = safe(state / 'upgrade-recovery' / (rid + '.json'))
+    def matches():
+        retained = _restore_record(read(path, MAX_SNAPSHOT + 4096), target)
+        return (retained is not None and retained['requestId'] == rid
+                and retained['savedTargetVersion'] == target and retained['snapshot'] == clean)
+    if path.exists():
+        if not matches():
+            raise ValueError('같은 식별자의 이전 초안이 달라 원본을 유지했습니다.')
+        return path
+    HistoryStore(state)._write(path, json.dumps(value, ensure_ascii=False).encode('utf-8'))
+    if not matches():
+        raise ValueError('이전 초안의 별도 보관을 확인하지 못했습니다.')
+    return path
+
+
 class UpgradeHandoff:
     def __init__(self, app, current_version, *, clock=time.monotonic):
         self.app, self.version, self.clock = app, current_version, clock
@@ -101,31 +151,63 @@ class UpgradeHandoff:
         self.pending = None
         self.restore = None
         self.warning = None
+        self._restore_path = None
+        self._write_blocked = False
+        self._load_restore()
+
+    def _load_restore(self):
+        self.restore = self._restore_path = None
+        self.warning = None
+        self._write_blocked = False
+        def load(path, *, retained=False):
+            restored = _restore_record(read(path, MAX_SNAPSHOT + 4096), self.version)
+            if retained and (restored is None or path.stem != restored['requestId']):
+                raise ValueError('Invalid retained draft record')
+            if restored:
+                if retained:
+                    restored['retained'] = True
+                self.restore, self._restore_path = restored, path
+                return True
+            return False
         try:
-            if safe(self.path).exists():
-                value = read(self.path, MAX_SNAPSHOT + 4096)
-                if (not isinstance(value, dict) or value.get('schemaVersion') != 1
-                        or value.get('status') not in {'captured', 'ready'}):
-                    raise ValueError('Invalid handoff record')
-                nonce(value.get('requestId'))
-                version(value.get('targetVersion'))
-                saved = snapshot(value.get('snapshot'))
-                if value['status'] == 'ready':
-                    # Recovery is gated by the validated snapshot schema, not
-                    # the version originally chosen by an interrupted upgrade.
-                    self.restore = {'requestId': value['requestId'], 'snapshot': saved,
-                                    'savedTargetVersion': value['targetVersion']}
-                    # Older handoffs remain restorable without claiming an update.
-                    try:
-                        source = value.get('sourceVersion')
-                        source_parts = tuple(map(int, version(source).split('-')[0].split('.')))
-                        target_parts = tuple(map(int, version(self.version).split('-')[0].split('.')))
-                        if value['targetVersion'] == self.version and source_parts < target_parts:
-                            self.restore.update(sourceVersion=source, targetVersion=self.version)
-                    except (ValueError, TypeError):
-                        pass
+            if safe(self.path).exists() and load(self.path):
+                return
         except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+            # An unreadable live record cannot safely be replaced. An unreadable
+            # archive is separate and can stay on disk without blocking updates.
+            self._write_blocked = True
             self.warning = '이전 창의 작성 내용을 확인하지 못했습니다. 저장 기록은 보존했습니다.'
+        try:
+            directory = safe(self.app.state / 'upgrade-recovery')
+            if directory.exists():
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if not re.fullmatch(r'[0-9a-f]{32}\.json', entry.name):
+                            continue
+                        try:
+                            if load(safe(directory / entry.name), retained=True):
+                                return
+                        except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+                            self.warning = '일부 이전 초안을 확인하지 못했습니다. 별도 보관 기록은 유지됩니다.'
+        except (OSError, ValueError):
+            self.warning = '이전 초안 보관 위치를 확인하지 못했습니다. 저장 기록은 유지됩니다.'
+
+    def _checked_restore(self, path):
+        stored = _restore_record(read(safe(path), MAX_SNAPSHOT + 4096), self.version)
+        if (stored is None or stored['requestId'] != self.restore['requestId']
+                or stored['savedTargetVersion'] != self.restore['savedTargetVersion']
+                or stored['snapshot'] != self.restore['snapshot']):
+            raise ValueError('보관된 초안 기록이 바뀌었습니다. 앱을 다시 열어 최신 기록을 확인해 주세요.')
+
+    def _retain_previous(self):
+        if self.restore and self._restore_path == self.path:
+            self._checked_restore(self.path)
+            archive = preserve_recovery(self.app.state, self.restore)
+            # Recheck after the durable copy; do not remove a replaced record.
+            self._checked_restore(self.path)
+            safe(self.path).unlink()
+            self._restore_path = archive
+            self.restore['retained'] = True
 
     @staticmethod
     def _stage(pending, stage, **values):
@@ -154,8 +236,11 @@ class UpgradeHandoff:
                 return True
             bridge = item.get('bridge')
             if bridge and (getattr(bridge, 'busy', False) or getattr(bridge, 'pending', None)
-                           or getattr(bridge, 'stopping', False) and getattr(bridge, 'cleanup_complete', False) is not True):
+                           or getattr(bridge, 'stopping', False) and app.stop_state(item) == 'stopping'):
                 return True
+            # A completed but failed stop is not running work. Let normal
+            # close retry its retained owned handles after drafts are saved;
+            # commit still fails unless process/descendant cleanup succeeds.
             queue = app.dispatch.queue.snapshot(item['id'])
             if queue.get('warning') or any(row['status'] in {'dispatching', 'submitted'} for row in queue['queue']):
                 return True
@@ -171,7 +256,7 @@ class UpgradeHandoff:
         """An admitted user action/work event wins over a prepared restart."""
         pending = self.pending
         if pending and not pending.get('stopRequested') and pending['stage'] in {'capture', 'captured'}:
-            self._stage(pending, 'waiting', snapshot=None, captureDeadline=None)
+            self._stage(pending, 'waiting', snapshot=None)
 
     def _refresh(self):
         pending = self.pending
@@ -197,14 +282,16 @@ class UpgradeHandoff:
         if admitted:
             return
         if pending['stage'] == 'waiting':
-            self._stage(pending, 'capture', captureDeadline=now + CAPTURE_SECONDS)
+            # The frontend may still own a settings/preview dialog or file
+            # selection. Keep the same bounded handoff lease while it waits;
+            # a short second deadline must not expire otherwise healthy work.
+            # Nothing closes until the exact screen snapshot is acknowledged.
+            self._stage(pending, 'capture')
         if pending['stage'] == 'capture' and self.app._upgrade_headless and self.app._desktop_window is None:
             pending['snapshot'] = {'sessionId': None, 'drafts': []}
             self._write(pending, 'captured')
             pending['captureRevision'] = pending['revision']
             self._stage(pending, 'captured')
-        elif pending['stage'] == 'capture' and now >= pending['captureDeadline']:
-            self._stage(pending, 'expired', snapshot=None)
 
     def status(self, request_id=None):
         with self.app.lock:
@@ -231,12 +318,15 @@ class UpgradeHandoff:
             self._refresh()
             if action == 'restored':
                 if self.restore and self.restore['requestId'] == request_id:
-                    stored = read(safe(self.path), MAX_SNAPSHOT + 4096)
-                    if (not isinstance(stored, dict) or stored.get('requestId') != request_id or stored.get('status') != 'ready'
-                            or stored.get('snapshot') != self.restore['snapshot']):
-                        raise ValueError('보관된 초안 기록이 바뀌었습니다. 앱을 다시 열어 최신 기록을 확인해 주세요.')
-                    safe(self.path).unlink(missing_ok=True)
-                    self.restore = None
+                    self._checked_restore(self._restore_path)
+                    duplicate = safe(self.app.state / 'upgrade-recovery' / (request_id + '.json'))
+                    if self._restore_path == self.path and duplicate.exists():
+                        # A coordinator may have copied before losing the old
+                        # server's ACK. Consume that identical copy only.
+                        self._checked_restore(duplicate)
+                        duplicate.unlink()
+                    safe(self._restore_path).unlink()
+                    self._load_restore()
                 elif self.restore:
                     raise ValueError('복원할 작성 내용의 요청을 확인해 주세요.')
                 return {'ok': True, **self.status()}
@@ -248,14 +338,15 @@ class UpgradeHandoff:
                     checked_mode(mode)
                     if mode != self.app.execution_mode:
                         raise ValueError('다른 실행 권한으로 변경하려면 앱을 완전 종료한 뒤 Windows에서 다시 실행해 주세요.')
-                if self.warning or self.restore:
-                    raise ValueError(self.warning or '이전 창의 작성 내용을 먼저 복원해 주세요.')
+                if self._write_blocked:
+                    raise ValueError(self.warning)
                 if self.pending and self.pending['stage'] not in {'cancelled', 'expired', 'failed'}:
                     if self.pending['requestId'] != request_id or self.pending['targetVersion'] != target or self.pending.get('executionMode') != mode:
                         raise ValueError('다른 버전 전환을 준비하고 있습니다. 기존 요청을 먼저 마쳐 주세요.')
                 else:
+                    self._retain_previous()
                     self.pending = {'requestId': request_id, 'targetVersion': target, 'stage': 'waiting', 'executionMode': mode,
-                                    'revision': 1, 'deadline': self.clock() + LEASE_SECONDS, 'captureDeadline': None, 'snapshot': None}
+                                    'revision': 1, 'deadline': self.clock() + LEASE_SECONDS, 'snapshot': None}
                 return {'ok': True, **self.status()}
             pending = self.pending
             if not pending or pending['requestId'] != request_id:

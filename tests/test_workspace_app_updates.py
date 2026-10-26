@@ -311,7 +311,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual([updates.API_URL], self.transport.calls)
         self.installer.assert_not_called()
         self.assertEqual({'currentVersion', 'buildIdentity', 'status', 'autoCheck', 'lastChecked', 'release',
-                          'progress', 'error', 'canInstall', 'source', 'startupSequence', 'launcher'}, set(result))
+                          'progress', 'error', 'canInstall', 'source', 'startupSequence', 'launcher', 'attemptId'}, set(result))
         self.assertEqual({'version', 'title', 'notes', 'publishedAt', 'url'}, set(result['release']))
         result['release']['version'] = '1.0.0'
         self.assertEqual(VERSION, self.manager.snapshot()['release']['version'])
@@ -672,6 +672,164 @@ class ManagerTests(unittest.TestCase):
         self.assertIn('시작을 확인하지 못했습니다', result['error'])
         self.assertTrue(result['canInstall'])
 
+    def test_detached_coordinator_failure_before_prepare_finishes_progress_and_allows_retry(self):
+        request_id = 'a' * 32
+        process = Mock()
+        process.poll.return_value = 0  # The wrapper accepted a detached coordinator.
+        self.installer.return_value = {'status': 'launching', '_process': process, '_requestId': request_id}
+        manager = self.make(handoff_status=lambda: {'upgrade': None})
+        manager.check(manual=True)
+        self.finish(manager)
+        (self.root / 'upgrade-last-result.json').write_text(json.dumps({
+            'requestId': request_id, 'targetVersion': VERSION, 'status': 'failed',
+            'reason': 'draft_archive_failed', 'error': 'Bearer private content must not escape'}))
+        started = time.monotonic()
+        manager.install(VERSION)
+        result = self.finish(manager)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual('error', result['status'])
+        self.assertEqual(updates._MESSAGES['handoff_failed'], result['error'])
+        self.assertIsNone(result['progress'])
+        self.assertTrue(result['canInstall'])
+        self.assertEqual(request_id, result['attemptId'])
+        self.assertNotIn('private', json.dumps(result))
+        self.assertNotIn('_requestId', json.dumps(result))
+        self.assertNotIn(request_id, manager.path.read_text())
+        process.terminate.assert_not_called()
+        # A user retry is admitted; no automatic second install was started.
+        self.assertEqual(1, self.installer.call_count)
+        self.installer.return_value = {'status': 'launching', '_process': process, '_requestId': 'b' * 32}
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0):
+            submitted = manager.install(VERSION)
+            self.assertIsNone(submitted['attemptId'])
+            retry = self.finish(manager)
+        self.assertEqual(2, self.installer.call_count)
+        self.assertEqual('b' * 32, retry['attemptId'])
+        self.assertEqual(updates._MESSAGES['launch_timeout'], retry['error'])
+
+    def test_result_only_matches_exact_attempt_target_and_fixed_terminal_status(self):
+        manager = self.make()
+        request_id = 'a' * 32
+        base = {'requestId': request_id, 'targetVersion': VERSION, 'status': 'failed'}
+        invalid = [
+            {**base, 'requestId': 'b' * 32}, {**base, 'targetVersion': '0.23.32'},
+            {'requestId': request_id, 'status': 'failed'},
+            *({**base, 'status': status} for status in ('accepted', 'already_waiting', 'closed', 'restarted', 'running', None)),
+            {**base, 'status': ['failed']}, [], None,
+        ]
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                (self.root / 'upgrade-last-result.json').write_text(json.dumps(payload))
+                self.assertIsNone(manager._coordinator_result(VERSION, request_id))
+        for raw in ('{broken', ' ' * 4097):
+            (self.root / 'upgrade-last-result.json').write_text(raw)
+            self.assertIsNone(manager._coordinator_result(VERSION, request_id))
+        (self.root / 'upgrade-last-result.json').write_text(json.dumps(base))
+        for invalid_id in (None, '../escape', 'legacy-id', [], request_id.upper()):
+            self.assertIsNone(manager._coordinator_result(VERSION, invalid_id))
+        self.assertEqual(('failed', False), manager._coordinator_result(VERSION, request_id))
+
+    def test_terminal_result_after_accepted_waiting_does_not_wait_for_handoff_timeout(self):
+        request_id, calls, stage = 'a' * 32, [0], ['waiting']
+        process = Mock()
+        process.poll.return_value = 0
+        self.installer.return_value = {'status': 'launching', '_process': process, '_requestId': request_id}
+        def handoff():
+            calls[0] += 1
+            if calls[0] == 1:
+                return {'upgrade': None}
+            (self.root / 'upgrade-last-result.json').write_text(json.dumps({
+                'requestId': request_id, 'targetVersion': VERSION, 'status': 'failed'}))
+            return {'upgrade': {'requestId': request_id, 'targetVersion': VERSION, 'stage': stage[0]}}
+        manager = self.make(handoff_status=handoff)
+        manager.check(manual=True)
+        self.finish(manager)
+        with patch.object(updates, 'LAUNCH_POLL_INTERVAL', .001):
+            manager.install(VERSION)
+            result = self.finish(manager)
+        self.assertEqual('error', result['status'])
+        self.assertEqual(updates._MESSAGES['handoff_pending'], result['error'])
+        self.assertFalse(result['canInstall'])
+        with self.assertRaises(ValueError):
+            manager.install(VERSION)
+        # Cancelling the old handoff releases retry without restarting the app.
+        stage[0] = 'cancelled'
+        recovered = manager.snapshot()
+        self.assertEqual('error', recovered['status'])
+        self.assertTrue(recovered['canInstall'])
+        self.assertEqual(updates._MESSAGES['handoff_failed'], recovered['error'])
+        process.terminate.assert_not_called()
+
+    def test_ambiguous_commit_failure_keeps_retry_blocked_and_callback_outside_manager_lock(self):
+        request_id = 'a' * 32
+        for stage in ('waiting', 'capture', 'captured', 'committing', 'closed'):
+            with self.subTest(stage=stage):
+                manager = self.make()
+                manager.check(manual=True)
+                self.finish(manager)
+                manager._status, manager._error = 'error', updates._MESSAGES['handoff_failed']
+                manager._failed_handoff_request = (VERSION, request_id)
+                probes = []
+                def handoff():
+                    def probe():
+                        with manager._lock:
+                            probes.append(True)
+                    thread = threading.Thread(target=probe)
+                    thread.start()
+                    thread.join(.5)
+                    self.assertFalse(thread.is_alive(), 'Retry refresh held manager lock')
+                    return {'upgrade': {'requestId': request_id, 'targetVersion': VERSION, 'stage': stage}}
+                manager.handoff_status = handoff
+                self.assertFalse(manager.snapshot()['canInstall'])
+                self.assertEqual([True], probes)
+                manager.handoff_status = Mock(side_effect=OSError('state temporarily unavailable'))
+                self.assertFalse(manager.snapshot()['canInstall'])
+                manager.handoff_status = lambda: {'upgrade': None}
+                self.assertTrue(manager.snapshot()['canInstall'])
+
+    def test_terminal_cancel_is_distinct_from_failure_but_pending_cleanup_blocks_retry(self):
+        request_id = 'a' * 32
+        for status, reason, expected, can_install in (
+                ('cancelled', None, 'cancelled', True),
+                ('expired', None, 'error', True),
+                ('failed', 'launcher_cleanup_pending', 'error', False)):
+            with self.subTest(status=status, reason=reason):
+                process = Mock()
+                process.poll.return_value = 0
+                self.installer.return_value = {'status': 'launching', '_process': process, '_requestId': request_id}
+                manager = self.make(handoff_status=lambda: {'upgrade': None})
+                manager.check(manual=True)
+                self.finish(manager)
+                (self.root / 'upgrade-last-result.json').write_text(json.dumps({
+                    'requestId': request_id, 'targetVersion': VERSION, 'status': status, 'reason': reason}))
+                manager.install(VERSION)
+                result = self.finish(manager)
+                self.assertEqual(expected, result['status'])
+                self.assertEqual(can_install, result['canInstall'])
+                self.assertIsNone(result['progress'])
+                if not can_install:
+                    with self.assertRaises(ValueError):
+                        manager.install(VERSION)
+
+    def test_explicit_attempt_cannot_accept_a_different_same_version_handoff(self):
+        request_id = 'a' * 32
+        process = Mock()
+        process.poll.return_value = 0
+        self.installer.return_value = {'status': 'launching', '_process': process, '_requestId': request_id}
+        calls = [0]
+        def handoff():
+            calls[0] += 1
+            return {'upgrade': None if calls[0] == 1 else {
+                'requestId': 'b' * 32, 'targetVersion': VERSION, 'stage': 'closed'}}
+        manager = self.make(handoff_status=handoff)
+        manager.check(manual=True)
+        self.finish(manager)
+        with patch.object(updates, 'LAUNCH_TIMEOUT', 0):
+            manager.install(VERSION)
+            result = self.finish(manager)
+        self.assertEqual('error', result['status'])
+        self.assertEqual(updates._MESSAGES['launch_timeout'], result['error'])
+
     def test_unaccepted_live_launcher_is_closed_before_timeout_retry(self):
         process, exit_code = Mock(), [None]
         process.poll.side_effect = lambda: exit_code[0]
@@ -839,7 +997,7 @@ class ManagerTests(unittest.TestCase):
                 self.finish(manager)
                 manager.install(VERSION)
                 result = self.finish(manager)
-                self.assertEqual('error', result['status'])
+                self.assertEqual('cancelled' if stage == 'cancelled' else 'error', result['status'])
                 self.assertTrue(result['canInstall'])
 
     def test_stale_cancelled_request_is_ignored_during_retry_and_wrong_target_cannot_ack(self):

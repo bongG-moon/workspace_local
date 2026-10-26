@@ -98,6 +98,30 @@ class DraftRecoveryIntegrationTests(unittest.TestCase):
           assert.match($('upgrade-notice-text').textContent,/복원/);
         ''')
 
+    def test_archived_snapshot_does_not_overwrite_durable_current_draft_after_update(self):
+        self.run_case(r'''
+          const latest={requestId:'a'.repeat(32),snapshot:{sessionId:null,drafts:[{id:'home',text:'current update draft',attachments:['current.zip']}]}};
+          const old={requestId:'b'.repeat(32),retained:true,snapshot:{sessionId:null,drafts:[{id:'home',text:'older preserved draft',attachments:['older.zip']}]}};
+          const ordinaryFetch=fetch;
+          fetch=async(route,options={})=>{
+            if(route==='/api/upgrade'){
+              const body=JSON.parse(options.body);requests.push({route,body});
+              return {ok:true,json:async()=>({ok:true,upgradeRestore:old})};
+            }
+            return ordinaryFetch(route,options);
+          };
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:latest});
+          assert.equal(drafts.get('home').text,'current update draft');
+          assert.deepEqual(attachments,['current.zip']);
+          const writes=requests.filter(row=>row.route==='/api/drafts'&&row.body);
+          assert.equal(writes.at(-1).body.draft.text,'current update draft');
+          assert.equal(requests.filter(row=>row.route==='/api/upgrade').length,1);
+          $('upgrade-recovery-open').onclick();
+          assert.equal($('upgrade-recovery-text').value,'older preserved draft');
+          assert.equal($('upgrade-recovery-files').textContent,'older.zip');
+          assert.equal($('prompt').value,'current update draft');
+        ''')
+
 
 if __name__ == '__main__':
     unittest.main()

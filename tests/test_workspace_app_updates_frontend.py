@@ -420,7 +420,122 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
           await $('app-update-install').onclick();
           assert.equal(calls.length,1);assert.equal($('app-update-install').disabled,false);
           assert.equal($('app-update-retry').hidden,false);assert.match($('app-update-status').textContent,/다운로드 연결/);
+          assert.equal($('app-update-title').textContent,'업데이트 실패');
+          assert.equal($('app-update-dialog').dataset.progress,'false');assert.equal($('app-update-stages').hidden,true);
           assert.equal(updateTimers.size,1);await $('app-update-install').onclick();assert.equal(calls.length,2);
+        })()""", AVAILABLE)
+
+    def test_failed_handoff_immediately_stops_progress_before_late_status_reply(self):
+        self.run_case(r"""(async()=>{
+          const notices=[];toast=message=>notices.push(message);
+          api=async()=>({...available,status:'launching',progress:100,attemptId:'e'.repeat(32)});await $('app-update-install').onclick();
+          $('app-update-dismiss').onclick();assert.equal($('app-update-activity').hidden,false);
+          let reply;const calls=[];api=(path,data)=>{calls.push(data);return new Promise(resolve=>reply=resolve);};
+          WorkspaceAppUpdates.settingsOpened();await runUpdateTimer();
+          const id='e'.repeat(32),failed={requestId:id,targetVersion:'0.22.1',stage:'failed',revision:3,error:'이전 초안을 보관하지 못했어요.'};
+          await WorkspaceUpgrade.observe(failed,{});
+          assert.equal($('app-update-title').textContent,'업데이트 실패');assert.equal($('app-update-stages').hidden,true);
+          assert.equal($('app-update-activity').hidden,true);assert.equal($('app-update-dialog').dataset.progress,'false');
+          assert.equal($('app-update-install').disabled,true);assert.equal($('app-update-install').textContent,'업데이트 다시 시도');
+          reply({...available,status:'launching',progress:100,attemptId:id});for(let i=0;i<12;i++)await Promise.resolve();
+          assert.equal($('app-update-title').textContent,'업데이트 실패');assert.equal($('app-update-activity').hidden,true);
+          assert.equal($('app-update-dialog-retry').disabled,false);assert.equal($('app-update-check').disabled,false);
+          assert.equal(notices.length,1);
+          api=async(path,data)=>{calls.push(data);return {...available,status:'error',error:'전환을 마치지 못했습니다.'};};
+          await $('app-update-dialog-retry').onclick();assert.equal(calls.at(-1),undefined);
+          assert.equal($('app-update-install').disabled,false);assert.equal(notices.length,1);
+          api=async(path,data)=>{calls.push(data);return {...available,status:'downloading',progress:1};};
+          await $('app-update-install').onclick();assert.equal(calls.at(-1).action,'install');
+          WorkspaceAppUpdates.handoffChanged(failed,false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+          assert.equal($('app-update-dialog').dataset.progress,'true');
+        })()""", AVAILABLE)
+
+    def test_confirmed_failure_is_not_replaced_by_stale_launching_snapshot(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'launching'});await $('app-update-install').onclick();
+          WorkspaceAppUpdates.observe({...available,status:'error',error:'시작 실패'});
+          WorkspaceAppUpdates.observe({...available,status:'launching'});
+          assert.equal($('app-update-title').textContent,'업데이트 실패');assert.match($('app-update-status').textContent,/시작 실패/);
+          assert.equal($('app-update-stages').hidden,true);assert.equal($('app-update-activity').hidden,true);
+          assert.equal($('app-update-check').disabled,false);assert.equal($('app-update-install').disabled,true);
+        })()""", AVAILABLE)
+
+    def test_terminal_failure_cannot_install_until_backend_allows_cleanup_retry(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'launching',attemptId:'e'.repeat(32)});await $('app-update-install').onclick();
+          WorkspaceAppUpdates.handoffChanged({requestId:'e'.repeat(32),targetVersion:'0.22.1',stage:'failed'},false);
+          WorkspaceAppUpdates.observe({...available,status:'error',canInstall:false,attemptId:'e'.repeat(32),error:'기존 전환 취소 후 다시 확인해 주세요.'});
+          assert.equal($('app-update-status').textContent,'기존 전환 취소 후 다시 확인해 주세요.');
+          const calls=[];api=async(path,data)=>{calls.push(data);return {...available,status:'error',canInstall:false};};
+          await $('app-update-install').onclick();assert.equal(calls.length,0);assert.equal($('app-update-install').disabled,true);
+          assert.equal($('app-update-title').textContent,'업데이트 실패');assert.equal($('app-update-activity').hidden,true);
+          assert.equal($('app-update-check').disabled,false);
+        })()""", AVAILABLE)
+
+    def test_unknown_previous_terminal_cannot_poison_new_retry_or_inflight_install(self):
+        self.run_case(r"""(async()=>{
+          const oldId='a'.repeat(32),newId='b'.repeat(32);
+          api=async()=>({...available,status:'launching'});await $('app-update-install').onclick();
+          WorkspaceAppUpdates.observe({...available,status:'error',error:'previous attempt failed'});
+          let reply;api=()=>new Promise(resolve=>reply=resolve);
+          const installing=$('app-update-install').onclick();
+          const oldFailure={requestId:oldId,targetVersion:'0.22.1',stage:'failed',error:'late previous failure'};
+          WorkspaceAppUpdates.handoffChanged(oldFailure,false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+          reply({...available,status:'launching',attemptId:newId});await installing;
+          WorkspaceAppUpdates.handoffChanged({...oldFailure,stage:'waiting'},false);
+          WorkspaceAppUpdates.handoffChanged(oldFailure,false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+          assert.equal($('app-update-dialog').dataset.progress,'true');
+          WorkspaceAppUpdates.handoffChanged({...oldFailure,requestId:newId,error:'current attempt failed'},false);
+          assert.equal($('app-update-title').textContent,'업데이트 실패');
+          assert.equal($('app-update-status').textContent,'current attempt failed');
+          // Reset the old known identity before a new install's POST returns.
+          WorkspaceAppUpdates.observe({...available,status:'error',attemptId:newId,error:'current attempt failed'});
+          api=()=>new Promise(resolve=>reply=resolve);
+          const retrying=$('app-update-install').onclick();
+          WorkspaceAppUpdates.handoffChanged({...oldFailure,requestId:newId},false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+          reply({...available,status:'downloading',attemptId:null});await retrying;
+          WorkspaceAppUpdates.handoffChanged({...oldFailure,requestId:'c'.repeat(32)},false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+        })()""", AVAILABLE)
+
+    def test_unknown_terminal_waits_for_authoritative_failure_without_identity_guess(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'launching',attemptId:'malformed'});await $('app-update-install').onclick();
+          WorkspaceAppUpdates.handoffChanged({requestId:'f'.repeat(32),targetVersion:'0.22.1',stage:'failed'},false);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');
+          WorkspaceAppUpdates.observe({...available,status:'error',error:'실행기가 실패했습니다.'});
+          assert.equal($('app-update-title').textContent,'업데이트 실패');
+          assert.equal($('app-update-status').textContent,'실행기가 실패했습니다.');
+          assert.equal($('app-update-dialog').dataset.progress,'false');
+        })()""", AVAILABLE)
+
+    def test_cancelled_update_has_no_failure_notification_and_can_be_explicitly_restarted(self):
+        self.run_case(r"""(async()=>{
+          const notices=[];toast=message=>notices.push(message);
+          api=async()=>({...available,status:'launching',attemptId:'f'.repeat(32)});await $('app-update-install').onclick();$('app-update-dismiss').onclick();
+          WorkspaceAppUpdates.handoffChanged({requestId:'f'.repeat(32),targetVersion:'0.22.1',stage:'cancelled'},false);
+          assert.equal($('app-update-title').textContent,'업데이트 취소됨');assert.equal($('app-update-activity').hidden,true);
+          assert.equal($('app-update-dialog-retry').hidden,true);assert.equal($('app-update-install').disabled,true);
+          WorkspaceAppUpdates.observe({...available,status:'cancelled',error:'버전 전환을 취소했습니다.'});
+          assert.equal($('app-update-install').disabled,false);assert.equal(notices.length,0);
+          const calls=[];api=async(path,data)=>{calls.push(data);return {...available,status:'downloading'};};
+          await $('app-update-install').onclick();assert.equal(calls.length,1);assert.equal(calls[0].action,'install');
+        })()""", AVAILABLE)
+
+    def test_status_read_failure_is_unknown_not_failed_and_retry_reads_only(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({...available,status:'launching'});await $('app-update-install').onclick();$('app-update-dismiss').onclick();
+          const calls=[];api=async(path,data)=>{calls.push(data);throw Error('상태 연결 끊김');};
+          await runUpdateTimer();assert.equal($('app-update-title').textContent,'업데이트 상태 확인 필요');
+          assert.equal($('app-update-activity').hidden,true);assert.equal($('app-update-stages').hidden,true);
+          assert.equal($('app-update-install').disabled,true);assert.equal($('app-update-dialog-retry').disabled,false);
+          api=async(path,data)=>{calls.push(data);return {...available,status:'launching'};};
+          await $('app-update-dialog-retry').onclick();assert.deepEqual(calls,[undefined,undefined]);
+          assert.equal($('app-update-title').textContent,'업데이트하고 있어요');assert.equal($('app-update-activity').hidden,false);
         })()""", AVAILABLE)
 
     def test_progress_transfers_to_capture_in_same_turn_and_preserves_drafts(self):
@@ -461,13 +576,16 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
     def test_cancel_after_progress_transfer_restores_accessible_sidebar_opener(self):
         self.run_case(r"""(async()=>{
           $('app-update-dismiss').onclick();$('app-update-sidebar-badge').focus();$('app-update-sidebar-badge').onclick();
-          api=async()=>({...available,status:'ready'});await $('app-update-install').onclick();
+          api=async()=>({...available,status:'ready',attemptId:'d'.repeat(32)});await $('app-update-install').onclick();
           const id='d'.repeat(32);
           api=async(path,data)=>({ok:true,upgrade:{requestId:id,targetVersion:'0.22.1',
             stage:data.action==='capture'?'captured':'cancelled',revision:data.action==='capture'?2:3}});
           await WorkspaceUpgrade.observe({requestId:id,targetVersion:'0.22.1',stage:'capture',revision:1},{});
           assert.equal($('upgrade-dialog').open,true);await WorkspaceUpgrade.cancel();
           assert.equal($('upgrade-dialog').open,false);assert.equal(document.activeElement,$('app-update-sidebar-badge'));
+          assert.equal($('app-update-title').textContent,'업데이트 취소됨');
+          assert.equal($('app-update-activity').hidden,true);assert.equal($('app-update-stages').hidden,true);
+          assert.equal($('app-update-dialog').dataset.progress,'false');
         })()""", AVAILABLE)
 
     def test_updater_owned_dialog_does_not_bypass_another_human_dialog(self):

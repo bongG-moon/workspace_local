@@ -324,9 +324,11 @@ def stage_and_launch(state, current_version, version, package_bytes, sha256, dem
         _atomic_manifest(pending, value)
         try:
             launch_root = _safe(Path(state).parent if demo else Path(state))
+            request_id = uuid.uuid4().hex
             arguments = [powershell_path(), '-NoLogo', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
                          '-File', str(application / 'deploy/Start-CompanyWorkspace.ps1'),
-                         '-StateRoot', str(launch_root), '-PythonCommand', sys.executable]
+                         '-StateRoot', str(launch_root), '-PythonCommand', sys.executable,
+                         '-ExecutionRequestId', request_id]
             if demo:
                 arguments.append('-Demo')
             if no_browser:
@@ -345,7 +347,7 @@ def stage_and_launch(state, current_version, version, package_bytes, sha256, dem
             raise
     # Private process evidence is consumed by the update coordinator, never JSON.
     # Exit zero only acknowledges a detached handoff; it is not startup success.
-    return {'status': 'launching', 'version': version, 'launched': True, '_process': process}
+    return {'status': 'launching', 'version': version, 'launched': True, '_process': process, '_requestId': request_id}
 
 
 def confirm_running_update(state, current_version, *, application_root=None, demo=False):

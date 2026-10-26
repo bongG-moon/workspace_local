@@ -5,7 +5,7 @@
 globalThis.WorkspaceAppUpdates = (() => {
   const $=id=>document.getElementById(id);
   const stableVersion=value=>typeof value==="string"&&/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value);
-  const statuses=new Set(["idle","checking","current","available","downloading","ready","launching","error","disabled"]);
+  const statuses=new Set(["idle","checking","current","available","downloading","ready","launching","error","cancelled","disabled"]);
   const transfers=new Set(["downloading","ready","launching"]);
   const startupDelays=[1200,2500,5000,10000,15000];
   let hooks=null,bound=false,started=false,stopped=false,timer=null,pending=false,startupReads=0;
@@ -13,6 +13,8 @@ globalThis.WorkspaceAppUpdates = (() => {
   let localError="",startupWarning="",returnFocus=null,installSubmitted=false,installUncertain=false,closingForHandoff=false,handoffDialogsClosed=false;
   let installFailureNotified=false,startupOfferDone=false,offerTimer=null,startupReady=false,lastStartupSequence=0;
   let handoff=null,handoffLocked=false;
+  let terminal=null;
+  const previousHandoffs=new Set();
 
   function newer(version,current){
     if(!stableVersion(version)||!stableVersion(current))return false;
@@ -33,7 +35,8 @@ globalThis.WorkspaceAppUpdates = (() => {
       url:provider==="github"?`https://github.com/bongG-moon/workspace_local/releases/tag/v${value.release.version}`:""
     }:null;
     const buildIdentity=typeof value.buildIdentity==="string"&&/^[a-f0-9]{64}$/.test(value.buildIdentity)?value.buildIdentity:"";
-    return {currentVersion,buildIdentity,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
+    const attemptId=typeof value.attemptId==="string"&&/^[a-f0-9]{32}$/.test(value.attemptId)?value.attemptId:"";
+    return {currentVersion,buildIdentity,attemptId,source,status:value.status,autoCheck:value.autoCheck!==false,lastChecked:value.lastChecked,
       startupSequence:Number.isSafeInteger(value.startupSequence)&&value.startupSequence>=0?value.startupSequence:0,
       release,progress:typeof value.progress==="number"&&Number.isFinite(value.progress)?Math.max(0,Math.min(100,value.progress)):null,
       error:typeof value.error==="string"?value.error:null,canInstall:value.canInstall===true};
@@ -67,9 +70,12 @@ globalThis.WorkspaceAppUpdates = (() => {
     schedule(document.hidden!==true);
   }
   function message(){
+    if(terminal)return terminal.stage==="cancelled"?"업데이트를 취소했어요. 준비되면 다시 시작할 수 있습니다.":terminal.error;
     if(localError)return localError;
+    if(installSubmitted&&pending&&!transfers.has(snapshot.status))return "업데이트 요청을 보내고 있어요.";
     if(snapshot.status==="error")return snapshot.error||"업데이트를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.";
     if(snapshot.status==="checking")return "새 버전이 있는지 확인하고 있어요.";
+    if(snapshot.status==="cancelled")return snapshot.error||"업데이트를 취소했어요. 준비되면 다시 시작할 수 있습니다.";
     if(snapshot.status==="downloading")return "업데이트를 다운로드하고 있어요. 현재 업무를 계속할 수 있습니다.";
     if(snapshot.status==="ready")return "다운로드를 마쳤어요. 안전하게 전환할 준비를 하고 있습니다.";
     if(snapshot.status==="launching")return handoff?.stage==="waiting"
@@ -83,8 +89,12 @@ globalThis.WorkspaceAppUpdates = (() => {
   function render(){
     if(!$("app-update-status"))return;
     const release=snapshot.release,available=!!release,label=message(),isBusy=busy();
-    const transferring=installSubmitted&&(transfers.has(snapshot.status)||pending)&&!installUncertain;
-    const sidebarButton=$("app-update-sidebar-badge"),sidebarLabel=release?`${transferring?"업데이트 진행 중 ·":"새 버전"} ${release.version}${transferring?"":" 업데이트"}`:"새 버전 업데이트";
+    const requestingInstall=installSubmitted&&pending&&!transfers.has(snapshot.status);
+    const cancelled=terminal?.stage==="cancelled"||!terminal&&!requestingInstall&&snapshot.status==="cancelled";
+    const failed=!!terminal&&!cancelled||snapshot.status==="error"&&!cancelled&&!requestingInstall;
+    const uncertain=!!localError&&!failed&&!cancelled;
+    const transferring=installSubmitted&&(transfers.has(snapshot.status)||pending)&&!installUncertain&&!terminal&&!uncertain;
+    const sidebarButton=$("app-update-sidebar-badge"),sidebarLabel=release?`${failed?"업데이트 실패 ·":cancelled?"업데이트 취소됨 ·":uncertain?"업데이트 상태 확인 필요 ·":transferring?"업데이트 진행 중 ·":"새 버전"} ${release.version}${failed||cancelled||uncertain||transferring?"":" 업데이트"}`:"새 버전 업데이트";
     sidebarButton.hidden=!available;sidebarButton.disabled=!available;
     sidebarButton.dataset.state=transferring?"updating":"available";
     sidebarButton.setAttribute("aria-label",sidebarLabel);sidebarButton.setAttribute("title",sidebarLabel);
@@ -98,33 +108,34 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-source").textContent=snapshot.source?.label||"배포 서버";
     $("app-update-checked").textContent=dateText(snapshot.lastChecked,true);
     $("app-update-auto").checked=snapshot.autoCheck;$("app-update-auto").disabled=isBusy||installUncertain;
-    $("app-update-check").disabled=isBusy;
+    // A known terminal handoff or lost status read can be checked immediately,
+    // but a second install stays gated by the authoritative server state below.
+    $("app-update-check").disabled=pending||isBusy&&!terminal&&!localError;
     $("app-update-check").textContent=snapshot.status==="checking"?"확인 중…":"지금 확인";
     $("app-update-notes-open").hidden=!available;$("app-update-notes-open").disabled=!available;
     $("app-update-status").textContent=label;$("app-update-dialog-status").textContent=label;
     $("app-update-warning").textContent=startupWarning;$("app-update-warning").hidden=!startupWarning;
-    $("app-update-section").dataset.state=localError?"error":snapshot.status;
-    $("app-update-dialog").dataset.state=localError?"error":snapshot.status;
-    $("app-update-title").textContent=transferring?"업데이트하고 있어요":release?.title||"앱 업데이트";
+    $("app-update-section").dataset.state=failed||uncertain?"error":cancelled?"cancelled":snapshot.status;
+    $("app-update-dialog").dataset.state=failed||uncertain?"error":cancelled?"cancelled":snapshot.status;
+    $("app-update-title").textContent=failed?"업데이트 실패":cancelled?"업데이트 취소됨":uncertain?"업데이트 상태 확인 필요":transferring?"업데이트하고 있어요":release?.title||"앱 업데이트";
     $("app-update-dialog").dataset.progress=String(transferring);
     $("app-update-eyebrow").textContent=transferring?"APP UPDATE":"WHAT’S NEW";
     $("app-update-release-meta").textContent=release?`버전 ${release.version} · ${release.publishedAt?dateText(release.publishedAt):"게시일 확인 필요"}`:"";
     $("app-update-notes").textContent=release?.notes||"업데이트 내용을 확인하고 있어요.";
     $("app-update-release-link").hidden=!release?.url;
     $("app-update-release-link").setAttribute("href",release?.url||"#");
-    const stopChoice=available&&handoff?.targetVersion===release.version&&handoff.canStop&&["waiting","capture"].includes(handoff.stage);
+    const stopChoice=!terminal&&!uncertain&&available&&handoff?.targetVersion===release.version&&handoff.canStop&&["waiting","capture"].includes(handoff.stage);
     $("app-update-stop").hidden=!stopChoice;
     $("app-update-stop").disabled=!globalThis.WorkspaceUpgrade?.canStopForUpdate();
     $("app-update-install").hidden=!available||stopChoice;
     $("app-update-install").disabled=!available||!snapshot.canInstall||isBusy||installSubmitted||installUncertain;
-    $("app-update-install").textContent=snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"다시 시작 준비 중…":installSubmitted&&pending?"업데이트 요청 중…":"업데이트하고 다시 시작";
+    $("app-update-install").textContent=failed||cancelled?"업데이트 다시 시도":uncertain?"업데이트하고 다시 시작":snapshot.status==="downloading"?"다운로드 중…":transfers.has(snapshot.status)?"다시 시작 준비 중…":installSubmitted&&pending?"업데이트 요청 중…":"업데이트하고 다시 시작";
     $("app-update-dismiss").textContent=stopChoice?"기다리며 작업 계속":transferring?"작업으로 돌아가기":"다음에 하기";
     $("app-update-dismiss").title=transferring?"이 창만 닫습니다. 업데이트는 계속됩니다.":"";
     $("app-update-install-note").hidden=!available||snapshot.canInstall||transfers.has(snapshot.status);
-    const failed=!!localError||snapshot.status==="error";
-    $("app-update-retry").hidden=!failed;$("app-update-dialog-retry").hidden=!failed;
-    $("app-update-retry").disabled=isBusy;$("app-update-dialog-retry").disabled=isBusy;
-    const downloading=snapshot.status==="downloading";
+    $("app-update-retry").hidden=!failed&&!uncertain;$("app-update-dialog-retry").hidden=!failed&&!uncertain;
+    $("app-update-retry").disabled=pending||isBusy&&!terminal&&!localError;$("app-update-dialog-retry").disabled=$("app-update-retry").disabled;
+    const downloading=snapshot.status==="downloading"&&!terminal&&!uncertain;
     for(const prefix of ["app-update","app-update-dialog"]){
       $(prefix+"-progress-wrap").hidden=!downloading;
       const progress=$(prefix+"-progress");
@@ -145,7 +156,7 @@ globalThis.WorkspaceAppUpdates = (() => {
       :handoff?.stage==="waiting"?"작업을 계속할 수 있어요. 완료 후 다시 시작합니다.":"새 버전으로 다시 시작할 준비를 하고 있어요";
   }
   function closeForHandoff(){
-    if(!installSubmitted||handoffDialogsClosed||!["ready","launching"].includes(snapshot.status)||closingForHandoff)return;
+    if(terminal||!installSubmitted||handoffDialogsClosed||!["ready","launching"].includes(snapshot.status)||closingForHandoff)return;
     handoffDialogsClosed=true;
     closingForHandoff=true;
     // Settings may be underneath the release dialog. Close that owned layer
@@ -154,7 +165,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     closingForHandoff=false;
   }
   function canYieldForHandoff(value){
-    return installSubmitted&&!installUncertain&&["ready","launching"].includes(snapshot.status)
+    return !terminal&&installSubmitted&&!installUncertain&&["ready","launching"].includes(snapshot.status)
       &&(!value||value.targetVersion===snapshot.release?.version);
   }
   function handoffStarting(value){
@@ -166,7 +177,25 @@ globalThis.WorkspaceAppUpdates = (() => {
     if($("app-update-dialog").open)$("app-update-dialog").close();
     closingForHandoff=false;render();return target;
   }
-  function handoffChanged(value,locked){handoff=value;handoffLocked=locked;render();}
+  function handoffChanged(value,locked){
+    if(value&&previousHandoffs.has(value.requestId))return;
+    // Attention and update polling can finish in either order. A terminal
+    // result belongs to this install only when the backend identifies the
+    // exact attempt; same-version results from an unseen old retry are stale.
+    // When identity is not available yet, the next status read resolves it.
+    if(value&&["failed","expired","cancelled"].includes(value.stage)
+        &&(!snapshot.attemptId||value.requestId!==snapshot.attemptId))return;
+    handoff=value;handoffLocked=locked;
+    if(value&&value.targetVersion===snapshot.release?.version&&["failed","expired","cancelled"].includes(value.stage)
+        &&typeof value.requestId==="string"&&/^[a-f0-9]{32}$/.test(value.requestId)&&(installSubmitted||terminal)){
+      const error=value.stage==="expired"?"업데이트 대기 시간이 지났어요. 다시 시도해 주세요.":
+        typeof value.error==="string"&&value.error?value.error:"업데이트를 마치지 못했어요. 상태를 확인한 뒤 다시 시도해 주세요.";
+      if(value.stage!=="cancelled")notifyInstallFailure(error+" 설정의 ‘앱 업데이트’에서 다시 시도할 수 있습니다.");
+      terminal={requestId:value.requestId,version:value.targetVersion,stage:value.stage,error};
+      installSubmitted=false;installUncertain=false;handoffLocked=false;
+    }
+    render();
+  }
   function completed(value){
     if(!value||!newer(value.targetVersion,value.sourceVersion)||value.executionMode)return false;
     hooks?.notify?.(`AX Workspace ${value.targetVersion} 업데이트를 마쳤어요. 작성 중이던 내용을 이어서 사용할 수 있습니다.`);
@@ -184,10 +213,16 @@ globalThis.WorkspaceAppUpdates = (() => {
       // status reads retain the same sequence and cannot reset dismissal.
       startupOfferDone=$("app-update-dialog").open===true;
     }
-    if(next.status==="error")notifyInstallFailure((next.error||"업데이트를 마치지 못했어요.")+" 설정의 ‘앱 업데이트’에서 다시 시도할 수 있습니다.");
+    if(terminal&&(next.status==="current"||next.release?.version!==terminal.version))terminal=null;
+    if(next.status==="error"){
+      notifyInstallFailure((next.error||"업데이트를 마치지 못했어요.")+" 설정의 ‘앱 업데이트’에서 다시 시도할 수 있습니다.");
+      if((installSubmitted||terminal)&&terminal?.stage!=="cancelled")terminal={requestId:next.attemptId||terminal?.requestId,
+        version:next.release?.version,stage:"failed",error:next.error||terminal?.error||"업데이트를 마치지 못했어요."};
+    }
+    if(next.status==="cancelled"&&installSubmitted&&!terminal)terminal={requestId:next.attemptId,version:next.release?.version,stage:"cancelled",error:""};
     const wasUncertain=installUncertain;
     snapshot=next;localError="";installUncertain=false;
-    if(snapshot.status==="error"||snapshot.status==="current"||wasUncertain&&!transfers.has(snapshot.status))installSubmitted=false;
+    if(snapshot.status==="error"||snapshot.status==="cancelled"||snapshot.status==="current"||wasUncertain&&!transfers.has(snapshot.status))installSubmitted=false;
     if(!["idle","checking"].includes(snapshot.status))startupReads=startupDelays.length;
     render();closeForHandoff();offerUpdate();return true;
   }
@@ -204,7 +239,7 @@ globalThis.WorkspaceAppUpdates = (() => {
   }
   async function request(data){
     if(pending||!hooks||stopped)return false;
-    pending=true;localError="";clearTimeout(timer);timer=null;render();
+    pending=true;if(data)localError="";clearTimeout(timer);timer=null;render();
     try{
       const result=await hooks.api("/api/app-update",data);
       if(stopped)return false;
@@ -222,10 +257,14 @@ globalThis.WorkspaceAppUpdates = (() => {
       if(!stopped){render();offerUpdate();schedule();}}
   }
   function read(){return request();}
-  function check(){return request(installUncertain?undefined:{action:"check"});}
+  function check(){return request(installUncertain||terminal&&transfers.has(snapshot.status)?undefined:{action:"check"});}
   async function install(){
     if(busy()||installSubmitted||installUncertain||!snapshot.canInstall||!snapshot.release)return false;
-    installSubmitted=true;handoffDialogsClosed=false;installFailureNotified=false;handoff=null;handoffLocked=false;
+    if(terminal?.requestId)previousHandoffs.add(terminal.requestId);
+    if(handoff?.requestId)previousHandoffs.add(handoff.requestId);
+    if(snapshot.attemptId)previousHandoffs.add(snapshot.attemptId);
+    snapshot={...snapshot,attemptId:""};
+    terminal=null;installSubmitted=true;handoffDialogsClosed=false;installFailureNotified=false;handoff=null;handoffLocked=false;
     const ok=await request({action:"install",version:snapshot.release.version});
     // An ambiguous reply is resolved by local status reads, never an automatic
     // second install. Errors with a confirmed server state allow an explicit retry.
@@ -245,7 +284,7 @@ globalThis.WorkspaceAppUpdates = (() => {
   }
   function bind(){
     $("app-update-check").onclick=check;
-    $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError?read():check();
+    $("app-update-retry").onclick=$("app-update-dialog-retry").onclick=()=>localError||terminal&&transfers.has(snapshot.status)?read():check();
     $("app-update-auto").onchange=()=>request({action:"configure",autoCheck:$("app-update-auto").checked});
     $("app-update-sidebar-badge").onclick=$("app-update-notes-open").onclick=()=>openNotes();$("app-update-install").onclick=install;
     $("app-update-stop").onclick=()=>globalThis.WorkspaceUpgrade?.stopForUpdate();

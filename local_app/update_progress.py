@@ -50,6 +50,7 @@ class UpdateProgress:
         self._ready = threading.Event()
         self._closed = threading.Event()
         self._phase = 'preparing'
+        self.diagnostic = None
 
     def phase(self, phase):
         if phase == 'waiting':
@@ -60,14 +61,23 @@ class UpdateProgress:
         if not self.enabled or self._closed.is_set():
             return
         self._phase = phase
-        if self._thread is None:
-            self._thread = threading.Thread(target=self._run, name='workspace-update-progress', daemon=True)
-            self._thread.start()
-        # Before commit, confirm the card has actually been painted. Failure
-        # leaves the old app running and follows its existing error notice.
-        if not self._ready.wait(3) or self._error or not self._native:
-            raise OSError('업데이트 진행 안내를 준비하지 못했습니다.')
-        self._native.update(phase)
+        try:
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._run, name='workspace-update-progress', daemon=True)
+                self._thread.start()
+            if not self._ready.wait(3) or self._error or not self._native:
+                raise OSError('Update progress card unavailable')
+            self._native.update(phase)
+        except Exception as error:
+            # The card is presentation only. Its font/GDI/paint failure must
+            # not interrupt an otherwise authenticated, acknowledged handoff.
+            self._disable(error)
+
+    def _disable(self, error):
+        self._error = self._error or error
+        self.diagnostic = 'progress_unavailable'
+        self.enabled = False
+        self.close()
 
     def _run(self):
         try:
@@ -79,15 +89,22 @@ class UpdateProgress:
             self._ready.set()
 
     def hide(self):
-        if self._native:
-            self._native.hide()
+        if self._native and not self._closed.is_set():
+            try:
+                self._native.hide()
+            except Exception as error:
+                self._disable(error)
 
     def close(self):
         self._closed.set()
         if self._native:
-            self._native.close()
-        if self._thread and self._thread is not threading.current_thread():
-            self._thread.join(3)
+            try:
+                self._native.close()
+            except Exception as error:
+                self._error = self._error or error
+                self.diagnostic = 'progress_unavailable'
+        if self._thread and self._thread.ident is not None and self._thread is not threading.current_thread():
+            self._thread.join(.1 if self._error else 3)
 
 
 class _NativeCard:

@@ -58,6 +58,7 @@ _MESSAGES = {
     'handoff_cancelled': '버전 전환을 취소했습니다. 준비되면 업데이트를 다시 시도할 수 있습니다.',
     'handoff_expired': '버전 전환 대기 시간이 지났습니다. 기존 앱에서 업데이트를 다시 시도해 주세요.',
     'handoff_failed': '버전 전환을 마치지 못했습니다. 기존 앱에서 업데이트를 다시 시도해 주세요.',
+    'handoff_pending': '업데이트를 마치지 못했습니다. 기존 전환 상태를 확인하고, 전환 취소 후 다시 시도해 주세요.',
 }
 
 
@@ -437,6 +438,9 @@ class UpdateManager:
         self._launch_done = threading.Event()
         self._launch_done.set()
         self._launcher_cleanup_failed = False
+        self._coordinator_cleanup_pending = False
+        self._failed_handoff_request = None
+        self._handoff_retry_pending = False
         self._launcher_process = None
         self._launcher_context = None
         self._busy = False
@@ -452,6 +456,7 @@ class UpdateManager:
         self._error = None
         self._progress = None
         self._launcher_result = None
+        self._attempt_id = None
         if not self.demo:
             self._load()
         else:
@@ -511,17 +516,45 @@ class UpdateManager:
                        'publishedAt': data['published_at'], 'url': data['html_url']}
         return {'currentVersion': self.current_version, 'buildIdentity': BUILD_ID, 'status': self._status, 'autoCheck': self._auto,
                 'startupSequence': self._startup_sequence,
+                'attemptId': self._attempt_id,
                 'source': self.source.public(),
                 'launcher': dict(self._launcher_result) if self._launcher_result is not None else None,
                 'lastChecked': self._last_checked, 'release': release, 'progress': self._progress,
-                'error': self._error, 'canInstall': bool(self._trusted and self._newer() and self.installer
+                'error': _MESSAGES['handoff_pending'] if self._handoff_retry_pending else self._error,
+                'canInstall': bool(self._trusted and self._newer() and self.installer
                     and not self.demo and not self.source.error and not self._busy and not self._cancel.is_set()
-                    and not self._launcher_cleanup_failed
-                    and self._status in ('available', 'error'))}
+                    and not self._launcher_cleanup_failed and not self._coordinator_cleanup_pending
+                    and not self._handoff_retry_pending
+                    and self._status in ('available', 'error', 'cancelled'))}
 
     def snapshot(self):
+        self._refresh_handoff_retry()
         with self._lock:
             return self._snapshot()
+
+    def _refresh_handoff_retry(self):
+        """Refresh only a failed attempt's unresolved handoff, outside our lock.
+
+        A failed coordinator may have lost a commit response. Never infer that
+        its captured/committing request can be replaced. The user can cancel a
+        pre-close request in the existing handoff UI, then retry without restart.
+        """
+        with self._lock:
+            failed = self._failed_handoff_request
+            if failed is None or self._status != 'error':
+                return
+        try:
+            pending = self._handoff()
+            blocked = bool(pending and pending['targetVersion'] == failed[0]
+                           and pending['requestId'] == failed[1]
+                           and pending.get('stage') not in ('cancelled', 'expired', 'failed'))
+        except Exception:
+            blocked = True
+        with self._lock:
+            if self._failed_handoff_request == failed:
+                self._handoff_retry_pending = blocked
+                if not blocked:
+                    self._failed_handoff_request = None
 
     def prepare_launcher(self):
         """Explicit repair for apps reached through an old EXE or VBS updater.
@@ -626,13 +659,15 @@ class UpdateManager:
     def check(self, manual=False, *, startup=False):
         if type(manual) is not bool or type(startup) is not bool or manual and startup:
             raise ValueError('업데이트 확인 요청을 확인해 주세요.')
+        self._refresh_handoff_retry()
         with self._lock:
             # An explicit window opening rearms the UI offer even when the last
             # request is recent. Ordinary polling and focus changes never do.
             if startup:
                 self._startup_sequence += 1
             if (self.demo or self.source.error or self._cancel.is_set() or self._busy
-                    or self._launcher_cleanup_failed or self._status in ('ready', 'launching')):
+                    or self._launcher_cleanup_failed or self._coordinator_cleanup_pending or self._handoff_retry_pending
+                    or self._status in ('ready', 'launching')):
                 return self._snapshot()
             if not manual and not self._auto:
                 return self._snapshot()
@@ -670,7 +705,8 @@ class UpdateManager:
                 message = '사내 업데이트 서버의 요청 한도에 도달했습니다. 잠시 후 다시 확인해 주세요.'
         else:
             message = _MESSAGES['install' if install else 'network']
-        self._error, self._status, self._progress = message, 'error', None
+        cancelled = isinstance(exc, UpdateError) and exc.code in ('cancelled', 'handoff_cancelled')
+        self._error, self._status, self._progress = message, 'cancelled' if cancelled else 'error', None
 
     def _check(self):
         try:
@@ -700,12 +736,14 @@ class UpdateManager:
 
     def install(self, version):
         version_tuple(version)
+        self._refresh_handoff_retry()
         with self._lock:
             if self._busy or self._status in ('ready', 'launching'):
                 return self._snapshot()
             if (not self._snapshot()['canInstall'] or self._metadata['tag_name'] != 'v' + version):
                 raise ValueError('확인된 새 버전만 설치할 수 있습니다. 업데이트를 먼저 확인해 주세요.')
             metadata = self._metadata
+            self._attempt_id = None
             self._busy, self._status, self._error, self._progress = True, 'downloading', None, 0
             self._thread = threading.Thread(target=self._install, args=(metadata,), name='workspace-update-install', daemon=True)
             self._thread.start()
@@ -758,13 +796,18 @@ class UpdateManager:
             # A busy task may postpone handoff for hours. Release the downloaded
             # archive before waiting; the installer already owns verified files.
             del data, package, sums, launcher_bytes
+            request_id = result.get('_requestId') if isinstance(result, dict) else None
+            if not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9]{32}', request_id):
+                request_id = None
             with self._lock:
                 if not self._cancel.is_set():
                     status = result.get('status', result.get('state')) if isinstance(result, dict) else None
                     self._status = status if status in ('ready', 'launching') else 'launching'
+                    # Public correlation only; no process, path or credential.
+                    self._attempt_id = request_id
             process = result.get('_process') if isinstance(result, dict) else None
-            if self.handoff_status is not None or process is not None:
-                self._monitor_launch(version, process, baseline)
+            if self.handoff_status is not None or process is not None or request_id is not None:
+                self._monitor_launch(version, process, baseline, request_id=request_id)
         except Exception as exc:
             with self._lock:
                 if not self._cancel.is_set() or isinstance(exc, UpdateError) and exc.code == 'launch_cleanup':
@@ -784,7 +827,27 @@ class UpdateManager:
             return None
         return pending
 
-    def _monitor_launch(self, version, process, baseline):
+    def _coordinator_result(self, version, request_id):
+        """Read only a fixed-size result belonging to this exact install attempt.
+
+        The PowerShell wrapper exits after acknowledgement while its detached
+        coordinator may subsequently fail without creating a handoff. An old
+        result or a same-version unrelated launch is never evidence of failure.
+        Only fixed terminal values are consumed, never arbitrary error text.
+        """
+        if not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9]{32}', request_id):
+            return None
+        try:
+            result = read(self.path.parent / 'upgrade-last-result.json', 4096)
+        except (OSError, ValueError, TypeError, RecursionError):
+            return None
+        if (not isinstance(result, dict) or result.get('requestId') != request_id
+                or result.get('targetVersion') != version
+                or result.get('status') not in ('failed', 'expired', 'cancelled')):
+            return None
+        return result['status'], result.get('reason') == 'launcher_cleanup_pending'
+
+    def _monitor_launch(self, version, process, baseline, *, request_id=None):
         """Observe cooperative restart; a launcher exit 0 is only a handoff ACK.
 
         A cancelled/expired previous attempt must not poison a retry, so require
@@ -794,15 +857,26 @@ class UpdateManager:
         started = time.monotonic()
         matched = None
         self._launcher_process = process
-        self._launcher_context = (version, baseline)
+        self._launcher_context = (version, baseline, request_id)
         try:
             while not self._cancel.is_set():
+                terminal = self._coordinator_result(version, request_id or matched)
+                if terminal:
+                    status, cleanup_pending = terminal
+                    if status == 'failed':
+                        with self._lock:
+                            self._failed_handoff_request = (version, request_id or matched)
+                    if cleanup_pending:
+                        self._coordinator_cleanup_pending = True
+                        raise UpdateError('launch_cleanup')
+                    raise UpdateError('handoff_' + status)
                 if process is not None:
                     code = process.poll()
                     if code is not None and code != 0:
                         raise UpdateError('install')
                 pending = self._handoff()
                 if (pending and pending['targetVersion'] == version and pending['requestId'] != baseline
+                        and (request_id is None or pending['requestId'] == request_id)
                         and (matched is None or matched == pending['requestId'])):
                     matched = pending['requestId']
                     stage = pending.get('stage')
@@ -819,11 +893,11 @@ class UpdateManager:
                     return
         finally:
             if matched is None:
-                self._cleanup_unaccepted_launcher(process, version, baseline)
+                self._cleanup_unaccepted_launcher(process, version, baseline, request_id)
             else:
                 self._launcher_process = self._launcher_context = None
 
-    def _cleanup_unaccepted_launcher(self, process, version, baseline):
+    def _cleanup_unaccepted_launcher(self, process, version, baseline, request_id=None):
         if process is None:
             self._launcher_process = self._launcher_context = None
             return
@@ -835,7 +909,8 @@ class UpdateManager:
             # A handoff may have arrived concurrently with cancellation or the
             # deadline. Never touch its coordinator or its detached new server.
             pending = self._handoff()
-            if pending and pending['targetVersion'] == version and pending['requestId'] != baseline:
+            if (pending and pending['targetVersion'] == version and pending['requestId'] != baseline
+                    and (request_id is None or pending['requestId'] == request_id)):
                 finished = True
                 return
             # Popen retains the original process handle on Windows. Kill only

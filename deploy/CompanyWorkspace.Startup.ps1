@@ -109,7 +109,7 @@ function Write-WorkspacePythonDiagnostic {
         $null = [IO.Directory]::CreateDirectory($directory)
         if (([IO.File]::GetAttributes($directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
         $path = Join-Path $directory ('python-check-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
-        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.23.33';
+        $report = [ordered]@{ diagnosticVersion='python-1'; workspaceVersion='0.23.34';
             createdUtc=[DateTime]::UtcNow.ToString('o'); sourceRoot=[IO.Path]::GetFullPath($AppRoot);
             powershellVersion=$PSVersionTable.PSVersion.ToString(); attemptId=$AttemptId; code=('WS-' + $Code); checks=$clean }
         # Allowlisted metadata only: no stderr, wrapper/profile bodies, auth,
@@ -134,7 +134,7 @@ function Read-WorkspaceRecentPythonDiagnostic {
         foreach ($file in $files) {
             try {
                 $report = [IO.File]::ReadAllText($file.FullName, [Text.Encoding]::UTF8) | ConvertFrom-Json
-                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.23.33' -or
+                if ($report.diagnosticVersion -ne 'python-1' -or $report.workspaceVersion -ne '0.23.34' -or
                     $report.sourceRoot -ne [IO.Path]::GetFullPath($AppRoot) -or $report.code -ne ('WS-' + $Code) -or $report.attemptId -ne $AttemptId) { continue }
                 return [pscustomobject]@{ path=$file.FullName; checks=@(ConvertTo-WorkspacePythonChecks -Checks $report.checks) }
             } catch {}
@@ -232,8 +232,31 @@ function Show-WorkspaceUpgradeWaiting {
 }
 
 function Show-WorkspaceUpgradeFailure {
+    param([ValidateSet('unknown', 'preflight_failed', 'connection_unavailable', 'handoff_prepare_failed',
+        'draft_recovery_pending', 'draft_archive_failed', 'draft_record_unreadable', 'handoff_already_pending', 'execution_mode_mismatch',
+        'handoff_expired', 'handoff_failed', 'cleanup_unconfirmed', 'old_app_still_open',
+        'new_app_launch_failed', 'new_app_not_ready', 'launcher_cleanup_pending')][string] $Reason = 'unknown')
     Initialize-WorkspaceStartupDisplay
-    [Windows.Forms.MessageBox]::Show('새 버전으로 전환을 마치지 못했어요. 진행 중인 업무를 강제로 종료하지 않았습니다. 기존 앱의 작업 상태를 확인한 뒤 새 실행 파일을 다시 열어 주세요.', 'AX Workspace', 'OK', 'Information') | Out-Null
+    $messages = @{
+        unknown = '새 버전으로 전환을 마치지 못했어요. 기존 앱이 열려 있다면 전환 또는 종료 안내를 확인해 주세요. 앱이 닫혀 있다면 새 실행 파일을 다시 열어 주세요.'
+        preflight_failed = '새 버전의 실행 준비를 확인하지 못했어요. 기존 앱을 종료하는 단계는 시작하지 않았습니다. 새 설치 파일로 다시 설치한 뒤 실행해 주세요.'
+        connection_unavailable = '기존 앱과 연결하지 못했어요. 기존 앱이 열려 있다면 완전 종료한 뒤 새 실행 파일을 열어 주세요.'
+        handoff_prepare_failed = '기존 앱에서 전환 준비를 시작하지 못했어요. 기존 앱의 초안 복원 또는 전환 안내를 확인한 뒤 다시 시도해 주세요.'
+        draft_recovery_pending = '이전 초안의 보관 상태를 확인하지 못해 전환을 멈췄어요. 기존 앱과 초안은 유지됩니다. 업데이트를 다시 시도하거나, 설정의 완전히 종료로 닫은 뒤 새 설치 파일을 직접 실행해 주세요. 초안을 지울 필요는 없습니다.'
+        draft_archive_failed = '이전 초안을 안전하게 별도 보관하지 못했어요. 기존 초안과 앱은 유지됩니다. 사용자 저장 위치의 공간과 쓰기 권한을 확인한 뒤 업데이트를 다시 시도해 주세요. 초안을 지울 필요는 없습니다.'
+        draft_record_unreadable = '이전 업데이트의 초안 보관 기록을 읽지 못했어요. 기록은 그대로 보존했습니다. 설정의 완전히 종료로 앱을 닫은 뒤, 기존 앱을 다시 열지 말고 새 설치 파일을 직접 실행해 주세요.'
+        handoff_already_pending = '기존 앱에서 다른 업데이트 전환을 준비하고 있어요. 기존 앱 상단의 전환 안내에서 취소한 뒤 업데이트를 다시 시도해 주세요. 작성 중인 내용은 유지됩니다.'
+        execution_mode_mismatch = '기존 앱과 새 실행 파일의 Windows 실행 권한이 달라요. 기존 앱의 설정에서 완전히 종료한 뒤 원하는 권한으로 새 실행 파일을 열어 주세요.'
+        handoff_expired = '새 버전 전환 대기 시간이 지났어요. 기존 앱의 전환 안내에서 진행 중인 작업과 열린 창을 확인한 뒤 업데이트를 다시 시도해 주세요.'
+        handoff_failed = '기존 앱의 전환 상태를 확인하지 못했어요. 기존 앱이 열려 있다면 전환 또는 종료 안내를 확인해 주세요. 앱이 닫혀 있다면 새 실행 파일을 다시 열어 주세요.'
+        cleanup_unconfirmed = '기존 앱의 종료 처리를 마치지 못했어요. 기존 앱의 종료 안내에서 원인을 확인하고 종료를 다시 시도해 주세요. 저장된 대화와 이어 할 일을 지울 필요는 없습니다.'
+        old_app_still_open = '기존 앱의 종료 응답은 받았지만 창과 연결의 정리가 끝났는지 확인하지 못했어요. 기존 앱의 종료 상태를 확인한 뒤 새 실행 파일을 다시 열어 주세요.'
+        new_app_launch_failed = '기존 앱은 종료했지만 새 버전을 실행하지 못했어요. 새 실행 파일을 다시 열어 주세요. 실행 오류 안내가 나오면 해당 내용을 확인해 주세요.'
+        new_app_not_ready = '기존 앱은 종료했지만 새 버전의 화면 준비를 확인하지 못했어요. 새 창이 이미 열려 있다면 화면의 오류 안내를 확인하고, 열리지 않았다면 새 실행 파일을 다시 열어 주세요.'
+        launcher_cleanup_pending = '기존 앱은 종료했지만 새 실행기의 종료 상태를 확인하지 못했어요. 중복 실행을 막기 위해 기다리고 있습니다. 잠시 후 실행 창의 상태를 확인해 주세요.'
+    }
+    $message = $messages[$Reason] + [Environment]::NewLine + [Environment]::NewLine + '진단 코드: ' + $Reason
+    [Windows.Forms.MessageBox]::Show($message, 'AX Workspace', 'OK', 'Information') | Out-Null
     return $true
 }
 

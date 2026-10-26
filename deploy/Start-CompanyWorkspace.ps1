@@ -461,7 +461,7 @@ try {
     if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
     $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.33' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.34' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -533,7 +533,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.33'
+        $targetVersion = [version]'0.23.34'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)
@@ -635,7 +635,8 @@ try {
         # Windows argv escaping doubles a trailing slash before the close quote.
         $quotedState = '"' + $appStateRoot + [regex]::Match($appStateRoot, '\\+$').Value + '"'
         $arguments = @('-X', 'utf8', '-m', 'local_app.upgrade_launcher', '--state', $quotedState,
-                      '--python', ('"' + $resolvedPython + '"'), '--request-id', $requestId)
+                      '--python', ('"' + $resolvedPython + '"'), '--request-id', $requestId,
+                      '--target-version', $targetVersion.ToString())
         if ($Demo) { $arguments += '--demo' }
         if ($NoBrowser) { $arguments += '--no-browser' }
         $arguments += @('--execution-mode', $ExecutionMode)

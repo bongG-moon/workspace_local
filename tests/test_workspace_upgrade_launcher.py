@@ -7,8 +7,9 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from copy import deepcopy
 from unittest.mock import Mock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from local_app import upgrade_launcher as upgrade
@@ -47,13 +48,47 @@ class FakeClient:
             return 200, self.task
         if path == '/api/dispatch?id=' + SID:
             return 200, self.dispatch
-        if path == '/api/quit' or path == '/api/upgrade' and data['action'] == 'commit':
+        if path == '/api/quit' or path == '/api/upgrade' and data and data['action'] == 'commit':
             if isinstance(self.commit, Exception):
                 raise self.commit
             return self.commit
-        if path == '/api/upgrade' and data['action'] == 'cancel':
+        if path == '/api/upgrade' and data and data['action'] == 'cancel':
             return 200, snapshot('cancelled')
         return 200, snapshot(self.stages.pop(0) if len(self.stages) > 1 else self.stages[0])
+
+
+class LegacyRecoveryClient(FakeClient):
+    """Published old-app rejection/ack contract, with all mutations observed."""
+    def __init__(self):
+        super().__init__()
+        self.restore = {'requestId': 'd' * 32, 'savedTargetVersion': '0.23.31',
+                        'snapshot': {'sessionId': SID, 'drafts': [
+                            {'id': SID, 'text': '이전 초안\n아직 보내지 않음', 'attachments': ['D:/보고서.xlsx']}]}}
+        self.before_ack = lambda: None
+        self.ack_result = None
+        self.prepare_count = 0
+        self.keep_blocked = False
+
+    def request(self, path, data=None, **kwargs):
+        if path == '/api/upgrade' and data is None:
+            self.calls.append((path, data))
+            return 200, {'upgrade': None, 'upgradeRestore': deepcopy(self.restore), 'warning': None}
+        if path == '/api/upgrade' and data and data.get('action') == 'prepare':
+            self.prepare_count += 1
+            if self.restore is not None or self.keep_blocked:
+                self.calls.append((path, data))
+                return 400, {'error': '이전 창의 작성 내용을 먼저 복원해 주세요.'}
+        if path == '/api/upgrade' and data and data.get('action') == 'restored':
+            self.calls.append((path, data))
+            self.before_ack()
+            if isinstance(self.ack_result, Exception):
+                raise self.ack_result
+            if self.ack_result is not None:
+                return self.ack_result
+            assert data['requestId'] == self.restore['requestId']
+            self.restore = None
+            return 200, {'ok': True, 'upgradeRestore': None}
+        return super().request(path, data, **kwargs)
 
 
 class UpgradeTransferTests(unittest.TestCase):
@@ -71,6 +106,58 @@ class UpgradeTransferTests(unittest.TestCase):
         self.assertEqual('closed', self.transfer(client))
         self.assertEqual(1, sum(bool(data and data.get('action') == 'commit') for _, data in client.calls))
         self.assertEqual(2, sum(path.startswith('/api/upgrade?') for path, _ in client.calls))
+
+    def test_transient_status_reads_recover_without_replaying_prepare_or_commit(self):
+        client = FakeClient(stages=['waiting', 'captured'])
+        original, failures = client.request, {'/api/bootstrap': 1, '/api/upgrade?requestId=' + RID: 2}
+        attempts = []
+        def request(path, data=None, **kwargs):
+            attempts.append((path, data))
+            if data is None and failures.get(path, 0):
+                failures[path] -= 1
+                raise URLError(TimeoutError('temporary local overload'))
+            return original(path, data, **kwargs)
+        client.request = request
+        self.assertEqual('closed', self.transfer(client))
+        self.assertEqual(1, sum(bool(data and data.get('action') == 'prepare') for _, data in attempts))
+        self.assertEqual(1, sum(bool(data and data.get('action') == 'commit') for _, data in attempts))
+        self.assertEqual(3, sum(path.startswith('/api/upgrade?') for path, _ in attempts))
+
+    def test_permanent_status_transport_failure_is_bounded_and_does_not_mutate_snapshot(self):
+        client = FakeClient(stages=['waiting'])
+        original, polls = client.request, []
+        def request(path, data=None, **kwargs):
+            if path.startswith('/api/upgrade?'):
+                polls.append(path)
+                raise URLError(ConnectionResetError('offline'))
+            return original(path, data, **kwargs)
+        client.request = request
+        with self.assertRaises(URLError):
+            self.transfer(client)
+        self.assertEqual(3, len(polls))
+        # No cancel, quit or commit is inferred from a failed read. The old
+        # app retains the pending handoff/snapshot and the user can cancel it.
+        self.assertEqual(['prepare'], [data['action'] for _, data in client.calls if data])
+
+    def test_authentication_malformed_response_and_prepare_failure_are_not_retried(self):
+        for failure in (HTTPError('http://127.0.0.1', 401, 'unauthorized', {}, None),
+                        ValueError('malformed response')):
+            reader = Mock()
+            reader.request.side_effect = failure
+            with self.assertRaises(type(failure)):
+                upgrade.read_status(reader, '/api/bootstrap', sleep=Mock())
+            reader.request.assert_called_once_with('/api/bootstrap')
+        client = FakeClient()
+        original, prepares = client.request, []
+        def request(path, data=None, **kwargs):
+            if data and data.get('action') == 'prepare':
+                prepares.append(data)
+                raise URLError(TimeoutError('prepare acknowledgement unknown'))
+            return original(path, data, **kwargs)
+        client.request = request
+        with self.assertRaises(URLError):
+            self.transfer(client)
+        self.assertEqual(1, len(prepares))
 
     def test_progress_appears_before_commit_and_waits_through_shutdown(self):
         client = FakeClient(stages=['waiting', 'capture', 'captured'])
@@ -90,6 +177,23 @@ class UpgradeTransferTests(unittest.TestCase):
             self.transfer(client, on_phase=Mock(side_effect=OSError('native card unavailable')))
         self.assertFalse(any(data and data.get('action') == 'commit' for _, data in client.calls))
         self.assertEqual('cancel', client.calls[-1][1]['action'])
+
+    def test_native_card_failure_does_not_block_handoff_or_mask_cleanup_failure(self):
+        from local_app import update_progress as progress_module
+        for commit, expected in ((None, 'closed'), ((503, {'closed': False}), None)):
+            with self.subTest(commit=commit):
+                card = progress_module.UpdateProgress(factory=Mock(side_effect=OSError('GDI unavailable')))
+                card.enabled = True
+                self.addCleanup(card.close)
+                client = FakeClient(commit=commit)
+                if expected:
+                    self.assertEqual(expected, self.transfer(client, on_phase=card.phase))
+                else:
+                    with self.assertRaises(upgrade.HandoffError) as error:
+                        self.transfer(client, on_phase=card.phase)
+                    self.assertEqual('cleanup_unconfirmed', error.exception.reason)
+                self.assertEqual('progress_unavailable', card.diagnostic)
+                self.assertEqual(1, sum(bool(data and data.get('action') == 'commit') for _, data in client.calls))
 
     def test_no_progress_popup_while_busy_or_cancelled(self):
         for stages in (['waiting'], ['cancelled'], ['capture', 'cancelled']):
@@ -129,8 +233,118 @@ class UpgradeTransferTests(unittest.TestCase):
 
     def test_cleanup_failure_never_reports_closed(self):
         for reply in [(503, {'closed': False}), (200, {'ok': True})]:
-            with self.assertRaises(upgrade.HandoffError):
+            with self.assertRaises(upgrade.HandoffError) as failure:
                 self.transfer(FakeClient(commit=reply))
+            self.assertEqual('cleanup_unconfirmed', failure.exception.reason)
+
+    def test_rejected_prepare_reports_safe_reason_without_server_text(self):
+        client = FakeClient()
+        original = client.request
+        def request(path, data=None, **kwargs):
+            if path == '/api/upgrade' and data.get('action') == 'prepare':
+                return 400, {'error': 'private prompt and bearer secret'}
+            return original(path, data, **kwargs)
+        client.request = request
+        with self.assertRaises(upgrade.HandoffError) as failure:
+            self.transfer(client)
+        self.assertEqual('handoff_prepare_failed', failure.exception.reason)
+        self.assertNotIn('private', str(failure.exception))
+        self.assertFalse(any(data and data.get('action') == 'commit' for _, data in client.calls))
+
+    def test_old_032_prepare_blockers_are_distinguished_without_recovery_mutations(self):
+        cases = (
+            ('이전 창의 작성 내용을 먼저 복원해 주세요.', 'draft_recovery_pending'),
+            ('이전 창의 작성 내용을 확인하지 못했습니다. 저장 기록은 보존했습니다.', 'draft_record_unreadable'),
+            ('다른 버전 전환을 준비하고 있습니다. 기존 요청을 먼저 마쳐 주세요.', 'handoff_already_pending'),
+            ('다른 실행 권한으로 변경하려면 앱을 완전 종료한 뒤 Windows에서 다시 실행해 주세요.', 'execution_mode_mismatch'),
+        )
+        for message, reason in cases:
+            with self.subTest(reason=reason):
+                client = FakeClient()
+                original = client.request
+                mutations = []
+                def request(path, data=None, **kwargs):
+                    if data:
+                        mutations.append(data['action'])
+                        return 400, {'error': message}
+                    return original(path, data, **kwargs)
+                client.request = request
+                with self.assertRaises(upgrade.HandoffError) as failure:
+                    self.transfer(client)
+                self.assertEqual(reason, failure.exception.reason)
+                self.assertEqual(['prepare'], mutations)
+                self.assertNotIn(message, str(failure.exception))
+
+    def test_prepare_reason_requires_exact_known_text_and_rejection_status(self):
+        message = '이전 창의 작성 내용을 먼저 복원해 주세요.'
+        for code, reply in (
+            (400, {'error': message + ' secret'}), (400, {'error': 'prefix ' + message}),
+            (400, {'error': [message]}), (400, {'reason': 'draft_recovery_pending'}),
+            (403, {'error': message}), (500, {'error': message}), (400, None),
+        ):
+            with self.subTest(code=code, reply=reply):
+                self.assertEqual('handoff_prepare_failed', upgrade.prepare_failure_reason(code, reply))
+
+    def test_legacy_recovery_is_archived_before_ack_then_prepared_once(self):
+        from local_app import upgrade_handoff
+        client = LegacyRecoveryClient()
+        original = deepcopy(client.restore)
+        preserved = []
+        def preserve(state, restore):
+            self.assertEqual(Path('.'), state)
+            preserved.append(deepcopy(restore))
+        client.before_ack = lambda: self.assertEqual([original], preserved)
+        with patch.object(upgrade_handoff, 'preserve_recovery', side_effect=preserve):
+            self.assertEqual('closed', self.transfer(client))
+        self.assertEqual(2, client.prepare_count)
+        self.assertEqual(['prepare', 'restored', 'prepare', 'commit'],
+                         [data['action'] for _, data in client.calls if data])
+        self.assertEqual(original, preserved[0])
+
+    def test_legacy_recovery_archive_failure_never_acknowledges_or_closes(self):
+        from local_app import upgrade_handoff
+        client = LegacyRecoveryClient()
+        original = deepcopy(client.restore)
+        with patch.object(upgrade_handoff, 'preserve_recovery', side_effect=OSError('private disk path')):
+            with self.assertRaises(upgrade.HandoffError) as failure:
+                self.transfer(client)
+        self.assertEqual('draft_archive_failed', failure.exception.reason)
+        self.assertNotIn('private', str(failure.exception))
+        self.assertEqual(original, client.restore)
+        self.assertEqual(['prepare'], [data['action'] for _, data in client.calls if data])
+
+    def test_legacy_recovery_uncertain_or_incomplete_ack_never_retries_mutation(self):
+        from local_app import upgrade_handoff
+        for response in (URLError('ack lost'), (200, {'ok': True}),
+                         (200, {'ok': False, 'upgradeRestore': None}),
+                         (200, {'ok': True, 'upgradeRestore': {'requestId': 'e' * 32}}),
+                         (400, {'error': 'record changed'})):
+            with self.subTest(response=response):
+                client = LegacyRecoveryClient()
+                client.ack_result = response
+                with patch.object(upgrade_handoff, 'preserve_recovery') as preserved:
+                    with self.assertRaises((upgrade.HandoffError, URLError)):
+                        self.transfer(client)
+                preserved.assert_called_once()
+                self.assertEqual(['prepare', 'restored'], [data['action'] for _, data in client.calls if data])
+
+    def test_legacy_recovery_migration_does_not_loop_on_another_rejection(self):
+        from local_app import upgrade_handoff
+        client = LegacyRecoveryClient()
+        client.keep_blocked = True
+        with patch.object(upgrade_handoff, 'preserve_recovery') as preserved:
+            with self.assertRaises(upgrade.HandoffError):
+                self.transfer(client)
+        preserved.assert_called_once()
+        self.assertEqual(['prepare', 'restored', 'prepare'], [data['action'] for _, data in client.calls if data])
+
+    def test_execution_mode_mismatch_is_reported_before_prepare(self):
+        client = FakeClient()
+        client.health['executionMode'] = 'normal'
+        with self.assertRaises(upgrade.HandoffError) as failure:
+            self.transfer(client, execution_mode='administrator')
+        self.assertEqual('execution_mode_mismatch', failure.exception.reason)
+        self.assertEqual(['/api/bootstrap'], [path for path, _ in client.calls])
 
     def test_preclose_busy_commit_can_retry(self):
         client = FakeClient()
@@ -209,6 +423,32 @@ class UpgradeTransferTests(unittest.TestCase):
 
 
 class UpgradeBoundaryTests(unittest.TestCase):
+    def test_failure_helper_accepts_only_fixed_reason_arguments(self):
+        runner = Mock(return_value=Mock(returncode=0))
+        self.assertTrue(upgrade.run_helper('Show-WorkspaceUpgradeFailure',
+                                         failure_reason='cleanup_unconfirmed', runner=runner))
+        source = runner.call_args.args[0][-1]
+        self.assertIn("Show-WorkspaceUpgradeFailure -Reason 'cleanup_unconfirmed'", source)
+        for reason in ("'; Write-Host secret; '", 'http://private?token=secret', [], {'reason': 'unknown'}):
+            runner.reset_mock()
+            with self.assertRaises(upgrade.HandoffError):
+                upgrade.run_helper('Show-WorkspaceUpgradeFailure', failure_reason=reason, runner=runner)
+            runner.assert_not_called()
+        with self.assertRaises(upgrade.HandoffError):
+            upgrade.run_helper('Confirm-WorkspaceLegacyUpgrade', failure_reason='unknown', runner=runner)
+
+    def test_failure_popup_has_distinct_new_app_messages_and_exact_reason_allowlist(self):
+        source = (upgrade.ROOT / 'deploy/CompanyWorkspace.Startup.ps1').read_text(encoding='utf-8')
+        block = source.split('function Show-WorkspaceUpgradeFailure {', 1)[1].split('\nfunction ', 1)[0]
+        import re
+        labels = dict(re.findall(r"^\s+(\w+) = '([^']*)'", block, re.MULTILINE))
+        self.assertEqual(upgrade.FAILURE_REASONS, set(labels))
+        for reason in ('new_app_launch_failed', 'new_app_not_ready', 'launcher_cleanup_pending'):
+            self.assertIn('기존 앱은 종료했지만', labels[reason])
+            self.assertNotIn('강제로 종료하지 않았습니다', labels[reason])
+        self.assertIn('기존 앱의 종료 처리를', labels['cleanup_unconfirmed'])
+        self.assertIn('초안을 지울 필요는 없습니다', labels['draft_recovery_pending'])
+
     def test_native_probe_uses_sysnative_when_exposed_to_32bit_caller(self):
         with tempfile.TemporaryDirectory(prefix="probe ' & ") as raw:
             root = Path(raw)
@@ -495,22 +735,63 @@ class ReplacementReadinessTests(unittest.TestCase):
 
 
 class CoordinatorProgressTests(unittest.TestCase):
-    def run_main(self, state, *, outcome='closed', launch_error=None, readiness_error=None, no_browser=False):
-        progress = Mock()
+    def run_main(self, state, *, outcome='closed', launch_error=None, readiness_error=None,
+                 preflight_error=None, transfer_error=None, no_browser=False, card=None,
+                 target_version=None, notice_callback=None):
+        progress = card or Mock()
         arguments = ['upgrade', '--state', str(state), '--python', sys.executable, '--request-id', RID]
         if no_browser:
             arguments.append('--no-browser')
+        if target_version is not None:
+            arguments.extend(['--target-version', target_version])
         with patch.object(sys, 'argv', arguments), \
                 patch('local_app.startup.verify_process', return_value='normal'), \
                 patch('local_app.update_progress.UpdateProgress', return_value=progress) as factory, \
-                patch.object(upgrade, 'preflight'), \
+                patch.object(upgrade, 'preflight', side_effect=preflight_error), \
                 patch.object(upgrade, 'endpoint', return_value=('http://127.0.0.1:12345', TOKEN)), \
-                patch.object(upgrade, 'transfer', return_value=outcome), \
+                patch.object(upgrade, 'transfer', return_value=outcome, side_effect=transfer_error), \
                 patch.object(upgrade, 'launch', side_effect=launch_error) as launch, \
                 patch.object(upgrade, 'wait_replacement', side_effect=readiness_error) as ready, \
-                patch.object(upgrade, 'run_helper') as helper:
+                patch.object(upgrade, 'run_helper', side_effect=notice_callback) as helper:
             result = upgrade.main()
         return result, progress, factory, launch, ready, helper
+
+    def test_failure_is_published_for_exact_attempt_after_lock_release_before_dialog(self):
+        from local_app.server import WORKSPACE_VERSION
+        for options in ({'outcome': 'failed'}, {'outcome': 'expired'},
+                        {'transfer_error': upgrade.HandoffError('fixture')},
+                        {'preflight_error': OSError('fixture')}):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as raw:
+                state = Path(raw)
+                notices = []
+                def notice(*args, **kwargs):
+                    record = json.loads((state / 'upgrade-last-result.json').read_text())
+                    self.assertEqual(RID, record['requestId'])
+                    self.assertEqual(WORKSPACE_VERSION, record['targetVersion'])
+                    self.assertIn(record['status'], {'failed', 'expired'})
+                    with upgrade.update_lock(state) as available:
+                        self.assertTrue(available)
+                    notices.append(record)
+                    return True
+                result, _, _, launch, ready, _ = self.run_main(state, target_version=WORKSPACE_VERSION,
+                                                              notice_callback=notice, **options)
+                self.assertIn(result, (0, 39))
+                self.assertEqual(1, len(notices))
+                launch.assert_not_called(); ready.assert_not_called()
+
+    def test_cancelled_result_keeps_attempt_identity_without_failure_dialog(self):
+        from local_app.server import WORKSPACE_VERSION
+        with tempfile.TemporaryDirectory() as raw:
+            result, _, _, launch, ready, helper = self.run_main(Path(raw), outcome='cancelled',
+                                                               target_version=WORKSPACE_VERSION)
+            self.assertEqual(0, result)
+            record = json.loads((Path(raw) / 'upgrade-last-result.json').read_text())
+            self.assertEqual({'requestId': RID, 'targetVersion': WORKSPACE_VERSION, 'status': 'cancelled'}, record)
+            helper.assert_not_called(); launch.assert_not_called(); ready.assert_not_called()
+
+    def test_launcher_propagates_target_without_another_version_literal(self):
+        source = (upgrade.ROOT / 'deploy/Start-CompanyWorkspace.ps1').read_text(encoding='utf-8')
+        self.assertIn("'--target-version', $targetVersion.ToString()", source)
 
     def test_success_closes_card_only_after_readiness(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -521,14 +802,62 @@ class CoordinatorProgressTests(unittest.TestCase):
             helper.assert_not_called()
             self.assertEqual('restarted', json.loads((Path(raw) / 'upgrade-last-result.json').read_text())['status'])
 
+    def test_degraded_progress_records_only_safe_code_and_still_checks_new_app(self):
+        from local_app.update_progress import UpdateProgress
+        secret = 'C:\\private\\draft.txt token=secret'
+        card = UpdateProgress(factory=Mock(side_effect=OSError(secret)))
+        card.enabled = True
+        with tempfile.TemporaryDirectory() as raw:
+            result, _, _, launch, ready, helper = self.run_main(Path(raw), card=card)
+            self.assertEqual(0, result)
+            launch.assert_called_once(); ready.assert_called_once(); helper.assert_not_called()
+            saved = json.loads((Path(raw) / 'upgrade-last-result.json').read_text())
+            self.assertEqual({'requestId': RID, 'status': 'restarted',
+                              'progressWarning': 'progress_unavailable'}, saved)
+            self.assertNotIn(secret, json.dumps(saved))
+
     def test_failed_launch_or_screen_readiness_closes_card_and_explains(self):
         for kind in ('launch_error', 'readiness_error'):
             with tempfile.TemporaryDirectory() as raw:
                 result, card, _, _, _, helper = self.run_main(Path(raw), **{kind: upgrade.HandoffError('fixture')})
                 self.assertEqual(39, result)
                 self.assertGreaterEqual(card.close.call_count, 1)
-                helper.assert_called_once_with('Show-WorkspaceUpgradeFailure')
-                self.assertEqual('failed', json.loads((Path(raw) / 'upgrade-last-result.json').read_text())['status'])
+                reason = 'new_app_launch_failed' if kind == 'launch_error' else 'new_app_not_ready'
+                helper.assert_called_once_with('Show-WorkspaceUpgradeFailure', failure_reason=reason)
+                saved = json.loads((Path(raw) / 'upgrade-last-result.json').read_text())
+                self.assertEqual({'requestId': RID, 'status': 'failed', 'reason': reason,
+                    'phase': 'opening' if kind == 'launch_error' else 'ready_check'}, saved)
+
+    def test_preflight_and_cleanup_failure_records_do_not_store_exception_or_server_text(self):
+        secret = 'Bearer secret; C:\\private\\prompt.txt https://private/?token=secret'
+        for kind, error, reason, phase in (
+                ('preflight_error', OSError(secret), 'preflight_failed', 'preflight'),
+                ('transfer_error', upgrade.HandoffError(secret, reason='cleanup_unconfirmed'),
+                 'cleanup_unconfirmed', 'preparing'),
+                ('transfer_error', upgrade.HandoffError(secret, reason='draft_recovery_pending'),
+                 'draft_recovery_pending', 'preparing'),
+                ('transfer_error', upgrade.HandoffError(secret, reason='draft_record_unreadable'),
+                 'draft_record_unreadable', 'preparing'),
+                ('transfer_error', upgrade.HandoffError(secret, reason=secret), 'handoff_failed', 'preparing')):
+            with self.subTest(kind=kind, reason=reason), tempfile.TemporaryDirectory() as raw:
+                result, _, _, launch, ready, helper = self.run_main(Path(raw), **{kind: error})
+                self.assertEqual(39, result)
+                launch.assert_not_called(); ready.assert_not_called()
+                saved = json.loads((Path(raw) / 'upgrade-last-result.json').read_text())
+                self.assertEqual({'requestId': RID, 'status': 'failed', 'phase': phase, 'reason': reason}, saved)
+                helper.assert_called_once_with('Show-WorkspaceUpgradeFailure', failure_reason=reason)
+                self.assertNotIn(secret, json.dumps(saved))
+
+    def test_failed_or_expired_transfer_records_safe_reason(self):
+        for outcome in ('failed', 'expired'):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as raw:
+                result, _, _, launch, ready, helper = self.run_main(Path(raw), outcome=outcome)
+                self.assertEqual(0, result)
+                launch.assert_not_called(); ready.assert_not_called()
+                reason = 'handoff_' + outcome
+                saved = json.loads((Path(raw) / 'upgrade-last-result.json').read_text())
+                self.assertEqual({'requestId': RID, 'status': outcome, 'phase': 'preparing', 'reason': reason}, saved)
+                helper.assert_called_once_with('Show-WorkspaceUpgradeFailure', failure_reason=reason)
 
     def test_cancelled_transfer_never_launches_and_cleans_up(self):
         with tempfile.TemporaryDirectory() as raw:

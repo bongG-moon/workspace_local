@@ -60,6 +60,9 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           await WorkspaceUpgrade.observe(captureState,{});
           assert.equal(calls.length,0);assert.equal(WorkspaceUpgrade.isLocked(),false);
           assert.equal($('settings-dialog').open,true);
+          assert.match($('upgrade-notice-text').textContent,/열려 있는 창/);
+          for(let i=0;i<60;i++)await WorkspaceUpgrade.observe(captureState,{});
+          assert.equal(calls.length,0);assert.equal($('prompt').value,'보내지 않은 요청');
           $('settings-dialog').close();
           await WorkspaceUpgrade.observe(captureState,{});
           assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/upgrade');
@@ -196,6 +199,74 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.equal($('upgrade-recovery-files').textContent,'old.csv');
           assert.equal($('prompt').value,'새 창에서 이미 작성한 내용');
           assert.equal(appClosed,false);
+        })()""")
+
+    def test_latest_snapshot_restores_before_retained_draft_without_changing_current_input(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          const latest={requestId:'a'.repeat(32),snapshot:{sessionId:null,drafts:[{id:'home',text:'latest draft',attachments:['latest.zip']}]}};
+          const older={requestId:'b'.repeat(32),retained:true,snapshot:{sessionId:'old-task',drafts:[{id:'old-task',text:'older draft',attachments:['older.zip']}]}};
+          sessions=[{id:'old-task',state:'idle',title:'이전 업무'}];
+          api=async(path,data)=>{calls.push({path,data});return {ok:true,upgradeRestore:older};};
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:latest});
+          assert.equal($('prompt').value,'latest draft');assert.deepEqual(attachments,['latest.zip']);
+          assert.equal(active,null);assert.deepEqual(calls.map(row=>row.data.requestId),[latest.requestId]);
+          assert.match($('upgrade-notice-text').textContent,/정리하지 않아도 업데이트/);
+          $('upgrade-recovery-open').onclick();assert.equal($('upgrade-recovery-text').value,'older draft');
+          assert.equal($('upgrade-recovery-files').textContent,'older.zip');
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:latest});
+          assert.equal($('upgrade-recovery-text').value,'older draft');assert.equal(calls.length,1);
+          assert.equal($('prompt').value,'latest draft');assert.equal(active,null);
+        })()""")
+
+    def test_manual_release_advances_only_one_record_and_pending_draft_does_not_block_capture(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='current draft';attachments=['current.csv'];
+          const record=(id,text)=>({requestId:id.repeat(32),retained:true,snapshot:{sessionId:null,drafts:[{id:'home',text,attachments:[text+'.csv']}]}});
+          const first=record('a','first old'),second=record('b','second old');
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:first});assert.equal(calls.length,0);
+          $('upgrade-recovery-open').onclick();assert.equal($('upgrade-recovery-text').value,'first old');
+          let release;confirmAction=async()=>true;
+          api=async(path,data)=>{calls.push({path,data});return new Promise(resolve=>release=resolve);};
+          const pending=$('upgrade-recovery-release').onclick();
+          for(let i=0;i<5;i++)await Promise.resolve();
+          await $('upgrade-recovery-release').onclick();assert.equal(calls.length,1);
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:first});
+          release({ok:true,upgradeRestore:second});await pending;
+          assert.equal($('upgrade-recovery-dialog').open,true);
+          assert.equal($('upgrade-recovery-text').value,'second old');assert.equal($('upgrade-recovery-files').textContent,'second old.csv');
+          assert.equal(calls[0].data.requestId,first.requestId);assert.equal(calls.length,1);
+          assert.equal($('prompt').value,'current draft');assert.deepEqual(attachments,['current.csv']);
+          $('upgrade-recovery-close').onclick();
+          api=async(path,data)=>{calls.push({path,data});return {ok:true,upgrade:capturedState};};
+          await WorkspaceUpgrade.observe(captureState,{});
+          assert.equal(calls.length,2);assert.equal(calls[1].data.action,'capture');
+          assert.equal(calls[1].data.snapshot.drafts[0].text,'current draft');
+          assert.deepEqual(calls[1].data.snapshot.drafts[0].attachments,['current.csv']);
+          assert.equal(WorkspaceUpgrade.isLocked(),true);
+        })()""")
+
+    def test_overlapping_bootstrap_restores_once_and_does_not_capture_during_flush(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          let finishRestore,restores=0;
+          WorkspaceUpgrade.attach({api:async(path,data)=>{calls.push({path,data});return {ok:true,upgradeRestore:null};},
+            restore:()=>{restores++;return new Promise(resolve=>finishRestore=resolve);},
+            capture:captureScreenRecovery,canCapture:()=>true});
+          const saved={upgradeRestore:{requestId:'a'.repeat(32),snapshot:{sessionId:null,drafts:[]}}};
+          const first=WorkspaceUpgrade.bootstrap(saved),second=WorkspaceUpgrade.bootstrap(saved);
+          assert.equal(restores,1);await WorkspaceUpgrade.observe(captureState,{});assert.equal(calls.length,0);
+          finishRestore({conflicts:[]});await Promise.all([first,second]);
+          assert.equal(calls.length,1);assert.equal(calls[0].data.action,'restored');
+          await WorkspaceUpgrade.bootstrap(saved);assert.equal(restores,1);assert.equal(calls.length,1);
+        })()""")
+
+    def test_automatic_recovery_pass_is_bounded_and_exposes_unprocessed_record(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          const record=index=>({requestId:String(index).padStart(32,'0'),snapshot:{sessionId:null,drafts:[]}});
+          let next=2;api=async(path,data)=>{calls.push({path,data});return {ok:true,upgradeRestore:record(next++)};};
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:record(1)});
+          assert.equal(calls.length,20);assert.equal(next,22);
+          assert.equal($('upgrade-recovery-open').hidden,false);assert.equal(WorkspaceUpgrade.isLocked(),false);
+          assert.match($('upgrade-notice-text').textContent,/별도로 보관/);
         })()""")
 
     def test_missing_task_restores_to_home_and_acknowledges_only_after_display(self):

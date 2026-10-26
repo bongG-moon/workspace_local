@@ -70,15 +70,49 @@ class UpdateProgressTests(unittest.TestCase):
         card.close()
         self.assertIsNone(card._thread)
 
-    def test_creation_failure_aborts_progress_before_commit(self):
+    def test_creation_failure_disables_only_the_optional_card(self):
         def fail(owner):
             raise OSError('A local resource is unavailable')
         with patch.object(progress.os, 'name', 'nt'):
             card = progress.UpdateProgress(factory=fail)
         self.addCleanup(card.close)
-        with self.assertRaisesRegex(OSError, '진행 안내'):
-            card.phase('preparing')
+        card.phase('preparing')
         self.assertIsInstance(card._error, OSError)
+        self.assertEqual('progress_unavailable', card.diagnostic)
+        self.assertFalse(card.enabled)
+        self.assertTrue(card._closed.is_set())
+        thread = card._thread
+        card.phase('opening')
+        self.assertIs(thread, card._thread)
+
+    def test_update_failure_closes_partial_card_and_does_not_retry_creating_it(self):
+        class BrokenNative(FakeNative):
+            def update(self, phase):
+                raise OSError('paint unavailable')
+        with patch.object(progress.os, 'name', 'nt'):
+            card = progress.UpdateProgress(factory=BrokenNative)
+        self.addCleanup(card.close)
+        card.phase('preparing')
+        native, thread = card._native, card._thread
+        self.assertTrue(native.stopped.is_set())
+        self.assertTrue(eventually(lambda: not thread.is_alive()))
+        card.phase('restarting'); card.phase('opening'); card.phase('waiting')
+        self.assertIs(thread, card._thread)
+        self.assertEqual('progress_unavailable', card.diagnostic)
+
+    def test_hide_and_close_errors_do_not_interrupt_coordinator(self):
+        class BrokenNative(FakeNative):
+            def hide(self):
+                raise OSError('hide unavailable')
+            def close(self):
+                super().close()
+                raise OSError('close unavailable')
+        with patch.object(progress.os, 'name', 'nt'):
+            card = progress.UpdateProgress(factory=BrokenNative)
+        self.addCleanup(card.close)
+        card.phase('preparing'); card.phase('waiting'); card.close()
+        self.assertTrue(card._native.stopped.is_set())
+        self.assertEqual('progress_unavailable', card.diagnostic)
 
     def test_unknown_phase_does_not_start_a_window(self):
         card = progress.UpdateProgress(factory=FakeNative)

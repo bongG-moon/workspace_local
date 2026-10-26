@@ -11,8 +11,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import uuid
 
+from local_app.bridge import ClaudeSession
 from local_app.server import AppClosing, LocalApp, Server
-from local_app.upgrade_handoff import CAPTURE_SECONDS, LEASE_SECONDS, UpgradeHandoff, snapshot
+from local_app.upgrade_handoff import LEASE_SECONDS, UpgradeHandoff, snapshot
 
 
 class HandoffTests(unittest.TestCase):
@@ -129,6 +130,45 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual('needs-review', item['verification']['state'])
         self.capture()
         self.assertTrue(self.action('commit')['closed'])
+
+    def failed_stop_bridge(self, *, descendants_uncertain=False):
+        bridge = ClaudeSession(['not-started'], {}, self.app.state, lambda *_: None)
+        # A completed stop attempt can fail to confirm cleanup. The request
+        # itself is no longer running, and normal close owns the safe retry.
+        bridge.closed = bridge.stopping = True
+        bridge._close_error = 'Previous owned cleanup attempt failed'
+        bridge.descendant_cleanup_uncertain = descendants_uncertain
+        bridge._close_done.set()
+        self.app.sessions[self.sid].update(state='error', bridge=bridge)
+        self.assertEqual('failed', bridge.stop_state)
+        return bridge
+
+    def test_failed_stop_cleanup_can_retry_during_idle_handoff(self):
+        bridge = self.failed_stop_bridge()
+        pending = self.app.dispatch.queue.enqueue(self.sid, 'keep this follow-up')
+        self.app.dispatch.queue.pause(self.sid, 'stopped')
+        stored_queue = self.app.dispatch.queue.path.read_bytes()
+        self.assertEqual('capture', self.prepare()['upgrade']['stage'])
+        self.assertFalse(bridge.cleanup_complete)
+        self.capture()
+        self.assertTrue(self.action('commit')['closed'])
+        self.assertTrue(bridge.cleanup_complete)
+        self.assertEqual(stored_queue, self.app.dispatch.queue.path.read_bytes())
+        self.assertEqual(pending['id'], self.app.dispatch.queue.snapshot(self.sid)['queue'][0]['id'])
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
+        self.assertEqual([], self.app.get(self.sid)['messages'])
+
+    def test_unverified_descendants_still_prevent_success_after_failed_stop(self):
+        bridge = self.failed_stop_bridge(descendants_uncertain=True)
+        self.assertEqual('capture', self.prepare()['upgrade']['stage'])
+        self.capture()
+        result = self.action('commit')
+        self.assertFalse(result['closed'])
+        self.assertEqual('failed', result['upgrade']['stage'])
+        self.assertIn({'sessionId': self.sid, 'code': 'descendants_unverified'},
+                      self.app.shutdown_status()['shutdownIssues'])
+        self.assertFalse(bridge.cleanup_complete)
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
 
     def test_running_approval_and_question_can_capture_after_explicit_stop_choice(self):
         for state in ('running', 'approval', 'question'):
@@ -290,19 +330,20 @@ class HandoffTests(unittest.TestCase):
             self.assertEqual(captured, self.upgrade.status()['upgrade'])
         self.assertEqual(captured, self.upgrade.status()['upgrade'])
 
-    def test_other_version_draft_can_be_recovered_but_not_overwritten_before_ack(self):
+    def test_other_version_draft_is_retained_before_new_handoff(self):
         self.prepare()
         self.capture()
         self.action('commit')
-        previous = self.upgrade.path.read_bytes()
         mismatch = UpgradeHandoff(self.app, '98.0.0')
         self.assertIsNone(mismatch.warning)
         self.assertEqual(self.draft, mismatch.restore['snapshot'])
         self.assertEqual(self.target, mismatch.restore['savedTargetVersion'])
         self.assertNotIn('targetVersion', mismatch.restore)
-        with self.assertRaises(ValueError):
-            mismatch.action({'action': 'prepare', 'requestId': uuid.uuid4().hex, 'targetVersion': '100.0.0'})
-        self.assertEqual(previous, self.upgrade.path.read_bytes())
+        self.assertTrue(mismatch.action({'action': 'prepare', 'requestId': uuid.uuid4().hex, 'targetVersion': '100.0.0'})['ok'])
+        archived = self.app.state / 'upgrade-recovery' / (self.rid + '.json')
+        self.assertEqual(self.draft, json.loads(archived.read_text(encoding='utf-8'))['snapshot'])
+        self.assertFalse(self.upgrade.path.exists())
+        self.assertTrue(mismatch.restore['retained'])
 
     def test_02328_draft_is_recoverable_in_02330_and_removed_only_after_ack(self):
         saved = {'schemaVersion': 1, 'requestId': self.rid, 'sourceVersion': '0.23.27',
@@ -393,19 +434,30 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual('failed', result['upgrade']['stage'])
         self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
 
-    def test_cancel_expiry_and_capture_timeout_do_not_close(self):
+    def test_cancel_and_overall_lease_expiry_do_not_close(self):
         self.prepare()
         self.capture()
         self.assertEqual('cancelled', self.action('cancel')['upgrade']['stage'])
         self.assertFalse(self.action('commit')['closed'])
         self.prepare()
-        self.now = CAPTURE_SECONDS + 1
+        self.now = LEASE_SECONDS + 1
         self.assertEqual('expired', self.upgrade.status()['upgrade']['stage'])
         self.app.sessions[self.sid]['state'] = 'running'
         self.prepare()
         self.now += LEASE_SECONDS + 1
         self.assertEqual('expired', self.upgrade.status()['upgrade']['stage'])
         self.assertFalse(self.app.shutdown_status()['closing'])
+
+    def test_delayed_frontend_dialog_does_not_expire_idle_capture(self):
+        first = self.prepare()
+        self.now = 90  # Longer than the previous 45-second capture timeout.
+        self.assertEqual(first['upgrade'], self.upgrade.status()['upgrade'])
+        self.assertFalse(self.app.shutdown_status()['closing'])
+        self.assertFalse(self.action('commit')['closed'])  # No snapshot yet.
+        self.assertEqual('capture', self.upgrade.status()['upgrade']['stage'])
+        self.capture()
+        self.assertTrue(self.action('commit')['closed'])
+        self.assertEqual(self.draft, UpgradeHandoff(self.app, self.target).restore['snapshot'])
 
     def test_prepare_is_idempotent_and_foreign_requests_cannot_replace(self):
         first = self.prepare()
