@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.32"
+WORKSPACE_VERSION = "0.23.33"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -627,10 +627,22 @@ class LocalApp:
                 '현재 작업을 중지하고 있습니다. 중지가 끝난 뒤 이어서 보내 주세요.',
                 '중지 완료 후 같은 대화에서 이어서 보내기')
 
+    @staticmethod
+    def _run_started_at(item):
+        """Display clock for the accepted request, never a view or control operation."""
+        value = item.get('runStartedAt')
+        if (item.get('lastRunId') and item.get('state') in {'starting', 'running', 'approval', 'question', 'stopping'}
+                and not item.get('_connecting') and not item.get('_modelUpdating')
+                and (item.get('_observationPending') or {}).get('phase') != 'start'
+                and type(value) in (int, float) and 0 < value < 1e12):
+            return value
+        return None
+
     def _public(self, item):
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
+            'runStartedAt': self._run_started_at(item),
             'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
             'permissionPreferenceNotice': item.get('permissionPreferenceNotice') or '',
             'attachmentReads': item.get('attachmentReads', []),
@@ -2086,6 +2098,10 @@ class LocalApp:
             if kind in {'status', 'result', 'error'}:
                 state = self.public(item)
                 data = dict(data, **{key: state[key] for key in ('stopState', 'connectionStopped', 'cleanupRetryable')})
+                if kind == 'status':
+                    data['runStartedAt'] = state['runStartedAt']
+            if kind in {'request', 'request_closed', 'queued_user'}:
+                data = dict(data, runId=item.get('lastRunId'), runStartedAt=self._run_started_at(item))
             if terminal:
                 item.pop('runActivity', None)
                 from .executions import normalize_executions
@@ -2314,6 +2330,9 @@ class LocalApp:
                 item["state"] = "starting"
                 item['updated'] = time.time()
                 item['lastRunId'] = run_id
+                # Runtime-only: the server owns this request even while its view is closed.
+                # A restarted app restores stopped history, not an in-flight execution.
+                item['runStartedAt'] = item['updated']
                 track_display_event(item, 'status', {'state': 'starting'})
                 item.pop('runActivity', None)
                 item['messages'][-1]['runId'] = item['lastRunId']

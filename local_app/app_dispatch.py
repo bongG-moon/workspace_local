@@ -9,7 +9,8 @@ import time
 from .work_queue import WorkQueue
 from .schedule_time import first_run as scheduled_first_run
 from .bridge import ControlRestoreRequired
-from .idle_connections import connection_slot, ConnectionCapacityUnavailable, trim_idle_connection
+from .idle_connections import (MAX_CONNECTIONS, connection_slot, ConnectionCapacityUnavailable,
+                               trim_idle_connection)
 
 
 class DispatchController:
@@ -21,19 +22,44 @@ class DispatchController:
         self.steering = {}
         self.error = None
         self._retention_pending = False
+        self._retention_running = False
+        self._dispatching_sessions = set()
+        self._last_scheduled = None
 
     def request_retention(self):
         with self.app.lock:
             self._retention_pending = True
 
-    def maintain_connections(self):
+    def maintain_connections(self, *, background=False):
         with self.app.lock:
-            if not self._retention_pending or self.stopped.is_set() or self.error:
+            if (self._retention_running or not self._retention_pending or
+                    self.stopped.is_set() or self.error):
                 return
-            # Consume before releasing the lock, preserving concurrent signals.
-            self._retention_pending = False
-        if trim_idle_connection(self.app):
-            self.request_retention()  # At most one child per existing worker tick.
+            self._retention_running = True
+        if background:
+            try:
+                threading.Thread(target=self._retain_connections, daemon=True,
+                                 name='workspace-connection-retention').start()
+            except Exception:
+                with self.app.lock:
+                    self._retention_running = False
+                raise  # Pending was not consumed; a later pass can retry.
+        else:
+            self._retain_connections()
+
+    def _retain_connections(self):
+        try:
+            with self.app.lock:
+                if self.stopped.is_set() or self.error:
+                    return
+                # Consume before releasing the lock, preserving concurrent
+                # signals. trim owns its usual operation/shutdown reservation.
+                self._retention_pending = False
+            if trim_idle_connection(self.app):
+                self.request_retention()  # At most one child per dispatch tick.
+        finally:
+            with self.app.lock:
+                self._retention_running = False
 
     @staticmethod
     def context(item):
@@ -195,8 +221,8 @@ class DispatchController:
     def _run(self):
         while not self.stopped.wait(.5):
             try:
-                self.pump()
-                self.maintain_connections()
+                self.pump(background=True)
+                self.maintain_connections(background=True)
             except (ValueError, OSError, RuntimeError):
                 # Storage errors stop automatic work, not the whole UI. No
                 # failed/uncertain send is retried by this loop.
@@ -228,7 +254,7 @@ class DispatchController:
                 return
             self.queue.pause(sid, 'stopped')
 
-    def pump(self):
+    def pump(self, *, background=False):
         if self.stopped.is_set() or self.error:
             return
         with self.app.lock:
@@ -242,104 +268,172 @@ class DispatchController:
             # Steering remains eligible while held so a completed interrupt
             # can resume its explicitly requested next direction.
             session_ids = tuple(dict.fromkeys((*self.queue.dispatch_candidates(), *self.steering)))
+            last_scheduled = self._last_scheduled
+        if background and last_scheduled in session_ids:
+            offset = session_ids.index(last_scheduled) + 1
+            session_ids = session_ids[offset:] + session_ids[:offset]
+        launched = 0
         for sid in session_ids:
-            if self.stopped.is_set():
-                return
-            with self.app.operation():
-                with self.app.lock:
-                    if self.app.upgrade.blocks_work():
-                        return
-                    # Queue eligibility needs only navigation/runtime metadata.
-                    # Hydrate the bounded UI mirror only when send actually runs.
+            with self.app.lock:
+                if self.stopped.is_set() or self.error or self.app.upgrade.blocks_work():
+                    return
+                if sid in self._dispatching_sessions:
+                    continue
+                if (len(self._dispatching_sessions) >= MAX_CONNECTIONS or
+                        background and launched >= MAX_CONNECTIONS):
+                    break
+                if background:
                     item = self.app.sessions.get(sid)
+                    # Running/blocked tasks need no short-lived preparation
+                    # worker. Steering still gets its normal transition checks.
                     if (item is None or item.get('_removingFromList') or
-                            self.app.session_visibility.contains(sid)):
+                            self.app.session_visibility.contains(sid) or
+                            (sid not in self.steering and (
+                                item.get('state') not in {'idle', 'done'} or
+                                item.get('trusted') is not True or item.get('requests') or item.get('choice') or
+                                (item.get('verification') or {}).get('state') == 'needs-review' or
+                                any(item.get(key) for key in ('_observationPending',
+                                    '_connecting', '_restarting', '_modelUpdating',
+                                    '_permissionUpdating', '_stopAdmission', '_controlRestore')) or
+                                getattr(item.get('bridge'), '_control_active', False)))):
                         continue
-                    if item.get('_observationPending') or item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False):
-                        continue  # Keep queued work unclaimed until a settings ACK resolves.
-                    pending = self.steering.get(sid)
-                    if pending:
-                        bridge = item.get('bridge')
-                        if pending.get('phase') == 'waiting_activity':
-                            # A newly written prompt is not necessarily admitted
-                            # by Claude. Keep the selected row durable and wait
-                            # for real turn activity instead of interrupting
-                            # prompt-check repeatedly. No polling child/thread
-                            # is added; the existing dispatch tick handles it.
-                            if item['state'] in {'idle', 'done'}:
-                                self.queue.resume(sid)
-                                self.steering.pop(sid, None)
-                                pending = None
-                            elif item['state'] in {'error', 'stopped'} or bridge is None or bridge.closed:
-                                self.steering.pop(sid, None)
-                                self.queue.pause(sid, 'stopped')
-                                continue
-                            else:
-                                try:
-                                    if not self._try_followup_interrupt(bridge):
-                                        continue
-                                    pending.update(phase='interrupting', created=time.monotonic())
-                                except (ValueError, OSError, RuntimeError):
-                                    self.steering.pop(sid, None)
-                                    self.queue.pause(sid, 'stopped')
-                                    continue
-                        if pending is None:
-                            pass  # The original request completed naturally.
-                        elif item['state'] == 'stopped' and (bridge is None or getattr(bridge, 'cleanup_complete', False) is True
-                                or (getattr(bridge, 'stop_state', None) == 'stopped'
-                                    and not bridge.closed and not getattr(bridge, 'stopping', False))):
-                            # Explicit "now" cancels the interrupted queued turn;
-                            # it does not silently retry it alongside the new one.
-                            queued = self.queue.snapshot(sid)['queue']
-                            if pending.get('requestId') and not any(row['id'] == pending['requestId']
-                                    and row['status'] == 'queued' for row in queued):
-                                self.steering.pop(sid, None)
-                                self.queue.pause(sid, 'stopped')
-                                continue
-                            for row in queued:
-                                if (row['id'] in pending['interrupted'] and row['status'] == 'needs_review'
-                                        and row.get('reason') == 'interrupted'):
-                                    self.queue.cancel(sid, row['id'])
+                self._dispatching_sessions.add(sid)
+                self._last_scheduled = sid
+                launched += 1
+            if background:
+                # Only admitted preparations get a thread, at most five and
+                # one per task. No permanent pool or unbounded executor queue.
+                try:
+                    worker = threading.Thread(target=self._dispatch_worker, args=(sid,),
+                                              daemon=True, name='workspace-dispatch-prepare')
+                    worker.start()
+                except Exception:
+                    with self.app.lock:
+                        self._dispatching_sessions.discard(sid)
+                    raise
+            else:
+                try:
+                    self._pump_session(sid)
+                finally:
+                    with self.app.lock:
+                        self._dispatching_sessions.discard(sid)
+
+    def _dispatch_worker(self, sid):
+        try:
+            self._pump_session(sid)
+        except Exception:
+            # Same storage/admission policy as the scheduler loop. Shutdown is
+            # not a delivery failure and unclaimed requests remain durable.
+            # Unexpected worker failures must also be visible, never silently
+            # leave automatic execution enabled after an uncertain delivery.
+            with self.app.lock:
+                if not self.stopped.is_set():
+                    self.error = '대기·예약 실행을 멈췄습니다. 해당 업무의 상태를 확인해 주세요.'
+        finally:
+            with self.app.lock:
+                self._dispatching_sessions.discard(sid)
+
+    def _pump_session(self, sid):
+        if self.stopped.is_set() or self.error:
+            return
+        with self.app.operation():
+            with self.app.lock:
+                if self.stopped.is_set() or self.error or self.app.upgrade.blocks_work():
+                    return
+                # Queue eligibility needs only navigation/runtime metadata.
+                # Hydrate the bounded UI mirror only when send actually runs.
+                item = self.app.sessions.get(sid)
+                if (item is None or item.get('_removingFromList') or
+                        self.app.session_visibility.contains(sid)):
+                    return
+                if item.get('_observationPending') or item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False):
+                    return  # Keep queued work unclaimed until a settings ACK resolves.
+                pending = self.steering.get(sid)
+                if pending:
+                    bridge = item.get('bridge')
+                    if pending.get('phase') == 'waiting_activity':
+                        # A newly written prompt is not necessarily admitted
+                        # by Claude. Keep the selected row durable and wait
+                        # for real turn activity instead of interrupting
+                        # prompt-check repeatedly. The existing dispatch tick
+                        # checks again; no worker waits or polls for activity.
+                        if item['state'] in {'idle', 'done'}:
                             self.queue.resume(sid)
-                            item['state'] = 'idle'
                             self.steering.pop(sid, None)
-                        elif time.monotonic() - pending['created'] > 30 or item['state'] == 'error':
+                            pending = None
+                        elif item['state'] in {'error', 'stopped'} or bridge is None or bridge.closed:
                             self.steering.pop(sid, None)
                             self.queue.pause(sid, 'stopped')
+                            return
                         else:
-                            continue
-                    # A claim also reserves a connection slot. Keep admission,
-                    # durable claim and reservation under the same app lock used
-                    # by ordinary connect/send, so other tasks cannot take it.
-                    if item.get('_stopAdmission') or self.app.stop_state(item) in {'stopping', 'failed'}:
-                        continue  # Do not claim or consume work during an unconfirmed stop.
-                try:
-                    # Reclaim before the durable claim: a capacity race or a
-                    # failed cleanup must leave the request safely queued.
-                    with connection_slot(self.app, sid):
-                        with self.app.lock:
-                            if self.app.upgrade.blocks_work():
+                            try:
+                                if not self._try_followup_interrupt(bridge):
+                                    return
+                                pending.update(phase='interrupting', created=time.monotonic())
+                            except (ValueError, OSError, RuntimeError):
+                                self.steering.pop(sid, None)
+                                self.queue.pause(sid, 'stopped')
                                 return
-                            if item.get('_idleReleasing') or item.get('_stopAdmission') or item.get('_observationPending'):
-                                continue
-                            claim = self.queue.claim(sid, item, self.context(item))
-                            if claim is not None:
-                                item['_dispatchClaim'] = claim['id']
-                        if claim is None:
-                            continue
-                        try:
-                            self.app.send(sid, claim['text'], claim['attachments'], _dispatch_claim=claim['id'])
-                            with self.app.lock:
-                                self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
-                        except ControlRestoreRequired:
-                            self.queue.defer_unsubmitted(claim['id'])
-                        except (ValueError, OSError, RuntimeError):
-                            self.queue.failed(claim['id'])
-                        finally:
-                            with self.app.lock:
-                                self.app.get(sid).pop('_dispatchClaim', None)
-                except ConnectionCapacityUnavailable:
-                    continue
+                    if pending is None:
+                        pass  # The original request completed naturally.
+                    elif item['state'] == 'stopped' and (bridge is None or getattr(bridge, 'cleanup_complete', False) is True
+                            or (getattr(bridge, 'stop_state', None) == 'stopped'
+                                and not bridge.closed and not getattr(bridge, 'stopping', False))):
+                        # Explicit "now" cancels the interrupted queued turn;
+                        # it does not silently retry it alongside the new one.
+                        queued = self.queue.snapshot(sid)['queue']
+                        if pending.get('requestId') and not any(row['id'] == pending['requestId']
+                                and row['status'] == 'queued' for row in queued):
+                            self.steering.pop(sid, None)
+                            self.queue.pause(sid, 'stopped')
+                            return
+                        for row in queued:
+                            if (row['id'] in pending['interrupted'] and row['status'] == 'needs_review'
+                                    and row.get('reason') == 'interrupted'):
+                                self.queue.cancel(sid, row['id'])
+                        self.queue.resume(sid)
+                        item['state'] = 'idle'
+                        self.steering.pop(sid, None)
+                    elif time.monotonic() - pending['created'] > 30 or item['state'] == 'error':
+                        self.steering.pop(sid, None)
+                        self.queue.pause(sid, 'stopped')
+                    else:
+                        return
+                # A claim also reserves a connection slot. Keep admission,
+                # durable claim and reservation under the same app lock used
+                # by ordinary connect/send, so other tasks cannot take it.
+                if item.get('_stopAdmission') or self.app.stop_state(item) in {'stopping', 'failed'}:
+                    return  # Do not claim or consume work during an unconfirmed stop.
+            try:
+                # Reclaim before the durable claim: a capacity race or a
+                # failed cleanup must leave the request safely queued.
+                with connection_slot(self.app, sid):
+                    with self.app.lock:
+                        if self.stopped.is_set() or self.error or self.app.upgrade.blocks_work():
+                            return
+                        if item.get('_idleReleasing') or item.get('_stopAdmission') or item.get('_observationPending'):
+                            return
+                        claim = self.queue.claim(sid, item, self.context(item))
+                        if claim is not None:
+                            item['_dispatchClaim'] = claim['id']
+                    if claim is None:
+                        return
+                    try:
+                        self.app.send(sid, claim['text'], claim['attachments'], _dispatch_claim=claim['id'])
+                        with self.app.lock:
+                            self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
+                    except ControlRestoreRequired:
+                        self.queue.defer_unsubmitted(claim['id'])
+                    except (ValueError, OSError, RuntimeError):
+                        self.queue.failed(claim['id'])
+                    except Exception:
+                        self.queue.failed(claim['id'])
+                        raise
+                    finally:
+                        with self.app.lock:
+                            self.app.get(sid).pop('_dispatchClaim', None)
+            except ConnectionCapacityUnavailable:
+                return
 
     @staticmethod
     def first_run(schedule, now=None):

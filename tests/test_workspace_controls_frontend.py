@@ -317,9 +317,11 @@ class WorkspaceControlsFrontendTests(unittest.TestCase):
           let calls=0;api=async()=>{calls++;};await oldButton.onclick();assert.equal(calls,0);
           active.state='done';active.choice=choice('choice-b');renderWorkspaceChoice();let reply;api=()=>new Promise(resolve=>reply=resolve);
           await oldButton.onclick();assert.equal(reply,undefined);
-          const pending=choiceView.buttons[0].onclick();selectionGeneration++;active={id:'B',state:'done',messages:[],choice:choice('choice-c'),trusted:true};
-          $('conversation').replaceChildren(el('article','다른 업무'));$('prompt').value='B 업무 초안';setStatus(active.state);
-          assert.equal($('send').disabled,true);assert.equal(choiceView.buttons[0].disabled,true);
+          const pending=choiceView.buttons[0].onclick();assert.equal($('send').disabled,true);assert.equal(choiceView.buttons[0].disabled,true);
+          const other={id:'B',title:'업무 B',workspace:'C:/fixture/B',state:'done',messages:[{role:'assistant',text:'다른 업무'}],requests:[],seq:0,choice:choice('choice-c'),trusted:true};
+          sessions.push(other);const choiceApi=api;api=(path,body)=>path.startsWith('/api/session?')?Promise.resolve(other):choiceApi(path,body);
+          poll=()=>{};refreshInspector=()=>{};await selectSession('B');$('prompt').value='B 업무 초안';
+          assert.equal($('send').disabled,false);assert.equal(choiceView.buttons[0].disabled,false);
           reply({session:{messages:[{role:'user',text:'이전 업무 선택'}]}});await pending;
           assert.equal(active.choice.id,'choice-c');assert.doesNotMatch(flatten($('conversation')),/이전 업무 선택/);
           assert.equal($('send').disabled,false);assert.equal(choiceView.buttons[0].disabled,false);

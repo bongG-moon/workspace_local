@@ -6,7 +6,11 @@ globalThis.WorkspaceInlineControls = (() => {
   const buttons = {model:$("composer-model"), effort:$("composer-effort"), permission:$("composer-permission")};
   const titles = {model:"모델 선택", effort:"Effort · 사고 수준", permission:"승인 모드"};
   const restoreKind = control => control === "permissionMode" ? "permission" : control;
-  let view = null, pending = false, notice = null, trustReturn = null, preparation = null;
+  let view = null, notice = null, trustReturn = null;
+  const pendingOperations = new Map(), preparations = new Map();
+  const isPending = () => pendingOperations.has(taskOperationOwner());
+  function beginPending(source){const operation={owner:source.owner||source.id||taskOperationOwner()};pendingOperations.set(operation.owner,operation);return operation;}
+  function endPending(operation){if(pendingOperations.get(operation.owner)===operation)pendingOperations.delete(operation.owner);}
   let positionFrame = null, positionObserver = null, watchingPosition = false;
   function placePanel() {
     if (!view || panel.hidden || !panel.offsetParent) return;
@@ -64,7 +68,7 @@ globalThis.WorkspaceInlineControls = (() => {
     globalThis.visualViewport?.removeEventListener("resize", schedulePosition);
     globalThis.visualViewport?.removeEventListener("scroll", schedulePosition);
   }
-  const context = () => ({id:active?.id || null, selection:selectionGeneration});
+  const context = () => ({id:active?.id || null, owner:taskOperationOwner(), selection:selectionGeneration});
   const same = value => value && value.id === (active?.id || null) && value.selection === selectionGeneration && !appClosed;
   const named = (rows, value) => rows.find(row => row.value === value)?.displayName || rows.find(row => row.value === value)?.label || value;
   const chatMode = () => globalThis.WorkspaceModes?.isChat() === true;
@@ -100,11 +104,11 @@ globalThis.WorkspaceInlineControls = (() => {
     const values = {model:named(modelOptions(),model) || (chatMode()?"Claude 기본":"기존 설정"), effort, permission};
     for (const [kind,button] of Object.entries(buttons)) {
       button.querySelector("strong").textContent = values[kind]; button.title = titles[kind] + ": " + values[kind];
-      button.disabled = appClosed || pending || (active && blocked(kind));
+      button.disabled = appClosed || isPending() || (active && blocked(kind));
       button.classList.toggle("bypass-active",kind==="permission"&&info.permissionMode==="bypassPermissions");
       button.setAttribute("aria-expanded", String(view?.kind === kind && !panel.hidden));
     }
-    if (view && (!same(view) || appClosed || stopBlocked() || (active && busyStates.has(active.state) && (view.kind!=="permission" || !pending&&blocked("permission"))))) close();
+    if (view && (!same(view) || appClosed || stopBlocked() || (active && busyStates.has(active.state) && (view.kind!=="permission" || !isPending()&&blocked("permission"))))) close();
     if(view&&!panel.hidden&&view.optionSignature&&view.optionSignature!==optionSignature()){
       const input=extra.querySelector("input"),inputText=input?.value,inputFocused=input===document.activeElement;
       const focused=[...options.children].find(button=>button===document.activeElement)?.dataset.runtimeValue;
@@ -131,7 +135,7 @@ globalThis.WorkspaceInlineControls = (() => {
     node.replaceChildren(); node.textContent = text; node.hidden = !text; node.dataset.error = String(Boolean((restore || permissionNotice() || visibleNotice?.isError) && !changing));
     if (restore && !changing && !connectionPreparing) {
       const kind=restoreKind(issue?.control)||"model", button=el("button",titles[kind],"text-button");button.type="button";
-      button.disabled=blocked()||pending;button.onclick=()=>recover();node.append(button);
+      button.disabled=blocked()||isPending();button.onclick=()=>recover();node.append(button);
     }
     if (view && !panel.hidden) watchPosition();
   }
@@ -146,7 +150,7 @@ globalThis.WorkspaceInlineControls = (() => {
     copy.append(el("strong", label)); if (description) copy.append(el("small", description));
     button.append(copy,el("span", selected ? "✓" : "")); button.setAttribute("aria-pressed", String(selected));
     button.dataset.runtimeValue=value===null?"":value;
-    button.disabled = !enabled || pending || blocked(view?.kind); button.onclick = () => apply(value); options.append(button);
+    button.disabled = !enabled || isPending() || blocked(view?.kind); button.onclick = () => apply(value); options.append(button);
   }
   function draw() {
     if (!view || !same(view)) return close();
@@ -198,16 +202,16 @@ globalThis.WorkspaceInlineControls = (() => {
     if(view.kind==="effort")action("모델 선택",()=>open("model"));
   }
   async function prepare(source) {
-    if (!same(source) || !active || pending || connectionPreparing || blocked()) return false;
+    if (!same(source) || !active || isPending() || connectionPreparing || blocked()) return false;
     if (!active.trusted) {
       trustReturn = {...source}; close(); chooseFolder(true); $("folder-form").dataset.afterTrust = "controls"; return false;
     }
-    pending = true; connectionPreparing = true; options.replaceChildren(); extra.replaceChildren(); failure("");
+    const pendingOperation=beginPending(source),operation=beginTaskOperation("prepare",source.id); options.replaceChildren(); extra.replaceChildren(); failure("");
     message("기존 Claude 연결을 준비하고 있어요. AI 질문은 보내지 않습니다."); setStatus(active.state);
     const request = {...source};
     try {
       request.promise = globalThis.WorkspaceCapabilities?.waitForPreparation?.(source.id) || globalThis.WorkspaceComposer?.waitForPreparation?.() || api("/api/connect",{id:source.id});
-      preparation = request;
+      preparations.set(source.id,request);
       const response = await request.promise;
       if (!same(source)) return false;
       active.connection = response.connection; applyConnectionState(response); renderConnection(active.connection);
@@ -218,8 +222,8 @@ globalThis.WorkspaceInlineControls = (() => {
       }
       return false;
     } finally {
-      if (preparation === request) preparation = null;
-      pending = false; connectionPreparing = false; setStatus(active?.state || "idle");
+      if (preparations.get(source.id)===request) preparations.delete(source.id);
+      endPending(pendingOperation);endTaskOperation(operation); setStatus(active?.state || "idle");
     }
     if (view && same(source)) draw();
     return same(source) && active?.connection?.connected === true;
@@ -229,16 +233,16 @@ globalThis.WorkspaceInlineControls = (() => {
     // A model choice is explicit intent to prepare this chat, without sending
     // a question. Share lazy creation and keep drafts/attachments in that chat.
     if(chatMode() && !active){
-      if(appClosed || pending || connectionPreparing || sending)return;
-      const source=context();pending=true;connectionPreparing=true;setStatus("idle");
+      if(appClosed || isPending() || connectionPreparing || sending)return;
+      const source=context(),pendingOperation=beginPending(source),operation=beginTaskOperation("prepare",source.owner);setStatus("idle");
       try{
         const created=await globalThis.WorkspaceModes.ensureChat();
         if(!created || !chatMode() || active?.id!==created.id || appClosed)return;
       }catch(err){const failedAt=err.chatCreationContext || source;if(same(failedAt))status(err.message,true,failedAt);return;}
-      finally{pending=false;connectionPreparing=false;setStatus(active?.state || "idle");}
+      finally{endPending(pendingOperation);endTaskOperation(operation);setStatus(active?.state || "idle");}
     }
     if (view?.kind === kind && !intent.commandDraft && !intent.cycle) return close({focus:true});
-    if (appClosed || pending || (active && blocked(kind))) return;
+    if (appClosed || isPending() || (active && blocked(kind))) return;
     // Explicit advanced commands need their visible anchor in the full view.
     if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     globalThis.WorkspaceComposer?.close(); view = {...context(),kind,...intent}; panel.hidden = false; notice = null; render();
@@ -248,14 +252,14 @@ globalThis.WorkspaceInlineControls = (() => {
     return view === opened ? opened : null;
   }
   async function recover() {
-    if(!controlRestoreState() || blocked() || pending)return;
+    if(!controlRestoreState() || blocked() || isPending())return;
     const kind=restoreKind(controlRestoreIssues()[0]?.control)||"model";
     if(view?.kind===kind&&same(view)){draw();render();return;}
     return open(kind);
   }
   async function acceptCurrent(control) {
-    if(!view||!same(view)||blocked()||pending)return;
-    const source={...view};pending=true;failure("");render();
+    if(!view||!same(view)||blocked()||isPending())return;
+    const source={...view},pendingOperation=beginPending(source);failure("");render();
     for(const node of options.children)node.disabled=true;
     try{
       const result=await useCurrentControl(control);if(!same(source))return;
@@ -263,14 +267,14 @@ globalThis.WorkspaceInlineControls = (() => {
       else if(result?.error){failure(result.error);status(result.error,true,source);}
       return result;
     }finally{
-      pending=false;render();
+      endPending(pendingOperation);render();
       if(view&&same(source)){const text=$("runtime-panel-error").textContent;draw();if(text)failure(text);}
     }
   }
   async function apply(value, request=view) {
-    if (!request || !same(request) || blocked(request.kind) || pending) return null;
-    const source = {...request}; let result;
-    pending = true; failure(""); render();
+    if (!request || !same(request) || blocked(request.kind) || isPending()) return null;
+    const source = {...request},pendingOperation=beginPending(source); let result;
+    failure(""); render();
     for (const node of options.children) node.disabled = true;
     try {
       if (source.kind === "model") result = await setModel(value);
@@ -291,7 +295,7 @@ globalThis.WorkspaceInlineControls = (() => {
       } else if (result?.error) { failure(result.error); status(result.error,true,source); }
       return result;
     } finally {
-      pending = false; render();
+      endPending(pendingOperation); render();
       if (view && same(source)) { const text = $("runtime-panel-error").textContent; draw(); if (text) failure(text); }
     }
   }
@@ -326,7 +330,7 @@ globalThis.WorkspaceInlineControls = (() => {
     return true;
   }
   async function nextPermission(source) {
-    if (!same(source) || blocked("permission") || pending) return;
+    if (!same(source) || blocked("permission") || isPending()) return;
     const info = active.connection || {}, supported = new Set(permissionOptions().map(row => row.value));
     const cycle = [...new Set((Array.isArray(info.permissionModeCycle) ? info.permissionModeCycle : []).map(mode=>permissionOptionValue(mode)))]
       .filter(mode => mode !== 'bypassPermissions' && supported.has(mode));
@@ -340,7 +344,7 @@ globalThis.WorkspaceInlineControls = (() => {
   async function cyclePermission() {
     if(globalThis.WorkspaceModes?.isChat())return;
     const source = {...context(),kind:"permission",cycle:true};
-    if (!active || blocked("permission") || pending) return;
+    if (!active || blocked("permission") || isPending()) return;
     if (globalThis.WorkspaceLayout?.snapshot?.()?.miniMode) globalThis.WorkspaceLayout.setMiniMode(false);
     if (!active.trusted || active.connection?.connected !== true) {
       const opened = await open("permission",{cycle:true});
@@ -377,7 +381,7 @@ globalThis.WorkspaceInlineControls = (() => {
     if (view && !panel.contains?.(event.target) && !Object.values(buttons).some(button => button.contains?.(event.target))) close();
   });
   function waitForPreparation() {
-    return same(preparation) ? preparation.promise : null;
+    return preparations.get(active?.id)?.promise || null;
   }
   function restoreFailure(text) {status(text,true);}
   render(); return {render,close,open,recover,restoreFailure,resumeAfterTrust,handleCommand,keydown,cyclePermission,waitForPreparation};

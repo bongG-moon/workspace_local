@@ -4,7 +4,9 @@
 globalThis.WorkspaceComposer = (() => {
   const input = $("prompt"), box = $("composer-suggestions"), list = $("composer-suggestion-list");
   let generation = 0, controller = null, timer = null, composing = false;
-  let current = null, rows = [], selected = 0, preparing = null, dismissed = false;
+  let current = null, rows = [], selected = 0, dismissed = false;
+  const preparations = new Map();
+  const currentPreparation = () => preparations.get(active?.id);
   const preparationAttempts = new Set();
   const pathKey = value => String(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   function fileReference(path, workspace = active?.workspace || "") {
@@ -59,13 +61,13 @@ globalThis.WorkspaceComposer = (() => {
     $("composer-suggestion-title").textContent = current?.kind === "terminal" ? "터미널 실행 명령(!)"
       : current?.kind === "file" ? "파일 참조" : "스킬·빠른 요청(/명령)";
     $("composer-suggestion-context").textContent = `${active ? basename(active.workspace) : "공통 스킬"} · ${rows.length ? `${rows.length}개 후보` : active ? "현재 업무 기준" : "업무 선택 전"}`;
-    $("composer-connect").hidden = !active || current?.kind !== "slash" || response.connectRequired !== true || Boolean(preparing);
-    $("composer-connect").disabled = Boolean(preparing);
-    $("composer-connect").textContent = preparing ? "빠른 요청 불러오는 중…" : "빠른 요청 불러오기";
+    $("composer-connect").hidden = !active || current?.kind !== "slash" || response.connectRequired !== true || Boolean(currentPreparation());
+    $("composer-connect").disabled = Boolean(currentPreparation());
+    $("composer-connect").textContent = currentPreparation() ? "빠른 요청 불러오는 중…" : "빠른 요청 불러오기";
     $("composer-native").hidden = current?.kind !== "terminal" && !rows.some(row => row.supported === false);
     $("composer-suggestion-note").textContent = rows.length
       ? "↑ ↓ / Ctrl+N·P 이동 · Tab / Enter 선택 · Esc 닫기" + (response.discovery ? " · 설치 스킬의 실행 가능 여부는 전송 시 Claude가 확인합니다." : "") + (response.limited ? " · 검색어를 더 입력해 주세요." : "")
-      : response.message || (preparing?.id === active?.id && active ? "빠른 요청 목록을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
+      : response.message || (currentPreparation() && active ? "빠른 요청 목록을 자동으로 불러오고 있어요. 질문은 전송하지 않습니다."
       : !active ? "설치된 공통 스킬에서 일치하는 항목을 찾지 못했어요. 업무를 선택하면 해당 폴더의 빠른 요청도 확인할 수 있어요."
       : response.connectRequired ? "연결에서 빠른 요청 목록을 확인하지 못했어요. ‘빠른 요청 불러오기’로 다시 시도할 수 있어요."
       : response.message || (response.limited
@@ -116,7 +118,7 @@ globalThis.WorkspaceComposer = (() => {
       }).map(row => ({...row, supported:request.kind === "file" ? row.supported !== false : row.supported === true}));
       render({...response,limited:response.limited === true || (Array.isArray(response.items) && response.items.length > 40)});
       if (request.kind === "slash" && response.connectRequired === true && active?.trusted
-          && !preparing && !preparationAttempts.has(active.id) && !busyStates.has(active.state)) {
+          && !currentPreparation() && !preparationAttempts.has(active.id) && !busyStates.has(active.state)) {
         return prepareConnection({automatic:true});
       }
     } catch (err) {
@@ -170,9 +172,9 @@ globalThis.WorkspaceComposer = (() => {
   }
   $("composer-connect").onmousedown = event => event.preventDefault();
   async function prepareConnection({automatic=false} = {}) {
-    if (!active || preparing || sending || choiceSubmission || connectionPreparing || globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed) return;
+    if (!active || currentPreparation() || sending || choiceSubmission || connectionPreparing || globalThis.WorkspaceConnectionRestart?.isCurrent() || appClosed) return;
     if (!active.trusted) { chooseFolder(true); $("folder-form").dataset.afterTrust = "commands"; return; }
-    const context = {id:active.id, selection:selectionGeneration}; preparing = context;
+    const context = {id:active.id, selection:selectionGeneration},operation=beginTaskOperation("completion",active.id); preparations.set(context.id,context);
     preparationAttempts.add(context.id);
     $("composer-connect").disabled = true; $("composer-connect").textContent = "빠른 요청 불러오는 중…";
     try {
@@ -191,8 +193,10 @@ globalThis.WorkspaceComposer = (() => {
         else if (!automatic) toast(err.message);
       }
     } finally {
-      if (preparing === context) {
-        preparing = null; $("composer-connect").disabled = false; $("composer-connect").textContent = "빠른 요청 불러오기";
+      endTaskOperation(operation);
+      if (preparations.get(context.id) === context) {
+        preparations.delete(context.id);
+        $("composer-connect").disabled = Boolean(currentPreparation()); $("composer-connect").textContent = currentPreparation() ? "빠른 요청 불러오는 중…" : "빠른 요청 불러오기";
         if (current?.kind === "slash" && !box.hidden && active?.id === context.id && !active.connection?.connected) $("composer-connect").hidden = false;
       }
     }
@@ -229,7 +233,7 @@ globalThis.WorkspaceComposer = (() => {
     close();
   }
   function waitForPreparation() {
-    return preparing?.id === active?.id && preparing?.selection === selectionGeneration ? preparing.promise : null;
+    return currentPreparation()?.promise || null;
   }
   return {refresh, keydown, close, beforeSubmit, removeFileReference, prepareConnection, waitForPreparation, connectionChanged, contextChanged:close};
 })();
