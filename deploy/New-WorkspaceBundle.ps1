@@ -22,6 +22,7 @@ $files = @(
     'local_app\web\archived-tasks.js', 'local_app\web\archived-tasks.css',
     'local_app\appearance.py', 'local_app\layout_preferences.py', 'local_app\managed_launcher.py', 'local_app\web\appearance.js', 'local_app\web\appearance.css',
     'local_app\extensions.py', 'local_app\extension_install.py', 'local_app\extension_open_client.py', 'local_app\web\extensions.js', 'local_app\web\extensions.css', 'local_app\web\extension-import.js',
+    'local_app\extension_tasks.py', 'local_app\llm_usage.py', 'local_app\web\llm-usage.js', 'local_app\web\llm-usage.css', 'docs\LLM_USAGE.md',
     'local_app\session_visibility.py', 'local_app\path_browser.py', 'local_app\web\path-picker.js', 'local_app\web\path-picker.css',
     'local_app\native_window.py', 'local_app\ui_health.py', 'deploy\Workspace.Desktop.cs', 'deploy\WebView2.lock.json',
     'deploy\New-WorkspaceDesktop.ps1', 'deploy\Workspace.Version.ps1', 'deploy\CompanyWorkspace.Standalone.manifest',

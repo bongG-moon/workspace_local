@@ -388,7 +388,8 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 
 /* Related dialogs use the same form/action scale without changing list or tab density. */
 #customizations-dialog :is(select,input){min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-family:inherit;font-size:var(--control-font-size);line-height:var(--control-line-height);border-radius:var(--control-radius)}
-.customizations-dialog .customizations-scope-row button{min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);border-radius:var(--control-radius);box-shadow:none}
+/* Only size the refresh action, not the browser-synced button inside select. */
+.customizations-dialog .customizations-scope-row>button{min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);border-radius:var(--control-radius);box-shadow:none}
 .schedule-overview-controls>label{margin:0}
 /* Explicit dialog scope beats legacy component/footer variants. */
 dialog :is(.dialog-actions,.branch-actions,.path-picker-actions,.attachment-storage-actions)>:is(.quiet-button,.text-button,.send-button,.primary){display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:var(--control-height);padding:7px 12px;border-width:1px;border-style:solid;border-radius:var(--control-radius);font-family:inherit;font-size:var(--control-font-size);font-weight:500;line-height:var(--control-line-height);box-shadow:none}
@@ -604,7 +605,7 @@ dialog.path-picker .path-picker-location .quiet-button{
  :root select:not([multiple]):not([size]),
  :root select:not([multiple]):not([size])::picker(select){appearance:base-select!important}
  :root select:not([multiple]):not([size]){display:flex;align-items:center;gap:12px;padding-inline-end:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;text-align:left}
- :root select>button{all:unset;display:flex;flex:1;min-width:0;overflow:hidden;cursor:inherit}
+ :root select>button{all:unset;display:flex;align-items:center;flex:1;min-width:0;overflow:hidden;cursor:inherit}
  :root select selectedcontent{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  :root select:not([multiple]):not([size]):disabled{cursor:not-allowed;opacity:.55}
  :root select:not([multiple]):not([size]):hover:not(:disabled){border-color:var(--theme-line-accent,#b8b9d9)}

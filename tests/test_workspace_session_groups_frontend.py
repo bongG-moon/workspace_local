@@ -378,7 +378,7 @@ class SessionGroupsFrontendTests(unittest.TestCase):
 
     def test_folder_drag_retains_source_when_current_task_changes(self):
         self.run_case(DRAG_SETUP+r"""(async()=>{
-          const source=row('A'),title=source.querySelector('.session');
+          const source=row('A'),title=source.querySelector('.session-drag');
           title.onpointerdown(pointer(source,{target:title}));
           title.onpointermove(pointer(header('group-b'),{target:title}));
           active={...sessions[1],messages:[{text:'B 대화'}]};selectionGeneration++;
@@ -557,31 +557,31 @@ class SessionGroupsFrontendTests(unittest.TestCase):
           assert.equal(WorkspaceSessionGroups.groupFor('A'),'group-b');assert.equal(sessions[0].pinned,true);
         })()""")
 
-    def test_task_title_drop_on_folder_member_moves_without_opening_task(self):
+    def test_task_grip_drop_on_folder_member_moves_without_opening_task(self):
         self.run_case(DRAG_SETUP+r"""(async()=>{
           boot.sessionGroups.groups[1].collapsed=false;renderSessions();
           const selected=[];selectSession=async id=>{selected.push(id);return true;};
-          $('prompt').value='이름으로 옮겨도 초안 유지';attachments=['report.xlsx'];
-          const source=row('A'),title=source.querySelector('.session'),target=row('B');
+          $('prompt').value='손잡이로 옮겨도 초안 유지';attachments=['report.xlsx'];
+          const source=row('A'),title=source.querySelector('.session-drag'),target=row('B');
           title.onpointerdown(pointer(source,{target:title}));title.onpointermove(pointer(target,{target:title}));
           assert.equal(sessionPointerDrag.target.kind,'folder');assert.equal(sessionPointerDrag.target.groupId,'group-b');
           assert.equal(target.classList.contains('drop-folder'),true);
           await title.onpointerup(pointer(target,{target:title}));
-          await title.onclick(pointer(target,{detail:1,target:title}));
+
           assert.deepEqual(selected,[]);assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/session-groups');
           assert.equal(WorkspaceSessionGroups.groupFor('A'),'group-b');assert.equal(sessions[0].pinned,true);
           assert.equal(active.id,'A');assert.equal(active.messages[0].text,'기존 대화');
-          assert.equal($('prompt').value,'이름으로 옮겨도 초안 유지');assert.equal(attachments[0],'report.xlsx');
+          assert.equal($('prompt').value,'손잡이로 옮겨도 초안 유지');assert.equal(attachments[0],'report.xlsx');
         })()""")
 
-    def test_task_title_drop_on_empty_folder_area_keeps_pin_and_remove_without_move_icon(self):
+    def test_task_grip_drop_on_empty_folder_area_keeps_pin_and_remove_without_move_icon(self):
         self.run_case(DRAG_SETUP+r"""(async()=>{
           delete boot.sessionGroups.assignments.B;boot.sessionGroups.groups[1].collapsed=false;renderSessions();
           selectSession=()=>{throw Error('Folder move must not open task');};
-          const source=row('A'),title=source.querySelector('.session');
+          const source=row('A'),title=source.querySelector('.session-drag');
           const target=[...$('sessions').children].find(node=>node.classList.contains('task-group-empty')&&node.dataset.groupId==='group-b');
           title.onpointerdown(pointer(source,{target:title}));title.onpointermove(pointer(target,{target:title}));
-          await title.onpointerup(pointer(target,{target:title}));await title.onclick(pointer(target,{detail:1,target:title}));
+          await title.onpointerup(pointer(target,{target:title}));
           assert.equal(calls.length,1);assert.equal(WorkspaceSessionGroups.groupFor('A'),'group-b');
           const moved=row('A');assert.equal(moved.querySelector('.session-group-move'),null);
           const pin=moved.querySelector('.session-pin'),remove=moved.querySelector('.session-remove'),actions=[];
@@ -591,7 +591,7 @@ class SessionGroupsFrontendTests(unittest.TestCase):
           assert.deepEqual(actions,[{id:'A',patch:{pinned:false}},{id:'A',hide:true}]);assert.equal(calls.length,1);
         })()""")
 
-    def test_task_lists_keep_title_drag_pin_and_remove_without_folder_move_button(self):
+    def test_task_lists_keep_title_click_grip_pin_and_remove_without_folder_move_button(self):
         self.run_case(DRAG_SETUP+r"""(()=>{
           showDialog('tasks-dialog');
           for(const id of ['sessions','home-recents','all-sessions']){

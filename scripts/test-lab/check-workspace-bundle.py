@@ -40,6 +40,8 @@ expected.add('local_app/web/focus-navigation.js')
 expected.add('local_app/layout_preferences.py')
 expected.update({'local_app/extensions.py', 'local_app/extension_install.py', 'local_app/extension_open_client.py', 'local_app/web/extensions.js', 'local_app/web/extensions.css', 'local_app/web/extension-import.js'})
 expected.update({'local_app/build_identity.py', 'local_app/workspace_preferences.py'})
+expected.update({'local_app/extension_tasks.py', 'local_app/llm_usage.py',
+                 'local_app/web/llm-usage.js', 'local_app/web/llm-usage.css', 'docs/LLM_USAGE.md'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})

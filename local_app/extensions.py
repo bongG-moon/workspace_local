@@ -405,6 +405,43 @@ class ExtensionHost:
                           and Path(row['workspace']).is_absolute()
                           and Path(row['workspace']) != Path(Path(row['workspace']).anchor)]}
 
+    def receive_publish_file(self, extension_id, name, size, source):
+        """Copy browser-selected bytes, never accept a client-supplied local path."""
+        self._verified(extension_id)
+        if (not isinstance(name, str) or len(name) > 180 or name in {'.', '..'}
+                or any(c in name for c in '/\\:\x00') or name.rstrip(' .') != name
+                or Path(name).stem.lower() in RESERVED or Path(name).suffix.lower() not in PUBLISH_FILE_SUFFIXES
+                or type(size) is not int or not 0 < size <= MAX_PUBLISH_FILE):
+            raise ExtensionError('64 MiB 이하의 ZIP·MD·AXEXTENSION·EXE·MSI·PS1 파일 한 개를 선택하세요.')
+        import tempfile
+        import shutil
+        root = no_links(self.data_root / extension_id / 'upload-staging')
+        root.mkdir(parents=True, exist_ok=True)
+        # Uploads are transient host-owned copies. Expired selections are never
+        # valid capabilities; remove only direct children of this private root.
+        for child in root.iterdir():
+            if child.name.startswith('upload-') and child.is_dir() and not child.is_symlink():
+                checked = no_links(child)
+                if time.time() - checked.stat().st_mtime > FILE_TTL:
+                    shutil.rmtree(checked)
+        if len(list(root.iterdir())) >= 16:
+            raise ExtensionError('잠시 뒤 파일을 다시 선택해 주세요. 임시 업로드 공간을 정리하고 있어요.')
+        directory = Path(tempfile.mkdtemp(prefix='upload-', dir=root))
+        path = directory / name
+        try:
+            remaining = size
+            with path.open('xb') as target:
+                while remaining:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ExtensionError('파일 전송이 중단됐어요. 다시 선택해 주세요.')
+                    target.write(chunk)
+                    remaining -= len(chunk)
+            return self.pick_file(extension_id, lambda _: {'status': 'success', 'paths': [str(path)]})
+        except Exception:
+            shutil.rmtree(no_links(directory))
+            raise
+
     def pick_file(self, extension_id, picker):
         """Grant only the single file explicitly selected in the native picker."""
         self._verified(extension_id)

@@ -284,7 +284,8 @@ function finishSessionDrag(event,cancel=false){
   if(drag.active)event?.preventDefault?.();
   if(Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)){drag.x=event.clientX;drag.y=event.clientY;}
   const target=!cancel&&drag.active?sessionDragTarget(drag):null;
-  if(drag.active||cancel)drag.handle.suppressSessionClick=true;
+  const outsideTitle=!drag.reorder&&Number.isFinite(event?.clientX)&&!drag.handle.contains(document.elementFromPoint(drag.x,drag.y));
+  if(drag.active||cancel||outsideTitle)drag.handle.suppressSessionClick=true;
   sessionPointerDrag=null;sessionDragId=null;if(drag.frame!==null)globalThis.cancelAnimationFrame?.(drag.frame);
   globalThis.removeEventListener?.("blur",drag.cancel);
   try{if(drag.handle.hasPointerCapture(drag.pointerId))drag.handle.releasePointerCapture(drag.pointerId);}catch(_){}
@@ -295,15 +296,15 @@ function finishSessionDrag(event,cancel=false){
   if(target)return moveSession(drag.id,target.id,target.position,drag.container);
   focusSessionHandle(drag.id,drag.container);
 }
-function startSessionDrag(event,item,handle,container){
+function startSessionDrag(event,item,handle,container,reorder=true){
   if(handle.disabled||sessionOrderSaving||globalThis.WorkspaceSessionGroups?.isSaving()||appClosed||boot.sessionOrder?.warning||hidingSessionIds.has(item.id)||sessionPointerDrag||event.isPrimary===false||event.button!==0)return;
-  const drag={id:item.id,handle,container,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,active:false,target:null,frame:null};
+  const drag={id:item.id,handle,container,reorder,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,active:false,target:null,frame:null};
   drag.cancel=()=>finishSessionDrag(null,true);sessionPointerDrag=drag;sessionDragId=item.id;
   try{handle.setPointerCapture(event.pointerId);}catch(_){sessionPointerDrag=null;sessionDragId=null;return;}
   handle.focus({preventScroll:true});globalThis.addEventListener?.("blur",drag.cancel);
 }
 function moveSessionDrag(event){
-  const drag=sessionPointerDrag;if(!drag||event.pointerId!==drag.pointerId)return;
+  const drag=sessionPointerDrag;if(!drag||event.pointerId!==drag.pointerId||!drag.reorder)return;
   drag.x=event.clientX;drag.y=event.clientY;
   if(!drag.active&&Math.hypot(drag.x-drag.startX,drag.y-drag.startY)<6)return;
   drag.active=true;drag.handle.suppressSessionClick=true;event.preventDefault();paintSessionDrag(drag);
@@ -339,9 +340,10 @@ function sessionRow(item,button,container){
   handle.onkeydown=event=>{if(event.key==="Escape"&&sessionPointerDrag){event.preventDefault();finishSessionDrag(null,true);return;}if(!event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.isComposing||!["ArrowUp","ArrowDown"].includes(event.key))return;
     event.preventDefault();const visible=new Set([...$(container).children].map(row=>row.dataset.sessionId)),groups=globalThis.WorkspaceSessionGroups,group=orderedSessions().filter(other=>visible.has(other.id)&&!!other.pinned===!!item.pinned&&(!groups||groups.groupFor(other.id)===groups.groupFor(item.id))),index=group.findIndex(other=>other.id===item.id),target=group[index+(event.key==="ArrowUp"?-1:1)];
     if(target)return moveSession(item.id,target.id,event.key==="ArrowUp"?"before":"after",container);};
-  // Names are both click targets and drag sources; adjacent action buttons stay independent.
-  const openTask=button.onclick;button.draggable=false;button.classList.add("session-title-drag");
-  button.title=(button.title?button.title+"\n":"")+"클릭하여 열기 · 끌어서 순서 변경"+(container==="sessions"?"·폴더로 이동":"");
+  // Titles only open tasks. Keep their DOM stable through pointerup/click while
+  // polling; reordering belongs to the grip so hand movement cannot eat a click.
+  const openTask=button.onclick;button.draggable=false;button.classList.add("session-title-button");
+  button.title=(button.title?button.title+"\n":"")+"클릭하여 열기 · 순서 이동은 옆 손잡이를 끌어주세요";
   button.onclick=event=>{
     const suppress=button.suppressSessionClick&&event?.detail!==0;button.suppressSessionClick=false;
     if(suppress){event?.preventDefault?.();event?.stopPropagation?.();return;}
@@ -350,7 +352,7 @@ function sessionRow(item,button,container){
   button.onpointerdown=event=>{
     button.suppressSessionClick=false;
     // Touch scrolling stays natural; the dedicated grip remains available for touch dragging.
-    if(event.pointerType!=="touch")startSessionDrag(event,item,button,container);
+    if(event.pointerType!=="touch")startSessionDrag(event,item,button,container,false);
   };
   button.onpointermove=moveSessionDrag;button.onpointerup=event=>finishSessionDrag(event);
   button.onpointercancel=button.onlostpointercapture=event=>finishSessionDrag(event,true);
@@ -664,7 +666,7 @@ function taskHeader(){
   $("task-view").hidden=!active||catalog;
   $("workspace-summary").hidden=catalog||isGeneralChat();
   updateRestartControls();globalThis.WorkspaceSessionImport?.render();globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceExtensions?.isOpen?.()?globalThis.WorkspaceExtensions.title():globalThis.WorkspaceCapabilities?.isOpen()?"스킬과 기능":active?.title||(isGeneralChat()?"일반 대화":"업무 홈");$("chat-title").title=$("chat-title").textContent;$("task-title").hidden=$("task-pin").hidden=!active||catalog;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("task-pin").title=$("task-pin").getAttribute("aria-label");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-name").title=$("folder-name").textContent;$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||secondaryViewOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);updateModeNavigation();}
-async function selectSession(id,{keepDraft=false}={}){
+async function selectSession(id,{keepDraft=false,canActivate=null}={}){
   if(appClosed)return false;
   if(hiddenSessionIds.has(id))throw new Error("업무 목록에서 삭제한 항목입니다. 기존 세션 활용하기에서 다시 불러올 수 있어요.");
   if(hidingSessionIds.has(id))throw new Error("업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.");
@@ -673,6 +675,7 @@ async function selectSession(id,{keepDraft=false}={}){
   let item;
   try{item=await api(`/api/session?id=${encodeURIComponent(id)}`);}catch(e){if(ticket!==selectionGeneration)return false;resumeCurrent();throw e;}
   if(ticket!==selectionGeneration||appClosed)return false;
+  if(canActivate&&!canActivate()){resumeCurrent();return false;}
   if(hiddenSessionIds.has(id)||hidingSessionIds.has(id)){resumeCurrent();return false;}
   // Keep the current conversation, streaming buffers and controls intact
   // until the target is available. A removed inbox entry must not interrupt
@@ -1598,6 +1601,12 @@ globalThis.WorkspaceOpenExtension=async notice=>{
   }catch(e){extensionOpenSeen=id;if(!appClosed)toast(e.message);}
   finally{extensionOpenBusy=false;}
 };
+async function openExtensionInstallRequest(result,isCurrent){
+  if(appClosed||!isCurrent())return false;
+  const opened=await selectSession(result.sessionId,{canActivate:isCurrent});
+  if(opened)toast(result.paused?"설치 요청을 보관했어요. 이어 할 일의 안내를 확인한 뒤 이어 실행해 주세요.":"설치 요청을 전달했어요. 진행 중인 작업이 없으면 자동으로 시작합니다.");
+  return opened;
+}
 let extensionsLoad;
 function loadExtensions(entries,strict=false){
   // Optional extensions impose no asset request, listener, timer, or layout
@@ -1610,7 +1619,10 @@ function loadExtensions(entries,strict=false){
   });
   return extensionsLoad.then(()=>{
     if(appClosed)return;
-    globalThis.WorkspaceExtensions?.mount({extensions:entries,api,isClosed:()=>appClosed,
+    globalThis.WorkspaceExtensions?.mount({extensions:entries,api,uploadFile:async(id,file)=>{
+      const response=await fetch(`/api/extensions/${encodeURIComponent(id)}/upload`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(file.name)},body:file});
+      const result=await response.json();if(!response.ok)throw Error(result.error||'파일을 전송하지 못했어요.');return result;
+    },openInstallRequest:openExtensionInstallRequest,notify:toast,isClosed:()=>appClosed,
       beforeOpen:()=>{saveDraft();globalThis.WorkspaceCapabilities?.close();if(globalThis.WorkspaceLayout?.snapshot?.()?.miniMode)globalThis.WorkspaceLayout.setMiniMode(false);globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceInlineControls?.close?.({focus:false});globalThis.WorkspaceComposer?.close?.();globalThis.WorkspaceStream?.suspend();},
       viewChanged:opened=>{taskHeader();globalThis.WorkspaceLayout?.refresh();if(!opened)globalThis.WorkspaceStream?.resume();},
       getContext:()=>({sessionId:active?.id||"",kind:isGeneralChat()?"chat":"work",workspace:active?.workspace||"",title:active?.title||""})});
@@ -1630,7 +1642,7 @@ async function init(){try{
     }else {if(!drafts.has("home")&&drafts.has("home:work"))drafts.set("home",drafts.get("home:work"));restoreDraft(homeDraftKey());}
   }
   void loadExtensions(boot.extensions);
-  globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
+  globalThis.WorkspaceLlmUsage?.start({api});globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
 }catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

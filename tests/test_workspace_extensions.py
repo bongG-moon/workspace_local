@@ -407,7 +407,8 @@ class ExtensionRoutesTests(unittest.TestCase):
     def test_bootstrap_metadata_and_authenticated_catalog(self):
         boot = self.app.bootstrap()
         self.assertEqual('example.tools', boot['extensions'][0]['id'])
-        self.assertEqual('0.23.32', boot['workspaceVersion'])
+        from local_app.server import WORKSPACE_VERSION
+        self.assertEqual(WORKSPACE_VERSION, boot['workspaceVersion'])
         for path, data in [('/api/extensions', None), ('/api/extensions/example.tools/view', {}),
                            ('/api/extensions/example.tools/action', {'action': 'status'})]:
             with self.subTest(path=path), self.assertRaises(HTTPError) as caught:

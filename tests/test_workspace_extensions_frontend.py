@@ -228,6 +228,35 @@ class WorkspaceExtensionsFrontendTests(unittest.TestCase):
             apiHandler=async()=>({url});await nav.children[0].onclick();assert.equal(currentFrame(),undefined);assert.equal(listeners.size,0);host.close();
           }""")
 
+    def test_install_ack_opens_only_confirmed_selected_work_once(self):
+        self.run_case("""const navigated=[],opts=options();opts.openInstallRequest=async(result,current)=>{assert.equal(current(),true);navigated.push(result.sessionId);};
+          host.mount(opts);await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          assert.ok(init.hostFeatures.includes('installRequestNavigation'));
+          apiHandler=async()=>({requested:true,sessionId:'task-8',paused:false});
+          const payload={action:'install',sessionId:'task-8',confirmed:true};
+          await request(frame,init,'install-one','host.requestInstall',payload);
+          assert.equal(response(frame,'install-one').ok,true);assert.deepEqual(navigated,['task-8']);
+          await request(frame,init,'install-one','host.requestInstall',payload);assert.equal(navigated.length,1);
+          apiHandler=async()=>({requested:true,sessionId:'wrong-task'});
+          await request(frame,init,'mismatch','host.requestInstall',payload);assert.equal(navigated.length,1);""")
+
+    def test_navigation_failure_does_not_undo_ack_or_resend_install(self):
+        self.run_case("""const notices=[],opts=options();opts.openInstallRequest=async()=>{throw Error('view failed');};opts.notify=text=>notices.push(text);
+          host.mount(opts);await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          apiHandler=async()=>({requested:true,sessionId:'task-8'});
+          await request(frame,init,'install-one','host.requestInstall',{action:'install',sessionId:'task-8'});
+          assert.equal(response(frame,'install-one').ok,true);assert.equal(notices.length,1);
+          assert.equal(frame.contentWindow.received.filter(x=>x.data.requestId==='install-one').length,1);
+          assert.equal(calls.filter(x=>x[0].endsWith('/install-request')).length,1);""")
+
+    def test_closed_store_does_not_steal_focus_after_late_install_ack(self):
+        self.run_case("""let resolve,navigated=0;const opts=options();opts.openInstallRequest=async()=>navigated++;
+          host.mount(opts);await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          apiHandler=()=>new Promise(r=>resolve=r);
+          await request(frame,init,'install-one','host.requestInstall',{action:'install',sessionId:'task-8'});
+          host.close();resolve({requested:true,sessionId:'task-8'});await flush();
+          assert.equal(navigated,0);assert.equal(listeners.size,0);""")
+
     def test_bootstrap_lazy_loader_does_nothing_when_not_installed_or_shutting_down(self):
         self.run_case("""const app=fs.readFileSync(process.argv[2].replace('extensions.js','app.js'),'utf8');
           const loader=app.slice(app.indexOf('let extensionsLoad;'),app.indexOf('async function init(){try{'));
@@ -246,6 +275,29 @@ class WorkspaceExtensionAppLifecycleTests(unittest.TestCase):
             input=APP_HARNESS, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_install_navigation_restores_target_draft_without_changing_permissions(self):
+        self.run_case(r"""(async()=>{
+          const original={id:'A',kind:'work',title:'원래 업무',workspace:'C:/A',state:'idle',messages:[],requests:[],seq:0};
+          const target={id:'B',kind:'work',title:'설치 업무',workspace:'C:/B',state:'idle',messages:[],requests:[],seq:0,permissionMode:'manual'};
+          active=original;sessions=[original,target];$('prompt').value='A 초안';attachments=['A.txt'];
+          drafts.set('B',{text:'B 초안',attachments:['B.txt']});poll=async()=>{};refreshInspector=async()=>{};toast=()=>{};
+          let closed=0;globalThis.WorkspaceExtensions={close(){closed++;},isOpen:()=>false};
+          api=async()=>target;
+          assert.equal(await openExtensionInstallRequest({sessionId:'B'},()=>true),true);
+          assert.equal(active.id,'B');assert.equal(active.permissionMode,'manual');assert.equal(closed,1);
+          assert.equal(drafts.get('A').text,'A 초안');assert.deepEqual(drafts.get('A').attachments,['A.txt']);
+          assert.equal($('prompt').value,'B 초안');assert.deepEqual(attachments,['B.txt']);
+        })()""")
+
+    def test_install_navigation_guard_preserves_view_when_store_changes_during_load(self):
+        self.run_case(r"""(async()=>{
+          active={id:'A',kind:'work',title:'A',workspace:'C:/A',state:'idle',messages:[],requests:[],seq:0};sessions=[active];
+          $('prompt').value='작성 중';poll=async()=>{};let current=true,resolve,closed=0;
+          globalThis.WorkspaceExtensions={close(){closed++;}};api=()=>new Promise(r=>resolve=r);
+          const pending=openExtensionInstallRequest({sessionId:'B'},()=>current);current=false;
+          resolve({id:'B'});assert.equal(await pending,false);assert.equal(active.id,'A');assert.equal(closed,0);assert.equal($('prompt').value,'작성 중');
+        })()""")
 
     def test_settings_warning_does_not_add_ui_or_load_assets_when_extensions_are_absent(self):
         self.run_case(r"""(()=>{

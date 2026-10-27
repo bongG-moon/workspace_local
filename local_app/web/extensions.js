@@ -77,7 +77,7 @@ globalThis.WorkspaceExtensions = (() => {
       if (owner.initialized) return;
       owner.initialized = true;
       const {workspace, title, kind} = owner.context;
-      post(owner, {type: "ax-extension-init", hostApi: 1, hostFeatures: ["workspaces", "publishFiles"], theme: theme(), context: {workspace, title, kind}});
+      post(owner, {type: "ax-extension-init", hostApi: 1, hostFeatures: ["workspaces", "publishFiles", "publishUpload", "installRequests", ...(hooks.openInstallRequest ? ["installRequestNavigation"] : [])], theme: theme(), context: {workspace, title, kind}});
       owner.loading.remove();
       return;
     }
@@ -89,7 +89,7 @@ globalThis.WorkspaceExtensions = (() => {
     try { length = JSON.stringify(data).length; } catch (_) { return; }
     if (length > MAX_MESSAGE || (data.payload !== undefined && !plain(data.payload))) return respond({ok: false, error: "확장 요청이 너무 크거나 형식이 올바르지 않아요."});
     if (owner.requests.size >= MAX_REQUESTS) return respond({ok: false, error: "확장 화면을 닫고 다시 열어 주세요."});
-    if (typeof data.action !== "string" || (!["host.openExternal", "host.pickDirectory", "host.pickFile", "host.listWorkspaces", "host.selectWorkspace"].includes(data.action) && !owner.extension.actions.includes(data.action)))
+    if (typeof data.action !== "string" || (!["host.openExternal", "host.pickDirectory", "host.pickFile", "host.uploadFile", "host.requestInstall", "host.listWorkspaces", "host.selectWorkspace"].includes(data.action) && !owner.extension.actions.includes(data.action)))
       return respond({ok: false, error: "이 확장에서 제공하지 않는 기능이에요."});
     owner.requests.add(data.requestId);
     if (data.action === "host.openExternal") {
@@ -123,6 +123,23 @@ globalThis.WorkspaceExtensions = (() => {
             typeof selected.directoryToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(selected.directoryToken)))
           throw Error("선택한 폴더를 확인하지 못했어요. 다시 선택해 주세요.");
         respond({ok: true, result: selected});
+      } else if (data.action === "host.requestInstall") {
+        const payload=data.payload||{};
+        if(!owner.extension.actions.includes(payload.action))throw Error("이 확장에서 설치 요청을 제공하지 않아요.");
+        const result=await hooks.api(`/api/extensions/${owner.extension.id}/install-request`,payload);
+        respond({ok:true,result});
+        // Acknowledgement is independent of navigation: failing to open a view
+        // must never turn an accepted installation into a retryable mutation.
+        if(result?.requested===true&&result.sessionId===payload.sessionId&&isCurrent(owner)&&hooks.openInstallRequest){
+          try{await hooks.openInstallRequest(result,()=>isCurrent(owner));}
+          catch(_){if(isCurrent(owner))hooks.notify?.("설치 요청은 전달됐지만 업무 화면을 열지 못했어요. 왼쪽 목록에서 선택한 업무를 열어 주세요.");}
+        }
+      } else if (data.action === "host.uploadFile") {
+        const file=data.payload?.file;
+        if (!(file instanceof File) || file.size<=0 || file.size>64*1024*1024 || !/\.(zip|md|axextension|exe|msi|ps1)$/i.test(file.name) || !hooks.uploadFile)
+          throw Error("64 MiB 이하의 배포 파일 한 개를 선택하세요.");
+        const selected=await hooks.uploadFile(owner.extension.id,file);
+        respond({ok:true,result:selected});
       } else if (data.action === "host.pickFile") {
         if (Object.keys(data.payload || {}).length) throw Error("등록할 파일은 파일 선택 창에서 선택해 주세요.");
         const selected = await hooks.api(`/api/extensions/${owner.extension.id}/file`, {});

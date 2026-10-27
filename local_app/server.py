@@ -139,6 +139,10 @@ class LocalApp:
         self.appearance = Appearance(state)
         self.layout_preferences = LayoutPreferences(state)
         self.extensions = ExtensionHost(state)
+        from .extension_tasks import ExtensionTasks
+        self.extension_tasks = ExtensionTasks(self)
+        from .llm_usage import UsageService
+        self.llm_usage = UsageService(demo=demo or os.environ.get("LLMOPS_DEMO") == "1")
         self.launcher_details = entry_details(WORKSPACE_VERSION)
         self.token = secrets.token_urlsafe(32)
         from .ui_health import UiHealthLog
@@ -2760,6 +2764,8 @@ class Handler(BaseHTTPRequestHandler):
                                        'demo':app.demo,'executionMode':app.execution_mode,'executionModeProtocol':EXECUTION_MODE_PROTOCOL,
                                        'upgradeProtocol':1,'window':app.window_state(), **app.shutdown_status()})
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
+            if route.path == '/api/llm-usage':
+                return self.reply(app.llm_usage.snapshot())
             if route.path == '/api/drafts':
                 return self.reply(app.drafts.snapshot())
             if route.path == '/api/session-groups':
@@ -2934,6 +2940,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
                       "/appearance.css": ("appearance.css", "text/css; charset=utf-8"),
                       "/extensions.js": ("extensions.js", "text/javascript; charset=utf-8"),
+                      "/llm-usage.js": ("llm-usage.js", "text/javascript; charset=utf-8"),
+                      "/llm-usage.css": ("llm-usage.css", "text/css; charset=utf-8"),
                       "/extension-import.js": ("extension-import.js", "text/javascript; charset=utf-8"),
                       "/extensions.css": ("extensions.css", "text/css; charset=utf-8"),
                       "/execution-mode.js": ("execution-mode.js", "text/javascript; charset=utf-8"),
@@ -2996,6 +3004,25 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, OSError):
             return self.reply({'error': '확장 파일을 준비하지 못했습니다. 파일을 다시 열어 주세요.'}, 400)
 
+    def upload_publish_file(self, extension_id):
+        self.close_connection = True
+        if (not self.valid_request() or self.headers.get('Content-Type') != 'application/octet-stream'
+                or self.headers.get('Transfer-Encoding')):
+            return self.reply({'error': '허용되지 않은 파일 전송입니다.'}, 403)
+        try:
+            from .extensions import MAX_PUBLISH_FILE
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= MAX_PUBLISH_FILE:
+                return self.reply({'error': '등록 파일은 64 MiB 이하여야 합니다.'}, 413)
+            name = unquote(self.headers.get('X-File-Name', ''), errors='strict')
+            self.connection.settimeout(30)
+            with self.server.app.operation():
+                return self.reply(self.server.app.extensions.receive_publish_file(extension_id, name, size, self.rfile))
+        except ExtensionError as exc:
+            return self.reply({'error': str(exc)}, exc.status)
+        except (OSError, ValueError):
+            return self.reply({'error': '파일을 전송하지 못했어요. 작성한 내용은 유지됩니다.'}, 400)
+
     def do_POST(self):
         if self.valid_request() and not self.execution_access(identity_only=urlsplit(self.path).path == '/api/window/open'):
             self.close_connection = True
@@ -3005,6 +3032,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.connection.settimeout(.5);self.rfile.read(length)
             except (OSError,ValueError):pass
             return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
+        upload_match = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/upload', urlsplit(self.path).path)
+        if upload_match:
+            return self.upload_publish_file(upload_match.group(1))
         if urlsplit(self.path).path == '/api/attachments/upload':
             return self.upload_attachment()
         if urlsplit(self.path).path == '/api/extensions/import/file':
@@ -3142,12 +3172,18 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == "/api/llm-usage":
+            if set(data) - {"refresh", "team"} or ("refresh" in data and type(data["refresh"]) is not bool):
+                raise ValueError("사용량 조회 조건을 확인해 주세요.")
+            return self.reply(app.llm_usage.snapshot(refresh=data.get("refresh", False), team=data.get("team")))
         extension_import = re.fullmatch(r'/api/extensions/import/(prepare|confirm|cancel|pending)', route)
         if extension_import:
             return self.reply(app.extensions.import_package(extension_import.group(1), data, app.pick))
-        extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory|file|workspaces|workspace)', route)
+        extension_route = re.fullmatch(r'/api/extensions/([a-z0-9.-]+)/(view|action|directory|file|workspaces|workspace|install-request)', route)
         if extension_route:
             extension_id, operation = extension_route.groups()
+            if operation == 'install-request':
+                return self.reply(app.extension_tasks.request(extension_id, data))
             if operation == 'view':
                 if data:
                     raise ValueError('확장 화면 요청의 항목을 확인해 주세요.')

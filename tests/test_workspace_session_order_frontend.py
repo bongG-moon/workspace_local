@@ -20,7 +20,7 @@ proto.setPointerCapture=function(id){this.capture=id;};proto.hasPointerCapture=f
 proto.getBoundingClientRect=function(){if(this.bounds)return this.bounds;if(this.classList.contains('session-row')){const top=this.parent.children.indexOf(this)*100-this.parent.scrollTop;return {left:0,top,right:300,bottom:top+100,width:300,height:100};}return {left:0,top:0,right:300,bottom:300,width:300,height:300};};
 globalThis.getComputedStyle=node=>node.testStyle||{};globalThis.innerWidth=1000;globalThis.innerHeight=800;
 let hitContainer='sessions',blockedHit=false,frames=[],cancelledFrames=[];
-document.elementFromPoint=(x,y)=>{if(blockedHit)return document.body;const box=$(hitContainer);return [...box.children].find(node=>{const bounds=node.getBoundingClientRect();return x>=bounds.left&&x<=bounds.right&&y>=bounds.top&&y<bounds.bottom;})?.querySelector('.session')||box;};
+document.elementFromPoint=(x,y)=>{if(blockedHit)return document.body;const box=$(hitContainer);return [...box.children].find(node=>{const bounds=node.getBoundingClientRect();return x>=bounds.left&&x<=bounds.right&&y>=bounds.top&&y<bounds.bottom;})?.querySelector(hitContainer==='home-recents'?'.recent-card':'.session')||box;};
 globalThis.requestAnimationFrame=callback=>{frames.push(callback);return frames.length;};globalThis.cancelAnimationFrame=id=>cancelledFrames.push(id);
 const event=(x=10,y=10,extra={})=>({pointerId:7,button:0,isPrimary:true,clientX:x,clientY:y,preventDefault(){this.prevented=true;},...extra});
 renderSessions();
@@ -61,7 +61,7 @@ class SessionOrderFrontendTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           const selected=[];selectSession=async id=>{selected.push(id);return true;};
           api=()=>{throw Error('A short click must not save task order');};
-          for(const [dx,dy] of [[0,0],[3,2]]){
+          for(const [dx,dy] of [[0,0],[3,2],[6,0],[12,8],[24,12]]){
             const original=row('A'),title=original.querySelector('.session');
             title.onpointerdown(event(80,250,{target:title}));
             title.onpointermove(event(80+dx,250+dy,{target:title}));
@@ -71,21 +71,20 @@ class SessionOrderFrontendTests(unittest.TestCase):
             assert.equal(row('A'),original);assert.equal(sessionPointerDrag,null);
             await title.onclick(event(80+dx,250+dy,{detail:1,target:title}));
           }
-          assert.deepEqual(selected,['A','A']);assert.equal(ids(),'C,B,A');
+          assert.deepEqual(selected,['A','A','A','A','A']);assert.equal(ids(),'C,B,A');
         })()""")
 
-    def test_title_drag_reorders_without_opening_and_next_real_click_still_works(self):
+    def test_grip_reorders_without_opening_and_title_click_still_works(self):
         self.run_case(r"""(async()=>{
           const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
           api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
           $('prompt').value='keep title-drag draft';attachments=['keep.zip'];
-          const original=row('A'),title=original.querySelector('.session');
+          const original=row('A'),title=original.querySelector('.session-drag');
           title.onpointerdown(event(80,250,{target:title}));
           title.onpointermove(event(80,15,{target:title}));
           sessions[0].state='running';renderSessions();assert.equal(row('A'),original);
           assert.equal(sessionPointerDrag.active,true);assert.ok(row('C').classList.contains('drop-before'));
           await title.onpointerup(event(80,15,{target:title}));
-          await title.onclick(event(80,15,{detail:1,target:title}));
           assert.deepEqual(selected,[]);assert.equal(ids(),'A,C,B');assert.equal(calls.length,1);
           assert.deepEqual(calls[0],{path:'/api/session/reorder',body:{id:'A',targetId:'C',position:'before'}});
           const next=row('A').querySelector('.session');
@@ -94,16 +93,16 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.deepEqual(selected,['A']);assert.equal($('prompt').value,'keep title-drag draft');assert.equal(attachments[0],'keep.zip');
         })()""")
 
-    def test_recent_and_all_task_titles_support_drag_and_ordinary_click(self):
+    def test_recent_and_all_tasks_use_grips_for_drag_and_titles_for_click(self):
         self.run_case(r"""(async()=>{
           const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
           api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
           showDialog('tasks-dialog');
           for(const container of ['home-recents','all-sessions']){
             boot.sessionOrder={};renderSessions();hitContainer=container;
-            const title=row('A',container).querySelector(container==='home-recents'?'.recent-card':'.session');
+            const title=row('A',container).querySelector('.session-drag');
             title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
-            await title.onpointerup(event(80,15,{target:title}));await title.onclick(event(80,15,{detail:1,target:title}));
+            await title.onpointerup(event(80,15,{target:title}));
             assert.equal(ids(),'A,C,B');assert.equal(selected.length,0);
             const click=row('B',container).querySelector(container==='home-recents'?'.recent-card':'.session');
             click.onpointerdown(event(80,250,{target:click}));await click.onpointerup(event(80,250,{target:click}));
@@ -112,7 +111,7 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.equal(calls.length,2);assert.ok(calls.every(call=>call.path==='/api/session/reorder'));
         })()""")
 
-    def test_title_drag_cancel_capture_loss_and_escape_cannot_open_or_reorder(self):
+    def test_title_cancel_capture_loss_and_escape_cannot_open_or_reorder(self):
         self.run_case(r"""(async()=>{
           const selected=[];selectSession=async id=>{selected.push(id);return true;};
           api=()=>{throw Error('Cancelled title drag must not save');};
@@ -127,20 +126,33 @@ class SessionOrderFrontendTests(unittest.TestCase):
           }
         })()""")
 
-    def test_exact_title_threshold_suppresses_click_but_keyboard_activation_remains(self):
+    def test_previous_drag_threshold_and_keyboard_both_open_task(self):
         self.run_case(r"""(async()=>{
           const selected=[];selectSession=async id=>{selected.push(id);return true;};
           api=()=>{throw Error('Same-row drag must not save');};
           const title=row('A').querySelector('.session');
           title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(86,250,{target:title}));
-          assert.equal(sessionPointerDrag.active,true);await title.onpointerup(event(86,250,{target:title}));
-          await title.onclick(event(86,250,{detail:1,target:title}));assert.deepEqual(selected,[]);
+          assert.equal(sessionPointerDrag.active,false);await title.onpointerup(event(86,250,{target:title}));
+          await title.onclick(event(86,250,{detail:1,target:title}));assert.deepEqual(selected,['A']);
           const keyboard=row('A').querySelector('.session');let prevented=false;
           keyboard.onkeydown?.({key:'Enter',preventDefault(){prevented=true;}});
           assert.equal(prevented,false);await keyboard.onclick({detail:0,preventDefault(){},target:keyboard});
-          assert.deepEqual(selected,['A']);
+          assert.deepEqual(selected,['A','A']);
           await row('B').querySelector('.session').onclick(event(80,150,{detail:1}));
-          assert.deepEqual(selected,['A','B']);
+          assert.deepEqual(selected,['A','A','B']);
+        })()""")
+
+    def test_title_release_on_another_row_does_not_open_or_reorder(self):
+        self.run_case(r"""(async()=>{
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          api=()=>{throw Error('Title movement must not save order');};
+          const title=row('A').querySelector('.session');
+          title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
+          sessions[1].state='running';renderSessions();assert.equal(row('A').querySelector('.session'),title);
+          await title.onpointerup(event(80,15,{target:title}));await title.onclick(event(80,15,{detail:1,target:title}));
+          assert.deepEqual(selected,[]);assert.equal(sessionPointerDrag,null);assert.equal(ids(),'C,B,A');
+          title.onpointerdown(event(80,250,{target:title}));await title.onpointerup(event(85,250,{target:title}));
+          await title.onclick(event(85,250,{detail:1,target:title}));assert.deepEqual(selected,['A']);
         })()""")
 
     def test_title_drag_handlers_do_not_turn_pin_or_remove_into_drag_handles(self):
