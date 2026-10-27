@@ -14,7 +14,7 @@ import uuid
 import zipfile
 
 from . import git_sync, source_archive, installer
-from .config import PublisherError, active, atomic_json, checked_version, normalize, runtime_config, safe_path
+from .config import PublisherError, active, atomic_json, checked_version, normalize, runtime_config, safe_path, usage_config
 from . import publish as publishing
 
 
@@ -290,6 +290,11 @@ class Publisher:
         injected = runtime_config(config)
         config_path = stage / 'workspace-update-source.json'
         atomic_json(config_path, injected)
+        usage = usage_config(config)
+        usage_path = stage / 'workspace-llm-usage.json'
+        if usage:
+            atomic_json(usage_path, usage)
+        usage_args = ['-UsageConfig', str(usage_path)] if usage else []
         # Refuse a moving checkout; build output is always tied to one reviewed HEAD.
         latest = self.inspect_source(require_clean=True, cancel=cancel)
         if latest['sourceKind'] != info['sourceKind'] or latest['sourceId'] != info['sourceId']:
@@ -305,14 +310,14 @@ class Publisher:
         self._info('회사 업데이트 주소를 포함한 EXE를 별도 폴더에서 빌드·검증합니다. 취소 요청은 현재 빌드 단계가 끝난 뒤 반영됩니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceStandalone.ps1'), '-UpdateConfig', str(config_path),
                      '-ConfigPython', sys.executable, '-OutputDirectory', str(output),
-                     '-VerificationDirectory', str(stage / 'v')], cwd=source, cancel=cancel)
+                     '-VerificationDirectory', str(stage / 'v'), *usage_args], cwd=source, cancel=cancel)
         active(cancel)
         exe = output / f"AX-Workspace-{info['version']}.exe"
         self._info('최신 버전 설치기, NSIS 설치 프로그램과 기존 앱 업데이트용 ZIP·체크섬을 만듭니다.' if nsis else
                    'EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceRelease.ps1'), '-UpdateConfig', str(config_path),
                      '-ConfigPython', sys.executable, '-StandaloneExe', str(exe), '-OutputDirectory', str(release),
-                     *(['-IncludeInstaller', '-NsisCompiler', str(nsis)] if nsis else [])],
+                     *usage_args, *(['-IncludeInstaller', '-NsisCompiler', str(nsis)] if nsis else [])],
                     cwd=source, cancel=cancel)
         active(cancel)
         try:
@@ -330,9 +335,10 @@ class Publisher:
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise PublisherError('EXE 내장 파일과 VBS 공통 파일의 빌드 검증 결과가 일치하지 않습니다. 게시하지 않았습니다.') from exc
         self.runner([sys.executable, str(source / 'scripts/test-lab/check-workspace-bundle.py'),
-                     str(release / f"AX-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path)],
+                     str(release / f"AX-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path),
+                     *(['--usage-config', str(usage_path)] if usage else [])],
                     cwd=source, cancel=cancel, timeout=120)
-        files = publishing.verify_files(release, info['version'], injected)
+        files = publishing.verify_files(release, info['version'], injected, usage)
         if nsis:
             installer.verify_build_report(source, release, info['version'], standalone['sha256'])
             installer.verify_online_build_report(source, release, info['version'], injected)
@@ -349,6 +355,8 @@ class Publisher:
         result = {'version': info['version'], 'commit': info['commit'], 'directory': str(release),
                   'sourceRoot': str(source), 'files': files, 'runtimeConfig': injected,
                   'sourceKind': info['sourceKind'], 'sourceId': info['sourceId']}
+        if usage:
+            result['usageConfig'] = usage
         atomic_json(stage / 'build-result.json', result)
         atomic_json(self.work_root / 'last-build.json', result)
         self._info('배포 파일과 기존 앱 업데이트용 호환 파일을 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
@@ -358,7 +366,7 @@ class Publisher:
         try:
             legacy_fields = {'version', 'commit', 'directory', 'sourceRoot', 'files', 'runtimeConfig'}
             if (not isinstance(build_result, dict)
-                    or set(build_result) not in (legacy_fields, legacy_fields | {'sourceKind', 'sourceId'})
+                    or set(build_result) - {'usageConfig'} not in (legacy_fields, legacy_fields | {'sourceKind', 'sourceId'})
                     or not isinstance(build_result['commit'], str)):
                 raise ValueError()
             source_kind = build_result.get('sourceKind', 'git')
@@ -378,6 +386,10 @@ class Publisher:
             if saved_path.stat().st_size > 256 * 1024 or json.loads(saved_path.read_text(encoding='utf-8')) != build_result:
                 raise ValueError()
             checked_version(build_result['version'])
+            if 'usageConfig' in build_result:
+                from local_app.llm_usage_config import normalize as normalize_usage
+                if normalize_usage(build_result['usageConfig']) != build_result['usageConfig']:
+                    raise ValueError()
             from local_app.update_source import source_from_config
             source = source_from_config(build_result['runtimeConfig'])
             if source.provider != 'gitlab' or source.config != build_result['runtimeConfig']:
@@ -392,9 +404,10 @@ class Publisher:
         directory = self._validated_build_metadata(build_result)
         try:
             expected_source = runtime_config(config)
-            if build_result['runtimeConfig'] != expected_source:
+            expected_usage = usage_config(config)
+            if build_result['runtimeConfig'] != expected_source or build_result.get('usageConfig') != expected_usage:
                 raise ValueError()
-            files = publishing.verify_files(directory, build_result['version'], expected_source)
+            files = publishing.verify_files(directory, build_result['version'], expected_source, expected_usage)
             if files != build_result['files']:
                 raise ValueError()
             if any(row['name'].endswith('-Setup.exe') for row in files):
@@ -469,7 +482,8 @@ class Publisher:
                 raise
             return self._require_current_installer(config, self._validated_build(config, candidate))
         if (isinstance(candidate, dict) and candidate.get('version') == version
-                and candidate.get('runtimeConfig') == runtime_config(config)):
+                and candidate.get('runtimeConfig') == runtime_config(config)
+                and candidate.get('usageConfig') == usage_config(config)):
             checked = self._validated_build(config, candidate)
             self._require_current_installer(config, checked)
             self._info('이전에 만든 배포 파일을 확인했습니다. 같은 파일로 게시를 이어갑니다.')

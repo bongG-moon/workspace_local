@@ -262,6 +262,7 @@ class PublisherJobsTests(unittest.TestCase):
     def test_build_identity_tracks_destination_but_allows_notes_and_token_kind_changes(self):
         self.assertEqual(build_identity(CONFIG), build_identity({**CONFIG, "notes": "새 설명", "tokenKind": "job"}))
         self.assertNotEqual(build_identity(CONFIG), build_identity({**CONFIG, "projectId": "99"}))
+        self.assertNotEqual(build_identity(CONFIG), build_identity({**CONFIG, "llmUsageMcpUrl": "http://usage.example.test/mcp"}))
         self.jobs.start("build", CONFIG)
         result = self.finish()[-1]
         self.assertEqual(BUILD, result["result"])

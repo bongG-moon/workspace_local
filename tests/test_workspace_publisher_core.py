@@ -25,7 +25,7 @@ CONFIG = {'schema': 1, 'baseUrl': 'https://gitlab.corp:8443/company', 'projectId
           'allowedDownloadOrigins': [], 'tokenKind': 'deploy', 'includeInstaller': False}
 
 
-def release_files(directory, source=None, *, branded=False, installer=False, online=False):
+def release_files(directory, source=None, *, branded=False, installer=False, online=False, usage=None):
     directory.mkdir(parents=True, exist_ok=True)
     source = source or runtime_config(CONFIG)
     entries = {'Company-Workspace.vbs': b'fixture', 'deploy/Start-CompanyWorkspace.ps1': b'fixture',
@@ -34,6 +34,8 @@ def release_files(directory, source=None, *, branded=False, installer=False, onl
                'desktop/Microsoft.Web.WebView2.Core.dll': b'fixture',
                'desktop/Microsoft.Web.WebView2.WinForms.dll': b'fixture', 'desktop/WebView2Loader.dll': b'fixture',
                'workspace-update-source.json': json.dumps(source).encode()}
+    if usage is not None:
+        entries['workspace-llm-usage.json'] = json.dumps(usage).encode()
     vbs = directory / f'Company-Workspace-{VERSION}-vbs.zip'
     with zipfile.ZipFile(vbs, 'w', zipfile.ZIP_DEFLATED) as archive:
         for name, content in entries.items():
@@ -66,7 +68,7 @@ def release_files(directory, source=None, *, branded=False, installer=False, onl
         packages.append(bootstrap)
     (directory / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.name + '\n'
                                                    for path in packages), encoding='utf-8')
-    files = verify_files(directory, VERSION, source)
+    files = verify_files(directory, VERSION, source, usage)
     return {'version': VERSION, 'commit': 'a' * 40, 'directory': str(directory), 'files': files, 'runtimeConfig': source}
 
 
@@ -314,8 +316,9 @@ class GitAndBuildTests(unittest.TestCase):
         elif '-File' in args:
             output = Path(args[args.index('-OutputDirectory') + 1])
             injected = json.loads(Path(args[args.index('-UpdateConfig') + 1]).read_text())
+            usage = json.loads(Path(args[args.index('-UsageConfig') + 1]).read_text()) if '-UsageConfig' in args else None
             release_files(output, injected, branded=True, installer='-IncludeInstaller' in args,
-                          online='-IncludeInstaller' in args)
+                          online='-IncludeInstaller' in args, usage=usage)
             if '-IncludeInstaller' in args:
                 setup = output / f'AX-Workspace-{VERSION}-Setup.exe'
                 standalone = Path(args[args.index('-StandaloneExe') + 1])
@@ -344,6 +347,31 @@ class GitAndBuildTests(unittest.TestCase):
     def build(self):
         with patch('local_app.windows_process.powershell_path', return_value='fixture-powershell.exe'):
             return self.publisher.build(CONFIG)
+
+    def test_usage_url_is_in_both_packages_and_validated_on_retry(self):
+        config = {**CONFIG, 'llmUsageMcpUrl': 'http://usage.example.test/mcp'}
+        with patch('local_app.windows_process.powershell_path', return_value='fixture-powershell.exe'):
+            result = self.publisher.build(config)
+        usage = {'schema':1, 'mcpUrl':'http://usage.example.test/mcp'}
+        self.assertEqual(usage, result['usageConfig'])
+        for args in self.calls[:2]:
+            self.assertEqual(usage, json.loads(Path(args[args.index('-UsageConfig')+1]).read_text()))
+        self.assertIn('--usage-config', self.calls[2])
+        self.assertEqual(result, self.publisher.load_last_build(config))
+        with self.assertRaises(PublisherError):
+            self.publisher.load_last_build(CONFIG)
+        with patch.object(self.publisher, 'build', return_value={'new':True}) as build:
+            self.assertEqual({'new':True}, self.publisher.prepare_deploy({**config, 'llmUsageMcpUrl':'http://other.example.test/mcp'}))
+            build.assert_called_once()
+
+    def test_unexpected_usage_sidecar_is_rejected(self):
+        directory = self.repo/'build/check-usage'
+        usage = {'schema':1, 'mcpUrl':'http://usage.example.test/mcp'}
+        release_files(directory, usage=usage)
+        with self.assertRaises(PublisherError):
+            verify_files(directory, VERSION, runtime_config(CONFIG))
+        with self.assertRaises(PublisherError):
+            verify_files(directory, VERSION, runtime_config(CONFIG), {**usage, 'mcpUrl':'http://other.example.test/mcp'})
 
     def test_clean_archive_build_keeps_source_and_git_unchanged(self):
         before = self.run_git('rev-parse', 'HEAD')

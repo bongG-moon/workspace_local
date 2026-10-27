@@ -68,7 +68,7 @@ class PublisherCliTests(unittest.TestCase):
 
     def test_zip_configure_skips_git_remote_and_release_prompts(self):
         prompts = []
-        values = iter(["https://gitlab.example", "42"])
+        values = iter(["https://gitlab.example", "42", "http://usage.example.test/mcp"])
         def answer(prompt):
             prompts.append(prompt)
             return next(values)
@@ -82,10 +82,11 @@ class PublisherCliTests(unittest.TestCase):
         self.assertEqual("", saved["releaseTag"])
         self.assertEqual("42", saved["projectId"])
         self.assertEqual("https://gitlab.example", saved["baseUrl"])
-        self.assertEqual(2, len(prompts))
+        self.assertEqual("http://usage.example.test/mcp", saved["llmUsageMcpUrl"])
+        self.assertEqual(3, len(prompts))
 
     def test_http_configure_rejected_before_save(self):
-        with patch("builtins.input", side_effect=["http://gitlab.example", "42"]):
+        with patch("builtins.input", side_effect=["http://gitlab.example", "42", ""]):
             code, _ = self.invoke(["configure"])
         self.assertEqual(1, code)
         self.publisher.save_config.assert_not_called()

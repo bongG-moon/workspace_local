@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.35"
+WORKSPACE_VERSION = "0.23.36"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -3173,6 +3173,8 @@ class Handler(BaseHTTPRequestHandler):
         app = self.server.app
         sid = data.get("id")
         if route == "/api/llm-usage":
+            if set(data) == {'configure'}:
+                return self.reply(app.llm_usage.configure_test(data['configure']))
             if set(data) - {"refresh", "team"} or ("refresh" in data and type(data["refresh"]) is not bool):
                 raise ValueError("사용량 조회 조건을 확인해 주세요.")
             return self.reply(app.llm_usage.snapshot(refresh=data.get("refresh", False), team=data.get("team")))

@@ -11,11 +11,11 @@ from urllib.parse import quote, quote_plus
 
 CONFIG_KEYS = ("schema", "baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag",
                "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind", "includeSource",
-               "includeInstaller", "nsisCompiler")
+               "includeInstaller", "nsisCompiler", "llmUsageMcpUrl")
 DEFAULT_CONFIG = {"schema": 1, "baseUrl": "", "projectId": "", "remoteName": "intranet",
                   "remoteUrl": "", "releaseTag": "", "title": "", "notes": "",
                   "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto", "includeSource": True,
-                  "includeInstaller": True, "nsisCompiler": ""}
+                  "includeInstaller": True, "nsisCompiler": "", "llmUsageMcpUrl": ""}
 TOKEN_LABELS = {"auto": "자동 감지", "access": "액세스 토큰 (Personal / Project)",
                 "deploy": "배포 토큰 (Deploy Token)", "job": "CI 작업 토큰 (Job Token)"}
 ACTION_NAMES = {"load": "설정과 소스 확인", "inspect": "소스 확인", "save": "설정 저장",
@@ -285,7 +285,7 @@ class PublisherWindow:
         self.mutable = []
         self.buttons = []
         self.fields = {key: tk.StringVar(value=DEFAULT_CONFIG[key]) for key in
-                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title", "nsisCompiler")}
+                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title", "nsisCompiler", "llmUsageMcpUrl")}
         self.origins, self.token = tk.StringVar(), tk.StringVar()
         self.sdk_url = tk.StringVar()
         self.sdk_label = tk.StringVar(value="SDK를 확인하고 있어요.")
@@ -350,6 +350,10 @@ class PublisherWindow:
         ttk.Label(basics, text="기본 브랜치에 소스를 보관합니다. api 범위의 Access Token과 브랜치 쓰기 권한이 필요합니다.\n"
                   "Deploy Token으로 설치 파일만 게시하려면 체크를 해제하세요.",
                   style="Note.TLabel", wraplength=730).grid(row=6, column=0, columnspan=2, sticky="w")
+
+        field(basics, 7, "LLM 사용량 MCP 주소 (선택)", self.fields["llmUsageMcpUrl"])
+        ttk.Label(basics, text="사용량 서버의 HTTP/HTTPS 주소와 /mcp 경로를 입력하세요. 개인 KEY는 각 사용자의 Claude 설정에서 읽습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=8, column=0, columnspan=2, sticky="w")
 
         self.sdk_summary = ttk.Label(outer, textvariable=self.sdk_label, style="Note.TLabel", wraplength=790)
         self.sdk_summary.pack(anchor="w", pady=(8, 0))

@@ -128,10 +128,26 @@
           </button>
           <section id="llm-usage-details" class="llm-usage-details" role="region" aria-label="LLM 사용량 상세" hidden>
             <header><strong>LLM 토큰 사용량</strong><button id="llm-usage-close" type="button" aria-label="사용량 상세 닫기">×</button></header>
+            <form id="llm-usage-connection" class="llm-usage-connection" hidden>
+              <span class="llm-usage-test-badge">연결 테스트</span>
+              <label for="llm-usage-url">사용량 MCP 서버 주소</label>
+              <input id="llm-usage-url" type="url" placeholder="https://서버주소/mcp" autocomplete="off" spellcheck="false" required maxlength="2048">
+              <p class="usage-note">주소만 입력하세요. KEY는 내 Claude 설정에서 자동으로 읽어요.</p>
+              <fieldset class="llm-usage-network">
+                <legend>연결 방식</legend>
+                <label><input type="radio" name="llm-usage-network" value="system" checked>기본 연결</label>
+                <label><input type="radio" name="llm-usage-network" value="direct">서버에 직접 연결</label>
+              </fieldset>
+              <p class="usage-note">기본 연결은 PC의 프록시 설정을 따릅니다. 직접 연결은 이 앱의 사용량 조회에만 적용돼요.</p>
+              <p id="llm-usage-network-state" class="usage-note" hidden></p>
+              <button id="llm-usage-connect" type="submit">저장하고 연결 확인</button>
+              <p id="llm-usage-connect-state" class="usage-note" role="status"></p>
+            </form>
             <label for="llm-usage-team">팀 예산 기준</label><select id="llm-usage-team" disabled><option>팀 확인 중</option></select>
             <div id="llm-usage-detail-amount" class="llm-usage-detail-amount">—</div>
             <dl><dt>남은 금액</dt><dd id="llm-usage-detail-remaining">—</dd><dt>다음 초기화</dt><dd id="llm-usage-reset">—</dd></dl>
-            <p id="llm-usage-detail-state" role="status"></p><p class="usage-note">팀의 사용 금액과 예산 한도 기준입니다. 실제 토큰 개수는 제공되지 않습니다. 사용량 조회 상태는 대화와 업무 실행에 영향을 주지 않습니다.</p>
+            <p id="llm-usage-reset-note" class="usage-note" hidden></p>
+            <p id="llm-usage-detail-state" role="status"></p><p id="llm-usage-diagnostic" class="usage-note" hidden></p><p class="usage-note">팀의 사용 금액과 예산 한도 기준입니다. 실제 토큰 개수는 제공되지 않습니다. 사용량 조회 상태는 대화와 업무 실행에 영향을 주지 않습니다.</p>
             <footer><span id="llm-usage-updated"></span><button id="llm-usage-refresh" type="button">새로고침</button></footer>
           </section>
         </section>

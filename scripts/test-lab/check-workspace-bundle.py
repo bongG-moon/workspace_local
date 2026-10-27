@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser()
 parser.add_argument("bundle", type=Path)
 parser.add_argument("--update-config", type=Path, help="Expected non-secret GitLab settings injected during packaging")
+parser.add_argument("--usage-config", type=Path, help="Expected non-secret usage MCP address injected during packaging")
 args = parser.parse_args()
 count = 0
 expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELIABILITY.md","AX-Workspace.vbs", "Company-Workspace.vbs", "docs/AX_WORKSPACE_STORY.html", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md", "docs/WORKSPACE_USER_GUIDE.html", "docs/WORKSPACE_0.15.0_CLAUDE.md",
@@ -40,7 +41,7 @@ expected.add('local_app/web/focus-navigation.js')
 expected.add('local_app/layout_preferences.py')
 expected.update({'local_app/extensions.py', 'local_app/extension_install.py', 'local_app/extension_open_client.py', 'local_app/web/extensions.js', 'local_app/web/extensions.css', 'local_app/web/extension-import.js'})
 expected.update({'local_app/build_identity.py', 'local_app/workspace_preferences.py'})
-expected.update({'local_app/extension_tasks.py', 'local_app/llm_usage.py',
+expected.update({'local_app/extension_tasks.py', 'local_app/llm_usage.py', 'local_app/llm_usage_config.py',
                  'local_app/web/llm-usage.js', 'local_app/web/llm-usage.css', 'docs/LLM_USAGE.md'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
@@ -85,6 +86,12 @@ if args.update_config is not None:
     assert configured.provider == 'gitlab'
     configuration_bytes = (json.dumps(configured.config, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
     expected.add('workspace-update-source.json')
+usage_bytes = None
+if args.usage_config is not None:
+    sys.path.insert(0, str(root))
+    from local_app.llm_usage_config import encoded, load
+    usage_bytes = encoded(load(args.usage_config))
+    expected.add('workspace-llm-usage.json')
 desktop = json.loads((root/'build/desktop-host/desktop-build.json').read_text())
 lock = json.loads((root/'deploy/WebView2.lock.json').read_text())
 assert desktop['sdkSha256'] == lock['sha256'] and desktop['sdkVersion'] == lock['version']
@@ -106,6 +113,8 @@ with zipfile.ZipFile(args.bundle) as bundle:
         assert not any(part in {"__pycache__", "history.json", "runtime.json", ".env", ".claude"} for part in Path(relative).parts), name
         if relative == 'workspace-update-source.json':
             assert configuration_bytes is not None and bundle.read(entry) == configuration_bytes, "Unexpected update settings"
+        elif relative == 'workspace-llm-usage.json':
+            assert usage_bytes is not None and bundle.read(entry) == usage_bytes, "Unexpected usage settings"
         else:
             source = root / 'build/desktop-host' / Path(relative).name if relative in generated else root / relative
             assert source.is_file(), name

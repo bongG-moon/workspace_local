@@ -39,6 +39,7 @@ def test_mcp_session_sse_and_team_selection(tmp_path):
     try:
         result=query_usage({'LLMOPS_MCP_URL':f'http://127.0.0.1:{server.server_port}/mcp','ANTHROPIC_AUTH_TOKEN':'test-secret'},tmp_path,team='hcp-free-tier')
         assert result['percent']==96 and result['team']=='free'
+        assert result['resetAt'] == '2026-10-28T00:00:00'  # Preserve the API value for display/diagnosis.
         assert len(seen)==4 and 'test-secret' not in json.dumps(result)
     finally: server.shutdown();server.server_close()
 

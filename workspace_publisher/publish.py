@@ -18,7 +18,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
-from .config import PublisherError, active, checked_version, https_base, runtime_config, safe_path
+from .config import PublisherError, active, checked_version, https_base, runtime_config, safe_path, usage_config
 from .installer import ONLINE_NAME
 from .release_history import publish_auxiliary
 from local_app.update_source import https_parts, origin, source_from_config
@@ -159,7 +159,7 @@ def _file(path):
     return raw
 
 
-def verify_files(directory, version, expected_source):
+def verify_files(directory, version, expected_source, expected_usage=None):
     """Recheck exact filenames, checksums, VBS contents and EXE ZIP before PUT."""
     version = checked_version(version)
     directory = safe_path(Path(directory))
@@ -206,6 +206,14 @@ def verify_files(directory, version, expected_source):
             source = json.loads(archive.read(by_name['Company-Workspace/workspace-update-source.json']).decode('utf-8-sig'))
             if source != expected_source:
                 raise ValueError()
+            from local_app.llm_usage_config import CONFIG_NAME, MAX_CONFIG, from_bytes, normalize
+            usage_entry = by_name.get('Company-Workspace/' + CONFIG_NAME)
+            if expected_usage is None:
+                if usage_entry is not None:
+                    raise ValueError()
+            elif (usage_entry is None or usage_entry.file_size > MAX_CONFIG
+                  or from_bytes(archive.read(usage_entry)) != normalize(expected_usage)):
+                raise ValueError()
         from local_app.managed_launcher import unpack_archive
         executable = unpack_archive(content[names[2]], version)
         for brand in ('Company-Workspace', 'AX-Workspace') if len(names) >= 5 else ('Company-Workspace',):
@@ -249,7 +257,7 @@ def publish(config, result, token, *, token_kind='auto', transport=None, emit=la
     source = runtime_config(config)
     token_kind = resolve_token_kind(token, token_kind)
     version = checked_version(result.get('version'))
-    files = verify_files(Path(result['directory']), version, source)
+    files = verify_files(Path(result['directory']), version, source, usage_config(config))
     expected = [{key: row[key] for key in ('name', 'size', 'sha256')} for row in result.get('files', [])]
     if expected != [{key: row[key] for key in ('name', 'size', 'sha256')} for row in files]:
         raise PublisherError('빌드 이후 배포 파일이 바뀌었습니다. 다시 빌드한 결과를 게시해 주세요.')

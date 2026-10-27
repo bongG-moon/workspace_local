@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python',
-      [switch]$IncludeInstaller, [string]$NsisCompiler)
+      [switch]$IncludeInstaller, [string]$NsisCompiler, [string]$UsageConfig)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
@@ -30,7 +30,7 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $stage = Join-Path $repoRoot ('build\workspace-release-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage, $outputRoot -Force | Out-Null
-& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython | Out-Null
+& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython -UsageConfig $UsageConfig | Out-Null
 $vbsSource = @(Get-ChildItem -LiteralPath (Join-Path $stage 'vbs') -Filter '*.zip')
 if ($vbsSource.Count -ne 1) { throw 'Expected one VBS source bundle.' }
 # Read resources only. Loading this local assembly does not run its entry point.

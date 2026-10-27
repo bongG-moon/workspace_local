@@ -46,6 +46,7 @@ def main(argv=None):
                 config['releaseTag'] = source['releaseTag']
             config['baseUrl'] = input(f"사내 GitLab HTTPS 서버 주소 [{config['baseUrl']}]: ").strip() or config['baseUrl']
             config['projectId'] = input(f"숫자 Project ID [{config['projectId']}]: ").strip() or config['projectId']
+            config['llmUsageMcpUrl'] = input(f"LLM 사용량 MCP 주소 (선택) [{config['llmUsageMcpUrl']}]: ").strip() or config['llmUsageMcpUrl']
             config = normalize(config)
             print('변경 내용은 소스의 배포 기록에서 자동으로 채웠습니다. 편집은 배포 창에서 할 수 있습니다.')
             result = publisher.save_config(config)

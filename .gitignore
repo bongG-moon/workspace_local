@@ -32,6 +32,8 @@ scripts/test-lab/ws38-diagnostic/reportRun/
 *.key
 # Site-specific, non-secret deployment settings are generated during packaging.
 workspace-update-source.json
+workspace-llm-usage.json
+llm-usage-test.json
 # Optional upstream sources and generated duplicate manual output.
 company-agent-plugin/scripts/
 company-agent-plugin/resources/manuals/

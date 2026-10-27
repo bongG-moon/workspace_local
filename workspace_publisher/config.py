@@ -17,7 +17,7 @@ class PublisherError(ValueError):
 DEFAULTS = {'schema': 1, 'baseUrl': '', 'projectId': '', 'remoteName': 'intranet',
             'remoteUrl': '', 'releaseTag': '', 'title': '', 'notes': '',
             'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': '', 'includeSource': True,
-            'includeInstaller': True, 'nsisCompiler': ''}
+            'includeInstaller': True, 'nsisCompiler': '', 'llmUsageMcpUrl': ''}
 VERSION = re.compile(r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z')
 
 
@@ -76,7 +76,7 @@ def normalize(config, *, require_target=True):
         raise PublisherError('NSIS 설치 파일 생성 여부는 켜기 또는 끄기로 선택해 주세요.')
     for key, limit in [('baseUrl', 2048), ('projectId', 20), ('remoteName', 80), ('remoteUrl', 2048),
                        ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20),
-                       ('nsisCompiler', 4096)]:
+                       ('nsisCompiler', 4096), ('llmUsageMcpUrl', 2048)]:
         if not isinstance(value[key], str) or len(value[key].encode('utf-8')) > limit or '\x00' in value[key]:
             raise PublisherError('게시 설정에 너무 길거나 올바르지 않은 값이 있습니다.')
     for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title', 'notesVersion', 'nsisCompiler'):
@@ -90,7 +90,20 @@ def normalize(config, *, require_target=True):
     if value['tokenKind'] not in {'auto', 'access', 'deploy', 'job'}:
         raise PublisherError('게시 토큰 종류는 자동 감지, Access Token, Deploy Token 또는 CI Job Token이어야 합니다.')
     value['allowedDownloadOrigins'] = list(dict.fromkeys(https_base(item, origin_only=True) for item in origins))
+    if value['llmUsageMcpUrl'].strip():
+        from local_app.llm_usage_config import checked_url
+        try:
+            value['llmUsageMcpUrl'] = checked_url(value['llmUsageMcpUrl'].strip())
+        except ValueError as exc:
+            raise PublisherError(str(exc)) from None
+    else:
+        value['llmUsageMcpUrl'] = ''
     return value
+
+
+def usage_config(config):
+    value = normalize(config)
+    return {'schema': 1, 'mcpUrl': value['llmUsageMcpUrl']} if value['llmUsageMcpUrl'] else None
 
 
 def runtime_config(config):
