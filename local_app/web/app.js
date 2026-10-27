@@ -1500,17 +1500,34 @@ function captureScreenRecovery(){
   const stashes=globalThis.WorkspaceShortcuts?.exportStashes()||[];if(stashes.length)snapshot.stashes=stashes;
   return snapshot;
 }
-async function restoreScreenRecovery(snapshot){
+const recoveryDraftOwners=()=>new Set(["home","home:chat","home:work",...sessions.map(row=>row.id)]);
+function captureUpgradeRecovery(){
+  const snapshot=captureScreenRecovery();
+  // Hidden/deleted task drafts are already retained by the draft store. Do not
+  // turn them into a new unresolved recovery on every update. The handoff must
+  // still flush that store successfully before it may close the current app.
+  if(!globalThis.WorkspaceDraftPersistence?.isReady?.())return snapshot;
+  const owners=recoveryDraftOwners();
+  snapshot.drafts=snapshot.drafts.filter(row=>owners.has(row.id));
+  if(snapshot.stashes)snapshot.stashes=snapshot.stashes.filter(row=>owners.has(row.id));
+  return snapshot;
+}
+async function restoreScreenRecovery(snapshot,{upgrade=false}={}){
   if(snapshot.stashes?.length&&!globalThis.WorkspaceShortcuts?.restoreStashes)throw new Error("임시 보관한 입력을 복원할 기능을 아직 준비하지 못했어요. 이전 기록은 유지합니다.");
   // Bootstrap may finish after the user has already edited this page. Existing
   // entries, including explicitly empty drafts, take precedence over the handoff.
   if($("prompt").value||attachments.length)saveDraft();
   const liveDraftIds=new Set(drafts.keys());
   const stashConflicts=globalThis.WorkspaceShortcuts?.restoreStashes(snapshot.stashes||[])||[];
-  for(const row of snapshot.drafts)if(!drafts.has(row.id))drafts.set(row.id,{text:row.text,attachments:[...row.attachments]});
+  const owners=recoveryDraftOwners();
+  // During an update, inaccessible drafts stay in the recovery record for the
+  // user's restore/discard choice, not in the live map captured next time.
+  // Screen-only recovery keeps its existing full snapshot behavior.
+  for(const row of snapshot.drafts)if((!upgrade||owners.has(row.id))&&!drafts.has(row.id))drafts.set(row.id,{text:row.text,attachments:[...row.attachments]});
   const id=snapshot.sessionId,exists=id&&sessions.some(row=>row.id===id);
   const conflicts=()=>snapshot.drafts.filter(row=>{
     const same=draft=>!!draft&&(draft.text||"")===row.text&&JSON.stringify(draft.attachments||[])===JSON.stringify(row.attachments);
+    if(upgrade&&!owners.has(row.id))return !!(row.text||row.attachments.length)&&!(row.id===id&&same(drafts.get(homeDraftKey())));
     if(!same(drafts.get(row.id)))return true;
     if(!row.text&&!row.attachments.length)return false;
     return !["home","home:chat","home:work"].includes(row.id)&&!sessions.some(item=>item.id===row.id)&&!(row.id===id&&same(drafts.get("home")));
@@ -1522,7 +1539,7 @@ async function restoreScreenRecovery(snapshot){
     restoreDraft(id);return {conflicts:conflicts()};
   }
   if(["chat","work"].includes(snapshot.mode)&&snapshot.mode!==currentMode){modeViews[snapshot.mode].selected=null;await switchMode(snapshot.mode);}
-  if(id&&!liveDraftIds.has(homeDraftKey())){const previous=drafts.get(id);if(previous)drafts.set(homeDraftKey(),{text:previous.text,attachments:[...previous.attachments]});}
+  if(id&&!liveDraftIds.has(homeDraftKey())){const previous=drafts.get(id)||(upgrade&&snapshot.drafts.find(row=>row.id===id));if(previous)drafts.set(homeDraftKey(),{text:previous.text,attachments:[...previous.attachments]});}
   if(currentMode==="work"&&!drafts.has("home")&&drafts.has("home:work"))drafts.set("home",drafts.get("home:work"));
   restoreDraft(homeDraftKey());return {missingSession:!!id&&!exists,conflicts:conflicts()};
 }
@@ -1548,7 +1565,7 @@ globalThis.WorkspaceStartupHealth?.attach({
   canReload:()=>!hasTaskOperations()&&!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()
 });
 globalThis.WorkspaceUpgrade?.attach({
-  api:(path,data)=>api(path,data),capture:captureScreenRecovery,restore:restoreScreenRecovery,
+  api:(path,data)=>api(path,data),capture:captureUpgradeRecovery,restore:snapshot=>restoreScreenRecovery(snapshot,{upgrade:true}),
   canCapture:()=>!hasTaskOperations()&&!restartingConnections.size&&!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
   canStopCapture:()=>!hasTaskOperations()&&!restartingConnections.size&&!(globalThis.WorkspaceStartupHealth?.snapshot().missing.length)&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!sessionOrderSaving&&!sessionPointerDrag&&!hidingSessionIds.size&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting(),
   confirmStopForUpdate:()=>confirmAction({title:"작업을 중지하고 업데이트할까요?",message:"이 앱의 진행 중인 작업과 승인·응답 대기를 중지한 뒤 새 버전으로 다시 시작합니다. 작성 중인 내용과 첨부 자료, 대화·파일·이어 할 일은 보관합니다. 중지한 요청은 자동으로 재실행하지 않습니다.",confirmLabel:"작업 중지 후 업데이트",danger:true}),

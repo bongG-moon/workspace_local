@@ -18,7 +18,7 @@ api=async(path,data)=>{calls.push({path,data});return data.action==='capture'
 
 @unittest.skipUnless(NODE, "Node.js is required for upgrade handoff UI checks")
 class WorkspaceUpgradeFrontendTests(unittest.TestCase):
-    def run_case(self, javascript):
+    def run_case(self, javascript, *, persisted_drafts=False):
         harness = HARNESS.replace(
             "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,",
             "const context={assert,console,URLSearchParams,AbortController,Date,Map,Set,TextEncoder,",
@@ -31,9 +31,16 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
             "vm.runInContext(fs.readFileSync(process.argv[5],'utf8'),context,{filename:'execution-mode.js'});\n"
             "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
         )
+        if persisted_drafts:
+            harness = harness.replace(
+                "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
+                "vm.runInContext(fs.readFileSync(process.argv[6],'utf8'),context,{filename:'drafts.js'});\n"
+                "vm.runInContext(fs.readFileSync(process.argv[2],'utf8'),context,{filename:'app.js'});",
+            )
         result = subprocess.run(
             [NODE, "-", str(ROOT / "local_app/web/app.js"), javascript,
-             str(ROOT / "local_app/web/upgrade-handoff.js"), str(ROOT / "local_app/web/execution-mode.js")],
+             str(ROOT / "local_app/web/upgrade-handoff.js"), str(ROOT / "local_app/web/execution-mode.js"),
+             str(ROOT / "local_app/web/drafts.js")],
             input=harness, text=True, encoding="utf-8", capture_output=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -192,11 +199,14 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[
             {id:'home',text:'old draft',attachments:['old.csv']},{id:'A',text:'saved task',attachments:['A.csv']}]}}});
           assert.equal($('prompt').value,'새 창에서 이미 작성한 내용');assert.deepEqual(attachments,['new.csv']);
-          assert.equal(drafts.get('A').text,'saved task');
+          assert.equal(drafts.has('A'),false);
           assert.equal(calls.length,0);assert.match($('upgrade-notice-text').textContent,/별도로 보관/);
           $('upgrade-recovery-open').onclick();
           assert.equal($('upgrade-recovery-text').value,'old draft');
           assert.equal($('upgrade-recovery-files').textContent,'old.csv');
+          $('upgrade-recovery-task').value='1';$('upgrade-recovery-task').onchange();
+          assert.equal($('upgrade-recovery-text').value,'saved task');
+          assert.equal($('upgrade-recovery-files').textContent,'A.csv');
           assert.equal($('prompt').value,'새 창에서 이미 작성한 내용');
           assert.equal(appClosed,false);
         })()""")
@@ -361,6 +371,93 @@ class WorkspaceUpgradeFrontendTests(unittest.TestCase):
           assert.equal($('upgrade-recovery-dialog').open,false);assert.equal($('prompt').value,'new edit');
           assert.equal($('upgrade-notice').hidden,true);
         })()""")
+
+    def test_discarded_missing_task_draft_does_not_return_on_next_update(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          $('prompt').value='현재 작성 중';attachments=['current.csv'];
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[
+            {id:'deleted-task',text:'지울 이전 초안',attachments:['old.csv']}]}}});
+          assert.equal(calls.length,0);$('upgrade-recovery-open').onclick();
+          assert.equal($('upgrade-recovery-text').value,'지울 이전 초안');
+          confirmAction=async()=>true;await $('upgrade-recovery-release').onclick();
+          assert.equal($('upgrade-notice').hidden,true);
+          await WorkspaceUpgrade.observe(captureState,{});
+          const next=calls.find(row=>row.data.action==='capture').data.snapshot;
+          assert.equal(next.drafts.some(row=>row.id==='deleted-task'),false);
+          assert.equal(next.drafts.find(row=>row.id==='home').text,'현재 작성 중');
+          await WorkspaceUpgrade.observe(null,{});
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:'a'.repeat(32),snapshot:next}});
+          assert.equal($('upgrade-notice').hidden,true);
+          assert.equal($('prompt').value,'현재 작성 중');assert.deepEqual(attachments,['current.csv']);
+          assert.equal(calls.filter(row=>row.data.action==='restored').length,2);
+        })()""")
+
+    def test_persisted_hidden_drafts_and_stashes_stay_saved_without_new_update_notice(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          let flushed=0;
+          globalThis.WorkspaceDraftPersistence={isReady:()=>true,keepForRecovery:()=>true,flush:async()=>{flushed++;}};
+          const hidden={text:'예전 버전에서 저장된 초안',attachments:['hidden.csv']};
+          drafts.set('hidden-task',hidden);drafts.set('visible-task',{text:'다른 업무 초안',attachments:['visible.csv']});
+          sessions=[{id:'visible-task',state:'idle'}];
+          const stashes=[{id:'hidden-task',text:'숨긴 업무 임시 보관',attachments:[],selectionStart:0,selectionEnd:0},
+            {id:'home:chat',text:'일반 대화 임시 보관',attachments:[],selectionStart:0,selectionEnd:0}];
+          globalThis.WorkspaceShortcuts={exportStashes:()=>stashes};
+          $('prompt').value='현재 입력';
+          await WorkspaceUpgrade.bootstrap({});await WorkspaceUpgrade.observe(captureState,{});
+          const next=calls[0].data.snapshot;
+          assert.equal(next.drafts.some(row=>row.id==='hidden-task'),false);
+          assert.equal(next.drafts.find(row=>row.id==='visible-task').text,'다른 업무 초안');
+          assert.deepEqual(next.stashes.map(row=>row.id),['home:chat']);
+          assert.deepEqual(drafts.get('hidden-task'),hidden);assert.equal(stashes.length,2);assert.equal(flushed,1);
+          // A screen-only reload must still preserve every draft, including hidden tasks.
+          assert.equal(captureScreenRecovery().drafts.some(row=>row.id==='hidden-task'),true);
+          assert.equal(captureScreenRecovery().stashes.length,2);
+        })()""")
+
+    def test_missing_chat_task_recovers_once_without_an_orphan_copy(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{mode:'chat',sessionId:'gone',drafts:[
+            {id:'gone',text:'일반 대화에서 쓰던 내용',attachments:['chat.csv']}]}}});
+          assert.equal(currentMode,'chat');assert.equal($('prompt').value,'일반 대화에서 쓰던 내용');
+          assert.deepEqual(attachments,['chat.csv']);assert.equal(drafts.has('gone'),false);
+          assert.equal(calls[0].data.action,'restored');assert.equal($('upgrade-notice').hidden,true);
+        })()""")
+
+    def test_legacy_saved_orphan_discard_survives_two_updates_with_real_draft_writer(self):
+        self.run_case("(async()=>{" + PRELUDE + """
+          const legacy={id:'old-task',revision:1,draft:{text:'예전 복원 복사본',attachments:['old.csv']},stash:null};
+          const stored=new Map([[legacy.id,legacy]]);
+          api=async(path,data)=>{
+            calls.push({path,data});
+            if(path==='/api/drafts'){
+              if(!data)return {entries:[...stored.values()],selectedId:'home'};
+              assert.equal(data.revision,stored.get(data.id)?.revision||0);
+              stored.set(data.id,{...data,revision:data.revision+1});return {revision:data.revision+1};
+            }
+            return data.action==='capture'?{ok:true,upgrade:capturedState}:{ok:true,upgradeRestore:null};
+          };
+          WorkspaceDraftPersistence.attach({api:(...args)=>api(...args),selected:()=>active?.id||homeDraftKey(),
+            stashes:()=>[],restoreStashes:()=>{}});
+          await WorkspaceDraftPersistence.load();$('prompt').value='현재 작성 내용';attachments=['current.csv'];
+          await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:upgradeId,snapshot:{sessionId:null,drafts:[
+            {id:legacy.id,...legacy.draft}]}}});
+          $('upgrade-recovery-open').onclick();confirmAction=async()=>true;
+          await $('upgrade-recovery-release').onclick();
+          assert.equal($('upgrade-notice').hidden,true);
+          for(const letter of ['a','b']){
+            await WorkspaceUpgrade.observe({...captureState,requestId:letter.repeat(32)},{});
+            const next=calls.filter(row=>row.data?.action==='capture').at(-1).data.snapshot;
+            assert.deepEqual(next.drafts.map(row=>row.id),['home']);
+            await WorkspaceUpgrade.observe(null,{});
+            await WorkspaceUpgrade.bootstrap({upgradeRestore:{requestId:letter.repeat(32),snapshot:next}});
+            assert.equal($('upgrade-notice').hidden,true);
+          }
+          assert.deepEqual(stored.get(legacy.id),legacy); // No hidden task content was deleted.
+          assert.equal(stored.get('home').draft.text,'현재 작성 내용');
+          assert.deepEqual(stored.get('home').draft.attachments,['current.csv']);
+          assert.equal(WorkspaceDraftPersistence.hasPending(),false);
+          assert.equal(calls.some(row=>row.path==='/api/send'),false);
+        })()""", persisted_drafts=True)
 
     def test_conflicting_old_version_draft_can_be_added_once_then_record_cleared(self):
         self.run_case("(async()=>{" + PRELUDE + """

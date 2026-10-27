@@ -167,8 +167,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "a95b0fba89ab9916c34a470c098bdee80def266f54afb7562d9b1a431329c2a2",
-      "size": 82311
+      "sha256": "fd3bcfa4c584269427372d5aab7e458669442dcf0313a00a952fe22853ef8ad1",
+      "size": 83215
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -267,8 +267,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.36.md",
-      "sha256": "9772c88502cea86db43a73209cbd2de431dadb0893bd2886381280512e73bc23",
-      "size": 2945
+      "sha256": "f159efafd66c328a0734d29143a9710e2182507a1d3bc65414aabe46de43a730",
+      "size": 3817
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -574,6 +574,11 @@
       "path": "docs/VALIDATION_CHAT_MODES_LOCAL.md",
       "sha256": "90df09a87f218ffd8ba2855678a2e8a7f4f817dbb9ad93bc6436ddb2e31306f4",
       "size": 8231
+    },
+    {
+      "path": "docs/VALIDATION_DRAFT_RECOVERY_20261028.md",
+      "sha256": "6e18492783f55030e84c061b93d6a174cb6dfc718ecdf196b6dcd8473a9035a9",
+      "size": 2518
     },
     {
       "path": "docs/VALIDATION_DURABILITY_0.23.21.md",
@@ -1302,13 +1307,13 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "892e44ea16641f931fcb6d6fe7206401e2cd34c910c12a8a255638d6e6747244",
-      "size": 190541
+      "sha256": "2255e7ef80bf4e2df8d2b9bd4dee4a00764480db05983addf8f1b6660c585f98",
+      "size": 191794
     },
     {
       "path": "local_app/web/appearance.css",
-      "sha256": "d93a2b04b21d3aa1852cb785aa3e20bbec73e24f629652f39c95b3d130b38ff5",
-      "size": 61497
+      "sha256": "57de891446a05509ed804dbf82131def9a2caa943513fd84d240c33217512743",
+      "size": 61652
     },
     {
       "path": "local_app/web/appearance.js",
@@ -1447,8 +1452,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "96a65b3de5d66306d18abda46af927d93b3251cea88b01622debf2cdc1e15207",
-      "size": 106277
+      "sha256": "39c7a47dd791296f7c8bf64ed9a1c51c856ab61cf989ad245f6c1d973f81591a",
+      "size": 106327
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -3092,8 +3097,8 @@
     },
     {
       "path": "tests/test_workspace_upgrade_frontend.py",
-      "sha256": "7287d1b8c698f6f4733470d2edaf9bfc599fab4b0832c8b7bc8ae1d93d2fc177",
-      "size": 37103
+      "sha256": "8e6881f057c6cd934bec717ba4b9d98329a0e0b8d3164ab819af3b990c1a9631",
+      "size": 44052
     },
     {
       "path": "tests/test_workspace_upgrade_handoff.py",
