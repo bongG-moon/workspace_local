@@ -438,7 +438,7 @@ def _image_size(raw, extension):
     raise AttachmentReadError('이미지의 실제 형식을 확인하지 못했어요. PNG·JPG·WEBP로 다시 저장해 주세요.')
 
 
-def prepare_chat_content(text: str, paths: list[str], cache_root: Path):
+def prepare_chat_content(text: str, paths: list[str], cache_root: Path, *, use_cache=True):
     """Return Claude user content blocks and safe, per-file UI notices.
 
     Errors are per attachment and also visible in the supplied content, so the
@@ -498,11 +498,12 @@ def prepare_chat_content(text: str, paths: list[str], cache_root: Path):
                         total_image_bytes += len(raw)
                     else:
                         key = f'v{CACHE_VERSION}-{_fingerprint(stream, limit)}{extension}.json'
-                        result = _cache_load(root, key)
+                        result = _cache_load(root, key) if use_cache else None
                         if result is None:
                             result = _office(stream, extension) if extension in OFFICE_TYPES else _text(stream)
                             _unchanged(path, stream, before)
-                            _cache_save(root, key, result)
+                            if use_cache:
+                                _cache_save(root, key, result)
                         _unchanged(path, stream, before)
                         value, partial, scope = result
                         remaining = MAX_TOTAL_CHARS - total_chars

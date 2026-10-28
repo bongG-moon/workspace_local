@@ -311,6 +311,11 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 @media(hover:none){.session-remove{opacity:1}}@media(forced-colors:active){.session-remove-icon{background-color:ButtonText}}
 
 /* Existing conversations are a start option; reuse the shared primary action. */
+.composer-heading .session-sync-button{gap:5px;color:var(--accent-ink)}
+.composer-heading .session-sync-button .icon{width:14px;height:14px;flex:none}
+.session-sync-note{margin:0 4px 7px;color:var(--muted);font-size:11px;line-height:1.6}
+.session-sync-note[data-error="true"]{color:var(--theme-danger,#a3515d)}
+.message-external-source{margin-left:7px;color:var(--muted);font-size:10px;font-weight:400}
 .folder-dialog{padding:24px 28px}.folder-dialog .dialog-symbol{width:36px;height:36px;border-radius:11px}.folder-dialog h2{font-size:22px;margin-top:15px}.folder-dialog .folder-options{margin:18px 0 12px}.folder-dialog .folder-option{padding:11px 12px}.folder-dialog label{margin-top:15px}.folder-dialog .folder-options label{margin-top:8px}.folder-dialog .trust{font-size:11px;margin-top:16px}.folder-dialog .trust small{font-size:10px}.folder-dialog .dialog-actions{margin-top:18px;padding-top:14px}
 .sidebar .palette-launcher{margin-top:8px}.session-import-option{width:100%;text-align:left;color:var(--ink);gap:11px}.session-import-option>span{flex:1;min-width:0}.session-import-option small{color:var(--muted)}.session-import-icon{width:17px;height:17px;color:var(--accent-ink)}.session-import-arrow{width:17px;height:17px;margin-left:auto;color:var(--accent-ink)}.session-import-option:hover{background:var(--accent-tint);border-color:var(--theme-line-accent, #b7bfe6)}.import-apply{min-height:42px;padding:10px 17px;border-radius:12px}.import-apply .icon{width:17px;height:17px}.import-apply:disabled{box-shadow:none}.import-dialog>.dialog-actions{align-items:center}
 @media(max-width:700px){.import-dialog>.dialog-actions .import-apply{width:100%;white-space:normal}.session-import-option{padding:13px 10px;gap:8px}}

@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.36"
+WORKSPACE_VERSION = "0.23.37"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -148,6 +148,7 @@ class LocalApp:
         from .ui_health import UiHealthLog
         self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
         self.lock = threading.RLock()
+        self._external_sync_probe_cache = {}
         from .execution_mode import checked_mode
         self.execution_mode = checked_mode(execution_mode)
         self._execution_peer = None
@@ -324,6 +325,183 @@ class LocalApp:
             current = str(Path(runtime_context(self.command)['configRoot']).resolve()) if self.command else ''
             if os.path.normcase(current) != os.path.normcase(item['importedConfigRoot']):
                 raise ValueError('이 대화를 가져온 Claude 설정 위치가 현재 연결과 다릅니다. 원래 환경으로 앱을 다시 열어 주세요.')
+
+    def import_session_updates(self, sid, *, probe=False):
+        """Append verified external messages without changing the CLI transcript.
+
+        File discovery and parsing run outside the shared app lock. The exact
+        task is reserved throughout, including while an idle owned bridge is
+        safely retired, so a concurrent app turn cannot reuse stale context.
+        """
+        from .session_import import SessionImporter, session_uuid
+        from .session_reconcile import new_messages
+        from .idle_connections import _prepare_release, _finish_release
+        marker = secrets.token_hex(16)
+        release_owner = object()
+        with self.lock:
+            self._require_running()
+            item = self.get(sid)
+            if self.demo or not self.command:
+                raise ValueError('기존 Claude Code 연결을 먼저 확인해 주세요.')
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            self._check_import_context(item)
+            native_id = session_uuid(item.get('sessionId'))
+            if item.get('kind') == 'chat':
+                self.chat_spaces.validate(sid, item['workspace'])
+            workspace = workspace_folder(item)
+            bridge = item.get('bridge')
+            if (item.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
+                    or any(item.get(key) for key in ('requests', 'choice', '_connecting', '_restarting',
+                        '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim',
+                        '_stopAdmission', '_idleReleasing', '_observationPending', '_chatPreparing', '_capacityReservation'))
+                    or sid in self.dispatch.steering
+                    or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
+                        '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain'))):
+                raise ValueError('이 대화의 진행 중인 작업과 연결 변경을 마친 뒤 불러와 주세요.')
+            if bridge is not None and getattr(bridge, 'closed', False) and getattr(bridge, 'cleanup_complete', False) is not True:
+                raise ValueError('이전 Claude 연결의 종료를 확인한 뒤 불러와 주세요.')
+            if bridge is not None and not bridge.closed and getattr(bridge, 'session_id', None) != native_id:
+                raise ValueError('현재 Claude 연결과 저장된 대화가 달라 불러오지 않았어요. 연결 상태를 확인해 주세요.')
+            original = deepcopy(item['messages'])
+            if not probe:
+                item['_restarting'] = marker
+                item['_connecting'] = True
+            revision = (item.get('updated'), item.get('seq'), len(original), native_id, str(workspace))
+        try:
+            root = Path(runtime_context(self.command)['configRoot']).resolve()
+            reader = SessionImporter(root)
+            if probe:
+                paths, truncated = reader._paths(time.monotonic() + reader.seconds, native_id)
+                if truncated or len(paths) != 1:
+                    return {'available': False}
+                path, info = paths[0]
+                fingerprint = (str(root), str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, revision)
+                with self.lock:
+                    cached = self._external_sync_probe_cache.get(sid)
+                    if cached and cached[0] == fingerprint:
+                        return {'available': cached[1]}
+            legacy_resolved = {}
+            legacy_total_bytes = 0
+            legacy_deadline = None
+
+            def resolve_legacy_attachment(row):
+                # Older app versions did not store a content fingerprint.
+                # Reconstruct only from this chat's unchanged uploaded copies,
+                # never from the original user file or another conversation.
+                nonlocal legacy_total_bytes, legacy_deadline
+                if item.get('kind') != 'chat':
+                    return None
+                key = id(row)
+                if key in legacy_resolved:
+                    return legacy_resolved[key][0]
+                if legacy_deadline is None:
+                    legacy_deadline = time.monotonic() + 5
+                if len(legacy_resolved) >= 20 or time.monotonic() >= legacy_deadline:
+                    raise ValueError('이전 첨부 확인 범위를 넘었어요. 기존 대화는 유지됩니다.')
+                files = row.get('files')
+                if not isinstance(files, list) or not files or len(files) > 12:
+                    return None
+                try:
+                    owned = self.attachment_store.owned_paths(sid, files)
+                    sizes = sum(safe(Path(path)).stat().st_size for path in owned)
+                    if len(owned) != len(files) or sizes < 0 or legacy_total_bytes + sizes > 32 * 1024 * 1024:
+                        raise ValueError('이전 첨부 확인 범위를 넘었어요. 기존 대화는 유지됩니다.')
+                    legacy_total_bytes += sizes
+                    blocks, notices = prepare_chat_content(row['text'], owned,
+                        self.chat_spaces.path(sid) / 'cache', use_cache=False)
+                    self.attachment_store.owned_paths(sid, owned)
+                    if time.monotonic() >= legacy_deadline:
+                        raise ValueError('이전 첨부 확인 시간이 초과됐어요. 기존 대화는 유지됩니다.')
+                    clean = lambda values: [{key: str(value.get(key, ''))[:1000] for key in ('name', 'status', 'message')}
+                                            for value in values]
+                    if clean(notices) != clean(row.get('attachmentReads') or []):
+                        raise ValueError('기존 첨부 내용을 정확히 확인하지 못해 불러오지 않았어요.')
+                    from .session_reconcile import content_fingerprint
+                    value = content_fingerprint(blocks)
+                    if time.monotonic() >= legacy_deadline:
+                        raise ValueError('이전 첨부 확인 시간이 초과됐어요. 기존 대화는 유지됩니다.')
+                    legacy_resolved[key] = (value, owned)
+                    return value
+                except (OSError, TypeError, KeyError, UnicodeError) as exc:
+                    raise ValueError('이 대화의 기존 첨부 사본을 확인하지 못했어요. 기존 내용은 유지됩니다.') from exc
+
+            def read_updates():
+                record = reader.load(native_id, sync=True)
+                if record.get('_syncIncomplete'):
+                    raise ValueError('Claude 기록의 전체 연결 순서를 확인하지 못했어요. 기존 대화는 유지됩니다.')
+                if (record['sessionId'] != native_id or not record.get('workspaceAvailable')
+                        or os.path.normcase(str(Path(record['workspace']).resolve())) != os.path.normcase(str(workspace.resolve()))):
+                    raise ValueError('Claude 기록의 세션 또는 작업 폴더가 현재 대화와 달라 불러오지 않았어요.')
+                additions = new_messages(original, record['messages'], legacy_resolver=resolve_legacy_attachment)
+                path, expected = record['_sourceIdentity']
+                info = safe(path).stat()
+                if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != expected:
+                    raise ValueError('Claude 기록이 변경 중입니다. 터미널 작업을 마친 뒤 다시 불러와 주세요.')
+                return record, additions
+
+            record, additions = read_updates()
+            if probe:
+                with self.lock:
+                    current = self.sessions.get(sid)
+                    if (current is not item or current.get('sessionId') != native_id
+                            or current.get('messages') != original or current.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
+                            or current.get('_connecting') or current.get('_restarting')):
+                        return {'available': False}
+                    if len(self._external_sync_probe_cache) >= 100:
+                        self._external_sync_probe_cache.clear()
+                    self._external_sync_probe_cache[sid] = (fingerprint, bool(additions))
+                    return {'available': bool(additions)}
+            if additions and bridge is not None and not bridge.closed:
+                with self.lock:
+                    if self.get(sid) is not item or item.get('_restarting') != marker or item.get('bridge') is not bridge:
+                        raise ValueError('대화 연결이 바뀌어 불러오기를 중단했어요. 다시 시도해 주세요.')
+                    old, resumable = _prepare_release(self, item, release_owner)
+                if not _finish_release(self, item, old, resumable):
+                    raise ValueError('기존 Claude 연결을 안전하게 정리하지 못해 불러오지 않았어요.')
+                # Closing the owned CLI can itself finish writing its record.
+                # Re-read its final stable snapshot before merging anything.
+                record, additions = read_updates()
+            if len(original) + len(additions) > 150 or sum(len(row.get('text', '')) + sum(len(p) for p in row.get('files', [])) for row in original + additions) > 500000:
+                raise ValueError('화면에 보관할 수 있는 대화 범위를 넘어 기존 기록을 유지했어요. 원본 Claude에서 확인해 주세요.')
+            for _, owned in legacy_resolved.values():
+                # Recheck original upload identity just before committing.
+                self.attachment_store.owned_paths(sid, owned)
+            with self.lock:
+                self._require_running()
+                if (self.get(sid) is not item or item.get('_restarting') != marker or item.get('sessionId') != native_id
+                        or item['messages'] != original or workspace_folder(item) != workspace):
+                    raise ValueError('대화가 변경되어 불러오기를 중단했어요. 다시 시도해 주세요.')
+                if additions:
+                    previous_updated = item['updated']
+                    for index, row in enumerate(original):
+                        if id(row) in legacy_resolved:
+                            item['messages'][index]['_syncContentHash'] = legacy_resolved[id(row)][0]
+                    item['messages'].extend(additions)
+                    item['updated'] = time.time()
+                    try:
+                        self.save(sid)
+                    except (OSError, ValueError):
+                        item['messages'] = original
+                        item['updated'] = previous_updated
+                        raise
+                # Release the per-task admission reservation before exposing
+                # the result; its returned connection status must not remain
+                # stuck in a fictitious restart after this request finishes.
+                item.pop('_restarting', None)
+                item['_connecting'] = False
+                if additions:
+                    self.emit(sid, 'history_synced', {'added': len(additions)})
+                return {'ok': True, 'session': self.public(item), 'added': len(additions),
+                        'warnings': record.get('warnings', [])}
+        finally:
+            with self.lock:
+                if self.sessions.get(sid) is item:
+                    if item.get('_idleReleasing') is release_owner:
+                        item.pop('_idleReleasing', None)
+                    if item.get('_restarting') == marker:
+                        item.pop('_restarting', None)
+                        item['_connecting'] = False
 
     def _load(self):
         self.workspace_preferences = WorkspacePreferences(self.state)
@@ -711,6 +889,10 @@ class LocalApp:
                             and not item.get('_connecting') and not item.get('_modelUpdating')
                             and (item.get('runActivity') or {}).get('runId') == item.get('lastRunId') else None),
             "requests": list(item.get("requests", {}).values())}
+        if any('_syncContentHash' in row for row in item['messages']):
+            # This digest is private reconciliation metadata, not UI content.
+            result['messages'] = [{key:value for key,value in row.items() if key != '_syncContentHash'}
+                                  for row in item['messages']]
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
         result['stopState'] = self.stop_state(item)
@@ -2321,9 +2503,12 @@ class LocalApp:
                 current['trusted'] = True
             restore = (not self.demo and bool(current.get('_sessionControls') or current.get('_idleRestoreControls') or current.get('_idleReleased') or self._needs_default_permission(current))
                        and (old_bridge is None or old_bridge.closed or current.get('_needsControlRestore')))
-        chat_content, notices = (None, [])
+        chat_content, notices, sync_content_hash = (None, [], None)
         if chat:
             chat_content, notices = prepare_chat_content(text.strip(), paths, self.chat_spaces.path(sid) / 'cache')
+            if paths:
+                from .session_reconcile import content_fingerprint
+                sync_content_hash = content_fingerprint(chat_content)
             if paths and not any(row.get('status') in {'read', 'partial'} for row in notices):
                 raise ValueError('첨부파일을 읽지 못했어요. ' + ' '.join(row['message'] for row in notices))
         if restore:
@@ -2401,6 +2586,8 @@ class LocalApp:
                 if chat:
                     item['messages'][-1]['attachmentReads'] = notices
                     item['attachmentReads'] = notices
+                    if sync_content_hash:
+                        item['messages'][-1]['_syncContentHash'] = sync_content_hash
                 if _dispatch_claim is not None:
                     item['messages'][-1]['requestId'] = _dispatch_claim
                 item["state"] = "starting"
@@ -3093,6 +3280,8 @@ class Handler(BaseHTTPRequestHandler):
             read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind',
                                   '/api/attachments/prepare', '/api/drafts', '/api/session/result-read'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
+            read_only = read_only or route == '/api/session/import-status'
+            read_only = read_only or route == '/api/llm-usage' and not (set(data) - {'refresh', 'team'})
             with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
         except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
@@ -3343,6 +3532,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.dispatch.action(sid, data))
         if route == '/api/claude-sessions/import':
             return self.reply(app.import_session(data.get('sessionId')))
+        if route == '/api/session/import-status':
+            if set(data) != {'id'}:
+                raise ValueError('대화 내용 확인 요청을 확인해 주세요.')
+            return self.reply(app.import_session_updates(sid, probe=True))
+        if route == '/api/session/import-updates':
+            if set(data) != {'id'}:
+                raise ValueError('대화 내용 불러오기 요청을 확인해 주세요.')
+            return self.reply(app.import_session_updates(sid))
         if route == '/api/notifications':
             action = data.get('action')
             if action == 'configure':

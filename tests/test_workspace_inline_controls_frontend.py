@@ -465,6 +465,18 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal(modes.length,4);assert.equal($('prompt'),document.activeElement);
         })()""")
 
+    def test_permission_success_uses_centered_transient_notice_without_duplicate_status(self):
+        self.run_case(r"""(async()=>{
+          active.connection.availablePermissionModes=['default','auto'].map(value=>({value,displayName:value}));
+          active.connection.permissionModeCycle=['default','auto'];
+          api=async(path,body)=>{assert.equal(path,'/api/permission-mode');return {permissionMode:body.mode,permissionModeOverride:body.mode};};
+          $('toast').textContent='기존 알림';$('prompt').focus();
+          await WorkspaceInlineControls.cyclePermission();
+          assert.equal(active.connection.permissionMode,'auto');
+          assert.doesNotMatch($('composer-control-status').textContent,/승인 모드 변경을 확인/);
+          assert.match($('toast').textContent,/이 연결의 승인 모드를 변경했어요/);assertDraft();
+        })()""")
+
     def test_shift_tab_joins_completion_connection_preparation_instead_of_rejecting_duplicate_connect(self):
         self.run_case(r"""(async()=>{
           active.connection=null;let finishConnect;const paths=[];

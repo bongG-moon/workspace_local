@@ -117,6 +117,12 @@ def row(item):
         if not isinstance(message, dict) or message.get('role') not in {'user','assistant'} or not isinstance(message.get('text'),str):
             raise ValueError('대화 메시지를 확인하지 못했습니다.')
         clean = {'role':message['role'], 'text':message['text'][:100000]}
+        if message.get('source') == 'claude':
+            clean['source'] = 'claude'
+        fingerprint = message.get('_syncContentHash')
+        if (message['role'] == 'user' and isinstance(fingerprint, str) and fingerprint.startswith('v2:')
+                and len(fingerprint) == 67 and all(c in '0123456789abcdef' for c in fingerprint[3:])):
+            clean['_syncContentHash'] = fingerprint
         run_id = safe_run_id(message.get('runId'))
         if run_id is not None:
             clean['runId'] = run_id

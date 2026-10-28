@@ -288,7 +288,8 @@ globalThis.WorkspaceInlineControls = (() => {
         }
         if (source.commandDraft || source.cycle) $("prompt").focus();
         const actualEffort = active.connection?.effort, confirmedEffort = active.connection?.effortSupport === "confirmed";
-        status(source.kind === "effort" ? (value === null ? result.response?.alreadyInherited ? "Effort auto · 기존 설정을 이미 상속하고 있어요." : "Effort auto · 이 연결에서 변경 전 확인한 수준으로 복원했어요." : confirmedEffort && actualEffort
+        if (source.kind === "permission") { notice = null; render(); }
+        else status(source.kind === "effort" ? (value === null ? result.response?.alreadyInherited ? "Effort auto · 기존 설정을 이미 상속하고 있어요." : "Effort auto · 이 연결에서 변경 전 확인한 수준으로 복원했어요." : confirmedEffort && actualEffort
             ? actualEffort === value ? `Effort ${actualEffort} 적용을 확인했어요.` : `Effort 요청 ${value} · 실제 적용 ${actualEffort} (모델·회사 정책 제한)`
             : `Effort ${value} 요청을 반영했어요. 실제 적용 수준은 확인하지 못했습니다.`)
           : source.kind === "model" ? (chatMode()?"모델을 변경했어요. 다음 질문부터 이 대화에 적용합니다.":"모델 변경을 확인했어요. 이 업무 연결에만 적용합니다.") : result.response?.reconnectRequired ? "다음 요청부터 기존 승인 설정을 사용합니다." : "승인 모드 변경을 확인했어요. 이 연결에만 적용합니다.",false,source);

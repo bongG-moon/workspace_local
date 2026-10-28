@@ -118,6 +118,61 @@ function endTaskOperation(operation){
   syncTaskOperations();
 }
 const hasTaskOperations = () => taskOperations.size>0;
+let sessionSyncAvailability=null, sessionSyncProbeGeneration=0, sessionSyncProbePending=null;
+function renderSessionSync(){
+  const button=$("session-sync"),note=$("session-sync-note"),owner=active?.id;
+  const pending=!!(owner&&taskOperations.get(owner)?.has("session-sync"));
+  button.hidden=!owner||!active?.sessionId||sessionSyncAvailability?.owner!==owner||sessionSyncAvailability?.available!==true||busyStates.has(active?.state)||secondaryViewOpen()||appClosed;
+  button.disabled=pending||busyStates.has(active?.state)||stopBlocked()||sending||!!choiceSubmission||modelChanging||permissionChanging||effortChanging||connectionPreparing||connectionRestarting()||!!globalThis.WorkspaceUpgrade?.isLocked();
+  $("session-sync-label").textContent=pending?"확인 중…":"대화 내용 불러오기";
+  if(note.dataset.owner!==owner)note.hidden=true;
+}
+// One asynchronous check when this conversation is selected. If it is busy,
+// defer that same check until it becomes idle; do not start a polling timer.
+function startSessionSyncProbe(){
+  const generation=++sessionSyncProbeGeneration;
+  sessionSyncAvailability=null;sessionSyncProbePending=null;renderSessionSync();
+  if(!active?.id||appClosed)return;
+  sessionSyncProbePending={owner:active.id,ticket:selectionGeneration,generation};
+  runPendingSessionSyncProbe();
+}
+function runPendingSessionSyncProbe(){
+  const probe=sessionSyncProbePending;
+  if(!probe)return;
+  if(appClosed||probe.generation!==sessionSyncProbeGeneration||active?.id!==probe.owner||selectionGeneration!==probe.ticket){sessionSyncProbePending=null;return;}
+  if(busyStates.has(active.state)||active.state==="stopping"||stopBlocked()||taskOperations.get(probe.owner)?.has("session-sync"))return;
+  sessionSyncProbePending=null;
+  const nativeId=active.sessionId;
+  if(!nativeId)return;
+  api("/api/session/import-status",{id:probe.owner}).then(result=>{
+    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){sessionSyncAvailability={owner:probe.owner,available:result.available===true};renderSessionSync();}
+  }).catch(()=>{
+    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){sessionSyncAvailability=null;renderSessionSync();}
+  });
+}
+function sessionSyncNotice(owner,message,failed=false){
+  if(active?.id!==owner||appClosed)return;
+  const note=$("session-sync-note");note.dataset.owner=owner;note.dataset.error=String(failed);note.textContent=message;note.hidden=false;
+}
+async function syncExternalSession(){
+  const owner=active?.id,ticket=selectionGeneration;
+  if(!owner||$("session-sync").hidden||$("session-sync").disabled)return;
+  const operation=beginTaskOperation("session-sync",owner);
+  $("session-sync-note").hidden=true;setStatus(active.state);
+  try{
+    const result=await api("/api/session/import-updates",{id:owner});
+    if(active?.id!==owner||selectionGeneration!==ticket||appClosed)return;
+    if(result.added>0){
+      if(!Number.isSafeInteger(result.session?.seq))throw Error("불러온 대화를 확인하지 못했어요. 업무를 다시 선택해 주세요.");
+      if(result.session.seq>=(active.seq||0))restoreEventSnapshot(result.session,owner);
+    }
+    sessionSyncAvailability=null;
+    const message=result.added>0?`다른 곳에서 이어 쓴 대화 ${result.added}개를 불러왔어요.`:"새로 불러올 대화가 없어요.";
+    sessionSyncNotice(owner,[message,...(result.warnings||[])].join(" "));
+  }catch(error){if(active?.id===owner&&selectionGeneration===ticket)sessionSyncNotice(owner,error.message||"대화 내용을 불러오지 못했어요. 기존 내용은 유지됩니다.",true);}
+  finally{endTaskOperation(operation);if(active?.id===owner&&!appClosed)setStatus(active.state);}
+}
+$("session-sync").onclick=syncExternalSession;
 const restartingConnections = new Map(), pendingRequestAnswers = new Map();
 function connectionRestarting(){return !!active&&(restartingConnections.has(active.id)||active.connection?.restarting===true);}
 globalThis.WorkspaceConnectionRestart={isCurrent:connectionRestarting,isAny:()=>restartingConnections.size>0,refreshControls:updateRestartControls};
@@ -136,9 +191,12 @@ function markViewTransition(id){const node=$(id);node.dataset.motionStep=node.da
 function showDialog(id){const dialog=$(id);for(let i=modalStack.length-1;i>=0;i--)if(!modalStack[i].open||modalStack[i]===dialog)modalStack.splice(i,1);if(id==="tasks-dialog")renderAllSessions();dialog.showModal();modalStack.push(dialog);}
 function toast(text){
   const notice=$("toast"),dialog=[...modalStack].reverse().find(item=>item.open);
-  notice.textContent=text;notice.hidden=false;notice.classList.toggle("in-dialog",!!dialog);
-  if(dialog){dialog.prepend(notice);notice.scrollIntoView({block:"nearest"});}else document.body.append(notice);
-  clearTimeout(toast.timer);toast.timer=setTimeout(()=>notice.hidden=true,6500);
+  clearTimeout(toast.timer);clearTimeout(toast.hideTimer);
+  notice.classList.remove("is-dismissing");notice.textContent=text;notice.hidden=false;notice.classList.toggle("in-dialog",!!dialog);
+  if(dialog){dialog.prepend(notice);notice.scrollIntoView({block:"nearest"});}
+  else {const composer=$("composer");if(composer.parentNode)composer.parentNode.insertBefore(notice,composer);else document.body.append(notice);}
+  toast.timer=setTimeout(()=>notice.classList.add("is-dismissing"),2820);
+  toast.hideTimer=setTimeout(()=>notice.hidden=true,3000);
 }
 function confirmAction({title,message,confirmLabel="확인",cancelLabel="취소",danger=false,returnFocus=document.activeElement}){
   // A second click cannot reuse an approval for a different action.
@@ -223,10 +281,11 @@ function setStatus(state,label,runId){
   globalThis.WorkspaceProgressView?.currentRun(runId||active?.lastRunId);
   const choosing=!!choiceSubmission&&choiceSubmission.sessionId===active?.id,dispatching=!!globalThis.WorkspaceWorkflow?.isSubmitting();
   $("send").hidden=false;$("send").disabled=(busy&&isGeneralChat())||stopping||stopFailed||!!globalThis.WorkspaceWorkflow?.isSubmitting()||!!globalThis.WorkspaceAttachments?.isUploading()||sending||!!choiceSubmission||modelChanging||permissionChanging||active?.connection?.permissionModeChangePending===true||effortChanging||connectionPreparing||connectionRestarting()||!!boot.error||appClosed;$("stop").hidden=!busy;$("stop").disabled=stopping||connectionRestarting()||appClosed;for(const card of $("requests").children)card.inert=stopBlocked()||connectionRestarting()||appClosed;$("task-title").disabled=!active||busy||appClosed;$("task-pin").disabled=!active||appClosed;
+  if(active&&taskOperations.get(active.id)?.has("session-sync"))$("send").disabled=true;
   $("prompt").readOnly=sending||choosing||dispatching||appClosed;$("attach").disabled=sending||choosing||attachmentPicking||appClosed;
   if(sending||choosing||appClosed)globalThis.WorkspaceComposer?.close();
   syncElapsed(busy,runId);if(active){const row=sessions.find(s=>s.id===active.id);if(row&&row.state!==state){row.state=state;renderSessions();}}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
-  updateRestartControls();renderStopFeedback();globalThis.WorkspaceAppUpdates?.contextChanged();
+  updateRestartControls();renderStopFeedback();renderSessionSync();runPendingSessionSyncProbe();globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(renderElapsed,1000);
 function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
@@ -511,7 +570,7 @@ function renderMessage(message){
   const raw=String(message.text||""),text=raw.slice(0,MESSAGE_TEXT_LIMIT),truncated=!!message.uiTruncated||raw.length>MESSAGE_TEXT_LIMIT;
   const sk=streamKey(message),existing=message.messageId?streaming.get(sk):null;
   if(existing){renderBoundedMessageText(existing.querySelector(".message-body"),text);existing.classList.remove("streaming");delete existing.dataset.streamText;delete existing.dataset.streamTruncated;existing.dataset.messageSize=String(text.length);if(message.runId)existing.dataset.runId=message.runId;streaming.delete(sk);messageTruncation(existing,truncated);boundConversation(existing);globalThis.WorkspaceRequestTiming?.sync(message.runId);return existing;}
-  const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);article.append(el("div",message.role==="user"?"나":"AX Workspace","message-label"));const body=el("div",null,"message-body");renderBoundedMessageText(body,text);article.append(body);if(fileText){if(globalThis.WorkspaceRichContent&&!message.pending)WorkspaceRichContent.files(article,message.files,{sessionId:active?.id,workspace:active?.workspace});else article.append(el("div",fileText,"message-files"));}if(message.role==="user")renderAttachmentReads(article,message.attachmentReads);article.dataset.runId=message.runId||"";messageTruncation(article,truncated);$("conversation").append(article);boundConversation(article);if(message.runId)globalThis.WorkspaceRequestTiming?.sync(message.runId);return article;
+  const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);const label=el("div",message.role==="user"?"나":"AX Workspace","message-label");if(message.source==="claude")label.append(el("span","다른 곳에서 이어 쓴 대화","message-external-source"));article.append(label);const body=el("div",null,"message-body");renderBoundedMessageText(body,text);article.append(body);if(fileText){if(globalThis.WorkspaceRichContent&&!message.pending)WorkspaceRichContent.files(article,message.files,{sessionId:active?.id,workspace:active?.workspace});else article.append(el("div",fileText,"message-files"));}if(message.role==="user")renderAttachmentReads(article,message.attachmentReads);article.dataset.runId=message.runId||"";messageTruncation(article,truncated);$("conversation").append(article);boundConversation(article);if(message.runId)globalThis.WorkspaceRequestTiming?.sync(message.runId);return article;
 }
 function applyDelta(data){
   const sk=streamKey(data);let article=streaming.get(sk);
@@ -660,7 +719,7 @@ function pendingUserMessageIndex(next,pending,operation){
 }
 function secondaryViewOpen(){return !!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.();}
 function taskHeader(){
-  globalThis.WorkspaceResultReceipts?.changed();
+  globalThis.WorkspaceResultReceipts?.changed();renderSessionSync();
   // Keep the task mounted for background events; only its view is suspended.
   const catalog=secondaryViewOpen();
   $("task-view").hidden=!active||catalog;
@@ -694,9 +753,9 @@ async function selectSession(id,{keepDraft=false,canActivate=null}={}){
   });
   if(pendingSend?.pending&&acknowledged<0)$("conversation").append(pendingSend.pending);
   globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length&&!pendingSend?.pending)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
-  globalThis.WorkspaceResultReceipts?.viewReady();taskHeader();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
+  globalThis.WorkspaceResultReceipts?.viewReady();taskHeader();startSessionSyncProbe();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
-function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceRequestTiming?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceExtensions?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;syncTaskOperations();started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
+function showHome(clear=false){if(appClosed)return;globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceRequestTiming?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceExtensions?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;startSessionSyncProbe();syncTaskOperations();started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();error("");setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
 function restoreEventSnapshot(next,id){
   if(!next||next.id!==id||active?.id!==id||!Array.isArray(next.messages)||!Array.isArray(next.requests)||!Number.isSafeInteger(next.seq))throw new Error("대화 화면의 복원 정보를 확인하지 못했어요. 업무를 다시 선택해 주세요.");
   const area=$("work-area"),conversation=$("conversation"),top=area.scrollTop;
@@ -765,6 +824,16 @@ async function poll(id,after,signal){
       let sliceStart=now(),handled=0;
       for(const event of result.events){
         if(!current())return;
+        // Another window may have refreshed this conversation while the poll
+        // was in flight. Never replay events already included in that snapshot.
+        if(event.seq<=active.seq){after=Math.max(after,active.seq);continue;}
+        if(event.type==="history_synced"){
+          const next=await api(`/api/session?id=${encodeURIComponent(id)}`,undefined,signal);
+          if(!current())return;
+          if(!Number.isSafeInteger(next.seq)||next.seq<event.seq)throw new Error("불러온 대화의 순서를 확인하지 못했어요. 업무를 다시 선택해 주세요.");
+          if(next.seq>=(active.seq||0))restoreEventSnapshot(next,id);
+          ++sessionSyncProbeGeneration;sessionSyncProbePending=null;sessionSyncAvailability=null;renderSessionSync();after=active.seq;continue;
+        }
         handleEvent(event);after=event.seq;active.seq=after;
         // A slow machine may receive hundreds of tool/status records at once.
         // Preserve their order but give pointer, keyboard and paint tasks a turn
@@ -994,6 +1063,7 @@ async function preview(path){
 function folderMode(){const managed=$("folder-mode-new").checked;$("folder-existing-fields").hidden=managed;$("folder-new-fields").hidden=!managed;$("folder-input").required=!managed;$("new-workspace-location").textContent=managedRootChoice||boot.managedWorkspaceRoot||boot.workspaceLocationError||"저장 위치를 선택해 주세요.";$("managed-location-note").textContent="이 위치 아래에 이번 업무 전용 폴더를 만듭니다. 기존 업무는 이동하지 않아요.";}
 function chooseFolder(resume=false){if(appClosed)return;if(isGeneralChat())return ensureChatSession();$("import-open").hidden=resume;$("folder-title").textContent=resume?"이전 업무 폴더에서 이어갈까요?":"새 업무를 시작해 볼까요?";$("folder-description").textContent=resume?"기존 대화와 폴더를 그대로 사용합니다. 이 폴더의 Claude 설정·후크·MCP 실행을 확인해 주세요.":"이름을 정하면, 대화와 결과를 함께 모아둘게요.";$("folder-dialog").setAttribute("aria-label",resume?"기존 업무 폴더 확인":"새 업무 시작");$("confirm-folder-label").textContent=resume?"확인하고 이어가기":"업무 시작";folderChoiceGeneration++;managedRootChoice=null;$("folder-input").value=active?.workspace||boot.defaultWorkspace||"";$("trust").checked=false;$("folder-form").dataset.resume=resume?"yes":"no";$("folder-form").dataset.afterTrust="";$("folder-input").readOnly=resume;$("browse-folder").disabled=resume;$("choose-managed").disabled=resume;$("folder-mode-new").disabled=$("folder-mode-existing").disabled=resume;$("folder-mode-new").checked=!resume;$("folder-mode-existing").checked=resume;$("task-name").value=resume?active.title:"";$("task-name").disabled=resume;folderMode();showDialog("folder-dialog");}
 async function submit(){
+  if(active&&taskOperations.get(active.id)?.has("session-sync"))return;
   if(sending||choiceSubmission||modelChanging||permissionChanging||active?.connection?.permissionModeChangePending===true||effortChanging||connectionPreparing||globalThis.WorkspaceConnectionRestart?.isCurrent()||globalThis.WorkspaceAttachments?.isUploading()||globalThis.WorkspaceWorkflow?.isSubmitting()||appClosed)return;
   if(globalThis.WorkspaceStop?.blocked()){saveDraft();toast(stopState()==="failed"?"중지 상태를 정리한 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.":"현재 작업의 중지가 끝난 뒤 다시 보내 주세요. 작성한 요청은 유지됩니다.");return;}
   if(!$("prompt").value.trim())return $("prompt").focus();
@@ -1299,7 +1369,7 @@ async function setModel(model){
 $("model-apply").onclick=()=>{const model=$("model-input").value.trim();if(!model)return toast("회사에서 사용할 수 있는 모델 이름을 입력해 주세요.");setModel(model);};$("model-reset").onclick=()=>setModel(null);
 $("model-select").onchange=()=>{if($("model-select").value)$("model-input").value=$("model-select").value;else $("model-input").focus();};
 $("model-input").oninput=()=>{$("model-select").value=modelOptions().some(item=>item.value===$("model-input").value)?$("model-input").value:"";};
-async function setPermissionMode(mode){
+async function setPermissionMode(mode,{notifySuccess=true}={}){
   if(permissionConnectionLocked()||(!active?.connection?.capabilities?.setPermissionMode&&mode!==null))return null;
   if(mode!==null)mode=permissionOptionValue(mode);
   if(mode===null&&active.connection?.permissionModeResetAvailable===false)return {ok:false,error:"변경 전 승인 모드를 확인하지 못해 복원할 수 없어요. 목록에서 지원하는 모드를 선택해 주세요."};
@@ -1315,7 +1385,7 @@ async function setPermissionMode(mode){
   try{
     const response=await api("/api/permission-mode",{id,mode,...(bypassConfirmed?{bypassConfirmed:true}:{})});if(!stillCurrent())return null;
     applyConnectionState(response);renderConnection(active.connection);$("permission-mode-select").value=active.connection?.permissionModeOverride||"";
-    toast(response.reconnectRequired?"다음 요청에서 기존 승인 설정으로 다시 연결합니다.":"이 연결의 승인 모드를 변경했어요. 기존 설정은 유지됩니다.");return {ok:true,response};
+    if(notifySuccess)toast(response.reconnectRequired?"다음 요청에서 기존 승인 설정으로 다시 연결합니다.":"이 연결의 승인 모드를 변경했어요. 기존 설정은 유지됩니다.");return {ok:true,response};
   }catch(e){if(!stillCurrent())return null;if(e.connection){applyConnectionState(e.connection);renderConnection(active.connection);}failure=e.message;return {ok:false,error:failure};}
   finally{endTaskOperation(operation);setStatus(active?.state||"idle",$("status-text").textContent,active?.lastRunId);if(stillCurrent()&&failure)$("permission-mode-message").textContent=failure;}
 }

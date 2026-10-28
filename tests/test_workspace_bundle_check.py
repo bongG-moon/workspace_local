@@ -91,6 +91,7 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
         self.assertIn('deploy/workspace-release-notes.json', self.entries)
         self.assertIn('local_app/release_history.py', self.entries)
         self.assertIn('local_app/event_recovery.py', self.entries)
+        self.assertIn('local_app/session_reconcile.py', self.entries)
         self.assertIn('local_app/web/result-receipts.js', self.entries)
         for relative in ('local_app/extension_tasks.py', 'local_app/llm_usage.py',
                          'local_app/web/llm-usage.js', 'local_app/web/llm-usage.css', 'docs/LLM_USAGE.md'):
@@ -101,7 +102,7 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
 
     def test_missing_required_source_files_are_rejected(self):
         for relative in ('docs/WORKSPACE_NSIS_INSTALLER.md', 'docs/WORKSPACE_ONLINE_INSTALLER.md',
-                         'local_app/server.py', 'deploy/workspace-release-notes.json',
+                         'local_app/server.py', 'local_app/session_reconcile.py', 'deploy/workspace-release-notes.json',
                          'local_app/extension_tasks.py', 'local_app/llm_usage.py',
                          'local_app/web/llm-usage.js', 'local_app/web/llm-usage.css', 'docs/LLM_USAGE.md',
                          'local_app/release_history.py', 'local_app/event_recovery.py', 'local_app/web/result-receipts.js', 'local_app/web/release-history.js',

@@ -144,10 +144,11 @@
 .app.chat-mode #capabilities-open,.app.chat-mode #schedule-overview-open,.app.chat-mode #task-group-create,
 .app.chat-mode #prompt-shortcuts,.app.chat-mode .work-home-only,
 .app.chat-mode #branch-open,.app.chat-mode #branch-origin,.app.chat-mode #imported-context,.app.chat-mode #progress-view,
-.app.chat-mode #verification-status,.app.chat-mode #workspace-choice,.app.chat-mode .workflow-toolbar,.app.chat-mode #followup-now,
+.app.chat-mode #verification-status,.app.chat-mode #workspace-choice,.app.chat-mode #workflow-open,.app.chat-mode #followup-now,
 .app.chat-mode #schedule-open,.app.chat-mode .composer-trigger-hints,.app.chat-mode #composer-effort,.app.chat-mode #composer-permission,
 .app.chat-mode #tool-activity-open,.app.chat-mode #tool-activity-badge{display:none!important}
 .app.chat-mode .composer-input-hints{justify-content:flex-end}
+.app.chat-mode .workflow-toolbar:has(#session-sync[hidden]){display:none!important}
 
 .chat-home{display:none}
 .app.chat-mode .chat-home{display:block}
@@ -377,6 +378,9 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 #settings-dialog .settings-footer{gap:8px;flex-wrap:wrap;padding-top:14px}
 #settings-dialog .settings-footer>a{margin-right:auto;font-size:12px}
 #settings-dialog .settings-credit{margin:12px 0 0;font-family:inherit;font-size:12px;font-weight:400;line-height:18px;text-align:left;color:var(--muted)}
+.toast{pointer-events:none;opacity:1;transition:opacity .18s ease}
+.toast:not(.in-dialog){position:static;inset:auto;transform:none;z-index:auto;width:fit-content;max-width:100%;margin:4px auto 8px;padding:7px 12px;font-size:12px;line-height:1.5}
+.toast.is-dismissing{opacity:0}
 #settings-dialog #quit{color:var(--theme-danger,#a3515d)}
 #settings-dialog #window-behavior-note{display:block;text-align:left;font-size:11px;line-height:1.7;margin:0 4px 14px}
 .title-row #branch-open{display:inline-flex;align-items:center;justify-content:center;flex:none;gap:6px;height:32px;min-height:32px;margin-left:4px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--theme-surface,#f2f4f9);box-shadow:none;color:var(--muted);font-size:12px;font-weight:500;line-height:20px;white-space:nowrap}
@@ -508,7 +512,8 @@ dialog.path-picker .path-picker-location .quiet-button{
 .app.mini-mode .primary-nav,.app.mini-mode .sidebar-footer,.app.mini-mode .brand-type small,
 .app.mini-mode #task-title,.app.mini-mode #task-pin,.app.mini-mode #branch-open,.app.mini-mode #workspace-summary,
 .app.mini-mode #connection-badge,.app.mini-mode #restart-connection,.app.mini-mode #materials-button,.app.mini-mode #workspace-button,
-.app.mini-mode .workflow-toolbar,.app.mini-mode .attachment-tools,.app.mini-mode .composer-runtime-controls,.app.mini-mode .composer-trigger-hints{display:none!important}
+.app.mini-mode #workflow-open,.app.mini-mode .attachment-tools,.app.mini-mode .composer-runtime-controls,.app.mini-mode .composer-trigger-hints{display:none!important}
+.app.mini-mode .workflow-toolbar:has(#session-sync[hidden]){display:none!important}
 .app.mini-mode .topbar{min-height:64px;padding-top:14px;padding-bottom:14px;align-items:center}
 .app.mini-mode .topbar-context{padding-bottom:0!important}
 .app.mini-mode .title-row{min-height:32px;align-items:center}

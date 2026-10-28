@@ -90,6 +90,64 @@ class ProgressHistoryTests(unittest.TestCase):
         persisted = WorkQueue(self.app.state).snapshot(other)
         self.assertEqual([rows[2]['id'], rows[1]['id']], [row['id'] for row in persisted['queue']])
 
+    def test_assistant_snapshot_never_exposes_response_before_durable_save(self):
+        # Reads may wait or return the previous snapshot, but must not expose
+        # a response whose body is still being committed to disk.
+        bridge = SimpleNamespace(closed=False, cleanup_complete=False, close=lambda: True)
+        self.item['bridge'] = bridge
+        entered, release = threading.Event(), threading.Event()
+        original = self.app.history._write
+        def delayed(path, payload):
+            if path.name == self.sid + '.json':
+                entered.set()
+                self.assertTrue(release.wait(4))
+            return original(path, payload)
+        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(self.app.history, '_write', side_effect=delayed):
+            saving = pool.submit(self.app.emit, self.sid, 'assistant', {'text': 'SYNTHETIC_UNCOMMITTED'},
+                                 _bridge=bridge, _origin=(self.item, self.item['lastRunId']))
+            try:
+                self.assertTrue(entered.wait(2))
+                snapshot = pool.submit(lambda: self.app.public(self.app.get(self.sid)))
+                try:
+                    early = snapshot.result(timeout=.15)
+                except TimeoutError:
+                    pass  # Waiting is the existing implementation, not a performance target.
+                else:
+                    self.assertNotIn('SYNTHETIC_UNCOMMITTED', [row['text'] for row in early['messages']])
+                self.assertFalse(saving.done())
+            finally:
+                release.set()
+            saving.result(timeout=2)
+            snapshot.result(timeout=2)
+        self.assertEqual('SYNTHETIC_UNCOMMITTED', self.saved()['messages'][-1]['text'])
+
+    def test_assistant_event_stays_before_later_same_session_event(self):
+        bridge = SimpleNamespace(closed=False, cleanup_complete=False, close=lambda: True)
+        self.item['bridge'] = bridge
+        entered, release, later_started = threading.Event(), threading.Event(), threading.Event()
+        original = self.app.history._write
+        def delayed(path, payload):
+            if path.name == self.sid + '.json':
+                entered.set()
+                self.assertTrue(release.wait(4))
+            return original(path, payload)
+        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(self.app.history, '_write', side_effect=delayed):
+            saving = pool.submit(self.app.emit, self.sid, 'assistant', {'text': 'first'},
+                                 _bridge=bridge, _origin=(self.item, self.item['lastRunId']))
+            try:
+                self.assertTrue(entered.wait(2))
+                def publish_later():
+                    later_started.set()
+                    self.app.emit(self.sid, 'notice', {'message': 'later'})
+                later = pool.submit(publish_later)
+                self.assertTrue(later_started.wait(2))
+            finally:
+                release.set()
+            saving.result(timeout=2)
+            later.result(timeout=2)
+        relevant = [event['type'] for event in self.item['events'] if event['type'] in {'assistant', 'notice'}]
+        self.assertEqual(['assistant', 'notice'], relevant)
+
     def test_sync_terminal_snapshot_cannot_be_overwritten_by_older_inflight_save(self):
         entered, release = threading.Event(), threading.Event()
         original = self.app.history._write

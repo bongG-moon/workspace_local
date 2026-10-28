@@ -105,7 +105,10 @@ class SessionImporter:
                     truncated = True
                     break
                 try:
-                    path = safe(Path(entry.path))
+                    # Validate the full path only for an actual candidate.
+                    # This avoids thousands of repeated ancestor checks for
+                    # unrelated projects while retaining safe() at use time.
+                    path = Path(entry.path)
                     if entry.is_dir(follow_symlinks=False):
                         result.append(path)
                 except (OSError, ValueError):
@@ -138,6 +141,9 @@ class SessionImporter:
                     continue
             for path in candidates:
                 try:
+                    # Most projects do not contain this UUID. A cheap lstat
+                    # rejects absent names before validating all ancestors.
+                    path.lstat()
                     info = safe(path).stat()
                     if stat.S_ISREG(info.st_mode):
                         result.append((path, info))
@@ -189,7 +195,7 @@ class SessionImporter:
             raise SessionImportError('changed', '세션 기록이 갱신 중입니다. 기존 Claude 작업을 마친 뒤 다시 확인해 주세요.')
         return rows, skipped, before
 
-    def _read(self, path, sid, deadline, *, preview=False):
+    def _read(self, path, sid, deadline, *, preview=False, sync=False):
         records, truncated, info = self._records(path, sid, deadline, preview=preview)
         nodes = OrderedDict()
         leaf = None
@@ -206,13 +212,26 @@ class SessionImporter:
             visited.add(leaf)
             node = nodes[leaf]
             chain.append(node)
-            leaf = node.get('parentUuid')
+            # Claude compaction starts a new context chain. For display-only
+            # reconciliation, its explicit logical parent links the preceding
+            # conversation without rewriting, replaying or substituting the
+            # summary for an actual user message. Missing links fail closed.
+            if sync and node.get('type') == 'system' and node.get('subtype') == 'compact_boundary':
+                leaf = node.get('logicalParentUuid')
+                if not isinstance(leaf, str) or not leaf:
+                    truncated = True
+                    break
+            else:
+                leaf = node.get('parentUuid')
             if leaf is not None and not isinstance(leaf, str):
                 truncated = True
                 break
         if leaf:
             truncated = True
         chain.reverse()
+        # A shortened visible tail is safe if its matching anchor is present;
+        # a broken/unknown parent chain or malformed record is not.
+        incomplete = truncated
         cwd = next((r.get('cwd') for r in reversed(chain) if isinstance(r.get('cwd'), str)), None)
         if (not cwd or len(cwd) > 8192 or any(ord(c) < 32 or 0xd800 <= ord(c) <= 0xdfff for c in cwd)
                 or not Path(cwd).is_absolute() or cwd.startswith(('\\\\', '//'))):
@@ -224,9 +243,21 @@ class SessionImporter:
             available = False
         messages, last_key = [], None
         for record in chain:
+            if sync and record.get('isCompactSummary') is True:
+                continue
             visible = _visible(record)
             if visible is None:
                 continue
+            if sync and visible['role'] == 'user':
+                content = record.get('message', {}).get('content')
+                if isinstance(content, list):
+                    visible['_syncBlocks'] = [_text(block.get('text')) for block in content
+                        if isinstance(block, dict) and block.get('type') == 'text']
+                    if any(isinstance(block, dict) and (block.get('type') in {'image', 'document'}
+                            or block.get('type') == 'text' and str(block.get('text', '')).startswith('[첨부 자료'))
+                            for block in content[1:]):
+                        from .session_reconcile import content_fingerprint
+                        visible['_syncContentHash'] = content_fingerprint(content)
             message_id = record.get('message', {}).get('id')
             key = (visible['role'], message_id) if visible['role'] == 'assistant' and isinstance(message_id, str) else None
             if key and key == last_key:
@@ -260,6 +291,9 @@ class SessionImporter:
                   'activeStatus': 'unknown', 'trusted': False}
         if not preview:
             result['messages'] = messages
+        if sync:
+            result['_syncIncomplete'] = incomplete
+            result['_sourceIdentity'] = (path, (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns))
         return result
 
     def discover(self, limit=50):
@@ -289,7 +323,7 @@ class SessionImporter:
             warnings.append('중복·변경 중·지원하지 않는 기록은 목록에서 제외했습니다.')
         return {'sessions': sessions, 'truncated': truncated, 'warnings': warnings}
 
-    def load(self, session_id):
+    def load(self, session_id, *, sync=False):
         sid = session_uuid(session_id)
         deadline = time.monotonic() + self.seconds
         paths, truncated = self._paths(deadline, sid)
@@ -299,4 +333,4 @@ class SessionImporter:
             raise SessionImportError('not_found', '현재 Claude 설정 폴더에서 해당 세션을 찾지 못했습니다.')
         if len(paths) != 1:
             raise SessionImportError('ambiguous', '같은 세션 ID가 여러 프로젝트에 있습니다. 원본 Claude Code에서 중복 기록을 확인해 주세요.')
-        return self._read(paths[0][0], sid, deadline)
+        return self._read(paths[0][0], sid, deadline, sync=sync)
