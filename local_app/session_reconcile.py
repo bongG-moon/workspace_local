@@ -126,7 +126,7 @@ def _same(current, source, legacy_resolver=None):
     return False
 
 
-def new_messages(current, source, *, legacy_resolver=None):
+def new_messages(current, source, *, legacy_resolver=None, source_anchor=None):
     def additions(rows):
         result = []
         for row in rows:
@@ -137,17 +137,23 @@ def new_messages(current, source, *, legacy_resolver=None):
                 clean['_syncContentHash'] = row['_syncContentHash']
             result.append(clean)
         return result
+    if not current and source_anchor is not None:
+        raise ValueError('원래 작업 폴더에서 이어진 대화인지 확인하지 못했어요. 기존 내용은 유지됩니다.')
     if not current:
         return additions(source)
     @lru_cache(maxsize=None)
     def aligned(i, j, roles):
         if i < 0 or j < 0:
-            return roles == 3
+            return roles == (7 if source_anchor is not None else 3)
         left, right = current[i], source[j]
         if left.get('role') != right.get('role'):
             return False
+        # Only a message that is actually matched to the app's retained
+        # conversation can establish the original workspace. An unrelated
+        # older or newly appended record must not satisfy that check.
+        anchored = 4 if source_anchor is not None and source_anchor(right) else 0
         if left.get('role') == 'user':
-            return _same(left, right, legacy_resolver) and aligned(i-1, j-1, roles | 1)
+            return _same(left, right, legacy_resolver) and aligned(i-1, j-1, roles | 1 | anchored)
         if left.get('role') != 'assistant':
             return False
         target = right.get('text', '')
@@ -165,7 +171,7 @@ def new_messages(current, source, *, legacy_resolver=None):
             combined = text if first == i else text + '\n' + combined
             if len(combined) > len(target):
                 break
-            if combined == target and aligned(first-1, j-1, roles | 2):
+            if combined == target and aligned(first-1, j-1, roles | 2 | anchored):
                 return True
         return False
     matches = [end for end in range(2, len(source) + 1) if aligned(len(current)-1, end-1, 0)]
@@ -173,4 +179,6 @@ def new_messages(current, source, *, legacy_resolver=None):
         raise ValueError('같은 대화 내용이 여러 위치에 있어 새 기록의 경계를 확인하지 못했어요. Claude 원본을 확인해 주세요.')
     if matches:
         return additions(source[matches[0]:])
+    if source_anchor is not None:
+        raise ValueError('원래 작업 폴더와 기존 대화의 연결 지점을 확인하지 못했어요. 기존 내용은 유지됩니다.')
     raise ValueError('기존 대화와 Claude 기록의 연결 지점을 확인하지 못했어요. 기존 내용은 유지됩니다.')

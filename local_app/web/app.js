@@ -131,6 +131,8 @@ function renderSessionSync(){
 // defer that same check until it becomes idle; do not start a polling timer.
 function startSessionSyncProbe(){
   const generation=++sessionSyncProbeGeneration;
+  const note=$("session-sync-note");
+  if(note.dataset.kind==="probe"){note.hidden=true;delete note.dataset.kind;}
   sessionSyncAvailability=null;sessionSyncProbePending=null;renderSessionSync();
   if(!active?.id||appClosed)return;
   sessionSyncProbePending={owner:active.id,ticket:selectionGeneration,generation};
@@ -147,12 +149,16 @@ function runPendingSessionSyncProbe(){
   api("/api/session/import-status",{id:probe.owner}).then(result=>{
     if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){sessionSyncAvailability={owner:probe.owner,available:result.available===true};renderSessionSync();}
   }).catch(()=>{
-    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){sessionSyncAvailability=null;renderSessionSync();}
+    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){
+      sessionSyncAvailability=null;renderSessionSync();
+      // Never surface untrusted diagnostics, transcripts, paths or keys.
+      sessionSyncNotice(probe.owner,"다른 곳에서 이어 쓴 대화를 확인하지 못했어요. 다른 도구의 작업을 마친 뒤 이 대화를 다시 선택해 주세요.",true,"probe");
+    }
   });
 }
-function sessionSyncNotice(owner,message,failed=false){
+function sessionSyncNotice(owner,message,failed=false,kind="import"){
   if(active?.id!==owner||appClosed)return;
-  const note=$("session-sync-note");note.dataset.owner=owner;note.dataset.error=String(failed);note.textContent=message;note.hidden=false;
+  const note=$("session-sync-note");note.dataset.owner=owner;note.dataset.error=String(failed);note.dataset.kind=kind;note.textContent=message;note.hidden=false;
 }
 async function syncExternalSession(){
   const owner=active?.id,ticket=selectionGeneration;

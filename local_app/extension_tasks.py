@@ -3,9 +3,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sqlite3
 import threading
 
-from .history import HistoryStore
 from .extensions import no_links
 
 
@@ -14,6 +14,51 @@ class ExtensionTasks:
         self.app = app
         self.lock = threading.Lock()
         self.path = app.state / 'extension-install-requests.json'
+        self.database = app.state / 'extension-install-requests.sqlite3'
+
+    def _open_records(self):
+        # Keep the original JSON as a recovery backup. Older app versions can
+        # write it again; re-import changes atomically without losing new rows.
+        no_links(self.database.parent).mkdir(parents=True, exist_ok=True)
+        no_links(self.database)
+        for suffix in ('-journal', '-wal', '-shm'):
+            no_links(Path(str(self.database) + suffix))
+        connection = sqlite3.connect(str(self.database), timeout=5)
+        try:
+            with connection:
+                connection.execute('CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                connection.execute('CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                path = no_links(self.path)
+                stat = path.stat() if path.exists() else None
+                signature = f'{stat.st_mtime_ns}:{stat.st_size}' if stat else 'none'
+                imported = connection.execute("SELECT value FROM metadata WHERE key = 'legacy_signature'").fetchone()
+                if not imported or imported[0] != signature:
+                    legacy = json.loads(path.read_text(encoding='utf-8')) if stat else {}
+                    if not isinstance(legacy, dict):
+                        raise ValueError('기존 설치 요청 기록을 확인할 수 없습니다.')
+                    for key, value in legacy.items():
+                        if not isinstance(key, str) or not isinstance(value, dict) or not isinstance(value.get('binding'), str):
+                            raise ValueError('기존 설치 요청 기록을 확인할 수 없습니다.')
+                        existing = connection.execute('SELECT value FROM requests WHERE id = ?', (key,)).fetchone()
+                        if existing:
+                            current = json.loads(existing[0])
+                            if current.get('binding') != value['binding'] or current.get('sessionId') != value.get('sessionId'):
+                                raise ValueError('이전 버전의 설치 요청 기록이 달라 복구가 필요합니다.')
+                            for field in ('artifact', 'result'):
+                                if current.get(field) and value.get(field) and current[field] != value[field]:
+                                    raise ValueError('이전 버전의 설치 요청 기록이 달라 복구가 필요합니다.')
+                            value = {**value, **current}
+                        # Completed requests need only their binding and response;
+                        # incomplete requests retain their artifact for recovery.
+                        if value.get('result'):
+                            value = {name: value[name] for name in ('binding', 'sessionId', 'result') if name in value}
+                        connection.execute('INSERT OR REPLACE INTO requests (id, value) VALUES (?, ?)',
+                                           (key, json.dumps(value, ensure_ascii=False)))
+                    connection.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('legacy_signature', ?)", (signature,))
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
     def request(self, extension_id, data):
         allowed = {'requestId', 'scope', 'sessionId', 'action', 'payload', 'confirmed'}
@@ -26,10 +71,12 @@ class ExtensionTasks:
         binding = hashlib.sha256(json.dumps([extension_id, data], sort_keys=True).encode()).hexdigest()
         if not self.lock.acquire(blocking=False):
             raise ValueError('다른 설치 요청을 준비하고 있습니다. 잠시 뒤 다시 시도해 주세요.')
+        connection = None
         try:
-            records = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+            connection = self._open_records()
             key, sid = data['requestId'], data['sessionId']
-            record = records.get(key)
+            stored = connection.execute('SELECT value FROM requests WHERE id = ?', (key,)).fetchone()
+            record = json.loads(stored[0]) if stored else None
             if record and record['binding'] != binding:
                 raise ValueError('설치 요청 내용이 변경되었습니다. 새 요청으로 진행해 주세요.')
             if record and record.get('result'):
@@ -42,11 +89,11 @@ class ExtensionTasks:
                 workspace = no_links(Path(item['workspace']))
                 title = item['title']
             def save():
-                HistoryStore(self.app.state)._write(self.path, json.dumps(records, ensure_ascii=False).encode())
+                with connection:
+                    connection.execute('INSERT OR REPLACE INTO requests (id, value) VALUES (?, ?)',
+                                       (key, json.dumps(record, ensure_ascii=False)))
             if not record:
-                if len(records) >= 1000:
-                    raise ValueError('보관된 설치 요청이 많습니다. 기존 설치 업무에서 계속 진행해 주세요.')
-                record = records[key] = {'binding': binding, 'sessionId': sid}
+                record = {'binding': binding, 'sessionId': sid}
                 save()
             directory = no_links(workspace / '.ax-install-requests' / key)
             directory.mkdir(parents=True, exist_ok=True)
@@ -90,7 +137,10 @@ class ExtensionTasks:
                                  if snapshot.get('paused') else
                                  '설치 요청을 전달했습니다. 진행 중인 작업이 없으면 자동으로 시작하고, 작업 중이면 끝난 뒤 이어서 실행합니다.')}
             record['result'] = result
+            record.pop('artifact', None)
             save()
             return result
         finally:
+            if connection is not None:
+                connection.close()
             self.lock.release()

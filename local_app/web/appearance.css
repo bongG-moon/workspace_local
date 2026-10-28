@@ -379,7 +379,8 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 #settings-dialog .settings-footer>a{margin-right:auto;font-size:12px}
 #settings-dialog .settings-credit{margin:12px 0 0;font-family:inherit;font-size:12px;font-weight:400;line-height:18px;text-align:left;color:var(--muted)}
 .toast{pointer-events:none;opacity:1;transition:opacity .18s ease}
-.toast:not(.in-dialog){position:static;inset:auto;transform:none;z-index:auto;width:fit-content;max-width:100%;margin:4px auto 8px;padding:7px 12px;font-size:12px;line-height:1.5}
+.toast:not(.in-dialog){position:absolute;top:auto;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);z-index:30;width:max-content;max-width:calc(100% - 24px);margin:0;padding:7px 12px;font-size:12px;line-height:1.5}
+.composer-wrap:has(#latest-response:not([hidden])) .toast:not(.in-dialog){bottom:calc(100% + 44px)}
 .toast.is-dismissing{opacity:0}
 #settings-dialog #quit{color:var(--theme-danger,#a3515d)}
 #settings-dialog #window-behavior-note{display:block;text-align:left;font-size:11px;line-height:1.7;margin:0 4px 14px}

@@ -368,18 +368,41 @@ class LocalApp:
                 item['_restarting'] = marker
                 item['_connecting'] = True
             revision = (item.get('updated'), item.get('seq'), len(original), native_id, str(workspace))
+            probe_state, probe_workspace = item.get('state'), item.get('workspace')
+
+        def require_unchanged_probe():
+            # Caller holds app.lock. Both cached and freshly read results need
+            # the same admission and identity check; a race is not "no changes".
+            current = self.sessions.get(sid)
+            if (current is not item or current.get('sessionId') != native_id
+                    or current.get('messages') != original or current.get('state') != probe_state
+                    or current.get('updated') != revision[0] or current.get('seq') != revision[1]
+                    or current.get('workspace') != probe_workspace or current.get('bridge') is not bridge
+                    or current.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
+                    or any(current.get(key) for key in ('requests', 'choice', '_connecting', '_restarting',
+                        '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_choiceAnswerClaim',
+                        '_stopAdmission', '_idleReleasing', '_observationPending', '_chatPreparing', '_capacityReservation'))
+                    or sid in self.dispatch.steering
+                    or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
+                        '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain'))):
+                raise ValueError('확인 중 대화 상태가 바뀌었어요. 같은 대화를 다시 선택해 주세요.')
         try:
             root = Path(runtime_context(self.command)['configRoot']).resolve()
             reader = SessionImporter(root)
             if probe:
                 paths, truncated = reader._paths(time.monotonic() + reader.seconds, native_id)
-                if truncated or len(paths) != 1:
-                    return {'available': False}
+                if truncated:
+                    raise ValueError('Claude 대화 기록이 확인 범위를 넘었어요. 원본 Claude Code에서 확인해 주세요.')
+                if not paths:
+                    raise ValueError('이 대화의 Claude 기록을 찾지 못했어요. 같은 사용자와 Claude 설정으로 열었는지 확인해 주세요.')
+                if len(paths) != 1:
+                    raise ValueError('같은 Claude 세션 기록이 여러 위치에 있어 확인을 중단했어요. 원본 Claude Code에서 확인해 주세요.')
                 path, info = paths[0]
                 fingerprint = (str(root), str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, revision)
                 with self.lock:
                     cached = self._external_sync_probe_cache.get(sid)
                     if cached and cached[0] == fingerprint:
+                        require_unchanged_probe()
                         return {'available': cached[1]}
             legacy_resolved = {}
             legacy_total_bytes = 0
@@ -430,10 +453,45 @@ class LocalApp:
                 record = reader.load(native_id, sync=True)
                 if record.get('_syncIncomplete'):
                     raise ValueError('Claude 기록의 전체 연결 순서를 확인하지 못했어요. 기존 대화는 유지됩니다.')
-                if (record['sessionId'] != native_id or not record.get('workspaceAvailable')
-                        or os.path.normcase(str(Path(record['workspace']).resolve())) != os.path.normcase(str(workspace.resolve()))):
+                if record['sessionId'] != native_id:
                     raise ValueError('Claude 기록의 세션 또는 작업 폴더가 현재 대화와 달라 불러오지 않았어요.')
-                additions = new_messages(original, record['messages'], legacy_resolver=resolve_legacy_attachment)
+                expected_workspace = os.path.normcase(str(workspace.resolve()))
+                last_workspace = os.path.normcase(str(Path(record['workspace']).resolve()))
+                if last_workspace == expected_workspace and not record.get('workspaceAvailable'):
+                    raise ValueError('원래 작업 폴더를 확인하지 못해 불러오지 않았어요.')
+                source_anchor = None
+                if last_workspace != expected_workspace:
+                    # A terminal can resume this same native session from a
+                    # different folder. Its latest cwd alone is not the original
+                    # identity: require a *matched* app message from the app's
+                    # workspace in the verified parent chain before importing.
+                    anchor_cache = {}
+                    def source_anchor(row):
+                        candidate = row.get('_syncCwd')
+                        if not isinstance(candidate, str) or not candidate or len(candidate) > 8192:
+                            return False
+                        if any(ord(ch) < 32 or 0xd800 <= ord(ch) <= 0xdfff for ch in candidate):
+                            return False
+                        if candidate.startswith(('\\\\', '//')):
+                            return False
+                        if candidate in anchor_cache:
+                            return anchor_cache[candidate]
+                        try:
+                            path = Path(candidate)
+                            valid = path.is_absolute() and os.path.normcase(str(path.resolve())) == expected_workspace
+                        except (OSError, RuntimeError, ValueError):
+                            valid = False
+                        anchor_cache[candidate] = valid
+                        return valid
+                additions = new_messages(original, record['messages'], legacy_resolver=resolve_legacy_attachment,
+                                         source_anchor=source_anchor)
+                if source_anchor is not None:
+                    # Availability describes the external terminal's last cwd,
+                    # not the independently validated original app workspace.
+                    record['warnings'] = [warning for warning in record.get('warnings', [])
+                        if warning != '원래 작업 폴더가 없거나 사용할 수 없습니다. 폴더를 복구한 뒤 이어가 주세요.']
+                    if additions:
+                        record['warnings'].append('다른 폴더에서 이어 쓴 대화입니다. 앱의 업무 폴더는 그대로 유지됩니다.')
                 path, expected = record['_sourceIdentity']
                 info = safe(path).stat()
                 if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != expected:
@@ -443,11 +501,7 @@ class LocalApp:
             record, additions = read_updates()
             if probe:
                 with self.lock:
-                    current = self.sessions.get(sid)
-                    if (current is not item or current.get('sessionId') != native_id
-                            or current.get('messages') != original or current.get('state') in {'starting', 'running', 'stopping', 'approval', 'question'}
-                            or current.get('_connecting') or current.get('_restarting')):
-                        return {'available': False}
+                    require_unchanged_probe()
                     if len(self._external_sync_probe_cache) >= 100:
                         self._external_sync_probe_cache.clear()
                     self._external_sync_probe_cache[sid] = (fingerprint, bool(additions))

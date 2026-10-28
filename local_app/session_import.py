@@ -248,6 +248,12 @@ class SessionImporter:
             visible = _visible(record)
             if visible is None:
                 continue
+            if sync:
+                # Internal provenance for matching an existing app message to
+                # its original workspace. Never include it in imported text.
+                record_cwd = record.get('cwd')
+                if isinstance(record_cwd, str):
+                    visible['_syncCwd'] = record_cwd
             if sync and visible['role'] == 'user':
                 content = record.get('message', {}).get('content')
                 if isinstance(content, list):

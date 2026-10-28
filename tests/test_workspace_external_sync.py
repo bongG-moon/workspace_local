@@ -68,8 +68,112 @@ class ExternalSyncTests(unittest.TestCase):
         duplicate=self.config/'projects'/'duplicate'/(self.native+'.jsonl')
         duplicate.parent.mkdir()
         duplicate.write_bytes(self.transcript.read_bytes())
-        self.assertEqual({'available':False}, self.app.import_session_updates(self.task, probe=True))
+        with self.assertRaisesRegex(ValueError, '여러 위치'):
+            self.app.import_session_updates(self.task, probe=True)
         self.assertEqual(self.base, self.item['messages'])
+
+    def test_probe_reports_missing_and_search_limit_instead_of_no_updates(self):
+        with self.assertRaisesRegex(ValueError, '찾지 못했어요'):
+            self.app.import_session_updates(self.task, probe=True)
+        with patch.object(SessionImporter, '_paths', return_value=([], True)):
+            with self.assertRaisesRegex(ValueError, '확인 범위'):
+                self.app.import_session_updates(self.task, probe=True)
+        self.assertEqual(self.base, self.item['messages'])
+
+    def test_probe_reports_concurrent_message_change_as_unconfirmed(self):
+        self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
+        actual=SessionImporter.load
+        def changed(reader,*args,**kwargs):
+            record=actual(reader,*args,**kwargs)
+            self.item['messages'].append({'role':'user','text':'동시에 추가된 앱 요청'})
+            return record
+        with patch.object(SessionImporter,'load',changed):
+            with self.assertRaisesRegex(ValueError,'대화 상태가 바뀌었어요'):
+                self.app.import_session_updates(self.task,probe=True)
+        self.assertEqual('동시에 추가된 앱 요청',self.item['messages'][-1]['text'])
+
+    def test_cached_probe_also_rechecks_concurrent_state_change(self):
+        self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
+        self.assertEqual({'available':True},self.app.import_session_updates(self.task,probe=True))
+        actual=SessionImporter._paths
+        def changed(reader,*args,**kwargs):
+            result=actual(reader,*args,**kwargs)
+            self.item['state']='running'
+            return result
+        with patch.object(SessionImporter,'_paths',changed):
+            with self.assertRaisesRegex(ValueError,'대화 상태가 바뀌었어요'):
+                self.app.import_session_updates(self.task,probe=True)
+        self.assertEqual(self.base,self.item['messages'])
+
+    def test_resume_from_another_cwd_after_restart_imports_once(self):
+        other=self.root/'other';other.mkdir()
+        self.write([('user','기존 질문'),('assistant','기존 답변'),
+                    ('user','외부 질문'),('assistant','외부 답변')])
+        rows=[json.loads(line) for line in self.transcript.read_text(encoding='utf-8').splitlines()]
+        for row in rows[2:]: row['cwd']=str(other)
+        self.transcript.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
+        original=self.transcript.read_bytes()
+        self.app.close()
+        self.app=LocalApp(self.root/'state',command=['fixture'],info={'version':'fixture'})
+        self.addCleanup(self.app.close)
+        self.item=self.app.get(self.task)
+        self.assertEqual({'available':True},self.app.import_session_updates(self.task,probe=True))
+        result=self.app.import_session_updates(self.task)
+        self.assertEqual(2,result['added'])
+        self.assertEqual(self.base,result['session']['messages'][:2])
+        self.assertEqual(['외부 질문','외부 답변'],[row['text'] for row in result['session']['messages'][-2:]])
+        self.assertEqual(str(self.work.resolve()),result['session']['workspace'])
+        self.assertTrue(any('업무 폴더는 그대로' in warning for warning in result['warnings']))
+        self.assertEqual({'available':False},self.app.import_session_updates(self.task,probe=True))
+        self.assertEqual(original,self.transcript.read_bytes())
+
+    def test_removed_external_cwd_does_not_block_verified_original_workspace(self):
+        other=self.root/'removed';other.mkdir()
+        self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
+        rows=[json.loads(line) for line in self.transcript.read_text(encoding='utf-8').splitlines()]
+        rows[-1]['cwd']=str(other)
+        self.transcript.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
+        other.rmdir()
+        self.assertEqual({'available':True},self.app.import_session_updates(self.task,probe=True))
+        result=self.app.import_session_updates(self.task)
+        self.assertEqual(1,result['added'])
+        self.assertTrue(any('업무 폴더는 그대로' in warning for warning in result['warnings']))
+        self.assertFalse(any('원래 작업 폴더가 없거나' in warning for warning in result['warnings']))
+
+    def test_unmatched_original_cwd_cannot_authorize_other_session(self):
+        other=self.root/'other';other.mkdir()
+        self.write([('user','기존 질문'),('assistant','기존 답변'),
+                    ('user','외부 질문'),('assistant','외부 답변')],cwd=other)
+        rows=[json.loads(line) for line in self.transcript.read_text(encoding='utf-8').splitlines()]
+        # An unmatched new message claiming the app workspace is not evidence
+        # that the existing app conversation belongs to this transcript.
+        rows[2]['cwd']=str(self.work)
+        self.transcript.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'폴더'):
+            self.app.import_session_updates(self.task,probe=True)
+        with self.assertRaisesRegex(ValueError,'폴더'):
+            self.app.import_session_updates(self.task)
+        self.assertEqual(self.base,self.item['messages'])
+
+    def test_repeated_messages_reuse_workspace_resolution_during_matching(self):
+        other=self.root/'other';other.mkdir()
+        repeated=[('user','같은 질문'),('assistant','같은 답변')]*30
+        self.item['messages']=[{'role':role,'text':text} for role,text in repeated]
+        self.write(repeated+[('user','외부 질문'),('assistant','외부 답변')])
+        rows=[json.loads(line) for line in self.transcript.read_text(encoding='utf-8').splitlines()]
+        for row in rows[-2:]: row['cwd']=str(other)
+        self.transcript.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
+        resolve=Path.resolve; counts={'work':0,'other':0}
+        def counted(path,*args,**kwargs):
+            if path == self.work: counts['work']+=1
+            if path == other: counts['other']+=1
+            return resolve(path,*args,**kwargs)
+        with patch.object(Path,'resolve',counted):
+            with self.assertRaisesRegex(ValueError,'여러 위치'):
+                self.app.import_session_updates(self.task,probe=True)
+        # Canonical path checks should not grow with recursive text matches.
+        self.assertLess(counts['work'],10)
+        self.assertLess(counts['other'],10)
 
     def test_append_once_preserves_app_fields_and_survives_restart(self):
         self.base[0]['files']=['C:/원본.csv']
@@ -182,6 +286,33 @@ class ExternalSyncTests(unittest.TestCase):
         self.assertNotIn('_syncContentHash',json.dumps(response,ensure_ascii=False))
         self.assertTrue(chat['messages'][0]['_syncContentHash'])
 
+    def test_chat_attachment_and_draft_survive_different_cwd_resume(self):
+        other=self.root/'external';other.mkdir()
+        chat_id=self.app.create(kind='chat')['id'];chat=self.app.get(chat_id)
+        native=str(uuid4());chat['sessionId']=native;chat['state']='done'
+        document=self.root/'synthetic.txt';document.write_text('synthetic private body',encoding='utf-8')
+        paths=[str(document)]
+        blocks,notices=prepare_chat_content('기존 질문',paths,self.root/'cache')
+        chat['messages']=[{'role':'user','text':'기존 질문','files':paths,'attachmentReads':notices,
+                           '_syncContentHash':content_fingerprint(blocks)},
+                          {'role':'assistant','text':'기존 답변'}]
+        draft={'text':'작성 중인 내용','attachments':paths}
+        self.app.drafts.update({'id':chat_id,'revision':0,'draft':draft,'stash':None,'selectedId':chat_id})
+        before=deepcopy(self.app.drafts.snapshot())
+        parent=None;rows=[]
+        for index,(role,content) in enumerate([('user',blocks),('assistant','기존 답변'),
+                ('user',[{'type':'text','text':'외부 질문'},*blocks[1:]]),('assistant','외부 답변')]):
+            uid=str(uuid4());rows.append({'type':role,'sessionId':native,'uuid':uid,'parentUuid':parent,
+                'cwd':chat['workspace'] if index<2 else str(other),'message':{'role':role,'content':content}});parent=uid
+        target=self.config/'projects'/'chat-cross'/(native+'.jsonl');target.parent.mkdir()
+        target.write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in rows),encoding='utf-8')
+        response=self.app.import_session_updates(chat_id)
+        self.assertEqual(2,response['added'])
+        self.assertEqual(['외부 질문','외부 답변'],[row['text'] for row in response['session']['messages'][-2:]])
+        self.assertNotIn('synthetic private body',json.dumps(response,ensure_ascii=False))
+        self.assertNotIn('_syncContentHash',json.dumps(response,ensure_ascii=False))
+        self.assertEqual(before,self.app.drafts.snapshot())
+
     def test_new_chat_attachment_fingerprint_is_saved_but_never_exposed_in_public_session(self):
         from local_app.bridge import CHAT_REQUIRED_FLAGS
         from tests.test_workspace_idle_connections import MemoryBridge
@@ -281,6 +412,12 @@ class ExternalSyncTests(unittest.TestCase):
             'sessionId':self.native,'parentUuid':None,'logicalParentUuid':anchor,'cwd':str(self.work)})
         parent=boundary;append('user','축약 요약은 사용자 질문이 아님',isCompactSummary=True)
         append('user','외부 질문');append('assistant','외부 답변')
+        self.transcript.write_text('\n'.join(json.dumps(row,ensure_ascii=False) for row in rows)+'\n',encoding='utf-8')
+        self.assertEqual(2,self.app.import_session_updates(self.task)['added'])
+        self.assertEqual(['외부 질문','외부 답변'],[row['text'] for row in self.item['messages'][-2:]])
+        self.item['messages']=deepcopy(self.base)
+        other=self.root/'compact-external';other.mkdir()
+        for row in rows[2:]: row['cwd']=str(other)
         self.transcript.write_text('\n'.join(json.dumps(row,ensure_ascii=False) for row in rows)+'\n',encoding='utf-8')
         self.assertEqual(2,self.app.import_session_updates(self.task)['added'])
         self.assertEqual(['외부 질문','외부 답변'],[row['text'] for row in self.item['messages'][-2:]])

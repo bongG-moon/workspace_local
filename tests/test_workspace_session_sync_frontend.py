@@ -73,6 +73,37 @@ class WorkspaceSessionSyncFrontendTests(unittest.TestCase):
           startSessionSyncProbe();finish({available:false});await Promise.resolve();assert.equal($('session-sync').hidden,true);
         })()""")
 
+    def test_probe_failure_uses_fixed_safe_message_and_successful_recheck_clears_it(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'idle'};let calls=0;
+          api=async()=>{calls++;if(calls===1)throw Error('secret-token C:\\private\\session.json');return {available:true};};
+          startSessionSyncProbe();await Promise.resolve();await Promise.resolve();
+          const note=$('session-sync-note');assert.equal(note.hidden,false);assert.equal(note.dataset.error,'true');assert.equal(note.dataset.kind,'probe');
+          assert.match(note.textContent,/다시 선택/);assert.doesNotMatch(note.textContent,/secret-token|private|session.json/);
+          assert.equal($('session-sync').hidden,true);
+          selectionGeneration++;startSessionSyncProbe();await Promise.resolve();
+          assert.equal(calls,2);assert.equal(note.hidden,true);assert.equal($('session-sync').hidden,false);
+        })()""")
+
+    def test_late_probe_failure_cannot_pollute_new_selection_or_closed_app(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'idle'};let fail;
+          api=()=>new Promise((_,reject)=>fail=reject);startSessionSyncProbe();
+          active={id:'b',sessionId:'native-b',state:'idle'};selectionGeneration++;
+          sessionSyncNotice('b','다른 업무 안내');fail(Error('late private error'));await Promise.resolve();await Promise.resolve();
+          assert.equal($('session-sync-note').dataset.owner,'b');assert.equal($('session-sync-note').textContent,'다른 업무 안내');
+          startSessionSyncProbe();appClosed=true;fail(Error('closed private error'));await Promise.resolve();await Promise.resolve();
+          assert.equal($('session-sync-note').textContent,'다른 업무 안내');
+        })()""")
+
+    def test_selection_recheck_does_not_clear_completed_import_notice(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'idle'};sessionSyncNotice('a','다른 곳에서 이어 쓴 대화 2개를 불러왔어요.');
+          api=async()=>({available:false});selectionGeneration++;startSessionSyncProbe();await Promise.resolve();
+          assert.equal($('session-sync-note').hidden,false);assert.match($('session-sync-note').textContent,/2개/);
+          assert.equal($('session-sync').hidden,true);
+        })()""")
+
     def test_probe_result_from_previous_task_is_discarded(self):
         self.run_case(r"""(async()=>{
           active={id:'a',sessionId:'native-a',state:'idle'};let finish;
