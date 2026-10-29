@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.37"
+WORKSPACE_VERSION = "0.23.38"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -3149,6 +3149,7 @@ class Handler(BaseHTTPRequestHandler):
                       "/path-picker.css": ("path-picker.css", "text/css; charset=utf-8"),
                       "/composer.js": ("composer.js", "text/javascript; charset=utf-8"),
                       "/inline-controls.js": ("inline-controls.js", "text/javascript; charset=utf-8"),
+                      "/error-help.js": ("error-help.js", "text/javascript; charset=utf-8"),
                       "/input-keys.js": ("input-keys.js", "text/javascript; charset=utf-8"),
                       "/focus-navigation.js": ("focus-navigation.js", "text/javascript; charset=utf-8"),
                       "/html-preview.js": ("html-preview.js", "text/javascript; charset=utf-8"),

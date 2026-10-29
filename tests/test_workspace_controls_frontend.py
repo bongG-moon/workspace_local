@@ -307,7 +307,7 @@ class WorkspaceControlsFrontendTests(unittest.TestCase):
           assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/trust');assert.equal($('prompt').value,'보존할 초안');
           api=async(path,body)=>{calls.push({path,body});throw new Error('전송 확인 실패');};
           await choiceView.buttons[0].onclick();assert.equal(calls.length,2);assert.equal(choiceView.buttons[0].disabled,false);
-          assert.equal(active.choice.id,'choice-a');assert.match($('error-banner').textContent,/전송 확인 실패/);
+          assert.equal(active.choice.id,'choice-a');assert.match($('error-message').textContent,/전송 확인 실패/);
         })()""")
 
     def test_stopped_choice_and_old_session_ack_cannot_mutate_new_session(self):

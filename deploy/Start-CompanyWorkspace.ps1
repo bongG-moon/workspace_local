@@ -461,7 +461,7 @@ try {
     if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
     $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.37' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.38' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -533,7 +533,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.37'
+        $targetVersion = [version]'0.23.38'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)

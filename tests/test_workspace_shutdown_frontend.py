@@ -126,11 +126,11 @@ class WorkspaceShutdownFrontendTests(unittest.TestCase):
           assert.equal($('quit').disabled,true);assert.equal($('send').disabled,true);
           assert.equal($('prompt').readOnly,true);
           assert.match($('status-text').textContent,/종료하고/);
-          assert.doesNotMatch($('error-banner').textContent,/종료가 완료/);
+          assert.doesNotMatch($('error-message').textContent,/종료가 완료/);
           await $('quit').onclick();assert.equal(calls,1);
           reply({ok:true,closed:true});await pending;
           assert.equal($('status-text').textContent,'앱 종료 완료');
-          assert.match($('error-banner').textContent,/실행기로 다시/);
+          assert.match($('error-message').textContent,/실행기로 다시/);
         })()''')
 
     def test_old_server_ack_does_not_claim_confirmed_exit(self):
@@ -138,7 +138,7 @@ class WorkspaceShutdownFrontendTests(unittest.TestCase):
           api=async()=>({ok:true});
           const pending=$('quit').onclick();$('action-confirm').onclick();await pending;
           assert.equal($('status-text').textContent,'종료 요청 전달됨');
-          assert.doesNotMatch($('error-banner').textContent,/종료가 완료/);
+          assert.doesNotMatch($('error-message').textContent,/종료가 완료/);
           assert.equal(appClosed,true);
         })()''')
 

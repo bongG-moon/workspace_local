@@ -368,7 +368,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           flushTimers();await reading;
           assert.equal(calls,5);assert.deepEqual(received,[1,2,3]);
           assert.ok(reads[1].endsWith('after=2')&&reads[2].endsWith('after=2')&&reads[3].endsWith('after=2'));
-          assert.equal($('error-banner').textContent,'');
+          assert.equal($('error-message').textContent,'');
         })()""")
 
     def test_event_poll_retries_are_bounded_and_abort_releases_delay(self):
@@ -378,7 +378,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           const reading=poll('A',0,abort.signal);await settle();
           for(let i=0;i<4;i++){flushTimers();await settle();}
           await reading;assert.equal(calls,5);assert.equal(timers.size,0);
-          assert.match($('error-banner').textContent,/앱 연결/);
+          assert.match($('error-message').textContent,/앱 연결/);
           calls=0;const next=new AbortController(),pending=poll('A',0,next.signal);await settle();
           assert.equal(timers.size,1);next.abort();await pending;
           assert.equal(calls,1);assert.equal(timers.size,0);
@@ -406,7 +406,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           let calls=0;fetch=async()=>{calls++;return {ok:true,json:async()=>({events:[{seq:1}]})};};
           handleEvent=()=>{throw new TypeError('render failure');};
           await poll('A',0,new AbortController().signal);assert.equal(calls,1);assert.equal(timers.size,0);
-          assert.match($('error-banner').textContent,/render failure/);
+          assert.match($('error-message').textContent,/render failure/);
         })()""")
 
     def test_slow_cancel_is_immediate_deduplicated_and_allows_other_cancels(self):

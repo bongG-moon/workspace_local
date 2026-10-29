@@ -646,3 +646,22 @@ dialog.path-picker .path-picker-location .quiet-button{
 /* Action icons describe the destination; manual links retain their book icon. */
 .action-link-icon{display:inline-block;width:15px;height:15px;flex:none;margin-inline-start:4px;vertical-align:-3px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 button>.action-link-icon{margin-inline-start:0}
+
+/* Keep error guidance with its message and preserve the alert's text node. */
+.error-banner{display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}
+.error-message{flex:1 1 240px;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.error-help-trigger{display:inline-flex;align-items:center;gap:6px;flex:none;min-height:32px;padding:5px 9px;border:1px solid var(--theme-line,#e5dacd);border-radius:8px;background:var(--theme-surface-raised,#fffcf7);font:inherit;line-height:1.4;white-space:nowrap}
+.error-help-trigger,.error-help-trigger:hover:not(:disabled){color:inherit}
+.error-help-trigger:hover{background:var(--theme-surface-hover,#f0e8dd)}
+
+/* Guidance uses the existing dialog and theme without covering the error itself. */
+.error-help-dialog{width:min(600px,calc(100vw - 32px));padding:27px 30px}
+.error-help-dialog h2{font-size:20px;line-height:1.45;letter-spacing:-.5px}
+.error-help-dialog>p:not(.error-help-note):not(.error-help-contact){margin:15px 0 20px;color:var(--theme-text-secondary,#535b73);font-size:13px;line-height:1.7}
+.error-help-dialog section{margin:12px 0;padding:15px 17px;border:1px solid var(--line);border-radius:13px;background:var(--theme-surface-raised,#fff)}
+.error-help-dialog section h3{margin:0 0 7px;font-size:13px;color:var(--ink)}
+.error-help-dialog :is(ul,ol){margin:0;padding-left:19px;font-size:12px;line-height:1.75;color:var(--theme-text-secondary,#535b73)}
+.error-help-dialog li+li{margin-top:4px}
+.error-help-note{font-size:12px;line-height:1.7;color:var(--theme-text-muted,#707890)}
+.error-help-contact{margin:12px 0 0;font-size:12px;line-height:1.65;color:var(--theme-text-secondary,#535b73);overflow-wrap:anywhere}
+@media(max-width:650px){.error-help-dialog{padding:20px}.error-help-dialog h2{font-size:18px}.recovery-actions{flex-wrap:wrap}}

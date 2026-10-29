@@ -144,6 +144,16 @@ class WorkspaceExtensionsFrontendTests(unittest.TestCase):
           assert.equal(calls.length,2);assert.equal(response(frame,'second').ok,false);assert.equal(response(frame,'first'),undefined);
           finish({ok:true,result:{status:'installed'}});await flush();assert.equal(response(frame,'first').result.status,'installed');""")
 
+    def test_busy_status_stays_in_existing_toolbar_and_resets_after_failure(self):
+        self.run_case("""host.mount(options());await nav.children[0].onclick();const frame=currentFrame(),init=await ready();
+          const status=created.find(x=>x.className==='workspace-extension-status'),meta=status.parent,version=meta.children[0];
+          assert.equal(meta.className,'workspace-extension-meta');assert.equal(meta.parent.className,'workspace-extension-utility');
+          assert.equal(status.getAttribute('role'),'status');assert.equal(status.hidden,true);assert.equal(version.hidden,false);
+          let fail;apiHandler=()=>new Promise((resolve,reject)=>fail=reject);
+          await request(frame,init,'pending','install');assert.equal(status.hidden,false);assert.equal(version.hidden,true);
+          assert.match(status.textContent,/처리하고 있어요/);fail(Error('fixture failure'));await flush();
+          assert.equal(status.hidden,true);assert.equal(version.hidden,false);assert.equal(response(frame,'pending').ok,false);""")
+
     def test_close_releases_resources_and_never_delivers_late_action_to_next_frame(self):
         self.run_case("""host.mount(options());await nav.children[0].onclick();const old=currentFrame(),init=await ready();
           let finish;apiHandler=()=>new Promise(resolve=>finish=resolve);await request(old,init,'install','install');

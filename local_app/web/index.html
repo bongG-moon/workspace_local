@@ -38,6 +38,7 @@
   <script src="/archived-tasks.js" defer></script>
   <link rel="stylesheet" href="/archived-tasks.css">
   <script src="/html-preview.js" defer></script>
+  <script src="/error-help.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/request-timing.js" defer></script>
   <link rel="stylesheet" href="/request-timing.css">
@@ -172,7 +173,7 @@
       <div id="upgrade-notice" class="upgrade-notice" role="status" aria-live="polite" hidden><p id="upgrade-notice-text"></p><button id="upgrade-recovery-open" class="text-button" type="button" hidden>복원·정리</button><button id="upgrade-stop" class="quiet-button" type="button" hidden>작업 중지 후 업데이트</button><button id="upgrade-notice-cancel" class="text-button" type="button">전환 취소</button></div>
       <div id="demo-banner" class="demo-banner" hidden><svg class="icon"><use href="#i-spark"/></svg><span>화면 체험 중 · 가상의 업무로 둘러보세요. 실제 AI 실행이나 자료 읽기는 하지 않습니다.</span></div>
       <p id="chat-cleanup-note" class="chat-cleanup-note" role="status" hidden></p>
-      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+      <div id="error-banner" class="error-banner" hidden><span id="error-message" class="error-message" role="alert"></span><button id="error-help-open" class="text-button error-help-trigger" type="button" aria-haspopup="dialog" aria-controls="error-help-dialog">확인할 사항 <svg class="action-link-icon" aria-hidden="true" focusable="false"><use href="#i-book-open"/></svg></button></div>
       <div id="recovery-actions" class="recovery-actions" hidden><button id="reconnect" class="quiet-button"><svg class="icon"><use href="#i-refresh"/></svg>연결 다시 확인</button><button id="connection-settings" class="text-button">연결 설정 보기 <svg class="action-link-icon" aria-hidden="true" focusable="false"><use href="#i-settings"/></svg></button></div>
       <div id="work-area" class="work-area">
         <section id="capabilities-view" class="capabilities-view" aria-labelledby="capabilities-heading" hidden>
@@ -478,5 +479,6 @@
   <p id="customizations-status" role="status" class="composer-note"></p><button id="customizations-apply" class="quiet-button" type="button" hidden>저장한 설정 적용</button><div id="customizations-list"></div>
   <details><summary>설정 저장 위치</summary><p id="customizations-path" class="composer-note"></p></details></div>
 </dialog>
+<dialog id="error-help-dialog" class="error-help-dialog" aria-labelledby="error-help-title" aria-describedby="error-help-summary"><div class="dialog-head"><div><span class="eyebrow">확인할 사항</span><h2 id="error-help-title"></h2></div><button id="error-help-close" class="icon-button" type="button" aria-label="확인할 사항 닫기"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></div><p id="error-help-summary"></p><section><h3>이럴 때 발생할 수 있어요</h3><ul id="error-help-causes"></ul></section><section><h3>이렇게 확인해 주세요</h3><ol id="error-help-actions"></ol></section><p id="error-help-note" class="error-help-note"></p><p class="error-help-contact">추가 문의 사항은 문봉건TL(2069026)한테 연락 바랍니다.</p><div class="dialog-actions"><button id="error-help-done" class="quiet-button" type="button">확인</button></div></dialog>
 </body>
 </html>

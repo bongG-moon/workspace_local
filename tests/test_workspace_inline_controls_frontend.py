@@ -243,7 +243,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal(active.connection.controlRestore,null);assert.equal($('composer-control-status').dataset.error,'false');
           assert.doesNotMatch($('composer-control-status').textContent,/변경을 거절|복원 필요/);
           assert.equal($('runtime-panel-error').hidden,true);assert.doesNotMatch($('runtime-panel-note').textContent,/복원 필요/);
-          assert.equal($('error-banner').textContent,'별도의 파일 오류');assertDraft();
+          assert.equal($('error-message').textContent,'별도의 파일 오류');assertDraft();
         })()""")
 
     def test_partial_restore_keeps_next_issue_actionable_without_changing_permission(self):
@@ -277,7 +277,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           reject(Object.assign(Error('오래된 복원 오류'),{code:'control_restore_required',connection:{...connection(),controlRestore:{status:'needs_input',canSend:false,issues:[{control:'effort',message:'오래된 복원 오류'}]}}}));
           await request;assert.equal(active.connection.model,'fresh-model');assert.equal(active.connection.controlRestore,null);
           assert.equal($('prompt').value,'새로운 A 요청');assert.equal(attachments[0],'fresh.csv');
-          assert.equal($('error-banner').textContent,'유지할 오류');assert.doesNotMatch($('composer-control-status').textContent,/오래된 복원 오류/);
+          assert.equal($('error-message').textContent,'유지할 오류');assert.doesNotMatch($('composer-control-status').textContent,/오래된 복원 오류/);
         })()""")
 
     def test_restore_reset_unavailable_stays_blocked_and_preserves_command(self):

@@ -58,7 +58,7 @@ class WorkspaceStopFrontendTests(unittest.TestCase):
           assert.equal(stopState(),'failed');assert.equal($('send').disabled,true);
           assert.equal($('connection-badge').textContent,'중지 확인 필요');
           assert.equal($('reconnect').textContent,'중지 다시 시도');assert.equal($('connection-settings').hidden,true);
-          assert.doesNotMatch($('error-banner').textContent,/raw cleanup/);
+          assert.doesNotMatch($('error-message').textContent,/raw cleanup/);
           await $('reconnect').onclick();assert.equal(calls.length,2);
           assert.deepEqual(calls[1],{path:'/api/stop',data:{id:'A'}});
           assert.equal(pendingConfirmation,null);assert.equal($('reconnect').disabled,false);

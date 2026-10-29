@@ -58,6 +58,7 @@ globalThis.WorkspaceExtensions = (() => {
     if (!isCurrent(owner)) return;
     owner.status.textContent = busy ? "확장 기능에서 처리하고 있어요. 다른 화면으로 이동해도 시작한 작업은 계속됩니다." : "";
     owner.status.hidden = !busy;
+    owner.version.hidden = busy;
   }
   function openExternal(owner, payload) {
     const url = externalUrl(payload.url, payload.homepage);
@@ -206,13 +207,16 @@ globalThis.WorkspaceExtensions = (() => {
     back.innerHTML = '<svg class="icon back-icon" aria-hidden="true"><use href="#i-arrow"/></svg>';
     back.append(node("span", context().kind === "chat" ? "대화로 돌아가기" : "업무로 돌아가기"));
     back.onclick = () => { close(); if (button?.isConnected) button.focus({preventScroll: true}); };
-    head.append(back, node("small", `추가 기능 · ${extension.version}`));
-    const status = node("p", "", "workspace-extension-status"); status.hidden = true; status.setAttribute("role", "status");
+    const meta = node("div", undefined, "workspace-extension-meta");
+    const version = node("small", `추가 기능 · ${extension.version}`);
+    const status = node("small", "", "workspace-extension-status"); status.hidden = true; status.setAttribute("role", "status");
+    status.title = "다른 화면으로 이동해도 시작한 작업은 계속됩니다.";
+    meta.append(version, status); head.append(back, meta);
     const external = node("a", "", "workspace-extension-external"); external.hidden = true;
     external.target = "_blank"; external.rel = "noopener noreferrer";
     const body = node("div", undefined, "workspace-extension-body"), loading = node("p", "추가 기능을 여는 중이에요.", "workspace-extension-loading");
-    body.append(loading); page.append(head, status, external, body); area.append(page);
-    const owner = {extension, button, page, app, status, external, body, loading, channel: channel(), context: context(), requests: new Set(), busy: false, initialized: false};
+    body.append(loading); page.append(head, external, body); area.append(page);
+    const owner = {extension, button, page, app, status, version, external, body, loading, channel: channel(), context: context(), requests: new Set(), busy: false, initialized: false};
     current = owner; button?.setAttribute("aria-current", "page");
     app.classList.add("extension-open", "catalog-open");
     hooks.viewChanged?.(true);

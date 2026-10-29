@@ -229,13 +229,16 @@ function confirmAction({title,message,confirmLabel="확인",cancelLabel="취소"
   });
   return pendingConfirmation;
 }
-function error(text,kind=null){
+function error(text,kind=null,code=null){
   stopNoticeOwner=kind==="stop"?active?.id:null;
-  $("error-banner").textContent=text||"";$("error-banner").hidden=!text||appClosed;$("recovery-actions").hidden=!text||appClosed;
+  globalThis.WorkspaceErrorHelp?.update(text,code,active?.id);
+  $("error-message").textContent=text||"";$("error-banner").hidden=!text||appClosed;$("recovery-actions").hidden=!text||appClosed;
   $("connection-settings").hidden=kind==="stop";
   const label=kind==="stop"?(cleanupRetryable()?"중지 다시 시도":"Claude Code 재시작"):"연결 다시 확인",button=$("reconnect");
   if(button.lastChild?.nodeType===3)button.lastChild.textContent=label;else button.textContent=label;
 }
+$("error-help-open").onclick=()=>{if(appClosed||$("error-banner").hidden)return;globalThis.WorkspaceErrorHelp?.open(()=>showDialog("error-help-dialog"));};
+$("error-help-close").onclick=$("error-help-done").onclick=()=>$("error-help-dialog").close();
 async function api(path,data,signal,capacityRetried=false){
   if(appClosed&&data!==undefined&&!["/api/quit","/api/ui-health"].includes(path))throw new Error("앱 종료를 진행 중이에요. 위의 종료 안내를 확인해 주세요.");
   const requestSelection=selectionGeneration, catalogContext=globalThis.WorkspaceCapabilities?.capacityContext?.(data?.id);
@@ -920,7 +923,7 @@ function handleEvent(event){
   if(event.type==="execution")globalThis.WorkspaceExecutionView?.render(d);
   if(event.type==="tool_activity"){ $("conversation").querySelector(".conversation-empty")?.remove();globalThis.WorkspaceToolActivity?.render(d); }
   if(event.type==="result"){if(d.lastRunId)active.lastRunId=d.lastRunId;if(d.branch)active.branch=d.branch;if(d.sessionId)active.sessionId=d.sessionId;active.verification=d.verification||(["needs-review","unverified"].includes(active.verification?.state)?active.verification:{state:"unverified",message:"요청은 끝났지만 결과 검증 상태는 확인하지 못했습니다."});setStatus(stopState()==="stopped"?"stopped":"done");refreshInspector(true);if(d.budgetWarning)toast(d.budgetWarning);refreshSessionMeta();}if(event.type==="artifacts")refreshResults(true);
-  if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshInspector();}if(event.type==="notice")toast(d.message);
+  if(event.type==="error"){globalThis.WorkspaceStream?.flush();error(d.message,null,d.code);active.choice=null;setStatus("error");if("resumeSessionId" in d)active.sessionId=d.resumeSessionId;$("requests").replaceChildren();for(const node of streaming.values()){node.classList.remove("streaming");node.append(el("small","연결 중단 전까지 받은 내용","message-interrupted"));}streaming.clear();refreshInspector();}if(event.type==="notice")toast(d.message);
   if(d.runTiming)globalThis.WorkspaceRequestTiming?.render(d.runTiming);
   if(Object.prototype.hasOwnProperty.call(d,"resultReceipt"))globalThis.WorkspaceResultReceipts?.completed(d.resultReceipt);
   else if(event.type==="assistant")globalThis.WorkspaceResultReceipts?.changed({content:true});

@@ -124,7 +124,7 @@ class EventRecoveryFrontendTests(unittest.TestCase):
         self.run_case(r'''(async()=>{
           active={id:'A',title:'A',state:'running',messages:[],requests:[],connection:{connected:true}};sessions=[{...active}];refreshInspector=async()=>{};
           restoreEventSnapshot({...active,seq:400,state:'error',displayError:'provider failed',verification:{state:'needs-review',message:'check result'},streams:[{messageId:'part',index:0,text:'received before failure',afterMessage:-1,interrupted:true}]},'A');
-          assert.equal(active.state,'error');assert.equal($('error-banner').textContent,'provider failed');assert.equal($('verification-status').hidden,false);
+          assert.equal(active.state,'error');assert.equal($('error-message').textContent,'provider failed');assert.equal($('verification-status').hidden,false);
           assert.equal(streaming.size,0);assert.equal($('conversation').children[0].classList.contains('streaming'),false);
           assert.equal($('conversation').children[0].querySelector('.message-body').textContent,'received before failure');
           restoreEventSnapshot({...active,seq:401,state:'running',displayError:'',streams:[]},'A');assert.equal($('error-banner').hidden,true);
