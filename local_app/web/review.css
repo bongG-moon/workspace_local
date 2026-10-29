@@ -3,3 +3,6 @@
 .changes-dialog{gap:0}.changes-dialog .review-toolbar label{margin:0;width:auto}.changes-dialog .review-toolbar select{width:auto;flex:1}.changes-dialog .review-toolbar{flex-wrap:nowrap}
 
 .branch-origin{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 18px;padding:12px 16px;border-radius:14px;background:var(--theme-surface-a102, #eae8f766);color:var(--theme-text-muted, #777194);font-size:.78rem}.branch-origin[hidden]{display:none}.branch-origin .text-button{font-size:inherit;white-space:nowrap}
+
+/* Claude session command shares the compact header controls. */
+.title-copy{min-width:0;flex:0 1 auto}

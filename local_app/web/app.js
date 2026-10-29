@@ -724,10 +724,25 @@ function pendingUserMessageIndex(next,pending,operation){
   return -1;
 }
 function secondaryViewOpen(){return !!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.();}
+async function copyClaudeResumeCommand(){
+  if(!active||appClosed||secondaryViewOpen())return;
+  const owner=active.id,nativeId=active.sessionId;
+  if(!nativeId){toast("Claude 세션이 아직 없어요. 첫 요청을 보낸 뒤 다시 확인해 주세요.");return;}
+  if(typeof nativeId!=="string"||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nativeId)){
+    toast("Claude 세션 ID를 확인하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.");return;
+  }
+  try{
+    if(!globalThis.navigator?.clipboard?.writeText)throw new Error("clipboard unavailable");
+    await globalThis.navigator.clipboard.writeText(`claude --resume "${nativeId}"`);
+    if(active?.id===owner&&!appClosed&&!secondaryViewOpen())toast("Claude 이어가기 명령을 복사했어요.");
+  }catch(_){if(active?.id===owner&&!appClosed&&!secondaryViewOpen())toast("복사하지 못했어요. 클립보드 권한을 확인한 뒤 다시 시도해 주세요.");}
+}
+$('session-id-copy').onclick=copyClaudeResumeCommand;
 function taskHeader(){
   globalThis.WorkspaceResultReceipts?.changed();renderSessionSync();
   // Keep the task mounted for background events; only its view is suspended.
   const catalog=secondaryViewOpen();
+  $("session-id-copy").hidden=!active||catalog;
   $("task-view").hidden=!active||catalog;
   $("workspace-summary").hidden=catalog||isGeneralChat();
   updateRestartControls();globalThis.WorkspaceSessionImport?.render();globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceExtensions?.isOpen?.()?globalThis.WorkspaceExtensions.title():globalThis.WorkspaceCapabilities?.isOpen()?"스킬과 기능":active?.title||(isGeneralChat()?"일반 대화":"업무 홈");$("chat-title").title=$("chat-title").textContent;$("task-title").hidden=$("task-pin").hidden=!active||catalog;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("task-pin").title=$("task-pin").getAttribute("aria-label");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-name").title=$("folder-name").textContent;$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||secondaryViewOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);updateModeNavigation();}

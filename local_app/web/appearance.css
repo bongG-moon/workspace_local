@@ -384,13 +384,13 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 .toast.is-dismissing{opacity:0}
 #settings-dialog #quit{color:var(--theme-danger,#a3515d)}
 #settings-dialog #window-behavior-note{display:block;text-align:left;font-size:11px;line-height:1.7;margin:0 4px 14px}
-.title-row #branch-open{display:inline-flex;align-items:center;justify-content:center;flex:none;gap:6px;height:32px;min-height:32px;margin-left:4px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--theme-surface,#f2f4f9);box-shadow:none;color:var(--muted);font-size:12px;font-weight:500;line-height:20px;white-space:nowrap}
-.title-row #branch-open:hover:not(:disabled){background:var(--accent-tint);border-color:var(--theme-line-accent,#b8b4df);color:var(--accent-ink)}
-.title-row #branch-open>span{font-size:14px;line-height:1}
+.title-row :is(#branch-open,#session-id-copy){display:inline-flex;align-items:center;justify-content:center;flex:none;gap:6px;height:32px;min-height:32px;margin-left:4px;padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--theme-surface,#f2f4f9);box-shadow:none;color:var(--muted);font-size:12px;font-weight:500;line-height:20px;white-space:nowrap}
+.title-row :is(#branch-open,#session-id-copy):hover:not(:disabled){background:var(--accent-tint);border-color:var(--theme-line-accent,#b8b4df);color:var(--accent-ink)}
+.title-row :is(#branch-open,#session-id-copy)>span{font-size:14px;line-height:1}
 .runtime-custom-row input{border:1px solid var(--line);border-radius:var(--control-radius);background:var(--surface);color:var(--ink);font-family:inherit}
 .composer-controls-panel .runtime-custom-row :is(input,button){min-height:var(--control-height);height:var(--control-height);padding:7px 10px;font-size:12px;line-height:var(--control-line-height);border-radius:var(--control-radius);box-shadow:none}
-@media(max-width:420px){#settings-dialog .dialog-scroll-body{padding:12px 14px 16px}#settings-dialog .settings-section{padding:14px}#settings-dialog .settings-control-grid{grid-template-columns:1fr}#settings-dialog .appearance-options{grid-template-columns:1fr;gap:6px}.title-row #branch-open{padding-inline:8px;margin-left:0}}
-@media(forced-colors:active){#settings-dialog .settings-section,#settings-dialog :is(.quiet-button,.text-button,select,input),.title-row #branch-open{border-color:ButtonBorder}}
+@media(max-width:420px){#settings-dialog .dialog-scroll-body{padding:12px 14px 16px}#settings-dialog .settings-section{padding:14px}#settings-dialog .settings-control-grid{grid-template-columns:1fr}#settings-dialog .appearance-options{grid-template-columns:1fr;gap:6px}.title-row :is(#branch-open,#session-id-copy){padding-inline:8px;margin-left:0}}
+@media(forced-colors:active){#settings-dialog .settings-section,#settings-dialog :is(.quiet-button,.text-button,select,input),.title-row :is(#branch-open,#session-id-copy){border-color:ButtonBorder}}
 
 /* Related dialogs use the same form/action scale without changing list or tab density. */
 #customizations-dialog :is(select,input){min-height:var(--control-height);height:var(--control-height);padding:7px 11px;font-family:inherit;font-size:var(--control-font-size);line-height:var(--control-line-height);border-radius:var(--control-radius)}

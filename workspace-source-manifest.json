@@ -1317,13 +1317,13 @@
     },
     {
       "path": "local_app/web/app.js",
-      "sha256": "5f97d81f451df487027ce1b93e66a4a80260d5acecabfe880be24b397f35c0e0",
-      "size": 197722
+      "sha256": "58407fa73decab303b00f20e712e89020d5cec3bf6bb9d2f3c1d898c4d7cd994",
+      "size": 198823
     },
     {
       "path": "local_app/web/appearance.css",
-      "sha256": "82d149ef73a159ee066fa4c4dc9b7a4257a144059ce6bb4cc8dc16a6adb3e9bf",
-      "size": 62244
+      "sha256": "079aa1e286504b2ece38089417cf2374d3749b2656509e88882cf97fd3ac6822",
+      "size": 62354
     },
     {
       "path": "local_app/web/appearance.js",
@@ -1462,8 +1462,8 @@
     },
     {
       "path": "local_app/web/index.html",
-      "sha256": "8c93d57a7566cbb81aa18adc52956708eb6b319272d91e92178fd09afbe8343c",
-      "size": 106763
+      "sha256": "46b14ed6c150c47f65fb6f678e45acdd7a8c31ec2492574b2301fbe9f0e1ac34",
+      "size": 107177
     },
     {
       "path": "local_app/web/inline-controls.js",
@@ -1557,8 +1557,8 @@
     },
     {
       "path": "local_app/web/review.css",
-      "sha256": "187f76810a0077fc2f1540642c1f41fe943fb1ee50beab18b9b8ce01701a5816",
-      "size": 5208
+      "sha256": "c6e14e1ca077223f8360debdd8200355b354e41905394113732d18631746eebc",
+      "size": 5317
     },
     {
       "path": "local_app/web/rich-content.css",
@@ -2979,6 +2979,11 @@
       "path": "tests/test_workspace_session_groups_frontend.py",
       "sha256": "77c071b3c6bb8851263c21c821ce174a5df233147f33b8d7b4879deeacc95324",
       "size": 50355
+    },
+    {
+      "path": "tests/test_workspace_session_id_frontend.py",
+      "sha256": "387e26afffb38b398321de0fb0de97632cf5369fdc3f11b46f1ed69c1b426319",
+      "size": 3006
     },
     {
       "path": "tests/test_workspace_session_import.py",
