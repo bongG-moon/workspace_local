@@ -92,6 +92,9 @@ class ManualRoutingTests(unittest.TestCase):
         upgrade = guide_by_case['이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다']
         for instruction in ('PowerShell', 'claude --version', '최신 버전으로 업데이트 해줘', '완전히 종료', '담당자'):
             self.assertIn(instruction, upgrade)
+        auth = guide_by_case['기존 Claude Code의 인증을 확인하지 못했습니다']
+        for instruction in ('PowerShell', 'claude', '로그인 또는 KEY 갱신', 'cmd /c "claude -p 안녕하세요"', '실행 정책을 변경하지 않습니다', '모델 접근 권한', '터미널에서도 실패', '연결 상세 정보', '완전히 종료', 'KEY나 토큰 값은 전달하지 말고'):
+            self.assertIn(instruction, auth)
         self.assertIn('KEY나 토큰 값은 보내지 마세요', guide_by_case['403 team not allowed to access model'])
         self.assertIn('파일 변경을 먼저 확인', guide_by_case['Claude가 도구 처리 뒤 최종 답변을 완료하지 못했어요 (ede_diagnostic)'])
 

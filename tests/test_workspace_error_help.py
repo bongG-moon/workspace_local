@@ -49,6 +49,13 @@ class WorkspaceErrorHelpTests(unittest.TestCase):
           let steps=actionText();assert.ok(steps.some(s=>s.includes('PowerShell')&&s.includes('claude --version')));
           assert.ok(steps.some(s=>s.includes('claude를 실행')&&s.includes('최신 버전으로 업데이트')));
           assert.ok(steps.some(s=>s.includes('담당자')&&s.includes('제한')));assert.ok(steps.some(s=>s.includes('완전히 종료')));
+          error('기존 Claude Code의 인증을 확인하지 못했습니다.',null,'cli_authentication');$('error-help-open').onclick();
+          steps=actionText();assert.ok(steps.some(s=>s.includes('PowerShell')&&s.includes('claude를 실행')&&s.includes('질문')));
+          assert.ok(steps.some(s=>s.includes('cmd /c "claude -p 안녕하세요"')));
+          assert.ok(steps.some(s=>s.includes('오류')&&s.includes('모델')&&s.includes('로그인')&&s.includes('KEY 갱신')));
+          assert.ok(steps.some(s=>s.includes('터미널에서만 정상')&&s.includes('앱에서 선택한 모델')&&s.includes('완전히 종료')));
+          assert.ok(steps.some(s=>s.includes('실행 계정')&&s.includes('설정 위치')));
+          assert.match($('error-help-note').textContent,/KEY|토큰/);
           error('API error 403 team not allowed to access model',null,'task_failed');$('error-help-open').onclick();
           steps=actionText();assert.ok(steps.some(s=>s.includes('입력창')&&s.includes('모델 버튼')));
           assert.ok(steps.findIndex(s=>s.includes('파일 변경')) < steps.findIndex(s=>s.includes('필요한 내용만 요청')));
