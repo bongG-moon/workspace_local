@@ -177,6 +177,11 @@ class WorkQueue:
                 raise ValueError('Invalid schedule')
             if 'pausedByUser' in schedule and type(schedule['pausedByUser']) is not bool:
                 raise ValueError('Invalid schedule pause intent')
+            if schedule.get('lastControl') is not None:
+                control = schedule['lastControl']
+                if not isinstance(control, dict) or control.get('action') not in {'paused', 'resumed'}:
+                    raise ValueError('Invalid schedule control')
+                _stamp(control.get('at'))
             if schedule['nextAt'] is not None:
                 _stamp(schedule['nextAt'])
             _stamp(schedule['runAt'])
@@ -493,11 +498,13 @@ class WorkQueue:
                 for row in self.data['queue']:
                     if row.get('scheduleId') == identifier and row['status'] == 'queued':
                         row['status'] = 'cancelled'
-                schedule['lastStatus'] = 'paused'
+                        self._schedule_status(row, 'cancelled')
             elif schedule['nextAt'] is None:
                 schedule['enabled'] = False
             elif schedule['nextAt'] <= self.clock():
                 self._advance(schedule, self.clock(), 'missed')
+            if not enabled or schedule['enabled']:
+                schedule['lastControl'] = {'action': 'resumed' if enabled else 'paused', 'at': self.clock()}
             self._save()
             return deepcopy(schedule)
 

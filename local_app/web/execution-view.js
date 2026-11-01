@@ -7,6 +7,21 @@ globalThis.WorkspaceExecutionView = (() => {
   const labels = {requested:"실행 요청",completed:"실행 완료",error:"실행 오류",interrupted:"결과 미확인"};
   function reset(id = null) { sessionId=id;cards.clear();galleries.clear(); }
   const current = () => sessionId && sessionId === active?.id;
+  // Ordering is a display hint, not a claim that a file is final or verified.
+  function fileRank(file){
+      const name=String(file.name||file.path||'').replace(/\\/g,'/');
+      if(/(?:^|\/)(?:scratch|tmp|temp|__pycache__)(?:\/|$)/i.test(name))return 3;
+      if(/\.(?:html?|pdf|docx|pptx|xlsx)$/i.test(name))return 0;
+      if(/\.(?:md|csv|tsv|txt|png|jpe?g|webp)$/i.test(name))return 1;
+      return 2;
+  }
+  function orderFiles(files) {
+    return [...files].sort((a,b)=>fileRank(a)-fileRank(b)||(b.observedAt||0)-(a.observedAt||0));
+  }
+  function primaryFiles(files){
+    const ordered=orderFiles(files),documents=ordered.filter(file=>fileRank(file)===0);
+    return (documents.length?documents:ordered).slice(0,6);
+  }
   function place(node, runId, beforeReply = false) {
     const conversation = $("conversation");
     if (beforeReply && runId) {
@@ -53,12 +68,21 @@ globalThis.WorkspaceExecutionView = (() => {
   }
   function results(runId, files, restoring = false) {
     if(!current() || !runId)return;
-    const items=(files||[]).filter(file=>file.runId===runId).slice(-12),signature=JSON.stringify(items.map(file=>[file.path,file.observedAt]));
+    const items=orderFiles((files||[]).filter(file=>file.runId===runId)),signature=JSON.stringify(items.map(file=>[file.path,file.observedAt]));
     const old=galleries.get(runId);if(old?.signature===signature)return;
     if(!items.length){if(old){old.card.remove();galleries.delete(runId);}return;}
-    const card=old?.card||el("article",null,"message run-results");card.replaceChildren();card.dataset.runId=runId;
+    const card=old?.card||el("article",null,"message run-results"),wasOpen=card.querySelector("details")?.open===true;card.replaceChildren();card.dataset.runId=runId;
     card.append(el("div","이번 요청 중 바뀐 파일","run-results-label"));
-    globalThis.WorkspaceRichContent?.files(card,items.map(file=>file.path),{sessionId,workspace:active.workspace});
+    const options={sessionId,workspace:active.workspace};
+    const primary=primaryFiles(items);
+    globalThis.WorkspaceRichContent?.files(card,primary.map(file=>file.path),options);
+    if(items.length>primary.length){
+      const detail=el("details",null,"run-results-more"),content=el("div");
+      detail.append(el("summary",`전체 변경 파일 ${items.length}개 보기`),content);
+      let populated=false;
+      const populate=()=>{if(detail.open&&!populated){populated=true;for(let start=0;start<items.length;start+=24)globalThis.WorkspaceRichContent?.files(content,items.slice(start,start+24).map(file=>file.path),options);}};
+      detail.ontoggle=populate;detail.open=wasOpen;populate();card.append(detail);
+    }
     card.dataset.messageSize=String(items.reduce((sum,file)=>sum+file.path.length,0));
     if(!old) {
       if(restoring){
@@ -74,5 +98,5 @@ globalThis.WorkspaceExecutionView = (() => {
     for(const record of (records||[]).slice(-40))render(record,true);
     for(const run of [...new Set((artifacts||[]).map(file=>file.runId))].slice(-8))results(run,artifacts,true);
   }
-  return {reset,render,results,restore};
+  return {reset,render,results,restore,orderFiles,primaryFiles};
 })();

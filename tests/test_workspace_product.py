@@ -281,8 +281,9 @@ class ProductTests(unittest.TestCase):
         (private / 'secret.txt').write_text('never listed', encoding='utf-8')
         deep = self.workspace / 'first' / 'second'
         deep.mkdir(parents=True)
-        (deep / 'deep.txt').write_text('never listed', encoding='utf-8')
-        self.assertEqual(4, len(snapshot(self.workspace).files))
+        (deep / 'deep.txt').write_text('nested result', encoding='utf-8')
+        self.assertEqual(5, len(snapshot(self.workspace).files))
+        self.assertFalse(any('.private' in path for path in snapshot(self.workspace).files))
 
     def test_symlink_documents_and_directories_are_not_followed(self):
         outside = self.root / 'outside'

@@ -241,5 +241,5 @@ def build_preview(path: Path):
         return {'kind': 'html', 'name': path.name, 'html': render(text),
                 'text': text[:MAX_CODE_CHARS], 'language': 'html',
                 'truncated': len(text) > MAX_CODE_CHARS,
-                'message': '정적 미리보기 · 외부 자료나 스크립트가 필요한 내용은 기본 앱에서 확인하세요.'}
+                'message': '본문 확인용 미리보기입니다. 보고서의 검색과 정렬 등 원본 기능은 기본 앱에서 열어 확인하세요. 이 미리보기에서는 스크립트를 실행하지 않습니다.'}
     return {'kind': 'text', 'name': path.name, 'text': text}

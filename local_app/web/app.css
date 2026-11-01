@@ -509,3 +509,5 @@ dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overfl
 .extension-import-dialog .dialog-actions{padding:16px 24px;margin-top:0;border-top:1px solid var(--theme-line);flex:none}
 .extension-import-dialog .dialog-actions button{min-height:32px;font-size:12px;padding:6px 14px}
 @media(max-width:480px){.extension-import-dialog .dialog-scroll-body{padding:0 18px 18px}.extension-import-summary>div{grid-template-columns:68px minmax(0,1fr);gap:8px}.extension-import-dialog .dialog-actions{padding:14px 18px}}
+
+.request-recovery{max-width:calc(var(--conversation-max) - var(--conversation-gutter) * 2);width:calc(100% - var(--conversation-gutter) * 2);box-sizing:border-box;margin:0 auto 20px;padding:12px 15px;border:1px solid var(--theme-line,#d9dfeb);border-radius:10px;background:var(--theme-surface-raised,#f5f6fc);color:var(--theme-text-secondary,#566983);font-size:12px;line-height:1.7}.request-recovery-copy strong{font-weight:600}.request-recovery-copy p{margin:4px 0 0}.request-recovery-actions{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:7px}.request-recovery-actions button{font-size:12px}

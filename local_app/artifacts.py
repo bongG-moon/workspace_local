@@ -40,13 +40,15 @@ EXCLUDED = {'node_modules', 'venv', '__pycache__', 'build', 'dist'}
 class Snapshot:
     files: dict = field(default_factory=dict)
     complete_directories: set = field(default_factory=set)
+    directories: set = field(default_factory=set)
     limited: bool = False
     errors: int = 0
     scanned: int = 0
+    max_depth: int = 3
 
     def public(self):
         return {'limited': self.limited, 'errors': self.errors, 'scanned': self.scanned,
-                'scope': 'workspace-top-two-levels'}
+                'scope': 'workspace-bounded-depth', 'maxDepth': self.max_depth}
 
 
 def linked(path):
@@ -54,13 +56,13 @@ def linked(path):
     return redirects_path(info)
 
 
-def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30, seconds=.5):
+def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30, seconds=.5, max_depth=3):
     """Read stat data only, without descending into links or unknown depth.
 
     A directory counts as complete only after its iterator is exhausted. This
     prevents a file omitted by a scan limit from later being called newly made.
     """
-    result = Snapshot()
+    result = Snapshot(max_depth=max_depth)
     deadline = time.monotonic() + seconds
     try:
         if root.resolve(strict=True) != root or any(linked(p) for p in (root, *root.parents)):
@@ -76,7 +78,7 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
             result.limited = True
             break
         try:
-            if linked(directory):
+            if linked(directory) or directory.resolve(strict=True) != directory:
                 continue
             with os.scandir(directory) as children:
                 for child in children:
@@ -91,9 +93,12 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
                         if redirects_path(info):
                             continue
                         path = Path(child.path)
-                        if stat.S_ISDIR(info.st_mode) and depth == 0:
-                            if len(pending) < max_directories + 1:
-                                pending.append((path, 1))
+                        if stat.S_ISDIR(info.st_mode):
+                            # Keep evidence that an unscanned folder already
+                            # existed; omission must never imply a new file.
+                            result.directories.add(str(path))
+                            if depth < max_depth and len(pending) < max_directories + 1:
+                                pending.append((path, depth + 1))
                             else:
                                 result.limited = True
                         elif stat.S_ISREG(info.st_mode) and path.suffix.lower() in REFERENCE_FILE_TYPES:
@@ -161,11 +166,19 @@ def changes(root: Path, before: Snapshot, after: Snapshot, run_id: str, observed
         if previous == signature:
             continue
         if previous is None and str(path.parent) not in before.complete_directories:
-            # A new child folder can be observed safely when the root scan was
-            # complete: none of that folder's documents existed at the start.
-            if not (str(root) in before.complete_directories and path.parent.parent == root
-                    and str(path.parent) not in before.complete_directories
-                    and not before.limited and not before.errors):
+            # A nested file is new only if an ancestor was absent from a
+            # completely read parent. An existing but unscanned directory
+            # (depth/time/count limit) is not evidence of creation.
+            ancestor = path.parent
+            new_directory = False
+            while ancestor != root and ancestor.is_relative_to(root):
+                if (str(ancestor.parent) in before.complete_directories
+                        and str(ancestor) not in before.directories
+                        and str(ancestor) not in before.complete_directories):
+                    new_directory = True
+                    break
+                ancestor = ancestor.parent
+            if not new_directory:
                 continue
         rows.append({'path': value, 'name': str(path.relative_to(root)),
                      'change': 'created' if previous is None else 'modified',

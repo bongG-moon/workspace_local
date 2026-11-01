@@ -181,7 +181,9 @@ globalThis.WorkspaceWorkflow = (() => {
       row.dataset.scheduleId=item.id;
       row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
       row.append(el("small",item.nextRunAt?`다음 실행: ${dateLabel(item.nextRunAt)}`:"다음 실행 없음","workflow-files"));
-      if (item.lastRun?.dueAt || item.lastRun?.status) row.append(el("small",`최근 실행: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
+      if (item.lastRun?.status && item.lastRun.status!=="paused") row.append(el("small",`최근 예약 처리: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
+      if(item.lastControl)row.append(el("small",`마지막 설정 변경: ${dateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"workflow-files"));
+      else if(item.lastRun?.status==="paused")row.append(el("small","이전 설정 변경: 일시 정지","workflow-files"));
       if (item.lastError) row.append(el("p",item.lastError,"workflow-warning"));
       for (const [label,fn] of [["수정",()=>openEditor("schedule",item)],[item.enabled ? "일시 정지" : "예약 재개",()=>item.enabled?mutate({action:"schedule_pause",requestId:item.id},context):requestResume({action:"schedule_resume",requestId:item.id},context)],["삭제",()=>mutate({action:"schedule_cancel",requestId:item.id},context)]]) {
         const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||(label==="예약 재개"&&!item.nextRunAt);button.onclick=()=>{if(current(context))fn();};actions.append(button);
@@ -228,7 +230,8 @@ globalThis.WorkspaceWorkflow = (() => {
       const timing=el("div",null,"schedule-overview-timing");
       timing.append(el("span",item.kind==="once"?"한 번":scheduleLabel(item)),el("span",item.nextRunAt?`${item.pausedByUser?"예약 시각":"다음"} ${overviewDateLabel(item.nextRunAt)}`:"다음 실행 없음"));row.append(timing);
       if(item.waitReason)row.append(el("p",item.waitReason,"schedule-overview-reason"));
-      if(item.lastRun?.status)row.append(el("small",`최근 ${overviewDateLabel(item.lastRun.dueAt)} · ${resultNames[item.lastRun.status]||"결과 확인 필요"}`,"schedule-overview-last"));
+      if(item.lastRun?.status && item.lastRun.status!=="paused")row.append(el("small",`최근 예약 처리: ${overviewDateLabel(item.lastRun.dueAt)} · ${resultNames[item.lastRun.status]||"결과 확인 필요"}`,"schedule-overview-last"));
+      if(item.lastControl)row.append(el("small",`설정 변경: ${overviewDateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"schedule-overview-last"));
       const button=el("button","예약 관리","secondary-button schedule-overview-manage");button.type="button";button.disabled=overviewNavigating||appClosed;
       button.setAttribute("aria-label",`${item.title} 예약 관리`);button.onclick=()=>manageOverviewSchedule(item);row.append(button);list.append(row);
     }

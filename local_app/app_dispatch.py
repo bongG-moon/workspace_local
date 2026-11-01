@@ -174,6 +174,7 @@ class DispatchController:
                     'nextRunAt': next_at, 'enabled': schedule['enabled'], 'pausedByUser': paused,
                     'category': category, 'statusLabel': label, 'waitReason': reason,
                     'lastRun': {'dueAt': schedule.get('lastDueAt'), 'status': last},
+                    'lastControl': schedule.get('lastControl'),
                 })
                 counts['total'] += 1
                 counts[category] += 1

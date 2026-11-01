@@ -930,6 +930,7 @@ class LocalApp:
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
             'resultReceipt': normalize_result_receipt(item.get('resultReceipt')),
+            'pendingRunId': item.get('pendingRunId'),
             'runStartedAt': self._run_started_at(item),
             'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
             'permissionPreferenceNotice': item.get('permissionPreferenceNotice') or '',

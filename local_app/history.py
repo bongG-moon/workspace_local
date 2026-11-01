@@ -19,7 +19,23 @@ MAX_SESSIONS = 500
 MAX_ARCHIVED_SESSIONS = 10000
 MAX_STORED_SESSIONS = MAX_SESSIONS + MAX_ARCHIVED_SESSIONS
 MAX_ARTIFACTS = 100
-INDEX_METADATA = ('lastRunId', 'branch', 'importedConfigRoot', 'choice', 'verification', 'resultReceipt')
+INDEX_METADATA = ('lastRunId', 'pendingRunId', 'artifactObservation', 'branch', 'importedConfigRoot', 'choice', 'verification', 'resultReceipt')
+
+
+def normalize_artifact_observation(value):
+    """Persist scan coverage only, never its paths or private folder inventory."""
+    if not isinstance(value, dict) or type(value.get('limited')) is not bool:
+        return None
+    if value.get('scope') not in {'workspace-bounded-depth', 'workspace-top-two-levels'}:
+        return None
+    result = {'limited': value['limited'], 'scope': value['scope']}
+    for key, maximum in (('errors', 10000), ('scanned', 2000), ('maxDepth', 8), ('retainedLimit', MAX_ARTIFACTS)):
+        number = value.get(key)
+        if number is not None:
+            if type(number) is not int or not 0 <= number <= maximum:
+                return None
+            result[key] = number
+    return result
 
 
 def normalize_result_receipt(value):
@@ -161,10 +177,22 @@ def row(item):
         artifacts.append({key: artifact[key] for key in ('path', 'name', 'change', 'runId', 'observedAt')} |
                          {'size': artifact.get('size') if type(artifact.get('size')) is int and artifact['size'] >= 0 else None})
     result['artifacts'] = artifacts
+    observation = normalize_artifact_observation(item.get('artifactObservation'))
+    if observation is not None:
+        result['artifactObservation'] = observation
     result['executions'] = normalize_executions(item.get('executions'))
     result['toolActivity'] = normalize_activities(item.get('toolActivity'))
     last_run = item.get('lastRunId')
     result['lastRunId'] = last_run if isinstance(last_run, str) and len(last_run) <= 64 else None
+    # Persist only a display marker, never an instruction to retry a request.
+    # Completion/stop/error clears it, including snapshots written on shutdown.
+    state = item.get('state')
+    timer = item.get('_runTimer')
+    live_request = isinstance(timer, dict) and timer.get('runId') == last_run and safe_run_id(last_run)
+    pending_run = (last_run if live_request and state in {'starting', 'running', 'stopping', 'approval', 'question'}
+                   else item.get('pendingRunId') if state not in {'done', 'error', 'stopped'} else None)
+    if safe_run_id(pending_run) and pending_run == last_run:
+        result['pendingRunId'] = pending_run
     receipt = normalize_result_receipt(item.get('resultReceipt'))
     if receipt is not None:
         result['resultReceipt'] = receipt

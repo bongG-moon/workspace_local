@@ -373,6 +373,23 @@ class WorkQueueTests(unittest.TestCase):
         self.assertEqual([], state['queue'])
         self.assertGreater(state['schedules'][0]['nextRunAt'], self.now)
 
+    def test_schedule_control_does_not_replace_last_execution_result(self):
+        schedule = self.schedule('daily')
+        self.now += 60
+        self.queue.tick()
+        claim = self.claim()
+        self.queue.dispatched(claim['id'], 'scheduled-run')
+        self.queue.observe('task', 'result', {'lastRunId': 'scheduled-run'})
+        last_run = self.queue.snapshot('task')['schedules'][0]['lastRun']
+        self.queue.set_schedule_enabled('task', schedule['id'], False)
+        paused = self.queue.snapshot('task')['schedules'][0]
+        self.assertEqual(last_run, paused['lastRun'])
+        self.assertEqual('paused', paused['lastControl']['action'])
+        self.queue.set_schedule_enabled('task', schedule['id'], True)
+        resumed = self.queue.snapshot('task')['schedules'][0]
+        self.assertEqual(last_run, resumed['lastRun'])
+        self.assertEqual('resumed', resumed['lastControl']['action'])
+
     def test_schedule_pause_does_not_interrupt_already_submitted_request(self):
         schedule = self.schedule('daily')
         self.now += 60

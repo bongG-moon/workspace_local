@@ -10,7 +10,7 @@
 
 화면은 중앙 뉴트럴과 기존 좌우 패널 색상을 조합한 A2 구성입니다. 사이드바의 글자·아이콘·행 간격을 줄여 목록을 간결하게 표시하며 라이트·다크 모드를 함께 지원합니다.
 
-**현재 소스와 배포 버전은 0.23.39입니다.** Claude 인증 오류 안내에 터미널의 실행 환경과 모델을 확인하는 방법을 추가했습니다. 사용 설명서에서도 같은 확인 절차를 볼 수 있습니다. [변경 내용](docs/RELEASE_NOTES_0.23.39.md) · [사용량 연결 안내](docs/LLM_USAGE.md)
+**현재 소스와 배포 버전은 0.23.39입니다.** 2026-11-01 동일 버전 갱신으로 보고서 파일 우선 표시, 하위 폴더 결과 확인과 이전 요청의 완료 여부 확인 안내를 추가했습니다. 기존 Claude 인증 오류 확인 방법은 유지합니다. 같은 버전을 사용 중이면 새 설치 파일로 적용하세요. [변경 내용](docs/RELEASE_NOTES_0.23.39.md) · [사용량 연결 안내](docs/LLM_USAGE.md)
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 

@@ -150,3 +150,57 @@ class ExecutionViewTests(unittest.TestCase):
           assert.notEqual($('conversation').children[2],deleted);
           assert.equal($('conversation').children[2].dataset.runId,'a');
         ''')
+
+    def test_report_is_visible_before_scratch_files_and_all_files_remain_accessible(self):
+        self.run_case(r'''
+          active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
+          const rendered=[];globalThis.WorkspaceRichContent={files(parent,paths){assert.ok(paths.length<=24);rendered.push(paths);}};
+          const report={path:'C:/task/output/q2/report.html',runId:'a',observedAt:1};
+          const files=[report,...Array.from({length:25},(_,i)=>({path:`C:/task/scratch/check-${i}.txt`,runId:'a',observedAt:2}))];
+          WorkspaceExecutionView.results('a',files);
+          assert.equal(rendered.length,1);assert.equal(rendered[0].length,1);assert.equal(rendered[0][0],report.path);
+          const card=$('conversation').children[0],detail=card.querySelector('details');assert.equal(detail.open,false);
+          detail.open=true;detail.ontoggle();
+          assert.equal(rendered.slice(1).flat().length,26);assert.equal(new Set(rendered.slice(1).flat()).size,26);
+          detail.ontoggle();assert.equal(rendered.length,3);
+          WorkspaceExecutionView.results('a',[...files,{path:'C:/task/notes.md',runId:'a',observedAt:3}]);
+          assert.equal(card.querySelector('details').open,true);
+        ''')
+
+    def test_recovery_notice_is_read_only_and_does_not_hide_draft(self):
+        self.run_case(r'''
+          active={id:'A',workspace:'C:/task',state:'idle',lastRunId:'a',pendingRunId:'a',messages:[{role:'user',text:'request',runId:'a'}]};
+          $('prompt').value='unsent draft';attachments=['C:/task/input.csv'];let sent=0,opened=[];
+          api=async()=>{sent++;};WorkspaceProgressView={open(run){opened.push(run);}};
+          renderRequestRecovery();assert.equal($('request-recovery').hidden,false);
+          const button=$('request-recovery').querySelector('button');button.onclick();assert.equal(opened.join(','),'a');
+          assert.equal(sent,0);assert.equal($('prompt').value,'unsent draft');assert.equal(attachments.length,1);
+          active.state='running';renderRequestRecovery();assert.equal($('request-recovery').hidden,true);
+          active.state='idle';active.messages[0].runTiming={status:'done'};renderRequestRecovery();assert.equal($('request-recovery').hidden,true);
+          active={id:'B',state:'idle',lastRunId:'legacy',messages:[]};renderRequestRecovery();assert.equal($('request-recovery').hidden,true);
+        ''')
+
+    def test_sidebar_prioritizes_report_and_disclosure_is_scoped_to_request(self):
+        self.run_case(r'''(async()=>{
+          active={id:'A',workspace:'C:/task',kind:'work',messages:[]};WorkspaceExecutionView.reset('A');
+          let run='a';api=async()=>({lastRunId:run,artifacts:[{path:'C:/task/report.html',runId:run},...Array.from({length:25},(_,i)=>({path:`C:/task/scratch/${i}.txt`,runId:run}))]});
+          await refreshResults();const list=$('results-list');
+          assert.equal(list.children.filter(n=>n.classList.contains('result-card')).length,1);
+          let detail=list.querySelector('details');assert.equal(detail.open,false);
+          const content=detail.children[1];assert.equal(content.children.length,0);
+          detail.open=true;detail.ontoggle();assert.equal(content.children.length,26);
+          await refreshResults();assert.equal(list.querySelector('details').open,true);
+          run='b';await refreshResults();assert.equal(list.querySelector('details').open,false);
+          assert.equal($('result-count').textContent,26);
+        })()''')
+
+    def test_incomplete_scan_does_not_claim_no_files_and_offers_bounded_folder_browse(self):
+        self.run_case(r'''(async()=>{
+          active={id:'A',workspace:'C:/task',kind:'work',messages:[]};
+          const calls=[];api=async(path)=>{calls.push(path);return path.startsWith('/api/files')?{files:[],directory:''}:{lastRunId:'a',artifacts:[],observation:{limited:true}};};
+          $('prompt').value='draft';await refreshResults();
+          assert.equal($('empty-results').hidden,true);const note=$('results-list').querySelector('.result-observation');
+          assert.ok(note);note.querySelector('button').onclick();
+          assert.equal($('source-panel').hidden,false);assert.equal($('prompt').value,'draft');
+          assert.equal(calls.length,2);assert.ok(calls[1].startsWith('/api/files'));
+        })()''')
