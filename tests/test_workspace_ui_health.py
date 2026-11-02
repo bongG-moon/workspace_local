@@ -86,6 +86,36 @@ class UiHealthTests(unittest.TestCase):
         self.assertEqual('document-test-123', row['documentId'])
         self.assertFalse(self.log.native({'type':'ack','id':1}))
 
+    def test_native_failure_retains_hresult_and_stage_across_restart_without_exception_text(self):
+        self.log.native({'type': 'error', 'pid': 321, 'code': 47,
+            'hresult': -2147019873, 'stage': 'controller_creation', 'runtime': '156.0.4314.58',
+            'message': 'PRIVATE PATH', 'url': 'http://localhost/#token=SECRET'})
+        restarted = UiHealthLog(self.state, '0.23.40')
+        row = restarted.rows[-1]
+        self.assertEqual(-2147019873, row['hresult'])
+        self.assertEqual('0x8007139F', row['hresultHex'])
+        self.assertEqual('controller_creation', row['stage'])
+        self.assertEqual('156.0.4314.58', row['runtime'])
+        self.assertNotIn('PRIVATE', self.log.path.read_text())
+        self.assertNotIn('SECRET', self.log.path.read_text())
+
+    def test_native_failure_rejects_unbounded_or_freeform_details_and_recomputes_hex(self):
+        for hresult in (True, 2**31, -(2**31)-1, 1.5, '0x8007139F', None):
+            with self.subTest(hresult=hresult):
+                self.log.native({'type': 'error', 'hresult': hresult,
+                    'hresultHex': 'SECRET', 'stage': 'PRIVATE PATH'})
+                self.assertNotIn('hresult', self.log.rows[-1])
+                self.assertNotIn('hresultHex', self.log.rows[-1])
+                self.assertNotIn('stage', self.log.rows[-1])
+        self.log.native({'type': 'error', 'hresult': -2147467260, 'stage': 'environment_creation'})
+        data = json.loads(self.log.path.read_text())
+        data['events'][-1]['hresultHex'] = 'SECRET'
+        data['events'][0]['stage'] = ['PRIVATE PATH']
+        self.log.path.write_text(json.dumps(data))
+        restarted = UiHealthLog(self.state, '0.23.40')
+        self.assertEqual('0x80004004', restarted.rows[-1]['hresultHex'])
+        self.assertNotIn('stage', restarted.rows[0])
+
     def test_malformed_native_values_cannot_poison_host_context(self):
         for value in (None, [], {}, {'type': []}, {'type': {}}, {'type': None}):
             with self.subTest(value=value):

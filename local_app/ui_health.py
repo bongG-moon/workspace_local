@@ -21,7 +21,22 @@ REASONS = frozenset(('', 'resource-load', 'resource-error', 'runtime-error',
     'timeout', 'storage-unavailable', 'reload-requested', 'restore-failed'))
 NATIVE_EVENTS = frozenset(('ready', 'loaded', 'hidden', 'activated', 'close_requested',
     'error', 'external_link_failed', 'manual_link_failed', 'process_failed', 'navigation_failed', 'api_proxy_failed', 'exited'))
+NATIVE_STAGES = frozenset(('host_startup', 'runtime_discovery', 'environment_creation',
+    'control_creation', 'controller_creation', 'view_configuration', 'navigation'))
 MAX_EVENTS = 240
+
+
+def native_failure_fields(value):
+    """Keep fixed technical failure data, never exception text or user paths."""
+    row = {}
+    hresult = value.get('hresult')
+    if type(hresult) is int and -(2**31) <= hresult < 2**31:
+        row['hresult'] = hresult
+        row['hresultHex'] = f'0x{hresult & 0xffffffff:08X}'
+    stage = value.get('stage')
+    if isinstance(stage, str) and stage in NATIVE_STAGES:
+        row['stage'] = stage
+    return row
 
 
 def frontend_row(value):
@@ -82,6 +97,7 @@ class UiHealthLog:
                         if row.get('event') not in NATIVE_EVENTS or row.get('status') not in STATES:
                             continue
                         clean = {key: row[key] for key in ('event', 'module', 'status')}
+                        clean.update(native_failure_fields(row))
                     else:
                         clean = frontend_row(row)
                     if not re.fullmatch(r'[0-9a-f]{32}', row.get('launchId', '')):
@@ -119,6 +135,7 @@ class UiHealthLog:
         runtime = value.get('runtime')
         if isinstance(runtime, str) and re.fullmatch(r'[0-9][0-9A-Za-z. -]{0,79}', runtime):
             row['runtime'] = runtime
+        row.update(native_failure_fields(value))
         return self._append(row, native=True)
 
     def _append(self, row, native=False):

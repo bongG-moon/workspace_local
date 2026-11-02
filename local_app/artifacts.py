@@ -10,7 +10,7 @@ import time
 from .windows_paths import redirects_path, workspace_path
 from .file_preview import ARCHIVE_TYPES, CODE_LANGUAGES, private_name
 
-DOCUMENT_TYPES = {'.md', '.txt', '.csv', '.tsv', '.html', '.htm', '.pdf', '.pptx', '.docx', '.xlsx', '.png', '.jpg', '.jpeg', '.webp'}
+DOCUMENT_TYPES = {'.md', '.txt', '.csv', '.tsv', '.html', '.htm', '.pdf', '.pptx', '.docx', '.xlsx', '.xls', '.png', '.jpg', '.jpeg', '.webp'}
 # Archives are listed by metadata only and offer an external-open handoff.
 # Source previews remain separate from the external-app opening allowlist.
 PREVIEW_TYPES = DOCUMENT_TYPES | ARCHIVE_TYPES | set(CODE_LANGUAGES)

@@ -606,14 +606,47 @@ class TimeoutProbe {
 
 
 class StandaloneManifestTests(unittest.TestCase):
-    def test_manifest_requests_no_elevation_and_per_monitor_dpi(self):
+    def test_manifest_requests_no_elevation_and_compatible_system_dpi(self):
         import xml.etree.ElementTree as ET
         root = ET.parse(MANIFEST).getroot()
         level = root.find('.//{urn:schemas-microsoft-com:asm.v3}requestedExecutionLevel')
         self.assertEqual('asInvoker', level.attrib['level'])
         self.assertEqual('false', level.attrib['uiAccess'])
-        dpi = root.find('.//{http://schemas.microsoft.com/SMI/2016/WindowsSettings}dpiAwareness')
-        self.assertIn('PerMonitorV2', dpi.text)
+        dpi = root.find('.//{http://schemas.microsoft.com/SMI/2005/WindowsSettings}dpiAware')
+        self.assertEqual('true', dpi.text)
+        # PMv2 fixes the process context before WebView2 initializes and can
+        # prevent controller creation on Windows 10 LTSC 2019 (0x8007139F).
+        self.assertIsNone(root.find('.//{http://schemas.microsoft.com/SMI/2016/WindowsSettings}dpiAwareness'))
+
+    @unittest.skipUnless(os.name == 'nt' and CSC.is_file(), 'Windows .NET Framework compiler required')
+    def test_compiled_manifest_uses_system_dpi_context_without_opening_window(self):
+        # Check the actual process context Windows assigns from the shared
+        # desktop/bootstrap manifest, not only its XML spelling. No display,
+        # registry, app profile or process-wide setting is changed by the probe.
+        with tempfile.TemporaryDirectory(prefix='workspace-dpi-context-') as raw:
+            folder = Path(raw)
+            source = folder / 'DpiContext.cs'
+            binary = folder / 'DpiContext.exe'
+            source.write_text('''using System;
+using System.Runtime.InteropServices;
+class DpiContext {
+    [DllImport("shcore.dll")]
+    static extern int GetProcessDpiAwareness(IntPtr process, out int awareness);
+    static int Main() {
+        int awareness;
+        int result = GetProcessDpiAwareness(IntPtr.Zero, out awareness);
+        Console.WriteLine(result + ":" + awareness);
+        return result == 0 && awareness == 1 ? 0 : 1;
+    }
+}''', encoding='utf-8')
+            built = subprocess.run([str(CSC), '/nologo', '/target:exe', '/platform:x64',
+                                    '/out:' + str(binary), '/win32manifest:' + str(MANIFEST), str(source)],
+                                   capture_output=True, text=True, timeout=30, creationflags=HIDDEN)
+            self.assertEqual(0, built.returncode, built.stdout + built.stderr)
+            probe = subprocess.run([str(binary)], capture_output=True, text=True,
+                                   timeout=15, creationflags=HIDDEN)
+            self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
+            self.assertEqual('0:1', probe.stdout.strip())
 
 
 if __name__ == '__main__':

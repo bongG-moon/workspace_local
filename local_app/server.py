@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.40"
+WORKSPACE_VERSION = "0.23.41"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -333,11 +333,12 @@ class LocalApp:
         task is reserved throughout, including while an idle owned bridge is
         safely retired, so a concurrent app turn cannot reuse stale context.
         """
-        from .session_import import SessionImporter, session_uuid
+        from .session_import import SessionImporter, SessionImportError, session_uuid
         from .session_reconcile import new_messages
         from .idle_connections import _prepare_release, _finish_release
         marker = secrets.token_hex(16)
         release_owner = object()
+        deferred_probe = {'available': False, 'deferred': True}
         with self.lock:
             self._require_running()
             item = self.get(sid)
@@ -358,6 +359,8 @@ class LocalApp:
                     or sid in self.dispatch.steering
                     or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
                         '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain'))):
+                if probe:
+                    return deferred_probe
                 raise ValueError('이 대화의 진행 중인 작업과 연결 변경을 마친 뒤 불러와 주세요.')
             if bridge is not None and getattr(bridge, 'closed', False) and getattr(bridge, 'cleanup_complete', False) is not True:
                 raise ValueError('이전 Claude 연결의 종료를 확인한 뒤 불러와 주세요.')
@@ -370,11 +373,12 @@ class LocalApp:
             revision = (item.get('updated'), item.get('seq'), len(original), native_id, str(workspace))
             probe_state, probe_workspace = item.get('state'), item.get('workspace')
 
-        def require_unchanged_probe():
+        def unchanged_probe():
             # Caller holds app.lock. Both cached and freshly read results need
-            # the same admission and identity check; a race is not "no changes".
+            # the same admission and identity check. An ordinary app turn or
+            # queue handoff invalidates this optional read, not the conversation.
             current = self.sessions.get(sid)
-            if (current is not item or current.get('sessionId') != native_id
+            return not (current is not item or current.get('sessionId') != native_id
                     or current.get('messages') != original or current.get('state') != probe_state
                     or current.get('updated') != revision[0] or current.get('seq') != revision[1]
                     or current.get('workspace') != probe_workspace or current.get('bridge') is not bridge
@@ -384,8 +388,7 @@ class LocalApp:
                         '_stopAdmission', '_idleReleasing', '_observationPending', '_chatPreparing', '_capacityReservation'))
                     or sid in self.dispatch.steering
                     or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
-                        '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain'))):
-                raise ValueError('확인 중 대화 상태가 바뀌었어요. 같은 대화를 다시 선택해 주세요.')
+                        '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain')))
         try:
             root = Path(runtime_context(self.command)['configRoot']).resolve()
             reader = SessionImporter(root)
@@ -402,7 +405,8 @@ class LocalApp:
                 with self.lock:
                     cached = self._external_sync_probe_cache.get(sid)
                     if cached and cached[0] == fingerprint:
-                        require_unchanged_probe()
+                        if not unchanged_probe():
+                            return deferred_probe
                         return {'available': cached[1]}
             legacy_resolved = {}
             legacy_total_bytes = 0
@@ -495,13 +499,14 @@ class LocalApp:
                 path, expected = record['_sourceIdentity']
                 info = safe(path).stat()
                 if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) != expected:
-                    raise ValueError('Claude 기록이 변경 중입니다. 터미널 작업을 마친 뒤 다시 불러와 주세요.')
+                    raise SessionImportError('changed', 'Claude 기록이 변경 중입니다. 작업을 마친 뒤 다시 불러와 주세요.')
                 return record, additions
 
             record, additions = read_updates()
             if probe:
                 with self.lock:
-                    require_unchanged_probe()
+                    if not unchanged_probe():
+                        return deferred_probe
                     if len(self._external_sync_probe_cache) >= 100:
                         self._external_sync_probe_cache.clear()
                     self._external_sync_probe_cache[sid] = (fingerprint, bool(additions))
@@ -548,6 +553,16 @@ class LocalApp:
                     self.emit(sid, 'history_synced', {'added': len(additions)})
                 return {'ok': True, 'session': self.public(item), 'added': len(additions),
                         'warnings': record.get('warnings', [])}
+        except (OSError, ValueError) as exc:
+            if probe:
+                with self.lock:
+                    # The CLI may finish its JSONL write after a turn result, or
+                    # the next queued turn may start before this read completes.
+                    # Do not cache a negative result or label either as an
+                    # external-tool failure. A later selection can check again.
+                    if not unchanged_probe() or isinstance(exc, SessionImportError) and exc.code == 'changed':
+                        return deferred_probe
+            raise
         finally:
             with self.lock:
                 if self.sessions.get(sid) is item:
@@ -3783,6 +3798,9 @@ def main():
         serving.set()
         server.serve_forever(poll_interval=.3)
     except DesktopError as exc:
+        # Startup is ending; persist the final failure before the asynchronous
+        # native diagnostic queue closes. DesktopError exposes safe fields only.
+        app.ui_health.native({'type': 'error', 'code': exc.code, **exc.diagnostic})
         raise SystemExit(exc.code)
     except KeyboardInterrupt:
         pass

@@ -53,6 +53,7 @@ class DropUploadTests(unittest.TestCase):
         self.assertTrue(result['copied'])
         path = Path(result['path'])
         self.assertEqual(b'dropped', path.read_bytes())
+
         self.assertTrue(path.is_relative_to(self.app.state / 'attachments' / self.sid))
         self.assertEqual('한글 & 자료.md', path.name)
         self.assertEqual([], self.app.get(self.sid)['messages'])
@@ -61,6 +62,18 @@ class DropUploadTests(unittest.TestCase):
         self.assertEqual(200, code)
         self.assertNotEqual(result['path'], other['path'])
         self.assertEqual(b'dropped', path.read_bytes())
+
+    def test_xls_prepare_and_upload_work_for_chat_and_work_without_execution(self):
+        body = (Path(__file__).parent / 'fixtures/chat-legacy-excel.xls').read_bytes()
+        chat_id = self.app.create(kind='chat')['id']
+        for sid in (self.sid, chat_id):
+            with self.subTest(kind=self.app.get(sid)['kind']):
+                self.assertEqual(200, self.prepare(name='이전 실적.XLS', size=len(body), sid=sid)[0])
+                code, result = self.upload('이전 실적.XLS', body, sid=sid)
+                self.assertEqual(200, code, result)
+                self.assertEqual(body, Path(result['path']).read_bytes())
+                self.assertEqual([], self.app.get(sid)['messages'])
+                self.assertIsNone(self.app.get(sid)['bridge'])
 
     def test_unauthorized_cross_origin_and_missing_task_cannot_write(self):
         # Repeated immediate rejection used to race unread-body socket close.

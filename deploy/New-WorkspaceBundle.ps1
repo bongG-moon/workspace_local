@@ -14,7 +14,10 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'local_app\web') -Force |
 New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
-    'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'docs\WORKSPACE_CHAT_MODES.md',
+    'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'local_app\legacy_excel.py',
+    'local_app\_vendor\__init__.py',
+    'local_app\_vendor\xlrd\__init__.py', 'local_app\_vendor\xlrd\biffh.py', 'local_app\_vendor\xlrd\book.py', 'local_app\_vendor\xlrd\compdoc.py', 'local_app\_vendor\xlrd\formatting.py', 'local_app\_vendor\xlrd\formula.py', 'local_app\_vendor\xlrd\info.py', 'local_app\_vendor\xlrd\LICENSE', 'local_app\_vendor\xlrd\sheet.py', 'local_app\_vendor\xlrd\SOURCE.json', 'local_app\_vendor\xlrd\timemachine.py', 'local_app\_vendor\xlrd\xldate.py',
+     'docs\WORKSPACE_CHAT_MODES.md',
     'local_app\customizations.py', 'local_app\web\customizations.js',
     'local_app\workspace_preferences.py', 'local_app\session_groups.py', 'local_app\web\session-groups.js',
     'local_app\drafts.py', 'local_app\idle_connections.py', 'local_app\history_writer.py', 'local_app\event_recovery.py', 'local_app\web\drafts.js',

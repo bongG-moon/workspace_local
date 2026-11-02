@@ -23,6 +23,9 @@ with open(sys.argv[2] + '.config', 'w', encoding='utf-8') as record:
 mode = sys.argv[1]
 if mode == 'missing':
  print(json.dumps({'type':'error','code':46}), flush=True); sys.exit(46)
+if mode == 'controller_failed':
+ print(json.dumps({'type':'error','code':47,'hresult':-2147019873,'stage':'controller_creation',
+                   'runtime':'156.0.4314.58','message':'PRIVATE PATH','url':config['url']}), flush=True); sys.exit(47)
 print(json.dumps({'type':'ready','pid':os.getpid() + (1 if mode=='wrong' else 0),'hwnd':123,'runtime':'fixture',
                   'notificationCards':mode!='unsupported'}), flush=True)
 for line in sys.stdin:
@@ -207,6 +210,28 @@ class NativeWindowTests(unittest.TestCase):
         self.assertIsNone(self.host.process)
         self.notifier.bind_owned.assert_not_called()
         self.assertEqual(1, len(self.launches))
+
+    def test_controller_failure_keeps_diagnostics_without_exposing_exception_or_launching_browser(self):
+        self.mode = 'controller_failed'
+        log = UiHealthLog(self.root, '0.23.40')
+        self.host.on_event = log.native
+        with self.assertRaises(DesktopError) as caught:
+            self.host.open()
+        self.assertEqual(47, caught.exception.code)
+        self.assertEqual('0x8007139F', caught.exception.diagnostic['hresultHex'])
+        self.assertIn('DPI', str(caught.exception))
+        self.assertNotIn('PRIVATE', str(caught.exception))
+        self.wait_for(lambda: any(row.get('hresult') == -2147019873 for row in log.rows))
+        # Memory is appended before the asynchronous atomic disk write.
+        with log.lock:
+            restarted = UiHealthLog(self.root, '0.23.40')
+        failure = next(row for row in restarted.rows if row.get('hresult') == -2147019873)
+        self.assertEqual('controller_creation', failure['stage'])
+        self.assertNotIn(self.url, log.path.read_text())
+        self.assertNotIn('PRIVATE', log.path.read_text())
+        self.assertIsNone(self.host.process)
+        self.assertEqual(1, len(self.launches))
+        self.notifier.bind_owned.assert_not_called()
 
     def test_wrong_pid_or_unverified_hwnd_is_rejected_and_child_cleaned_up(self):
         self.mode = 'wrong'

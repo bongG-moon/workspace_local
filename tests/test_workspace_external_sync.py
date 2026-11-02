@@ -14,7 +14,7 @@ from uuid import uuid4
 from local_app.server import LocalApp, Server
 from local_app.llm_usage import UsageService
 from local_app.chat_attachments import prepare_chat_content
-from local_app.session_import import SessionImporter
+from local_app.session_import import SessionImporter, SessionImportError
 from local_app.session_reconcile import content_fingerprint, new_messages
 
 
@@ -80,7 +80,7 @@ class ExternalSyncTests(unittest.TestCase):
                 self.app.import_session_updates(self.task, probe=True)
         self.assertEqual(self.base, self.item['messages'])
 
-    def test_probe_reports_concurrent_message_change_as_unconfirmed(self):
+    def test_probe_defers_concurrent_app_message_change_without_caching(self):
         self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
         actual=SessionImporter.load
         def changed(reader,*args,**kwargs):
@@ -88,9 +88,10 @@ class ExternalSyncTests(unittest.TestCase):
             self.item['messages'].append({'role':'user','text':'동시에 추가된 앱 요청'})
             return record
         with patch.object(SessionImporter,'load',changed):
-            with self.assertRaisesRegex(ValueError,'대화 상태가 바뀌었어요'):
-                self.app.import_session_updates(self.task,probe=True)
+            self.assertEqual({'available':False,'deferred':True},
+                             self.app.import_session_updates(self.task,probe=True))
         self.assertEqual('동시에 추가된 앱 요청',self.item['messages'][-1]['text'])
+        self.assertNotIn(self.task,self.app._external_sync_probe_cache)
 
     def test_cached_probe_also_rechecks_concurrent_state_change(self):
         self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
@@ -101,9 +102,48 @@ class ExternalSyncTests(unittest.TestCase):
             self.item['state']='running'
             return result
         with patch.object(SessionImporter,'_paths',changed):
-            with self.assertRaisesRegex(ValueError,'대화 상태가 바뀌었어요'):
-                self.app.import_session_updates(self.task,probe=True)
+            self.assertEqual({'available':False,'deferred':True},
+                             self.app.import_session_updates(self.task,probe=True))
         self.assertEqual(self.base,self.item['messages'])
+
+    def test_probe_skips_running_task_and_automatic_queue_handoff_before_reading(self):
+        with patch.object(SessionImporter,'_paths',side_effect=AssertionError('busy task must not scan')):
+            for field,value in [('state','running'),('_dispatchClaim','next-request'),('_observationPending',True)]:
+                with self.subTest(field=field):
+                    previous=self.item.get(field)
+                    self.item[field]=value
+                    self.assertEqual({'available':False,'deferred':True},
+                                     self.app.import_session_updates(self.task,probe=True))
+                    with self.assertRaisesRegex(ValueError,'진행 중인 작업'):
+                        self.app.import_session_updates(self.task)
+                    if previous is None:self.item.pop(field,None)
+                    else:self.item[field]=previous
+        self.assertEqual(self.base,self.item['messages'])
+
+    def test_transcript_write_defers_probe_but_explicit_import_remains_strict(self):
+        self.write([('user','기존 질문'),('assistant','기존 답변'),('user','외부 질문')])
+        with patch.object(SessionImporter,'load',side_effect=SessionImportError('changed','기록 변경 중')):
+            self.assertEqual({'available':False,'deferred':True},
+                             self.app.import_session_updates(self.task,probe=True))
+            with self.assertRaisesRegex(SessionImportError,'기록 변경 중'):
+                self.app.import_session_updates(self.task)
+        self.assertNotIn(self.task,self.app._external_sync_probe_cache)
+        self.assertEqual(self.base,self.item['messages'])
+        self.assertEqual({'available':True},self.app.import_session_updates(self.task,probe=True))
+
+    def test_other_running_session_in_same_folder_does_not_trigger_or_mix_updates(self):
+        self.write([('user','기존 질문'),('assistant','기존 답변')])
+        other=self.app.create(str(self.work),True)['id']
+        sibling=self.app.get(other);sibling['sessionId']=str(uuid4());sibling['state']='running'
+        path=self.transcript.with_name(sibling['sessionId']+'.jsonl')
+        path.write_text(json.dumps({'type':'user','sessionId':sibling['sessionId'],'uuid':str(uuid4()),
+            'parentUuid':None,'cwd':str(self.work),'message':{'role':'user','content':'다른 업무 내용'}})+'\n',encoding='utf-8')
+        self.assertEqual({'available':False},self.app.import_session_updates(self.task,probe=True))
+        self.write([('user','기존 질문'),('assistant','기존 답변'),('user','이 세션 외부 질문')])
+        self.assertEqual({'available':True},self.app.import_session_updates(self.task,probe=True))
+        result=self.app.import_session_updates(self.task)
+        self.assertEqual(['이 세션 외부 질문'],[row['text'] for row in result['session']['messages'][2:]])
+        self.assertEqual('running',sibling['state'])
 
     def test_resume_from_another_cwd_after_restart_imports_once(self):
         other=self.root/'other';other.mkdir()

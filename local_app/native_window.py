@@ -12,15 +12,21 @@ import threading
 import time
 import unicodedata
 
-from .ui_health import NATIVE_EVENTS
+from .ui_health import NATIVE_EVENTS, native_failure_fields
 from .attention import DEFAULT_REQUEST_SUMMARY, clean_summary
 
 
 class DesktopError(OSError):
-    def __init__(self, code=47):
+    def __init__(self, code=47, *, diagnostic=None):
         self.code = code if code in (46, 47) else 47
-        super().__init__('WebView2 Runtime을 찾지 못했습니다. PC의 실행 조건을 확인해 주세요.' if self.code == 46
-                         else '전용 앱 창을 준비하지 못했습니다. 앱 파일과 WebView2 실행 정책을 확인해 주세요.')
+        self.diagnostic = native_failure_fields(diagnostic or {})
+        message = ('WebView2 Runtime을 찾지 못했습니다. PC의 실행 조건을 확인해 주세요.' if self.code == 46
+                   else '전용 앱 창을 준비하지 못했습니다. 화면 표시 호환성, 앱 파일 또는 WebView2 실행 환경을 확인해 주세요.')
+        if self.code == 47 and self.diagnostic.get('stage') == 'controller_creation':
+            message = 'WebView2 화면을 만들지 못했습니다. 화면 표시(DPI) 호환성이나 WebView2 실행 상태를 확인해 주세요.'
+        if self.diagnostic.get('hresultHex'):
+            message += ' 진단: ' + self.diagnostic['hresultHex']
+        super().__init__(message)
 
 
 def desktop_executable():
@@ -99,6 +105,7 @@ class DesktopHost:
                 and isinstance(event.get('type'), str) and event['type'] in NATIVE_EVENTS):
             try:
                 row = {**{key: event[key] for key in ('type', 'hwnd', 'runtime', 'code') if key in event},
+                       **native_failure_fields(event),
                        'pid': process.pid,
                        **({'hwnd': self.window_handle} if self.window_handle else {})}
                 with self._diagnostic_condition:
@@ -148,15 +155,17 @@ class DesktopHost:
                 if not isinstance(event, dict):
                     break
                 kind = event.get('type')
+                # Queue technical diagnostics before waking open(): an error
+                # makes the caller dispose the host immediately.
+                if process is self.process:
+                    self.last_event = kind
+                    self._diagnostic(process, event)
                 if kind in {'ready', 'ack', 'error'}:
                     responses.put_nowait(event)
                 elif kind in {'notification_opened', 'notification_dismissed'}:
                     self._notification_event(process, event)
                 elif kind == 'close_requested' and self.on_close and not self.closed:
                     threading.Thread(target=self.on_close, name='workspace-desktop-close', daemon=True).start()
-                if process is self.process:
-                    self.last_event = kind
-                    self._diagnostic(process, event)
         except (OSError, ValueError, queue.Full):
             pass
         finally:
@@ -283,7 +292,7 @@ class DesktopHost:
                              'adminApiBridge': self.admin_api_bridge, 'theme': self.appearance})
                 ready = self.responses.get(timeout=30)
                 if ready.get('type') != 'ready' or ready.get('pid') != self.process.pid:
-                    raise DesktopError(ready.get('code', 47))
+                    raise DesktopError(ready.get('code', 47), diagnostic=ready)
                 hwnd = ready.get('hwnd')
                 if not isinstance(hwnd, int) or hwnd <= 0:
                     raise DesktopError()

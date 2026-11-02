@@ -60,7 +60,7 @@ internal static class DesktopProgram
         catch (Exception e)
         {
             // No exception text, URL, environment, auth fragment or file paths.
-            Emit(new { type = "error", code = 47, hresult = e.HResult });
+            Emit(new { type = "error", code = 47, hresult = e.HResult, stage = "host_startup" });
             return 47;
         }
     }
@@ -401,20 +401,25 @@ internal sealed class DesktopWindow : Form
     {
         if (initializing || exiting) return;
         initializing = true;
+        string stage = "runtime_discovery";
         try
         {
             runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString();
             var options = new CoreWebView2EnvironmentOptions();
             options.ExclusiveUserDataFolderAccess = true;
+            stage = "environment_creation";
             var environment = await CoreWebView2Environment.CreateAsync(null, profile, options);
             runtimeVersion = environment.BrowserVersionString;
             if (exiting) return;
+            stage = "control_creation";
             CancelEventPoll();
             if (view != null) { Controls.Remove(view); view.Dispose(); }
             view = new WebView2 { Dock = DockStyle.Fill, DefaultBackgroundColor = BackColor, AllowExternalDrop = true };
             Controls.Add(view);
+            stage = "controller_creation";
             await view.EnsureCoreWebView2Async(environment);
             if (exiting) return;
+            stage = "view_configuration";
             var core = view.CoreWebView2;
             view.ZoomFactorChanged += delegate { PublishZoomFeedback(true); };
             ApplyAppearance();
@@ -485,12 +490,13 @@ internal sealed class DesktopWindow : Form
                     hwnd = Handle.ToInt64(), runtime = runtimeVersion, notificationCards = true });
                 started = true;
             }
+            stage = "navigation";
             core.Navigate(home.AbsoluteUri);
         }
         catch (WebView2RuntimeNotFoundException)
-        { DesktopProgram.Emit(new { type = "error", code = 46 }); if (!started) Exit(); else ShowRecovery(); }
+        { DesktopProgram.Emit(new { type = "error", code = 46, stage = stage }); if (!started) Exit(); else ShowRecovery(); }
         catch (Exception e)
-        { DesktopProgram.Emit(new { type = "error", code = 47, hresult = e.HResult }); if (!started) Exit(); else ShowRecovery(); }
+        { DesktopProgram.Emit(new { type = "error", code = 47, hresult = e.HResult, stage = stage, runtime = runtimeVersion }); if (!started) Exit(); else ShowRecovery(); }
         finally { initializing = false; }
     }
 

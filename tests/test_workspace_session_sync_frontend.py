@@ -113,6 +113,35 @@ class WorkspaceSessionSyncFrontendTests(unittest.TestCase):
           assert.equal($('session-sync').hidden,true);
         })()""")
 
+    def test_deferred_probe_does_not_report_external_failure_or_start_retries(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'done',seq:10,lastRunId:'r1'};let calls=0;
+          $('session-sync-note').hidden=true;api=async()=>{calls++;return {available:false,deferred:true};};
+          startSessionSyncProbe();await Promise.resolve();await Promise.resolve();
+          assert.equal($('session-sync-note').hidden,true);assert.equal($('session-sync').hidden,true);
+          setStatus('done');setStatus('idle');await Promise.resolve();assert.equal(calls,1);
+        })()""")
+
+    def test_next_queued_turn_discards_late_probe_error_even_after_it_finishes(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'done',seq:10,lastRunId:'r1'};let reject;
+          $('session-sync-note').hidden=true;api=()=>new Promise((_,fail)=>reject=fail);
+          startSessionSyncProbe();active.lastRunId='r2';active.seq=20;setStatus('running');
+          active.seq=25;setStatus('done');reject(Error('old probe failure'));await Promise.resolve();await Promise.resolve();
+          assert.equal($('session-sync-note').hidden,true);assert.equal($('session-sync').hidden,true);
+        })()""")
+
+    def test_running_same_task_discards_late_probe_success_and_clears_old_notice(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'done',seq:10,lastRunId:'r1'};let resolve;
+          api=()=>new Promise(finish=>resolve=finish);startSessionSyncProbe();
+          sessionSyncNotice('a','이전 확인 실패',true,'probe');
+          active.lastRunId='r2';active.seq=20;setStatus('running');
+          assert.equal($('session-sync-note').hidden,true);
+          resolve({available:true});await Promise.resolve();assert.equal(sessionSyncAvailability,null);
+          setStatus('done');assert.equal($('session-sync').hidden,true);
+        })()""")
+
     def test_probe_runs_once_per_selection_without_a_polling_timer(self):
         self.run_case(r"""(async()=>{
           active={id:'a',sessionId:'native-a',state:'idle'};let requests=0,timers=0;
@@ -131,9 +160,48 @@ class WorkspaceSessionSyncFrontendTests(unittest.TestCase):
           active={id:'a',sessionId:'native-a',state:'running'};let requests=0;
           api=async()=>{requests++;return {available:true};};
           startSessionSyncProbe();await Promise.resolve();assert.equal(requests,0);
-          setStatus('done');await Promise.resolve();assert.equal(requests,1);
+          setStatus('done');await Promise.resolve();await Promise.resolve();assert.equal(requests,1);
           assert.equal($('session-sync').hidden,false);
           setStatus('idle');await Promise.resolve();assert.equal(requests,1);
+        })()""")
+
+    def test_deferred_probe_uses_committed_sequence_from_real_poll_loop(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'running',seq:9,lastRunId:'r1'};
+          const controller=new AbortController();let events=0,finishEvents,finishProbe,probes=0;
+          api=async(path)=>{
+            if(path.startsWith('/api/events')){
+              if(events++===0)return {events:[{seq:10,type:'status',data:{state:'done',runId:'r1'}}]};
+              return new Promise(resolve=>finishEvents=resolve);
+            }
+            assert.equal(path,'/api/session/import-status');assert.equal(active.seq,10);probes++;
+            return new Promise(resolve=>finishProbe=resolve);
+          };
+          startSessionSyncProbe();const polling=poll('a',9,controller.signal);
+          await Promise.resolve();await Promise.resolve();await Promise.resolve();
+          assert.equal(probes,1);finishProbe({available:true});
+          await Promise.resolve();await Promise.resolve();await Promise.resolve();
+          assert.equal($('session-sync').hidden,false);
+          controller.abort();finishEvents({events:[]});await polling;
+        })()""")
+
+    def test_queue_handoff_in_one_event_batch_keeps_probe_pending_while_running(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'running',seq:9,lastRunId:'r1'};
+          const controller=new AbortController();let events=0,finishEvents,probes=0;
+          api=async(path)=>{
+            if(path.startsWith('/api/events')){
+              if(events++===0)return {events:[
+                {seq:10,type:'status',data:{state:'done',runId:'r1'}},
+                {seq:11,type:'status',data:{state:'running',runId:'r2'}}]};
+              return new Promise(resolve=>finishEvents=resolve);
+            }
+            probes++;return {available:true};
+          };
+          startSessionSyncProbe();const polling=poll('a',9,controller.signal);
+          await Promise.resolve();await Promise.resolve();await Promise.resolve();
+          assert.equal(active.seq,11);assert.equal(probes,0);assert.equal($('session-sync').hidden,true);
+          controller.abort();finishEvents({events:[]});await polling;
         })()""")
 
     def test_other_window_sync_snapshot_skips_events_already_included(self):

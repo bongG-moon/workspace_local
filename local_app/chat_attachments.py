@@ -35,7 +35,7 @@ TEXT_TYPES = frozenset({
     '.fsx', '.vb', '.vbs', '.tex', '.rst', '.adoc', '.graphql', '.gql', '.proto',
 })
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
-OFFICE_TYPES = frozenset({'.docx', '.pptx', '.xlsx'})
+OFFICE_TYPES = frozenset({'.docx', '.pptx', '.xlsx', '.xls'})
 SUPPORTED_TYPES = TEXT_TYPES | OFFICE_TYPES | IMAGE_TYPES.keys() | {'.pdf'}
 CHAT_FILE_TYPES = frozenset(SUPPORTED_TYPES)
 MAX_FILES = 12
@@ -44,6 +44,7 @@ MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_TOTAL = 5 * 1024 * 1024  # Base64 plus bounded text fits the 8 MiB CLI frame.
 MAX_PDF_BYTES = 5 * 1024 * 1024
 MAX_OFFICE_BYTES = 16 * 1024 * 1024
+MAX_XLS_BYTES = 8 * 1024 * 1024
 MAX_CHAT_FILE_BYTES = MAX_OFFICE_BYTES
 MAX_FILE_CHARS = 48_000
 MAX_TOTAL_CHARS = 120_000
@@ -71,7 +72,7 @@ def chat_attachment_policy():
             'maxUploadBytes': MAX_CHAT_FILE_BYTES,
             'maxTextBytes': MAX_TEXT_BYTES, 'maxImageBytes': MAX_IMAGE_BYTES,
             'maxPdfBytes': MAX_PDF_BYTES, 'maxBinaryTotalBytes': MAX_IMAGE_TOTAL,
-            'maxOfficeBytes': MAX_OFFICE_BYTES, 'maxTextChars': MAX_TOTAL_CHARS}
+            'maxOfficeBytes': MAX_OFFICE_BYTES, 'maxXlsBytes': MAX_XLS_BYTES, 'maxTextChars': MAX_TOTAL_CHARS}
 
 
 def validate_chat_file(name: str, size: int):
@@ -80,7 +81,7 @@ def validate_chat_file(name: str, size: int):
     if extension not in SUPPORTED_TYPES:
         raise AttachmentReadError('일반 대화에서는 문서·텍스트·정지 이미지만 읽을 수 있어요. 실행 파일·압축 파일은 업무에서 첨부해 주세요.')
     limit = (MAX_IMAGE_BYTES if extension in IMAGE_TYPES else MAX_PDF_BYTES if extension == '.pdf'
-             else MAX_OFFICE_BYTES if extension in OFFICE_TYPES else MAX_TEXT_BYTES)
+             else MAX_XLS_BYTES if extension == ".xls" else MAX_OFFICE_BYTES if extension in OFFICE_TYPES else MAX_TEXT_BYTES)
     if type(size) is not int or size < 0 or size > limit:
         raise AttachmentReadError(f'이 형식은 {limit // (1024 * 1024)} MB까지 읽을 수 있어요. 필요한 부분만 나눠 첨부해 주세요.')
     return limit
@@ -273,6 +274,12 @@ class _TextBudget:
 
 
 def _office(stream, extension):
+    if extension == ".xls":
+        from .legacy_excel import LegacyExcelError, read_values
+        try:
+            return read_values(stream, MAX_FILE_CHARS)
+        except LegacyExcelError as error:
+            raise AttachmentReadError(str(error)) from None
     if stream.read(8) == _CFB_SIGNATURE:
         raise AttachmentReadError('암호화되었거나 이전 Office 형식인 파일이에요. 암호를 해제한 DOCX·PPTX·XLSX 사본을 첨부해 주세요.')
     stream.seek(0)
@@ -471,7 +478,7 @@ def prepare_chat_content(text: str, paths: list[str], cache_root: Path, *, use_c
                 if not binary and total_chars >= MAX_TOTAL_CHARS:
                     raise AttachmentReadError('한 번에 읽을 텍스트 분량을 넘었어요. 파일을 나눠 보내 주세요.')
                 limit = (MAX_IMAGE_BYTES if extension in IMAGE_TYPES else MAX_PDF_BYTES if extension == '.pdf'
-                         else MAX_OFFICE_BYTES if extension in OFFICE_TYPES else MAX_TEXT_BYTES)
+                         else MAX_XLS_BYTES if extension == ".xls" else MAX_OFFICE_BYTES if extension in OFFICE_TYPES else MAX_TEXT_BYTES)
                 stream, before = _open_checked(path, limit)
                 with stream:
                     if binary:

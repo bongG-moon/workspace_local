@@ -11,7 +11,7 @@ globalThis.WorkspaceExecutionView = (() => {
   function fileRank(file){
       const name=String(file.name||file.path||'').replace(/\\/g,'/');
       if(/(?:^|\/)(?:scratch|tmp|temp|__pycache__)(?:\/|$)/i.test(name))return 3;
-      if(/\.(?:html?|pdf|docx|pptx|xlsx)$/i.test(name))return 0;
+      if(/\.(?:html?|pdf|docx|pptx|xlsx?)$/i.test(name))return 0;
       if(/\.(?:md|csv|tsv|txt|png|jpe?g|webp)$/i.test(name))return 1;
       return 2;
   }

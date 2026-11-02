@@ -146,13 +146,18 @@ function runPendingSessionSyncProbe(){
   sessionSyncProbePending=null;
   const nativeId=active.sessionId;
   if(!nativeId)return;
+  // A queued follow-up can start between the idle event and this response.
+  // Selection identity alone does not make a result current within one task.
+  const runId=active.lastRunId||null,state=active.state,seq=active.seq;
+  const current=()=>probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed
+    &&(active.lastRunId||null)===runId&&active.state===state&&active.seq===seq&&!busyStates.has(active.state)&&!stopBlocked();
   api("/api/session/import-status",{id:probe.owner}).then(result=>{
-    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){sessionSyncAvailability={owner:probe.owner,available:result.available===true};renderSessionSync();}
+    if(current()){sessionSyncAvailability=result.deferred===true?null:{owner:probe.owner,available:result.available===true};renderSessionSync();}
   }).catch(()=>{
-    if(probe.generation===sessionSyncProbeGeneration&&active?.id===probe.owner&&active?.sessionId===nativeId&&selectionGeneration===probe.ticket&&!appClosed){
+    if(current()){
       sessionSyncAvailability=null;renderSessionSync();
       // Never surface untrusted diagnostics, transcripts, paths or keys.
-      sessionSyncNotice(probe.owner,"다른 곳에서 이어 쓴 대화를 확인하지 못했어요. 다른 도구의 작업을 마친 뒤 이 대화를 다시 선택해 주세요.",true,"probe");
+      sessionSyncNotice(probe.owner,"추가 대화 기록을 확인하지 못했어요. 현재 대화는 그대로 사용할 수 있어요. 필요하면 이 대화를 다시 선택해 주세요.",true,"probe");
     }
   });
 }
@@ -285,6 +290,7 @@ function setStatus(state,label,runId){
   const stopping=stopState()==="stopping"||stopRequests.has(active?.id),stopFailed=stopState()==="failed";
   if(stopping){state="stopping";label=stopRequests.get(active?.id)?.disconnect?"업무 연결을 종료하고 있어요. 작성 중인 내용은 유지됩니다":statusLabels.stopping;}else if(stopFailed){state="error";label="작업 중지 확인이 필요해요";}
   if(active)active.state=state;globalThis.WorkspaceSessionImport?.render();const busy=!appClosed&&(busyStates.has(state)||stopping),running=!appClosed&&(state==="starting"||state==="running"||stopping);
+  if(busy){sessionSyncAvailability=null;const note=$("session-sync-note");if(note.dataset.kind==="probe")note.hidden=true;}
   globalThis.WorkspaceProductivityActions?.update();
   $("status-text").textContent=appClosed?shutdownLabel():label||(isGeneralChat()?({idle:"궁금한 점을 물어보세요",starting:"대화를 준비하고 있어요",running:"답변을 작성하고 있어요",done:"답변을 마쳤어요",stopped:"답변을 중지했어요. 같은 대화에서 이어갈 수 있어요"}[state]||statusLabels[state]):statusLabels[state])||"진행 상태를 확인하고 있어요";$("status").classList.toggle("busy",running);$("status").dataset.state=appClosed?"stopped":state;globalThis.WorkspaceToolActivity?.statusChanged(state,$("status-text").textContent,runId);
   globalThis.WorkspaceProgressView?.currentRun(runId||active?.lastRunId);
@@ -294,7 +300,11 @@ function setStatus(state,label,runId){
   $("prompt").readOnly=sending||choosing||dispatching||appClosed;$("attach").disabled=sending||choosing||attachmentPicking||appClosed;
   if(sending||choosing||appClosed)globalThis.WorkspaceComposer?.close();
   syncElapsed(busy,runId);if(active){const row=sessions.find(s=>s.id===active.id);if(row&&row.state!==state){row.state=state;renderSessions();}}updateModelControls();updatePermissionControls();renderWorkspaceChoice();renderVerification();globalThis.WorkspaceInlineControls?.render();globalThis.WorkspaceWorkflow?.render();
-  updateRestartControls();renderStopFeedback();renderRequestRecovery();renderSessionSync();runPendingSessionSyncProbe();globalThis.WorkspaceAppUpdates?.contextChanged();
+  updateRestartControls();renderStopFeedback();renderRequestRecovery();renderSessionSync();
+  // poll() commits the event sequence after handleEvent()/setStatus(). Check
+  // after that commit (and the rest of this batch), never against its old seq.
+  if(sessionSyncProbePending)Promise.resolve().then(runPendingSessionSyncProbe);
+  globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(renderElapsed,1000);
 function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
@@ -1073,7 +1083,7 @@ async function refreshResults(reveal=false){
       const card=el("article",null,"result-card"),heading=el("div",null,"result-file-heading"),name=file.name||basename(file.path),extension=(name.match(/\.([a-z0-9]{1,8})$/i)?.[1]||"FILE").toUpperCase(),kind=el("span",extension,"result-file-type"),meta=el("div",null,"result-meta-row");
       kind.setAttribute("aria-hidden","true");heading.append(kind,el("strong",name,"result-file-name"));meta.append(el("span",file.change==="created"?"새로 확인한 파일":"변경된 파일","result-change"),el("span",when(file.observedAt),"result-meta"));card.append(heading,meta);card.title=file.path;globalThis.WorkspaceAttachments?.makeDraggable(card,file.path,id);
       const actions=el("div",null,"result-actions"),open=el("button","미리보기","quiet-button"),external=el("button","기본 앱에서 열기","text-button"),folder=el("button","폴더에서 보기","text-button"),follow=el("button","이 결과로 요청","text-button"),context={sessionId:id,path:file.path};
-      open.onclick=()=>{if(active?.id===id)preview(file.path).catch(e=>error(e.message));};external.onclick=()=>openFileAction("open",context);folder.onclick=()=>openFileAction("reveal",context);external.disabled=folder.disabled=!!boot.demo;external.hidden=!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx|png|jpe?g|webp|zip)$/i.test(file.path);folder.hidden=false;
+      open.onclick=()=>{if(active?.id===id)preview(file.path).catch(e=>error(e.message));};external.onclick=()=>openFileAction("open",context);folder.onclick=()=>openFileAction("reveal",context);external.disabled=folder.disabled=!!boot.demo;external.hidden=!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx?|png|jpe?g|webp|zip)$/i.test(file.path);folder.hidden=false;
       follow.onclick=()=>{const added=globalThis.WorkspaceAttachments?.addPath(file.path,{id,generation:request.generation,kind:"work"});if(added==="added"||added==="duplicate")$("prompt").focus();if(added==="added")toast("요청할 자료에 추가했어요. 원하는 수정 내용을 입력하세요.");};
       actions.append(open,external,folder,follow);card.append(actions);if(/\.html?$/i.test(file.path))card.append(el("p","기본 앱에서 열면 원본의 스크립트와 외부 연결이 동작할 수 있어요.","external-file-note"));return card;
     }
@@ -1127,7 +1137,7 @@ async function preview(path){
   }else if(data.kind==="text"){
     const text=el("div",null,"message-body preview-text");renderText(text,data.text);$("preview-content").append(text);
   }else $("preview-content").append(el("p",data.message));
-  $("open-file").hidden=!!boot.demo||!!data.directory||!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx|png|jpe?g|webp|zip)$/i.test(path);
+  $("open-file").hidden=!!boot.demo||!!data.directory||!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx?|png|jpe?g|webp|zip)$/i.test(path);
   $("reveal-file").hidden=!!boot.demo||!!data.directory;
   $("open-text-file").hidden=!!boot.demo||!!data.directory||!(/\.(md|txt|csv|tsv|html?)$/i.test(path));
   $("external-html-note").hidden=!/\.html?$/i.test(path);showDialog("preview-dialog");

@@ -36,3 +36,11 @@ Claude Code, Microsoft Office and other default applications used to open files
 remain separately installed products. The current app does not require Company
 Agent or an Edge/Chrome browser window. The external WebView2 Runtime remains
 subject to its own Microsoft terms and the organization's installation policy.
+
+## xlrd
+
+Legacy XLS attachments use the unmodified xlrd 2.0.2 Python package under its
+BSD-style license. The source files, original LICENSE and pinned wheel/file
+SHA-256 provenance are included in `local_app/_vendor/xlrd/`. It is loaded only
+when reading an XLS attachment; no Office automation or workbook code executes.
+Source: https://pypi.org/project/xlrd/2.0.2/
