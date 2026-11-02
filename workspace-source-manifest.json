@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "98fde0476bb8d6ac75fab66bd62b20c624852178fa79a23e42c9c39fc98d94b5",
-      "size": 47665
+      "sha256": "d1dc1c0fd4ebc44fb2347cc1f8e96c26a30dab8d0fefbb3df94f2a847b989418",
+      "size": 48041
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -102,8 +102,8 @@
     },
     {
       "path": "deploy/New-WorkspaceRelease.ps1",
-      "sha256": "cd5d6315add8fec385d3096efe98e2d0867cbd6854120bf6a47c1b9568f0e8c3",
-      "size": 9377
+      "sha256": "bcd1246ef3a80991400a8e6ee88d56aa2a881a39487734959f74b2290328b00c",
+      "size": 10085
     },
     {
       "path": "deploy/New-WorkspaceStandalone.ps1",
@@ -589,6 +589,11 @@
       "path": "docs/VALIDATION_BACKGROUND_RESOURCES_0.23.20.md",
       "sha256": "99445ada49c31ad03725aca1dd3da31226a7fd71af248defcb79abb8c2d621b9",
       "size": 6814
+    },
+    {
+      "path": "docs/VALIDATION_BUNDLE_CHECK_2026-11-02.md",
+      "sha256": "aaaa1606cb5ff6512f7cc7de7a55dd029f50264e52fce3a98ca478575fe87f82",
+      "size": 2516
     },
     {
       "path": "docs/VALIDATION_CHAT_LAYOUT_0.23.21.md",
@@ -1847,8 +1852,8 @@
     },
     {
       "path": "scripts/test-lab/check-workspace-bundle.py",
-      "sha256": "d90a01221dc56ef16087dcd900f29bbd45e064022129b2f9e779deb50686a80c",
-      "size": 11717
+      "sha256": "1ffc4cbbdeb6233e8d3ad4301ec1087f2988d89e0cc7712c2dd71c54b041774e",
+      "size": 12345
     },
     {
       "path": "scripts/test-lab/check-workspace-transport.py",
@@ -2322,8 +2327,8 @@
     },
     {
       "path": "tests/test_workspace_bundle_check.py",
-      "sha256": "a9a1c1485857d2e0152a618e1612450d5679922e7abc31fa2d0182541f2cbd63",
-      "size": 7324
+      "sha256": "161ee12f29d4e4b39282809c84944a3567d8f4537adab02263d723624a1d22ad",
+      "size": 8498
     },
     {
       "path": "tests/test_workspace_bypass.py",
@@ -2959,6 +2964,11 @@
       "path": "tests/test_workspace_quit_confirmation.py",
       "sha256": "c670b2aecd45d6989c6790139ff206eb60b0e68c3f58deedbf06c6fb9a1ebf61",
       "size": 7902
+    },
+    {
+      "path": "tests/test_workspace_release_bundle_gate.py",
+      "sha256": "9a6aa4fe414b3ced9c57dc660184dce13620a47a9e94264d26fe83b5675de4d3",
+      "size": 5631
     },
     {
       "path": "tests/test_workspace_release_history.py",

@@ -33,6 +33,15 @@ New-Item -ItemType Directory -Path $stage, $outputRoot -Force | Out-Null
 & (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython -UsageConfig $UsageConfig | Out-Null
 $vbsSource = @(Get-ChildItem -LiteralPath (Join-Path $stage 'vbs') -Filter '*.zip')
 if ($vbsSource.Count -ne 1) { throw 'Expected one VBS source bundle.' }
+# Use the same independent inventory gate as the internal publisher. Comparing
+# two bundles from one builder alone cannot detect a stale checker allowlist.
+$bundleChecker = Join-Path $repoRoot 'scripts\test-lab\check-workspace-bundle.py'
+if (-not (Test-Path -LiteralPath $bundleChecker -PathType Leaf)) { throw 'Bundle validation script is missing.' }
+$checkArguments = @('-X', 'utf8', $bundleChecker, $vbsSource[0].FullName)
+if ($UpdateConfig) { $checkArguments += @('--update-config', $UpdateConfig) }
+if ($UsageConfig) { $checkArguments += @('--usage-config', $UsageConfig) }
+& $ConfigPython @checkArguments
+if ($LASTEXITCODE -ne 0) { throw 'Bundle validation failed. No release files were published.' }
 # Read resources only. Loading this local assembly does not run its entry point.
 $assembly = [Reflection.Assembly]::LoadFile($StandaloneExe)
 $stream = $assembly.GetManifestResourceStream('WorkspacePayload.zip')

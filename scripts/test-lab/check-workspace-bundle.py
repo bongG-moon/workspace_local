@@ -47,6 +47,13 @@ seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
 expected.update({'local_app/plain_chat.py', 'local_app/chat_attachments.py', 'docs/WORKSPACE_CHAT_MODES.md'})
+expected.update({'local_app/legacy_excel.py', 'local_app/_vendor/__init__.py',
+                 'local_app/_vendor/xlrd/__init__.py', 'local_app/_vendor/xlrd/biffh.py',
+                 'local_app/_vendor/xlrd/book.py', 'local_app/_vendor/xlrd/compdoc.py',
+                 'local_app/_vendor/xlrd/formatting.py', 'local_app/_vendor/xlrd/formula.py',
+                 'local_app/_vendor/xlrd/info.py', 'local_app/_vendor/xlrd/sheet.py',
+                 'local_app/_vendor/xlrd/timemachine.py', 'local_app/_vendor/xlrd/xldate.py',
+                 'local_app/_vendor/xlrd/LICENSE', 'local_app/_vendor/xlrd/SOURCE.json'})
 expected.update({'local_app/app_updates.py', 'local_app/update_install.py',
                  'local_app/web/app-updates.js', 'local_app/web/app-updates.css',
                  'docs/WORKSPACE_APP_UPDATES.md', 'docs/WORKSPACE_GITLAB_PUBLISHER.md',

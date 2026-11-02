@@ -100,6 +100,20 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
         self.assertEqual(0, code, output)
         self.assertIn('no runtime state or credentials bundled', output)
 
+    def test_bundled_xls_reader_and_provenance_are_all_required(self):
+        provenance = json.loads(self.entries['local_app/_vendor/xlrd/SOURCE.json'])
+        self.assertEqual('2.0.2', provenance['version'])
+        required = ['local_app/legacy_excel.py', 'local_app/_vendor/__init__.py',
+                    'local_app/_vendor/xlrd/SOURCE.json']
+        required.extend('local_app/_vendor/xlrd/' + name for name in provenance['files'])
+        self.assertEqual(14, len(required))
+        for relative in required:
+            with self.subTest(relative=relative):
+                self.assertIn(relative, self.entries)
+                code, output = self.check(omit=(relative,))
+                self.assertNotEqual(0, code, output)
+                self.assertIn(relative, output)
+
     def test_missing_required_source_files_are_rejected(self):
         for relative in ('docs/WORKSPACE_NSIS_INSTALLER.md', 'docs/WORKSPACE_ONLINE_INSTALLER.md',
                          'local_app/server.py', 'local_app/session_reconcile.py', 'deploy/workspace-release-notes.json',
@@ -113,13 +127,15 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
                 self.assertIn(relative, output)
 
     def test_duplicate_member_is_rejected(self):
-        relative = 'docs/WORKSPACE_NSIS_INSTALLER.md'
-        code, output = self.check(extra=((relative, self.entries[relative]),))
-        self.assertNotEqual(0, code, output)
-        self.assertIn(relative, output)
+        for relative in ('docs/WORKSPACE_NSIS_INSTALLER.md', 'local_app/_vendor/__init__.py'):
+            with self.subTest(relative=relative):
+                code, output = self.check(extra=((relative, self.entries[relative]),))
+                self.assertNotEqual(0, code, output)
+                self.assertIn(relative, output)
 
     def test_extra_or_private_files_are_rejected(self):
-        for relative in ('docs/unreviewed.md', '.env', 'local_app/runtime.json', '../outside.txt'):
+        for relative in ('docs/unreviewed.md', '.env', 'local_app/runtime.json', '../outside.txt',
+                         'local_app/_vendor/unknown.py', 'local_app/_vendor/xlrd/.env'):
             with self.subTest(relative=relative):
                 code, output = self.check(extra=((relative, b'fixture'),))
                 self.assertNotEqual(0, code, output)
@@ -127,7 +143,9 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
 
     def test_stale_source_or_desktop_content_is_rejected(self):
         for relative in ('docs/WORKSPACE_ONLINE_INSTALLER.md', 'local_app/server.py',
-                         'desktop/Workspace.Desktop.exe'):
+                         'desktop/Workspace.Desktop.exe', 'local_app/legacy_excel.py',
+                         'local_app/_vendor/xlrd/book.py', 'local_app/_vendor/xlrd/LICENSE',
+                         'local_app/_vendor/xlrd/SOURCE.json'):
             with self.subTest(relative=relative):
                 code, output = self.check(replace={relative: b'previous build content'})
                 self.assertNotEqual(0, code, output)

@@ -16,6 +16,8 @@
 
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.41/AX-Workspace-0.23.41-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.41/AX-Workspace-0.23.41-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.41/workspace-local-0.23.41-source.zip)**
 
+**2026-11-02 배포 소스 보완:** XLS 판독기 파일이 `bundle-check`에서 거부되는 문제를 수정했습니다. 이 오류가 발생한 배포 담당자는 위 소스 ZIP을 다시 내려받아 새 폴더에서 빌드해 주세요. 앱 버전과 기존 설치 EXE는 0.23.41로 유지합니다. [검사 수정 내용](docs/VALIDATION_BUNDLE_CHECK_2026-11-02.md)
+
 [NSIS 설치·제거 안내](docs/WORKSPACE_NSIS_INSTALLER.md) · [이어 할 일 자동 실행](docs/VALIDATION_FOLLOWUP_AUTO_0.23.20.md) · [자료·결과 갱신](docs/VALIDATION_FILE_REFRESH_0.23.20.md) · [사용법](docs/LOCAL_WORKSPACE.md) · [소스 ZIP으로 사내 GitLab 배포](docs/WORKSPACE_GITLAB_PUBLISHER.md)
 
 ## 실행하기
