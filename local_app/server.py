@@ -51,7 +51,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.42"
+WORKSPACE_VERSION = "0.23.43"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -3734,8 +3734,13 @@ def main():
     parser.add_argument('--execution-mode', choices=['auto', 'normal', 'administrator'], default='auto')
     parser.add_argument("--demo", action="store_true", help="Synthetic UI rehearsal; does not start Claude or read source documents")
     args = parser.parse_args()
-    from .startup import verify_process
-    execution_mode = verify_process(execution_mode=args.execution_mode)
+    from .startup import StartupError, verify_process
+    try:
+        execution_mode = verify_process(execution_mode=args.execution_mode)
+    except StartupError as exc:
+        # Preserve the verified startup code through pythonw and the launcher.
+        # No app services exist yet; do not replace this with a generic WS-40.
+        raise SystemExit(exc.code) from None
     if args.demo:
         args.state = args.state / "demo"
     app = LocalApp(args.state, demo=args.demo, execution_mode=execution_mode)

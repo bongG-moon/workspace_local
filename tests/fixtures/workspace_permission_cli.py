@@ -12,7 +12,7 @@ HELP = ('--input-format --output-format --permission-prompt-tool\n'
         '  --permission-mode <mode>  Permission mode (choices: "acceptEdits", "auto", '
         '"bypassPermissions", "manual", "dontAsk", "plan")')
 if '--version' in sys.argv:
-    print('permission-fixture 1.0')
+    print('0.0.0 (Claude Code)')
     sys.exit(0)
 if '--help' in sys.argv:
     print(HELP)

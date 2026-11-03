@@ -46,7 +46,7 @@ class BridgeTests(unittest.TestCase):
 
     def test_probe_and_preserve_settings(self):
         info = probe_cli(FAKE)
-        self.assertEqual(info["version"], "test-cli 1.0")
+        self.assertEqual(info["version"], "0.0.0 (Claude Code)")
         args = cli_arguments(FAKE, info)
         for forbidden in ("--bare", "--safe-mode", "--system-prompt", "--settings", "--strict-mcp-config",
                           "--dangerously-skip-permissions", "--disable-slash-commands", "--no-session-persistence",

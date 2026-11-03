@@ -37,7 +37,7 @@ elif mode == 'error_json':
     print(json.dumps({'error': 'fixture request rejected'}), file=sys.stderr)
     sys.exit(23)
 else:
-    print('test-cli 1.0' if sys.argv[-1] == '--version' else
+    print('0.0.0 (Claude Code)' if sys.argv[-1] == '--version' else
           '--input-format --output-format --permission-prompt-tool', flush=True)
 '''
 
@@ -91,7 +91,7 @@ class OwnedProcessTests(unittest.TestCase):
         with patch('local_app.owned_process.WindowsJob', side_effect=self.job), \
                 patch.object(WindowsJob, 'terminate', record_terminate):
             info = probe_cli(self.command())
-        self.assertEqual(info['version'], 'test-cli 1.0')
+        self.assertEqual(info['version'], '0.0.0 (Claude Code)')
         self.assertEqual(len(self.jobs), 2)
         self.assertTrue(all(count >= 1 for count in active_before_close))
         self.assertIsNone(unrelated.poll())
@@ -207,7 +207,7 @@ class OwnedProcessTests(unittest.TestCase):
         baseline_handles, baseline_threads = handle_count(), threading.active_count()
         with patch('local_app.owned_process.WindowsJob', side_effect=self.job):
             for _ in range(10):
-                self.assertEqual(probe_cli(self.command())['version'], 'test-cli 1.0')
+                self.assertEqual(probe_cli(self.command())['version'], '0.0.0 (Claude Code)')
         self.assertEqual(len(self.jobs), 20)
         self.assert_released()
         self.assertLessEqual(handle_count(), baseline_handles + 2)

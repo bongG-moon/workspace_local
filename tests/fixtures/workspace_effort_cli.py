@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 if '--version' in sys.argv:
-    print('effort-fixture'); sys.exit(0)
+    print('0.0.0 (Claude Code)'); sys.exit(0)
 if '--help' in sys.argv:
     print('--input-format --output-format --permission-prompt-tool --permission-mode <mode> (choices: "manual", "auto")'); sys.exit(0)
 

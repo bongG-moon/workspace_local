@@ -9,7 +9,7 @@ import sys
 import uuid
 
 if '--version' in sys.argv:
-    print('approval-layout-fixture 1.0')
+    print('0.0.0 (Claude Code)')
     sys.exit(0)
 if '--help' in sys.argv:
     print('--input-format --output-format --permission-prompt-tool\n'

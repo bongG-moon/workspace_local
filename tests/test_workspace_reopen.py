@@ -10,6 +10,8 @@ import subprocess
 import tempfile
 import unittest
 
+from local_app.build_identity import build_identity
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "deploy/CompanyWorkspace.Startup.ps1"
@@ -40,6 +42,8 @@ class WorkspaceReopenTests(unittest.TestCase):
             deploy = directory / "deploy"
             deploy.mkdir()
             shutil.copyfile(LAUNCHER, deploy / LAUNCHER.name)
+            (directory / 'local_app/web').mkdir(parents=True)
+            (directory / 'local_app/server.py').write_text('# disposable build identity fixture\n', encoding='utf-8')
             state = directory / "state"
             state.mkdir()
             runtime = state / "runtime.json"
@@ -60,7 +64,7 @@ try {
   $mutex.Dispose()
 }
 """, encoding="utf-8-sig")
-            version = re.search(r"workspaceVersion -eq '([^']+)'", LAUNCHER.read_text(encoding="utf-8-sig"))[1]
+            version = re.search(r"\$targetVersion = \[version\]'([^']+)'", LAUNCHER.read_text(encoding="utf-8-sig"))[1]
             overrides = r"""
 function Write-FixtureEvent($Kind, $Value) {
   $record = @{kind=$Kind; value=$Value} | ConvertTo-Json -Compress
@@ -81,7 +85,7 @@ function Invoke-RestMethod {
   }
   if ($Uri -ne 'http://127.0.0.1:54321/api/bootstrap') {throw 'incorrect endpoint'}
   Write-FixtureEvent 'health' $Uri
-  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; executionMode=LIVE_MODE; executionModeProtocol=EXECUTION_PROTOCOL; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
+  [pscustomobject]@{application='company-workspace'; demo=$false; workspaceVersion=VERSION; buildIdentity=BUILD_IDENTITY; executionMode=LIVE_MODE; executionModeProtocol=EXECUTION_PROTOCOL; appRoot=APPROOT; closing=CLOSING; shutdownState=SHUTDOWN_STATE; window=[pscustomobject]@{reopenSupported=REOPEN}}
 }
 function Open-WorkspaceWindow {
   param([Uri]$Uri,[bool]$ReuseSupported)
@@ -108,6 +112,7 @@ function Start-Process { throw 'unexpected process launch' }
                 "REOPEN": "$true" if reopen_supported else "$false",
                 "EVENTS": ps_quote(events), "SID": ps_quote("fixture-" + directory.name),
                 "ROOT": ps_quote(directory), "VERSION": ps_quote(version_override or (version if same_version else "0.20.0")),
+                "BUILD_IDENTITY": ps_quote(build_identity(directory)),
                 "APPROOT": ps_quote(directory if same_root else directory / "other-app"),
                 "CLOSING": "$true" if closing else "$false", "RUNTIME": ps_quote(runtime),
                 "SHUTDOWN_STATE": ps_quote(shutdown_state) if shutdown_state is not None else '$null',
@@ -134,7 +139,8 @@ function Get-WorkspacePythonExecutable { param($Command) return 'C:\Fixture\pyth
 function Invoke-WorkspacePythonQuery {
   param($Executable,$Arguments,$WorkingDirectory)
   Write-FixtureEvent 'preflight' $Arguments
-  return '{"ok":true}'
+  $nonce = [regex]::Match($Arguments, '--response-marker ([a-f0-9]{32})').Groups[1].Value
+  return ('WORKSPACE_PREFLIGHT_V1:' + $nonce + ':{"ok":true}:END:' + $nonce)
 }
 function Start-Process {
   param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)

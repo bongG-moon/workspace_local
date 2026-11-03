@@ -7,7 +7,7 @@ import subprocess
 import uuid
 
 if "--version" in sys.argv:
-    print("test-cli 1.0")
+    print("0.0.0 (Claude Code)")
     sys.exit(0)
 if "--help" in sys.argv:
     print('--input-format --output-format --setting-sources --permission-prompt-tool --include-partial-messages --permission-mode <mode> (choices: "manual", "auto", "plan", "acceptEdits")')

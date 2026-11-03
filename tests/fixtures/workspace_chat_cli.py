@@ -8,7 +8,7 @@ if '--help' in sys.argv:
     print(FLAGS)
     raise SystemExit(0)
 if '--version' in sys.argv:
-    print('2.1.296 (deterministic fixture)')
+    print('2.1.296 (Claude Code)')
     raise SystemExit(0)
 
 assert all(value in sys.argv for value in ('--safe-mode', '--tools=', '--strict-mcp-config', '--disallowedTools=*'))

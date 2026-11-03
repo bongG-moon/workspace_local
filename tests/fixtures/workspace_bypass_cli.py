@@ -10,7 +10,7 @@ if '--help' in sys.argv:
     print(HELP)
     raise SystemExit(0)
 if '--version' in sys.argv:
-    print('bypass-control-fixture 1')
+    print('0.0.0 (Claude Code)')
     raise SystemExit(0)
 assert '--dangerously-skip-permissions' not in sys.argv
 assert '--permission-mode' not in sys.argv

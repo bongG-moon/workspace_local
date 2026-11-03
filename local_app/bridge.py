@@ -184,6 +184,16 @@ def runtime_context(command: list[str]) -> dict:
     return {"entry": entry, "configRoot": str(root), "authentication": "shared-with-cli"}
 
 
+def _cli_version(output: str) -> str:
+    """Extract only Claude's bounded version token, never wrapper diagnostics."""
+    versions = {match.group(1) for match in re.finditer(
+        r"(?<![\w.+-])([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})[ \t]{1,8}"
+        r"\(Claude Code\)(?!\w)", output)}
+    # An unknown or conflicting banner cannot establish version-gated features.
+    # The separate --help probe still determines basic transport support.
+    return next(iter(versions)) + " (Claude Code)" if len(versions) == 1 else ""
+
+
 def probe_cli(command: list[str]) -> dict:
     info = {}
     for flag, key in [("--version", "version"), ("--help", "help")]:
@@ -191,7 +201,7 @@ def probe_cli(command: list[str]) -> dict:
                                 errors="replace", timeout=12, creationflags=HIDDEN)
         if result.returncode:
             raise ValueError("기존 터미널의 Claude 실행 환경을 연결하지 못했습니다. 앱 전용 로그인·재설치 대신 터미널의 실행 경로와 시작 설정을 확인해 주세요.")
-        info[key] = result.stdout.strip()
+        info[key] = _cli_version(result.stdout) if key == "version" else result.stdout.strip()
     required = ["--input-format", "--output-format", "--permission-prompt-tool"]
     if any(flag not in info["help"] for flag in required):
         raise ValueError("이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다. CLI 버전을 확인해 주세요.")
@@ -1011,10 +1021,29 @@ class ClaudeSession:
             self.close()
 
     def _read_stderr(self):
+        from codecs import getincrementaldecoder
+        decoder = getincrementaldecoder('utf-8')(errors='replace')
+        retained = ''
+        line_started = False
         try:
-            for line in iter(self.process.stderr.readline, b""):
-                # Never persist or expose stderr automatically: it can contain secrets.
-                self.stderr.append(line.decode("utf-8", errors="replace")[:2000])
+            while True:
+                # Bound the read itself: truncating after an unlimited readline
+                # still allocates an entire newline-free diagnostic in memory.
+                chunk = self.process.stderr.readline(4096)
+                text = decoder.decode(chunk, final=not chunk)
+                retained += text[:max(0, 2000 - len(retained))]
+                if not chunk:
+                    if line_started:
+                        self.stderr.append(retained)
+                    break
+                line_started = True
+                if chunk.endswith(b'\n'):
+                    # Never persist or expose stderr automatically: it can
+                    # contain secrets. Keep one bounded entry per actual line.
+                    self.stderr.append(retained)
+                    retained = ''
+                    line_started = False
+                    decoder.reset()
         finally:
             self.process.stderr.close()
 

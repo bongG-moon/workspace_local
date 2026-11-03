@@ -461,7 +461,7 @@ try {
     if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
     $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.42' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.43' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -533,7 +533,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.42'
+        $targetVersion = [version]'0.23.43'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)
@@ -624,10 +624,11 @@ try {
         # Complete prerequisites while the previous app is still available.
         # The coordinator inherits this verified user's token and Claude shell
         # resolution, but has its own lifetime beyond the 60/90 second wrappers.
-        $preflightArguments = '-X utf8 -m local_app.upgrade_launcher --preflight'
+        $preflightNonce = [Guid]::NewGuid().ToString('N')
+        $preflightArguments = '-X utf8 -m local_app.upgrade_launcher --preflight --response-marker ' + $preflightNonce
         if ($NoBrowser) { $preflightArguments += ' --no-browser' }
         $preflight = Invoke-WorkspacePythonQuery -Executable $resolvedPython -Arguments $preflightArguments -WorkingDirectory $appRoot
-        if (-not $preflight -or -not (($preflight | ConvertFrom-Json).ok -eq $true)) { throw 'WORKSPACE_STARTUP:47' }
+        if (-not (Test-WorkspacePreflightResponse -Output $preflight -Nonce $preflightNonce)) { throw 'WORKSPACE_STARTUP:47' }
         $requestId = if ($ExecutionRequestId) { $ExecutionRequestId } else { [Guid]::NewGuid().ToString('N') }
         $coordinatorPython = Join-Path (Split-Path $resolvedPython -Parent) 'pythonw.exe'
         if (-not (Test-Path -LiteralPath $coordinatorPython -PathType Leaf)) { $coordinatorPython = $resolvedPython }
@@ -682,7 +683,7 @@ try {
     }
     if (-not $workspaceReady) {
         $workspaceProcess.Refresh()
-        if ($workspaceProcess.HasExited -and $workspaceProcess.ExitCode -in @(46,47)) {
+        if ($workspaceProcess.HasExited -and $workspaceProcess.ExitCode -in (30..47)) {
             throw ('WORKSPACE_STARTUP:' + $workspaceProcess.ExitCode)
         }
         throw 'WORKSPACE_STARTUP:40'

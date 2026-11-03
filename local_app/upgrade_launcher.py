@@ -517,6 +517,7 @@ def prune_acknowledgements(state, *, now=time.time):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--preflight', action='store_true')
+    parser.add_argument('--response-marker', help=argparse.SUPPRESS)
     parser.add_argument('--state', type=Path)
     parser.add_argument('--python')
     parser.add_argument('--request-id')
@@ -525,13 +526,22 @@ def main():
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--execution-mode', choices=['auto', 'normal', 'administrator'], default='auto')
     args = parser.parse_args()
+    if args.response_marker is not None and (not args.preflight
+            or re.fullmatch(r'[a-f0-9]{32}', args.response_marker) is None):
+        parser.error('invalid preflight response marker')
     if args.preflight:
+        def respond(ok):
+            payload = '{"ok":true}' if ok else '{"ok":false}'
+            if args.response_marker:
+                payload = ('WORKSPACE_PREFLIGHT_V1:' + args.response_marker + ':'
+                           + payload + ':END:' + args.response_marker)
+            print(payload)
         try:
             preflight(no_browser=args.no_browser)
-            print('{"ok":true}')
+            respond(True)
             return 0
         except (ValueError, OSError, ImportError, AttributeError, subprocess.SubprocessError):
-            print('{"ok":false}')
+            respond(False)
             return 47
     if (args.state is None or not args.state.is_absolute() or not args.python
             or not re.fullmatch(r'[a-f0-9]{32}', args.request_id or '')
