@@ -15,7 +15,7 @@ globalThis.WorkspaceAttachments = (() => {
   function renderNote() {
     note.hidden = !uploading && !attachments.some(path=>copies.has(pathKey(path)));
     note.textContent = uploading ? "앱 관리 공간에 파일 복사본을 저장하고 있습니다. 원본은 변경하지 않습니다."
-      : globalThis.WorkspaceModes?.isChat()?"첨부 사본은 이 대화에 보관하며, 대화를 삭제하면 함께 정리합니다. 원본은 유지됩니다.":"끌어온 파일은 앱 관리 복사본입니다. 원본은 유지되며, 미사용 복사본은 설정에서 정리할 수 있습니다.";
+      : globalThis.WorkspaceModes?.isChat()?"첨부 사본은 이 대화에 보관하며, 대화를 삭제하면 함께 정리합니다. 원본은 유지됩니다.":"첨부한 파일은 앱 관리 복사본입니다. 원본은 유지되며, 미사용 복사본은 설정에서 정리할 수 있습니다.";
   }
   function attach(paths, context) {
     if (appClosed || hiddenSessionIds.has(context.id) || hidingSessionIds.has(context.id)) return;
@@ -95,15 +95,21 @@ globalThis.WorkspaceAttachments = (() => {
   }
   async function uploadFiles(files, suppliedContext=null) {
     if(locked()||!files.length)return;
-    if(!active&&globalThis.WorkspaceModes?.isChat()){try{if(!await ensureChatSession())return;}catch(error){toast(error.message);return;}}
-    const context=suppliedContext||capture();
-    if(!context.id)return toast("먼저 대화나 업무를 선택해 주세요.");
-    if((context.id===active?.id?attachments:drafts.get(context.id)?.attachments||[]).length+files.length>maxAttachments(context.kind))return toast(`자료는 한 번에 ${maxAttachments(context.kind)}개까지 추가할 수 있습니다.`);
-    const maxBytes=limit("maxUploadBytes",50*1024*1024,context.kind);
-    if (files.some(file=>file.size > maxBytes)) return toast(`끌어 놓는 파일은 각각 ${Math.floor(maxBytes/1024/1024)}MB 이하여야 합니다. 파일 크기를 줄인 뒤 다시 추가해 주세요.`);
+    // Reserve admission before creating an empty chat: a second paste or send
+    // must not race the first attachment while the new session is being made.
+    let context=suppliedContext||capture();
     uploading=true;note.hidden=false;note.textContent="앱 관리 공간에 파일 복사본을 저장하고 있습니다. 원본은 변경하지 않습니다.";setStatus(active?.state||"idle");
     let completed=0;
     try {
+      if(!context.id&&context.kind==="chat"){
+        const created=await ensureChatSession();
+        if(!created||appClosed||created.id!==active?.id||currentKind()!=="chat")return;
+        context=capture();
+      }
+      if(!context.id)return toast("먼저 대화나 업무를 선택해 주세요.");
+      if((context.id===active?.id?attachments:drafts.get(context.id)?.attachments||[]).length+files.length>maxAttachments(context.kind))return toast(`자료는 한 번에 ${maxAttachments(context.kind)}개까지 추가할 수 있습니다.`);
+      const maxBytes=limit("maxUploadBytes",50*1024*1024,context.kind);
+      if(files.some(file=>file.size>maxBytes))return toast(`첨부 파일은 각각 ${Math.floor(maxBytes/1024/1024)}MB 이하여야 합니다. 파일 크기를 줄인 뒤 다시 추가해 주세요.`);
       for (const file of files) {
         if (appClosed||hiddenSessionIds.has(context.id)||hidingSessionIds.has(context.id)) break;
         const path=await upload(file,context);if(hiddenSessionIds.has(context.id)||hidingSessionIds.has(context.id))break;attach([path],context);completed++;
@@ -112,6 +118,25 @@ globalThis.WorkspaceAttachments = (() => {
     } catch (err) {toast(`${err.message}${completed ? ` ${completed}개 파일은 추가됐습니다.` : ""}`);}
     finally {uploading=false;setStatus(active?.state||"idle");renderNote();if(context.id===active?.id)renderAttachments();}
   }
+  function paste(event) {
+    if(event.defaultPrevented)return;
+    const data=event.clipboardData;if(!data)return;
+    // Read File handles synchronously while the user-initiated paste owns the
+    // clipboard data. Do not request broad clipboard access or fetch HTML URLs.
+    const items=[...(data.items||[])],isImage=value=>String(value?.type||"").toLowerCase().startsWith("image/");
+    let images=items.filter(item=>item.kind==="file").map(item=>item.getAsFile?.()).filter(isImage);
+    if(!images.length)images=[...(data.files||[])].filter(isImage);
+    if(!images.length&&!items.some(isImage))return; // Keep ordinary text paste native.
+    event.preventDefault();
+    if(locked())return toast("자료 전송이 끝난 뒤 이미지를 다시 붙여넣어 주세요.");
+    if(!images.length)return toast("클립보드 이미지를 가져오지 못했어요. 이미지를 다시 복사해 주세요.");
+    const extensions={"image/png":"png","image/jpeg":"jpg","image/webp":"webp"};
+    if(images.some(file=>!extensions[file.type.toLowerCase()]))return toast("PNG, JPG, WebP 이미지를 붙여넣을 수 있어요. 다른 형식은 파일로 저장한 뒤 자료 추가를 이용해 주세요.");
+    const stamp=new Date().toISOString().replace(/\D/g,"").slice(0,17);
+    const files=images.map(file=>new File([file],`붙여넣은 이미지_${stamp}_${++serial}.${extensions[file.type.toLowerCase()]}`,{type:file.type}));
+    return uploadFiles(files);
+  }
+  $("prompt").addEventListener?.("paste",paste);
   zone.addEventListener?.("dragenter",event=>{if(accepts(event)){event.preventDefault();depth++;zone.classList.add("drag-over");}});
   zone.addEventListener?.("dragover",event=>{if(accepts(event)){event.preventDefault();event.dataTransfer.dropEffect=locked()?"none":"copy";}});
   zone.addEventListener?.("dragleave",()=>{depth=Math.max(0,depth-1);if(!depth)zone.classList.remove("drag-over");});
