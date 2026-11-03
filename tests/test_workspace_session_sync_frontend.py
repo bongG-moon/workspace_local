@@ -56,6 +56,7 @@ class WorkspaceSessionSyncFrontendTests(unittest.TestCase):
           active={id:'a',sessionId:'native-a',state:'idle',seq:1,messages:[],requests:[]};sessionSyncAvailability={owner:'a',available:true};
           $('prompt').value='유지';renderSessionSync();api=async()=>{throw Error('원본 기록을 확인해 주세요.');};
           await syncExternalSession();assert.match($('session-sync-note').textContent,/원본 기록/);
+          assert.equal($('session-sync-note').hidden,false);assert.equal($('session-sync-note').dataset.kind,'import');
           assert.equal($('session-sync-note').dataset.error,'true');assert.equal($('prompt').value,'유지');
           sessionSyncAvailability={owner:'a',available:true};renderSessionSync();api=async()=>({ok:true,added:0,warnings:[]});await syncExternalSession();
           assert.match($('session-sync-note').textContent,/새로 불러올 대화가 없어요/);
@@ -73,25 +74,47 @@ class WorkspaceSessionSyncFrontendTests(unittest.TestCase):
           startSessionSyncProbe();finish({available:false});await Promise.resolve();assert.equal($('session-sync').hidden,true);
         })()""")
 
-    def test_probe_failure_uses_fixed_safe_message_and_successful_recheck_clears_it(self):
+    def test_probe_failure_is_silent_until_reselection_confirms_updates(self):
         self.run_case(r"""(async()=>{
-          active={id:'a',sessionId:'native-a',state:'idle'};let calls=0;
-          api=async()=>{calls++;if(calls===1)throw Error('secret-token C:\\private\\session.json');return {available:true};};
+          active={id:'a',sessionId:'native-a',state:'idle'};let calls=0;const notices=[];
+          toast=message=>notices.push(message);
+          api=async(path,data)=>{assert.equal(path,'/api/session/import-status');assert.equal(data.id,'a');
+            calls++;if(calls===1)throw Error('secret-token C:\\private\\session.json');return {available:true};};
           startSessionSyncProbe();await Promise.resolve();await Promise.resolve();
-          const note=$('session-sync-note');assert.equal(note.hidden,false);assert.equal(note.dataset.error,'true');assert.equal(note.dataset.kind,'probe');
-          assert.match(note.textContent,/다시 선택/);assert.doesNotMatch(note.textContent,/secret-token|private|session.json/);
+          const note=$('session-sync-note');assert.equal(note.hidden,true);assert.equal(note.textContent,'');
+          assert.deepEqual(notices,[]);assert.equal(sessionSyncAvailability,null);
           assert.equal($('session-sync').hidden,true);
+          setStatus('done');setStatus('idle');await Promise.resolve();assert.equal(calls,1);
           selectionGeneration++;startSessionSyncProbe();await Promise.resolve();
           assert.equal(calls,2);assert.equal(note.hidden,true);assert.equal($('session-sync').hidden,false);
+          assert.deepEqual(notices,[]);
+        })()""")
+
+    def test_probe_failure_preserves_explicit_import_error(self):
+        self.run_case(r"""(async()=>{
+          active={id:'a',sessionId:'native-a',state:'idle',seq:1,messages:[],requests:[]};
+          sessionSyncAvailability={owner:'a',available:true};renderSessionSync();
+          api=async(path)=>{assert.equal(path,'/api/session/import-updates');throw Error('원본 기록을 확인해 주세요.');};
+          await syncExternalSession();
+          const note=$('session-sync-note'),message=note.textContent;assert.match(message,/원본 기록/);
+          api=async(path)=>{assert.equal(path,'/api/session/import-status');throw Error('background failure');};
+          selectionGeneration++;startSessionSyncProbe();await Promise.resolve();await Promise.resolve();
+          assert.equal(note.hidden,false);assert.equal(note.textContent,message);
+          assert.equal(note.dataset.kind,'import');assert.equal(note.dataset.error,'true');
+          assert.equal(sessionSyncAvailability,null);assert.equal($('session-sync').hidden,true);
         })()""")
 
     def test_late_probe_failure_cannot_pollute_new_selection_or_closed_app(self):
         self.run_case(r"""(async()=>{
           active={id:'a',sessionId:'native-a',state:'idle'};let fail;
-          api=()=>new Promise((_,reject)=>fail=reject);startSessionSyncProbe();
+          api=()=>new Promise((_,reject)=>fail=reject);startSessionSyncProbe();const failPrevious=fail;
           active={id:'b',sessionId:'native-b',state:'idle'};selectionGeneration++;
-          sessionSyncNotice('b','다른 업무 안내');fail(Error('late private error'));await Promise.resolve();await Promise.resolve();
+          api=async()=>({available:true});startSessionSyncProbe();await Promise.resolve();
+          sessionSyncNotice('b','다른 업무 안내');failPrevious(Error('late private error'));await Promise.resolve();await Promise.resolve();
           assert.equal($('session-sync-note').dataset.owner,'b');assert.equal($('session-sync-note').textContent,'다른 업무 안내');
+          assert.equal(sessionSyncAvailability.owner,'b');assert.equal(sessionSyncAvailability.available,true);
+          assert.equal($('session-sync').hidden,false);
+          api=()=>new Promise((_,reject)=>fail=reject);
           startSessionSyncProbe();appClosed=true;fail(Error('closed private error'));await Promise.resolve();await Promise.resolve();
           assert.equal($('session-sync-note').textContent,'다른 업무 안내');
         })()""")

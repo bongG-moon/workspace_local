@@ -156,8 +156,6 @@ function runPendingSessionSyncProbe(){
   }).catch(()=>{
     if(current()){
       sessionSyncAvailability=null;renderSessionSync();
-      // Never surface untrusted diagnostics, transcripts, paths or keys.
-      sessionSyncNotice(probe.owner,"추가 대화 기록을 확인하지 못했어요. 현재 대화는 그대로 사용할 수 있어요. 필요하면 이 대화를 다시 선택해 주세요.",true,"probe");
     }
   });
 }
