@@ -22,7 +22,7 @@
     },
     {
       "path": "Check-Workspace.ps1",
-      "sha256": "e9cf96fd3b5ad2a3518d58c875c5fa0b105fa0a842d2ebf15e4d250da2a53afc",
+      "sha256": "fadadfb96545933fc51dd74e1125110e298ac28bb3337e1f873980a56839d25a",
       "size": 10783
     },
     {
@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "d1dc1c0fd4ebc44fb2347cc1f8e96c26a30dab8d0fefbb3df94f2a847b989418",
-      "size": 48041
+      "sha256": "a81a1f4e04b42d16688a794c04a5f166bfed100931f43f6088aadebaf16d3101",
+      "size": 48117
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -77,7 +77,7 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Startup.ps1",
-      "sha256": "fd3b6384e3a5aa5f586298c952d18a5f23e2afac44c83417d743592020d0e78b",
+      "sha256": "647cdac8d1b1e1fe9706adc2b8986ff849c9681a9051ec87526069755ac771b2",
       "size": 29763
     },
     {
@@ -112,7 +112,7 @@
     },
     {
       "path": "deploy/Start-CompanyWorkspace.ps1",
-      "sha256": "90ee6897cbbcaffdfff23316f307d4584ede867a2bba12ce58f81a6751600a02",
+      "sha256": "533d48245e860bb6f367f7868dffee32db98649169d4398c1907644f66f7ff28",
       "size": 47870
     },
     {
@@ -167,8 +167,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "0693b35aa09a7840baac1cce234e4cecbb23303fe890c6c70dc82ae52081c9c4",
-      "size": 91727
+      "sha256": "2ed85d74fb5000af2472a2227a6ca123071a6da5cb98f9fb8fd093475ceb0778",
+      "size": 93224
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -294,6 +294,11 @@
       "path": "docs/RELEASE_NOTES_0.23.41.md",
       "sha256": "5c3512e448f124ab23e8716d6b2b09eaf28f362fc3e683e84bcbabc703f2498f",
       "size": 3486
+    },
+    {
+      "path": "docs/RELEASE_NOTES_0.23.42.md",
+      "sha256": "27293ef0a48e7a32597495c03fe9ae9a64f842ba7845918c2c5730ee6f1305f1",
+      "size": 1969
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -1307,7 +1312,7 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "db58a368266a9713f9dd1f3e65e5269c623396ee86935264e8a1275ac989d246",
+      "sha256": "971bd1a2a564de3be5416db9ade26c1e6ea3c3a9dcb0b57e515c64f4a4501eae",
       "size": 237172
     },
     {
@@ -3397,5 +3402,5 @@
     }
   ],
   "schema": 1,
-  "version": "0.23.41"
+  "version": "0.23.42"
 }
