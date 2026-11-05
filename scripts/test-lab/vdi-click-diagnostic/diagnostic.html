@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<title>AX Workspace 클릭 위치 진단</title><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:'Noto Sans KR','Malgun Gothic',sans-serif;background:#f5f6fa;color:#313447;user-select:none}
+#board{position:fixed;inset:0;background-image:linear-gradient(#e8eaf1 1px,transparent 1px),linear-gradient(90deg,#e8eaf1 1px,transparent 1px);background-size:40px 40px}
+#hint{position:absolute;top:18px;left:20px;right:20px;text-align:center;font-size:15px;color:#64697c;pointer-events:none}
+.target{position:absolute;width:54px;height:54px;margin:-27px;border:2px solid #ccd0df;border-radius:50%;background:#f8f9fc;pointer-events:none;opacity:.55}
+.target:before,.target:after{content:'';position:absolute;background:#b7bed0;left:50%;top:50%;transform:translate(-50%,-50%)}
+.target:before{width:25px;height:2px}.target:after{height:25px;width:2px}
+.target span{position:absolute;left:50%;top:62px;transform:translateX(-50%);white-space:nowrap;font-size:13px;color:#6c7082}
+.target.active{opacity:1;border-color:#6c60c9;background:#ebe8fb;box-shadow:0 0 0 8px #6c60c918}
+.target.active:before,.target.active:after{background:#6558c3}.target.active span{color:#5446b2;font-weight:700}
+.target.done{opacity:.7;border-color:#90b6a5;background:#eef7f1}.hit{position:absolute;width:12px;height:12px;border:2px solid #c65a42;background:#fff;border-radius:50%;margin:-6px;pointer-events:none}
+#summary{display:none;position:absolute;inset:34% 18% auto;text-align:center;padding:22px;background:#fff;border:1px solid #dedfec;border-radius:16px;box-shadow:0 8px 28px #3134470b;pointer-events:none}
+#summary strong{display:block;font-size:20px;margin-bottom:10px}#summary p{margin:8px;line-height:1.65;color:#656b7d;font-size:14px}
+#legend{position:absolute;bottom:12px;left:20px;right:20px;text-align:center;font-size:12px;color:#7b8190;pointer-events:none}
+</style></head><body><main id="board"><div id="hint">위쪽 ‘새 검사’를 누르면 시작합니다.</div><div id="summary"></div><div id="legend">보라색 십자의 중심을 한 번씩 클릭하세요. 주황색 점은 화면이 받은 위치입니다.</div></main>
+<script>
+(()=>{'use strict';
+const board=document.getElementById('board'), hint=document.getElementById('hint'), summary=document.getElementById('summary');
+const points=[[.5,.5],[.13,.24],[.87,.24],[.13,.76],[.87,.76]];
+const targets=points.map((p,i)=>{const el=document.createElement('div');el.className='target';el.style.left=p[0]*100+'%';el.style.top=p[1]*100+'%';el.innerHTML='<span>'+(i+1)+'번</span>';board.append(el);return el;});
+let round=0,index=-1,active=false,events=0,down=null,up=null,completed=[],started=0,geometry=null;
+const dims=()=>({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,visualScale:visualViewport?visualViewport.scale:1});
+const post=obj=>window.chrome.webview.postMessage(obj);
+const center=()=>{const r=targets[index].getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};};
+function paint(){targets.forEach((el,i)=>{el.classList.toggle('active',active&&i===index);el.classList.toggle('done',i<index||(!active&&completed.length===5));});}
+function advance(){index++;down=up=null;if(index>=5){active=false;paint();hint.textContent='검사를 마쳤습니다. 위쪽 ‘결과 저장’을 눌러 주세요.';summary.style.display='block';const measured=completed.filter(x=>x!==null);const max=measured.length?Math.max(...measured).toFixed(1):null;summary.innerHTML='<strong>검사 완료</strong><p>5곳 중 '+measured.length+'곳에서 클릭을 받았습니다.'+(max!==null?' 가장 큰 중심 오차: '+max+' CSS px':'')+'</p><p>오차는 십자 중심을 정확히 눌렀다는 전제의 관측값입니다.<br>이 결과만으로 원인을 확정하지 않습니다.</p>';post({kind:'complete',round,measured:measured.length,...dims()});}else{paint();hint.textContent=(index+1)+'번 보라색 십자의 중심을 한 번 클릭하세요. 클릭이 전달되지 않으면 F8로 건너뛰세요.';}}
+window.Diagnostic={start(n){round=n;index=-1;active=true;events=0;completed=[];started=performance.now();geometry=dims();summary.style.display='none';board.querySelectorAll('.hit').forEach(x=>x.remove());advance();post({kind:'start',round,...geometry});},skip(){if(!active)return;post({kind:'skip',round,target:index+1,ms:performance.now()-started,...center(),...dims()});completed.push(null);advance();},ready(){return true;}};
+function input(e){if(!active||!e.isTrusted||events>=1000||(e.type!=='pointercancel'&&e.button!==0))return;const c=center(),d=dims(),paired=!!(down&&up&&down.target===index&&up.target===index&&down.id===up.id),duplicate=e.type==='click'&&e.detail>1;post({kind:e.type,round,target:index+1,ms:performance.now()-started,clientX:e.clientX,clientY:e.clientY,targetX:c.x,targetY:c.y,deltaX:e.clientX-c.x,deltaY:e.clientY-c.y,buttons:e.buttons,pointerId:Number.isFinite(e.pointerId)?e.pointerId:0,paired:paired,duplicate:duplicate,geometryChanged:d.width!==geometry.width||d.height!==geometry.height||d.dpr!==geometry.dpr,...d});events++;if(e.type==='pointerdown'){down={target:index,id:e.pointerId};up=null;}if(e.type==='pointerup')up={target:index,id:e.pointerId};if(e.type==='pointercancel')down=up=null;if(e.type==='click'){if(!paired||duplicate||e.detail===0){down=up=null;hint.textContent='입력 순서를 확인하지 못했습니다. 같은 십자를 다시 한 번 클릭하거나 F8로 건너뛰세요.';return;}const hit=document.createElement('div');hit.className='hit';hit.style.left=e.clientX+'px';hit.style.top=e.clientY+'px';board.append(hit);completed.push(Math.hypot(e.clientX-c.x,e.clientY-c.y));advance();}}
+for(const type of ['pointerdown','pointerup','pointercancel','click'])document.addEventListener(type,input,true);
+document.addEventListener('keydown',e=>{if(e.key==='F8'||e.key==='F6'||((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s')){e.preventDefault();post({kind:'command',command:e.key==='F8'?'skip':e.key==='F6'?'start':'save'});}},true);
+window.addEventListener('resize',()=>{if(active){hint.textContent='검사 중 창 크기가 바뀌었습니다. 위쪽 ‘새 검사’를 눌러 다시 측정하세요.';active=false;paint();post({kind:'interrupted',round,...dims()});}});
+post({kind:'ready',...dims()});
+})();
+</script></body></html>

@@ -1976,6 +1976,36 @@
       "size": 2054
     },
     {
+      "path": "scripts/test-lab/vdi-click-diagnostic/Bootstrap.cs",
+      "sha256": "f9e281e2ddd8b895765841a92cbb57bf12d19b67530e441ad4b017d7c49e3451",
+      "size": 5797
+    },
+    {
+      "path": "scripts/test-lab/vdi-click-diagnostic/Build.ps1",
+      "sha256": "70596a15be49daa7a2c135416983ae06b99fff27bbccd8d2bbbba961694443ec",
+      "size": 4288
+    },
+    {
+      "path": "scripts/test-lab/vdi-click-diagnostic/Diagnostic.cs",
+      "sha256": "be9a4dfaf76b42e09812ac8d41dd8490871371335bb0b5af6f86dbb20e0cefe6",
+      "size": 19485
+    },
+    {
+      "path": "scripts/test-lab/vdi-click-diagnostic/README.ko.md",
+      "sha256": "85bdc462af68cab64f32064f79b1b5c6d167ae9d587670ba706a31f336deb38e",
+      "size": 5810
+    },
+    {
+      "path": "scripts/test-lab/vdi-click-diagnostic/diagnostic.html",
+      "sha256": "37664dc8b4b679be0ced9562de0bb4542e67febc3a3b745e7786865b4056a5b7",
+      "size": 6693
+    },
+    {
+      "path": "scripts/test-lab/vdi-click-diagnostic/test-page.mjs",
+      "sha256": "4f5ebdc8c39f34c304235d3070dff1b14fecd62de0ce2bdc48ca5fb350e7b192",
+      "size": 3513
+    },
+    {
       "path": "scripts/test-lab/verify-llm-usage-ui.cjs",
       "sha256": "d2e659712ca26f2e806c68b22a90e5b6abe888d31a16fdef040af29e40c646ad",
       "size": 11341
