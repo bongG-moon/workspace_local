@@ -1,4 +1,4 @@
-# AX Workspace 0.23.43
+# AX Workspace 0.23.44
 
 **내 업무와 AI가 만나는 공간**
 
@@ -10,11 +10,11 @@
 
 화면은 중앙 뉴트럴과 기존 좌우 패널 색상을 조합한 A2 구성입니다. 사이드바의 글자·아이콘·행 간격을 줄여 목록을 간결하게 표시하며 라이트·다크 모드를 함께 지원합니다.
 
-**현재 소스와 배포 버전은 0.23.43입니다.** WS-40 실행 확인과 진단 출력 처리를 보완했고, 채팅 입력창의 `Ctrl+V` 이미지 붙여넣기를 추가했습니다. 기존 대화와 초안을 유지하며 PNG, JPG, WebP를 지원합니다. 같은 0.23.43 재빌드이므로 이미 0.23.43을 사용 중이면 갱신된 설치 파일을 다시 다운로드해 설치하세요. [변경 내용](docs/RELEASE_NOTES_0.23.43.md) · [사용량 연결 안내](docs/LLM_USAGE.md)
+**현재 소스와 배포 버전은 0.23.44입니다.** 업무 폴더의 접기 화살표를 약 1초 누른 뒤 끌면 폴더 순서를 바꿀 수 있습니다. 짧게 클릭하면 기존처럼 접거나 펼칩니다. 폴더 설정의 위로 이동 / 아래로 이동과 Alt+방향키도 지원하며, 순서는 재실행 후에도 유지됩니다. [변경 내용](docs/RELEASE_NOTES_0.23.44.md) · [사용량 연결 안내](docs/LLM_USAGE.md)
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.43/AX-Workspace-0.23.43-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.43/AX-Workspace-0.23.43-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.43/workspace-local-0.23.43-source.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.44/AX-Workspace-0.23.44-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.44/AX-Workspace-0.23.44-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.44/workspace-local-0.23.44-source.zip)**
 
 **2026-11-02 배포 소스 보완:** XLS 판독기 파일이 `bundle-check`에서 거부되는 문제를 수정했습니다. 이 오류가 발생한 배포 담당자는 위 소스 ZIP을 다시 내려받아 새 폴더에서 빌드해 주세요. 이 검사 수정도 0.23.43 배포본에 포함됩니다. [검사 수정 내용](docs/VALIDATION_BUNDLE_CHECK_2026-11-02.md)
 
@@ -24,13 +24,13 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.43-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.43.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.44-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.44.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 파일을 권장합니다.** GitHub 0.23.43 Release의 `AX-Workspace-0.23.43-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.43.exe`, `Company-Workspace-0.23.43.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP의 사용 방식은 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 파일을 권장합니다.** GitHub 0.23.44 Release의 `AX-Workspace-0.23.44-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.44.exe`, `Company-Workspace-0.23.44.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP의 사용 방식은 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 

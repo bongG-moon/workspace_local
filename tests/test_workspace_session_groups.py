@@ -56,6 +56,85 @@ class SessionGroupsTests(unittest.TestCase):
         self.assertEqual(80, len(self.store.groups[-1]['name']))
         self.assertTrue(self.store.groups[-1]['name'].endswith(' (2)'))
 
+    def test_reorder_before_and_after_persists_without_changing_folder_contents(self):
+        first, second, third = [self.create(name) for name in ('보고서', '분석', '기획')]
+        sid, other_sid = tuple(self.ids)
+        self.change('move', id=sid, groupId=first)
+        self.change('move', id=other_sid, groupId=third)
+        self.change('collapse', groupId=third, collapsed=True)
+        original = self.store.snapshot()
+
+        result = self.change('reorder', groupId=third, targetGroupId=first, position='before',
+                             revision=original['revision'])
+        self.assertEqual([third, first, second], [row['id'] for row in result['groups']])
+        self.assertEqual(original['revision'] + 1, result['revision'])
+        self.assertEqual(result, SessionGroups(self.root).snapshot())
+        result = self.change('reorder', groupId=third, targetGroupId=second, position='after',
+                             revision=result['revision'])
+        self.assertEqual(original['groups'], result['groups'])
+        self.assertEqual(original['assignments'], result['assignments'])
+        self.assertEqual(original['revision'] + 2, result['revision'])
+        self.assertEqual(result, SessionGroups(self.root).snapshot())
+        saved = json.loads(self.store.path.read_text(encoding='utf-8'))
+        self.assertEqual({'schemaVersion', 'groups', 'assignments', 'revision'}, set(saved))
+        self.assertEqual(1, saved['schemaVersion'])
+
+    def test_adjacent_reorder_is_noop_without_writing_or_incrementing_revision(self):
+        first, second, third = [self.create(name) for name in ('A', 'B', 'C')]
+        before, snapshot = self.store.path.read_bytes(), self.store.snapshot()
+        with patch.object(HistoryStore, '_write', side_effect=AssertionError('no-op must not write')):
+            for gid, target, position in ((first, second, 'before'), (second, first, 'after'),
+                                          (second, third, 'before'), (third, second, 'after')):
+                with self.subTest(group=gid, target=target, position=position):
+                    result = self.change('reorder', groupId=gid, targetGroupId=target, position=position,
+                                         revision=snapshot['revision'])
+                    self.assertEqual(snapshot, result)
+        self.assertEqual(before, self.store.path.read_bytes())
+
+    def test_stale_reorder_rejects_changes_and_noops(self):
+        first, second, third = [self.create(name) for name in ('A', 'B', 'C')]
+        stale_revision = self.store.revision
+        self.change('collapse', groupId=second, collapsed=True)
+        before, snapshot = self.store.path.read_bytes(), self.store.snapshot()
+        for gid, target in ((third, first), (first, second)):
+            with self.subTest(group=gid), self.assertRaises(GroupRevisionConflict):
+                self.change('reorder', groupId=gid, targetGroupId=target, position='before',
+                            revision=stale_revision)
+        self.assertEqual(before, self.store.path.read_bytes())
+        self.assertEqual(snapshot, self.store.snapshot())
+
+    def test_invalid_reorders_do_not_write_or_accept_session_ids_as_folders(self):
+        first, second = self.create('A'), self.create('B')
+        sid = next(iter(self.ids))
+        valid = {'action': 'reorder', 'groupId': first, 'targetGroupId': second,
+                 'position': 'after', 'revision': self.store.revision}
+        invalid = [valid | {key: value} for key in ('groupId', 'targetGroupId')
+                   for value in (None, True, [], {}, 'not-a-uuid', str(uuid.uuid4()), sid)]
+        invalid += [valid | {'targetGroupId': first}]
+        invalid += [valid | {'position': value} for value in (None, True, [], {}, '', 'inside', 'Before')]
+        invalid += [valid | {'revision': value} for value in (None, True, [], {}, -1, '2')]
+        invalid += [{key: value for key, value in valid.items() if key != missing}
+                    for missing in ('groupId', 'targetGroupId', 'position')]
+        invalid += [valid | {key: sid} for key in ('id', 'targetId', 'workspace')]
+        before, snapshot = self.store.path.read_bytes(), self.store.snapshot()
+        for data in invalid:
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                self.store.change(data, self.ids)
+        self.assertEqual(before, self.store.path.read_bytes())
+        self.assertEqual(snapshot, self.store.snapshot())
+
+    def test_failed_reorder_atomic_replace_preserves_order_and_removes_temp_file(self):
+        first, second = self.create('A'), self.create('B')
+        before, snapshot = self.store.path.read_bytes(), self.store.snapshot()
+        with patch.object(Path, 'replace', side_effect=OSError('synthetic failure')):
+            with self.assertRaises(OSError):
+                self.change('reorder', groupId=second, targetGroupId=first, position='before',
+                            revision=snapshot['revision'])
+        self.assertEqual(before, self.store.path.read_bytes())
+        self.assertEqual(snapshot, self.store.snapshot())
+        self.assertEqual(snapshot, SessionGroups(self.root).snapshot())
+        self.assertEqual([], list(self.root.glob('*.tmp')))
+
     def test_delete_nonempty_folder_unassigns_only_its_members(self):
         gid = self.create()
         other = self.create('다른 폴더')
@@ -257,6 +336,35 @@ class SessionGroupRoutesTests(unittest.TestCase):
         with patch.object(self.app, '_shutdown_state', 'draining'):
             self.assertEqual(409, self.request(data={'action': 'create', 'name': 'second'})[0])
         self.assertEqual(1, len(self.app.session_groups.groups))
+
+    def test_folder_reorder_route_persists_order_and_rejects_stale_or_cross_target_requests(self):
+        first, second, third = [self.create_group(name) for name in ('A', 'B', 'C')]
+        self.move(self.ids[0], second)
+        original = self.app.session_groups.snapshot()
+        data = {'action': 'reorder', 'groupId': third, 'targetGroupId': first,
+                'position': 'before', 'revision': original['revision']}
+        self.assertEqual(403, self.request(data=data, auth=False)[0])
+        code, result = self.request(data=data)
+        self.assertEqual(200, code, result)
+        snapshot = result['sessionGroups']
+        self.assertEqual([third, first, second], [row['id'] for row in snapshot['groups']])
+        self.assertEqual(original['assignments'], snapshot['assignments'])
+        self.assertEqual(original['revision'] + 1, snapshot['revision'])
+        self.assertEqual(snapshot, self.request()[1])
+        self.assertEqual(snapshot, self.request('/api/bootstrap')[1]['sessionGroups'])
+        self.assertEqual(snapshot, SessionGroups(self.app.state).snapshot())
+
+        code, result = self.request(data=data)
+        self.assertEqual(409, code, result)
+        self.assertEqual('session_groups_changed', result['code'])
+        current = data | {'revision': snapshot['revision']}
+        self.assertEqual(200, self.request(data=current)[0])
+        for invalid in (current | {'targetGroupId': self.ids[0]}, current | {'groupId': self.ids[0]},
+                        current | {'targetId': second}, current | {'position': 'inside'}):
+            with self.subTest(data=invalid):
+                self.assertEqual(400, self.request(data=invalid)[0])
+        self.assertEqual(snapshot, self.app.session_groups.snapshot())
+        self.assertEqual(snapshot, SessionGroups(self.app.state).snapshot())
 
     def test_folder_changes_do_not_touch_history_workspace_or_native_files(self):
         native = self.root / '.claude' / 'settings.local.json'

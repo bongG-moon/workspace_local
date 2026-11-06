@@ -89,7 +89,8 @@ class SessionGroups:
                 raise ValueError(self.warning)
             action = data.get('action')
             fields = {'create': {'name'}, 'rename': {'groupId', 'name'}, 'delete': {'groupId'},
-                      'collapse': {'groupId', 'collapsed'}, 'move': {'id', 'groupId'}}
+                      'collapse': {'groupId', 'collapsed'}, 'move': {'id', 'groupId'},
+                      'reorder': {'groupId', 'targetGroupId', 'position'}}
             if not isinstance(action, str) or action not in fields or set(data) - {'action', 'revision'} != fields[action]:
                 raise ValueError('업무 폴더 변경 요청을 확인해 주세요.')
             if 'revision' in data:
@@ -119,6 +120,16 @@ class SessionGroups:
                 if type(data['collapsed']) is not bool:
                     raise ValueError('폴더의 펼침 상태를 확인해 주세요.')
                 by_id[gid]['collapsed'] = data['collapsed']
+            elif action == 'reorder':
+                target = checked_id(data['targetGroupId'])
+                position = data['position']
+                if target not in by_id or target == gid:
+                    raise ValueError('순서를 변경할 서로 다른 폴더를 선택해 주세요.')
+                if not isinstance(position, str) or position not in ('before', 'after'):
+                    raise ValueError('폴더를 놓을 위치를 확인해 주세요.')
+                groups = [group for group in groups if group['id'] != gid]
+                index = next(index for index, group in enumerate(groups) if group['id'] == target)
+                groups.insert(index + (position == 'after'), by_id[gid])
             elif action == 'move':
                 sid = checked_id(data['id'])
                 if sid not in visible_ids:
