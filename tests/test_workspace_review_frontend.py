@@ -23,8 +23,20 @@ class Element {
   }
   get value(){return this.tagName==='SELECT'&&!this._value ? this.children[0]?.value||'' : this._value;}
   set value(value){this._value=value;}
-  append(...nodes){for(const node of nodes){if(node?.tagName==='FRAGMENT')this.append(...node.children);else this.children.push(node);}}
-  replaceChildren(...nodes){this.children=[];this._value='';this.append(...nodes);}
+  get firstElementChild(){return this.children[0];}
+  querySelectorAll(selector){const found=[];for(const node of this.children){
+    if(node.className?.split(' ').includes(selector.slice(1)))found.push(node);
+    found.push(...node.querySelectorAll(selector));
+  }return found;}
+  scrollIntoView(){this.scrolled=true;}
+  setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;}
+  dispatchEvent(event){for(const fn of this.listeners[event.type]||[])fn(event);}
+  append(...nodes){for(const node of nodes){
+    if(node?.tagName==='FRAGMENT')this.append(...node.children);
+    else if(typeof node==='string')this.children.push(Object.assign(new Element('#text'),{textContent:node}));
+    else this.children.push(node);
+  }}
+  replaceChildren(...nodes){this.children=[];this._value='';this.textContent='';this.append(...nodes);}
   setAttribute(key,value){this.attributes[key]=String(value);}
   addEventListener(name,fn){(this.listeners[name] ||= []).push(fn);}
   showModal(){this.open=true;}
@@ -34,7 +46,7 @@ class Element {
 }
 const nodes=new Map();
 const get=id=>{if(!nodes.has(id))nodes.set(id,new Element(id==='changes-run'?'select':id.endsWith('-dialog')?'dialog':'div'));return nodes.get(id);};
-const context={assert,console,encodeURIComponent,Date,
+const context={assert,console,encodeURIComponent,Date,Event,
   active:{id:'A',title:'업무 A',workspace:'C:/fixture/A',state:'done',sessionId:'native-session-A'},
   boot:{demo:false},sending:false,appClosed:false,sessions:[],selectedSessions:[],toasts:[],renderCount:0,
   document:{activeElement:new Element('button'),createDocumentFragment:()=>new Element('fragment')},
@@ -167,7 +179,81 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.match($('changes-note').textContent,/비교 범위/);
           assert.doesNotMatch($('changes-note').textContent,/diff_work_limit/);
           assert.equal($('changes-file-name').textContent,'<img onerror=x>.html');
-          assert.match(flatText($('changes-content')),/<script>danger<\/script>/);
+          assert.equal($('changes-content').children.length,0);
+        })()""")
+
+    def test_targeted_explorer_numbering_split_navigation_and_draft_only(self):
+        self.run_case(r"""(async()=>{
+          let closePanel, opener, saved, panel;
+          setPanel=value=>panel=value;
+          WorkspaceResultExplorer={openCustom:opts=>{
+            assert.equal(opts.node,$('changes-review'));opener=opts.opener;closePanel=opts.onClose;
+            return ()=>closePanel();
+          }};
+          saveDraft=()=>saved=$('prompt').value;
+          const trigger=new Object(), calls=[];
+          const row=(kind,beforeLine,afterLine,text)=>({kind,beforeLine,afterLine,text,ending:'\n'});
+          const hunks=[
+            {beforeStart:1,beforeCount:2,afterStart:1,afterCount:3,rows:[
+              row('context',1,1,'  retained  '),row('remove',2,null,'old'),
+              row('add',null,2,'<script>danger</script>'),row('add',null,3,'next')]},
+            {beforeStart:19,beforeCount:1,afterStart:20,afterCount:1,rows:[
+              row('remove',19,null,'partial value'),row('add',null,20,'new value')]}
+          ];
+          hunks[0].rows[3].pairedBeforeLine=2;
+          hunks[1].rows[1].text='🔧 new value';hunks[1].rows[1].highlights=[[2,5]];
+          api=async(path,body)=>{
+            assert.equal(body,undefined);calls.push(path);
+            if(path.startsWith('/api/changes?'))return {runs:[run('x',[file('first','other.py'),file('second','src/code.py')])]};
+            return {status:'text',hunks,truncated:false};
+          };
+          const target={sessionId:'A',runId:'x',path:'C:\\fixture\\A\\src\\CODE.py',opener:trigger};
+          await WorkspaceProductivityActions.openChanges(target);await flush();
+          assert.equal(opener,trigger);assert.equal(panel,'results');assert.equal($('changes-dialog').open,false);
+          assert.deepEqual(calls,['/api/changes?id=A&run=x','/api/changes/file?id=A&run=x&file=second']);
+          assert.equal($('changes-file-name').textContent,'src/code.py');
+          assert.equal($('changes-unified').attributes['aria-pressed'],'true');
+          assert.equal($('changes-position').textContent,'1 / 2');
+          const content=$('changes-content');
+          assert.equal(content.querySelectorAll('.patch-remove')[0].children[0].textContent,2);
+          assert.match(flatText(content),/<script>danger<\/script>/);
+          $('changes-split').onclick();
+          const hunk=content.querySelectorAll('.patch-hunk')[0];
+          const pairs=hunk.querySelectorAll('.patch-pair');assert.equal(pairs.length,3);
+          assert.match(pairs[1].children[0].className,/patch-blank/);
+          assert.equal(pairs[1].children[1].children[0].textContent,2);
+          assert.equal(pairs[2].children[0].children[0].textContent,2);
+          assert.equal(pairs[2].children[1].children[0].textContent,3);
+          assert.equal(content.querySelectorAll('.patch-edit')[0].textContent,'new');
+          $('changes-next').onclick();assert.equal($('changes-position').textContent,'2 / 2');
+          assert.equal($('changes-next').disabled,true);
+          $('prompt').value='기존 초안';$('changes-question').onclick();
+          assert.match(saved,/기존 초안\n\nsrc\/code.py/);assert.match(saved,/@@ -19,1 \+20,1 @@/);
+          assert.match(saved,/\+🔧 new value/);assert.doesNotMatch(saved,/danger/);
+          assert.equal(calls.length,2);assert.equal(document.activeElement,$('prompt'));
+        })()""")
+
+    def test_unavailable_exact_target_never_loads_a_different_file_or_run(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];
+          api=async path=>{calls.push(path);assert.ok(path.startsWith('/api/changes?'));return {runs:[run('keep')]};};
+          await WorkspaceProductivityActions.openChanges({sessionId:'wrong',runId:'keep',path:'report.html'});
+          assert.equal(calls.length,0);
+          await WorkspaceProductivityActions.openChanges({sessionId:'A',runId:'expired',path:'report.html'});
+          assert.match($('changes-empty').textContent,/만료/);
+          await WorkspaceProductivityActions.openChanges({sessionId:'A',runId:'keep',path:'C:/another/report.html'});
+          assert.match($('changes-empty').textContent,/선택한 파일/);
+          assert.equal($('changes-content').children.length,0);assert.equal(calls.length,2);
+        })()""")
+
+    def test_replaced_explorer_discards_pending_file_and_does_not_reopen(self):
+        self.run_case(r"""(async()=>{
+          let dismissed, reply;setPanel=()=>{};
+          WorkspaceResultExplorer={openCustom:opts=>(dismissed=opts.onClose,()=>dismissed())};
+          api=async path=>path.startsWith('/api/changes?')?{runs:[run('one')]}:new Promise(done=>reply=done);
+          await WorkspaceProductivityActions.openChanges();
+          dismissed();reply(answer('STALE'));await flush();
+          assert.equal($('changes-content').children.length,0);assert.equal($('changes-run').children.length,0);
         })()""")
 
     def test_branch_preview_and_creation_send_exactly_one_request_without_ai_dispatch(self):

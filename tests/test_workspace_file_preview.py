@@ -89,6 +89,21 @@ class PreviewParsingTests(unittest.TestCase):
         self.assertEqual((['a', 'b'], []), (result['columns'], result['rows']))
         self.assertEqual('external', self.preview('bad.csv', 'a,b\n"unterminated')['kind'])
 
+    def test_table_with_sections_or_subtotals_does_not_suggest_a_single_chart(self):
+        cases = {
+            '날짜,수량\n1월,12\n2월,18': 'regular',
+            '생산 보고서\n월,실적\n1월,12': 'unclear_headers',
+            '설비,실적,실적\nA,1,2': 'unclear_headers',
+            '날짜,수량\n1월,12\n2월,18,메모': 'uneven_rows',
+            '제품,수량\nA,12\n합계,12': 'grouped_rows',
+            '공정,수량\nA,12\n공정,수량\nB,18': 'grouped_rows',
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                preview = self.preview('review.csv', source)
+                self.assertEqual('table', preview['kind'])
+                self.assertEqual(expected, preview['chartStructure'])
+
     def test_large_csv_binary_or_bad_encoding_never_leaks_partial_table(self):
         for raw in (b'a' * (MAX_TEXT_BYTES + 1), b'a,b\n\0,1', b'\xff\x00\xfe'):
             with self.subTest(size=len(raw)):

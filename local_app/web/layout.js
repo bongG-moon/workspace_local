@@ -14,11 +14,15 @@ globalThis.WorkspaceLayout = (() => {
   const storageKey = "workspace.layout.v1";
   const defaultInspectorWidth = 292, minInspectorWidth = 260, maxInspectorWidth = 560, minChatWidth = 420;
   const clampWidth = (width, maximum = maxInspectorWidth) => Math.max(minInspectorWidth, Math.min(maximum, Math.round(width)));
-  const preferences = {sidebarCollapsed:false, inspectorCollapsed:false, inspectorWidth:defaultInspectorWidth, miniMode:false};
+  const preferences = {sidebarCollapsed:false, inspectorCollapsed:false, inspectorWidth:defaultInspectorWidth, inspectorWidthMode:"auto", miniMode:false};
   function readPreferences(saved) {
     if (!saved || typeof saved !== "object" || Array.isArray(saved)) return false;
     for (const key of ["sidebarCollapsed", "inspectorCollapsed", "miniMode"]) if (typeof saved[key] === "boolean") preferences[key] = saved[key];
-    if (typeof saved.inspectorWidth === "number" && Number.isFinite(saved.inspectorWidth)) preferences.inspectorWidth = clampWidth(saved.inspectorWidth);
+    if (typeof saved.inspectorWidth === "number" && Number.isFinite(saved.inspectorWidth)) {
+      preferences.inspectorWidth = clampWidth(saved.inspectorWidth);
+      preferences.inspectorWidthMode = saved.inspectorWidthMode === "auto" || saved.inspectorWidthMode === "manual"
+        ? saved.inspectorWidthMode : preferences.inspectorWidth === defaultInspectorWidth ? "auto" : "manual";
+    }
     return true;
   }
   try {
@@ -89,8 +93,13 @@ globalThis.WorkspaceLayout = (() => {
   function inspectorResizable(state = snapshot()) {
     return !!resizer && !state.inspectorNarrow && state.inspectorVisible && !state.inspectorOverlay && !state.sidebarOverlay;
   }
+  function requestedInspectorWidth() {
+    return preferences.inspectorWidthMode === "auto"
+      ? Math.max(320, Math.min(480, Math.round(app.clientWidth * .232)))
+      : preferences.inspectorWidth;
+  }
   function renderInspectorSize(state = snapshot()) {
-    const maximum = inspectorMaximum(), width = clampWidth(resizeDrag ? resizeDrag.width : preferences.inspectorWidth, maximum);
+    const maximum = inspectorMaximum(), width = clampWidth(resizeDrag ? resizeDrag.width : requestedInspectorWidth(), maximum);
     const value = `${width}px`;
     if (app.style.getPropertyValue("--inspector-resized-width") !== value) app.style.setProperty("--inspector-resized-width", value);
     if (!resizer) return;
@@ -115,8 +124,9 @@ globalThis.WorkspaceLayout = (() => {
     // Clear the drag before releasing capture: lostpointercapture can fire
     // synchronously, and a completed drag must not be cancelled a second time.
     try { if (resizer.hasPointerCapture(finished.pointerId)) resizer.releasePointerCapture(finished.pointerId); } catch (_) { /* Capture may already be gone. */ }
-    if (commit && finished.width !== finished.startWidth && preferences.inspectorWidth !== finished.width) {
-      preferences.inspectorWidth = finished.width; save();
+    if (commit && finished.width !== finished.startWidth &&
+        (preferences.inspectorWidthMode !== "manual" || preferences.inspectorWidth !== finished.width)) {
+      preferences.inspectorWidth = finished.width; preferences.inspectorWidthMode = "manual"; save();
     }
     renderInspectorSize();
     return true;
@@ -128,7 +138,7 @@ globalThis.WorkspaceLayout = (() => {
   }
   function startResize(event) {
     if (event.button !== 0 || event.isPrimary === false || resizeDrag || !inspectorResizable() || !Number.isFinite(event.clientX)) return;
-    const maximum = inspectorMaximum(), width = clampWidth(preferences.inspectorWidth, maximum);
+    const maximum = inspectorMaximum(), width = clampWidth(requestedInspectorWidth(), maximum);
     resizeDrag = {pointerId:event.pointerId, startX:event.clientX, startWidth:width, width, maximum};
     try { resizer.setPointerCapture(event.pointerId); } catch (_) { finishResize(); return; }
     event.preventDefault(); restoreFocus(resizer);
@@ -136,26 +146,28 @@ globalThis.WorkspaceLayout = (() => {
   }
   function resizeKey(event) {
     if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || !inspectorResizable()) return;
-    const maximum = inspectorMaximum(), width = clampWidth(preferences.inspectorWidth, maximum), step = event.shiftKey ? 50 : 10;
+    const maximum = inspectorMaximum(), width = clampWidth(requestedInspectorWidth(), maximum), step = event.shiftKey ? 50 : 10;
     let next;
     switch (event.key) {
       case "ArrowLeft": next = clampWidth(width + step, maximum); break;
       case "ArrowRight": next = clampWidth(width - step, maximum); break;
       case "Home": next = minInspectorWidth; break;
       case "End": next = maximum; break;
-      case "Enter": next = defaultInspectorWidth; break;
+      case "Enter": resetInspectorWidth(event); return;
       default: return;
     }
     event.preventDefault(); event.stopPropagation(); finishResize();
-    if ((next !== width || event.key === "Enter") && next !== preferences.inspectorWidth) {
-      preferences.inspectorWidth = next; save();
+    if (next !== width && (preferences.inspectorWidthMode !== "manual" || next !== preferences.inspectorWidth)) {
+      preferences.inspectorWidth = next; preferences.inspectorWidthMode = "manual"; save();
     }
     renderInspectorSize();
   }
   function resetInspectorWidth(event) {
     if (!inspectorResizable()) return;
-    event.preventDefault(); finishResize();
-    if (preferences.inspectorWidth !== defaultInspectorWidth) { preferences.inspectorWidth = defaultInspectorWidth; save(); }
+    event.preventDefault(); event.stopPropagation(); finishResize();
+    if (preferences.inspectorWidthMode !== "auto") {
+      preferences.inspectorWidth = defaultInspectorWidth; preferences.inspectorWidthMode = "auto"; save();
+    }
     renderInspectorSize();
   }
   function overlayPanel(state = snapshot()) {

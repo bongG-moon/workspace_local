@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import codecs
 import csv
+import hashlib
 import io
 from pathlib import Path
 import re
@@ -16,6 +17,7 @@ import struct
 import zlib
 
 CODE_LANGUAGES = {
+    '.markdown': 'markdown',
     '.py': 'python', '.pyi': 'python', '.js': 'javascript', '.mjs': 'javascript',
     '.cjs': 'javascript', '.jsx': 'jsx', '.ts': 'typescript', '.tsx': 'tsx',
     '.json': 'json', '.jsonc': 'json', '.css': 'css', '.scss': 'scss',
@@ -183,9 +185,20 @@ def image_dimensions(raw, suffix):
 def _table(path, text):
     reader = csv.reader(io.StringIO(text, newline=''), delimiter='\t' if path.suffix.lower() == '.tsv' else ',', strict=True)
     header = next(reader, [])
+    headings = [value.strip().casefold() for value in header]
+    chart_structure = 'regular'
+    if len(header) < 2 or not all(headings) or len(set(headings)) != len(headings) or not any(
+            any(char.isalpha() for char in heading) for heading in headings):
+        chart_structure = 'unclear_headers'
     columns = len(header)
     rows, total = [], 0
     for row in reader:
+        if chart_structure == 'regular' and len(row) != len(header):
+            chart_structure = 'uneven_rows'
+        if chart_structure == 'regular' and row and (
+                row[0].strip().casefold() in {'합계', '소계', '총계', 'total', 'subtotal', 'grand total'}
+                or row == header):
+            chart_structure = 'grouped_rows'
         columns = max(columns, len(row))
         total += 1
         if total <= MAX_TABLE_ROWS:
@@ -197,7 +210,8 @@ def _table(path, text):
     row_limit, column_limit = total > MAX_TABLE_ROWS, columns > MAX_TABLE_COLUMNS
     return {'kind': 'table', 'name': path.name, 'columns': labels, 'rows': rows,
             'rowCount': total, 'columnCount': columns, 'rowsTruncated': row_limit,
-            'columnsTruncated': column_limit, 'truncated': row_limit or column_limit}
+            'columnsTruncated': column_limit, 'truncated': row_limit or column_limit,
+            'chartStructure': chart_structure}
 
 
 def build_preview(path: Path):
@@ -206,6 +220,7 @@ def build_preview(path: Path):
         return external(path, 'ZIP 파일은 기본 앱에서 열거나 폴더에서 확인하세요. 앱 안에서는 압축을 풀지 않아요.')
     is_image = suffix in IMAGE_TYPES
     is_code = suffix in CODE_LANGUAGES
+    is_markdown = suffix in {'.md', '.markdown'}
     if not is_image and not is_code and suffix not in {'.md', '.txt', '.csv', '.tsv', '.html', '.htm'}:
         message = ('Office·PDF 원본은 원래 앱에서 열어 확인해 주세요.' if suffix in {'.pdf', '.pptx', '.docx', '.xlsx', '.xls'}
                    else '이 형식은 내용 미리보기를 지원하지 않아요. 입력창으로 끌어 자료로 첨부하거나 폴더에서 확인하세요.')
@@ -215,7 +230,7 @@ def build_preview(path: Path):
     with path.open('rb') as handle:
         raw = handle.read(limit + 1)
     limited = len(raw) > limit
-    if limited and not is_code:
+    if limited and not (is_code or is_markdown):
         return external(path, '미리보기 크기를 넘는 파일입니다. 원래 앱에서 열어 주세요.')
     if is_image:
         try:
@@ -228,18 +243,24 @@ def build_preview(path: Path):
         text = _decode(raw[:limit], partial=limited)
     except UnicodeError:
         return external(path, '문자 인코딩을 확인하지 못했습니다. 원래 앱이나 메모장에서 확인해 주세요.')
+    if is_markdown:
+        return {'kind': 'text', 'name': path.name, 'language': 'markdown',
+                'text': text[:MAX_CODE_CHARS], 'truncated': limited or len(text) > MAX_CODE_CHARS}
     if is_code:
         return {'kind': 'code', 'name': path.name, 'language': CODE_LANGUAGES[suffix],
                 'text': text[:MAX_CODE_CHARS], 'truncated': limited or len(text) > MAX_CODE_CHARS}
     if suffix in {'.csv', '.tsv'}:
         try:
-            return _table(path, text)
+            table = _table(path, text)
+            table['version'] = hashlib.sha256(raw).hexdigest()
+            return table
         except csv.Error:
             return external(path, '표 형식을 확인하지 못했습니다. 원래 앱에서 열어 주세요.')
     if suffix in {'.html', '.htm'}:
-        from .html_preview import render
-        return {'kind': 'html', 'name': path.name, 'html': render(text),
+        from .html_preview import render_preview
+        html, script_only = render_preview(text)
+        return {'kind': 'html', 'name': path.name, 'html': html, 'scriptOnly': script_only,
                 'text': text[:MAX_CODE_CHARS], 'language': 'html',
                 'truncated': len(text) > MAX_CODE_CHARS,
-                'message': '본문 확인용 미리보기입니다. 보고서의 검색과 정렬 등 원본 기능은 기본 앱에서 열어 확인하세요. 이 미리보기에서는 스크립트를 실행하지 않습니다.'}
+                'message': '본문 확인용 미리보기입니다. 스크립트로 그리는 그래프나 검색, 정렬은 기본 앱에서 원본을 열어 확인하세요. 이 미리보기에서는 스크립트를 실행하지 않습니다.'}
     return {'kind': 'text', 'name': path.name, 'text': text}

@@ -6,6 +6,7 @@ cannot resurrect a sent/cleared draft. The CLI's transcript is never touched.
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
@@ -17,6 +18,18 @@ from .history import safe
 MAX_TOTAL = 4 * 1024 * 1024
 MAX_ROWS = 12000
 MAX_REQUEST = 1024 * 1024
+TABLE_MARKER = re.compile(r'^〔표 인용 ([1-9][0-9]{0,15})〕 ', re.MULTILINE)
+
+
+class StaleTableReference(ValueError):
+    """An explicitly quoted row must be selected again before delivery."""
+
+    code = 'stale_table_reference'
+
+    def __init__(self, message, reference_id=None, *, can_review=False):
+        super().__init__(message)
+        self.reference_id = reference_id
+        self.can_review = can_review
 
 
 def identifier(value):
@@ -141,6 +154,88 @@ class DraftStore:
         return {path for row in self.snapshot()['entries'] for kind in ('draft', 'stash')
                 for path in (row.get(kind) or {}).get('attachments', [])}
 
+    @contextmanager
+    def _table_db(self):
+        try:
+            with self.lock, self._connect() as db:
+                yield db
+        except sqlite3.Error as exc:
+            raise ValueError('표 인용 기록을 확인하지 못했어요. 입력한 내용은 유지됩니다.') from exc
+
+    @staticmethod
+    def _ensure_table_sources(db):
+        fields = {row[1] for row in db.execute('PRAGMA table_info(table_sources)')}
+        if 'scope' in fields:
+            return
+        if fields:
+            # The old UNIQUE index covered a whole row. Retain its receipt IDs,
+            # including the high-water mark of receipts already removed.
+            previous_seq = db.execute("SELECT seq FROM sqlite_sequence WHERE name='table_sources'").fetchone()
+            db.execute('ALTER TABLE table_sources RENAME TO old_table_sources')
+        db.execute('CREATE TABLE table_sources ('
+                   'id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, path TEXT NOT NULL, '
+                   "version TEXT NOT NULL, row_number INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT '', "
+                   'UNIQUE(owner,path,version,row_number,scope))')
+        if fields:
+            db.execute('INSERT INTO table_sources(id,owner,path,version,row_number) '
+                       'SELECT id,owner,path,version,row_number FROM old_table_sources')
+            if previous_seq:
+                db.execute("DELETE FROM sqlite_sequence WHERE name='table_sources'")
+                db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('table_sources',?)", previous_seq)
+            db.execute('DROP TABLE old_table_sources')
+
+    def record_table_source(self, sid, path, version, row, *, scope=None, replaces=None):
+        """Persist coordinates and the source hash; cell contents stay with their source."""
+        identifier(sid)
+        scope_key = json.dumps(scope, separators=(',', ':')) if scope is not None else ''
+        with self._table_db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self._ensure_table_sources(db)
+            if replaces is not None and not db.execute(
+                    'SELECT 1 FROM table_sources WHERE owner=? AND id=? AND path=?',
+                    (sid, replaces, path)).fetchone():
+                raise StaleTableReference('이 업무에서 교체할 표 인용을 확인할 수 없어요.', replaces)
+            previous = db.execute('SELECT id FROM table_sources WHERE owner=? AND path=? AND version=? AND row_number=? AND scope=?',
+                                  (sid, path, version, row, scope_key)).fetchone()
+            if previous:
+                return previous[0]
+            number = db.execute('INSERT INTO table_sources(owner,path,version,row_number,scope) VALUES(?,?,?,?,?)',
+                                (sid, path, version, row, scope_key)).lastrowid
+            db.execute('DELETE FROM table_sources WHERE id <= ?', (number - 4096,))
+            return number
+
+    def issued_table_source(self, sid, number):
+        identifier(sid)
+        if type(number) is not int or not 1 <= number < 10**16:
+            raise ValueError('교체할 표 인용 번호를 확인해 주세요.')
+        with self._table_db() as db:
+            fields = {row[1] for row in db.execute('PRAGMA table_info(table_sources)')}
+            scope = 'scope' if 'scope' in fields else "''"
+            row = db.execute(f'SELECT path,version,row_number,{scope} FROM table_sources WHERE owner=? AND id=?',
+                             (sid, number)).fetchone() if fields else None
+        if not row:
+            raise StaleTableReference('이 업무에서 확인할 수 없는 표 인용이에요. 원본 표에서 행을 다시 선택해 주세요.', number)
+        return (*row[:3], json.loads(row[3]) if row[3] else None)
+
+    def table_sources(self, sid, text):
+        if not isinstance(text, str) or '〔표 인용 ' not in text:
+            return []
+        numbers = list(dict.fromkeys(map(int, TABLE_MARKER.findall(text))))
+        if not numbers:
+            return []
+        if len(numbers) > 8:
+            raise ValueError('한 번에 표의 행을 8개까지 인용할 수 있어요.')
+        with self._table_db() as db:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='table_sources' AND type='table'").fetchone()
+            slots = ','.join('?' for _ in numbers)
+            rows = db.execute(f'SELECT id,path,version FROM table_sources WHERE owner=? AND id IN ({slots})',
+                              (sid, *numbers)).fetchall() if exists else []
+        if len(rows) != len(numbers):
+            found = {row[0] for row in rows}
+            missing = next(number for number in numbers if number not in found)
+            raise StaleTableReference('이 업무에서 확인할 수 없는 표 인용이 있어요. 원본 표에서 행을 다시 선택해 주세요.', missing)
+        return rows
+
     def delete_session(self, sid):
         identifier(sid)
         with self.lock:
@@ -148,4 +243,6 @@ class DraftStore:
                 return
             with self._connect() as db:
                 db.execute('DELETE FROM drafts WHERE id=?', (sid,))
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='table_sources' AND type='table'").fetchone():
+                    db.execute('DELETE FROM table_sources WHERE owner=?', (sid,))
                 db.execute("UPDATE metadata SET value='home:chat' WHERE key='selected' AND value=?", (sid,))

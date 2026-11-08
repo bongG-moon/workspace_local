@@ -17,7 +17,7 @@ const draftText='작성 중인 초안은 간편 화면을 바꿔도 그대로 �
 const attachment='C:/fixture/reports/월간 실적.csv';
 const normalPreferences={sidebarCollapsed:false,inspectorCollapsed:false,inspectorWidth:400,miniMode:false};
 const desktop={preferences:{enabled:false},inbox:[],unreadCount:0};
-const hiddenInMini=['#capabilities-open','.sidebar-footer','#task-title','#task-pin','#branch-open','#workspace-summary','#connection-badge','#restart-connection','#materials-button','#workspace-button','#workflow-open','#schedule-open','#attach','#attach-path','#composer-model','#composer-effort','#composer-permission','#inspector-panel','#inspector-resizer'];
+const hiddenInMini=['#capabilities-open','.sidebar-footer','#task-title','#task-pin','#branch-open','#workspace-summary','#connection-badge','#restart-connection','#materials-button','#workspace-button','#workflow-open','#schedule-open','#attach-path','#composer-model','#composer-effort','#composer-permission','#inspector-panel','#inspector-resizer'];
 const settle=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
 async function screenshot(page,name){if(output){await page.screenshot({path:path.join(output,name+'.png'),animations:'disabled'});if(/^(?:standard-desktop-light|simple-view-(?:1440|1000|640)-(?:light|dark))$/u.test(name))await page.locator('.topbar').screenshot({path:path.join(output,name+'-header.png'),animations:'disabled'});if(name.startsWith('panel-'))await page.screenshot({path:path.join(output,name+'-header.png'),clip:{x:0,y:0,width:page.viewportSize().width,height:120},animations:'disabled'});}}
 const layoutServer=(layout=null,delayMs=0)=>({layout:clone(layout),delayMs,inFlight:0,maxInFlight:0,writes:[],completed:[]});
@@ -63,6 +63,7 @@ async function fixture(browser,{preferences=normalPreferences,restricted=false,s
   else if(p==='/api/notifications')result={desktop};
   else if(p==='/api/appearance')result={theme:body.theme,nativeApplied:true};
   else if(p==='/api/files')result={files:[]};
+  else if(p==='/api/browse-paths')result={path:'C:/fixture/reports',entries:[],locations:[],breadcrumbs:[]};
   else if(p==='/api/results')result={artifacts:[],lastRunId:null};
   else if(p==='/api/dispatch')result={queue:[],schedules:[],policy:{},steer:{supported:false}};
   else if(p==='/api/session-groups'){
@@ -120,7 +121,7 @@ async function preserveToggle(f,value){
 }
 async function visibleMini(page){
  for(const selector of hiddenInMini)assert.equal(await page.locator(selector).isVisible(),false,selector+' must be hidden in mini mode');
- for(const selector of ['#appearance-toggle','#mini-mode-toggle','#prompt','#attachments .attachment','#conversation'])assert.equal(await page.locator(selector).first().isVisible(),true,selector+' must remain visible');
+ for(const selector of ['#appearance-toggle','#mini-mode-toggle','#prompt','#attach','#attachments .attachment','#conversation'])assert.equal(await page.locator(selector).first().isVisible(),true,selector+' must remain visible');
  const icons=await iconControls(page);assert.equal(icons.pressed,'true');
  await panelActions(page);
  const state=await bounds(page);assert.equal(state.overflow,false);assert.ok(state.toggle.x>=0&&state.toggle.right<=state.width+1);assert.ok(state.prompt.width>200&&state.prompt.bottom<=1001);return state;
@@ -145,6 +146,11 @@ async function runMain(browser){
   await page.locator('#materials-button').focus();await page.keyboard.press('Space');await settle(page);await panelActions(page);assert.equal(await page.locator('#close-materials').evaluate(node=>document.activeElement===node),true);await page.locator('#chat-title').click();await screenshot(page,'panel-open-work-light');
   checks.push('selected work session shows only the internal close action while panel is open and only the header open action while closed; keyboard activation transfers focus');
   await preserveToggle(f,true);await visibleMini(page);assert.equal(await page.locator('#send').isVisible(),true);
+  await page.locator('#attach').click();await page.locator('.path-picker[open]').waitFor();
+  await page.locator('.path-picker').getByRole('button',{name:'취소',exact:true}).click();
+  assert.equal(await page.locator('#prompt').inputValue(),draftText);
+  assert.equal(await page.locator('#attachments .attachment').count(),1);
+  checks.push('mini attachment picker opens and cancel preserves the current draft and attachment');
   assert.notDeepEqual((await iconControls(page)).paint,initialIcons.paint,'active simple view needs a visible selected treatment');
   checks.push('간편 화면 is an accessible icon-only 32px button immediately right of the theme button; both retain matching 18px glyphs without label or ON/OFF text');
   for(const selector of ['#session-search','#new-chat','#task-group-create','#sessions .task-group-toggle'])assert.equal(await page.locator(selector).isVisible(),true);
@@ -179,7 +185,7 @@ async function runMain(browser){
   checks.push('explicit Shift+Tab/Alt+M permission selection exits mini without losing draft or changing permission when only the current option is available');
   await page.evaluate(()=>WorkspaceCapabilities.open());await page.locator('#capabilities-view').waitFor({state:'visible'});assert.equal(await page.locator('#mini-mode-toggle').getAttribute('aria-pressed'),'false');await page.locator('#capabilities-back').click();await page.locator('#conversation').waitFor({state:'visible'});assert.equal(await page.locator('#prompt').inputValue(),draftText);await setMini(page,true);
   checks.push('explicit skills catalog opens in standard mode and returns to the same draft');
-  await page.locator('#sessions [data-session-id="mini-running"] .session').click();await page.waitForFunction(()=>active?.id==='mini-running');assert.equal(await page.locator('#stop').isVisible(),true);assert.equal(await page.locator('#send').isVisible(),false);
+  await page.locator('#sessions [data-session-id="mini-running"] .session').click();await page.waitForFunction(()=>active?.id==='mini-running');assert.equal(await page.locator('#stop').isVisible(),true);assert.equal(await page.locator('#send').isVisible(),true);
   await preserveToggle(f,false);await preserveToggle(f,true);eventQueues.get('mini-running').push({seq:1,type:'assistant_delta',data:{id:'live-mini',text:'간편 화면에서도 실시간 응답이 계속됩니다.'}});await page.getByText('간편 화면에서도 실시간 응답이 계속됩니다.',{exact:false}).first().waitFor({state:'visible'});assert.equal(await page.locator('#stop').isVisible(),true);
   checks.push('live running session keeps stop control and receives actual polled response after toggling');
   await page.locator('#sessions [data-session-id="mini-approval"] .session').click();await page.waitForFunction(()=>active?.id==='mini-approval');const approval=page.locator('#requests [data-request-id="approval-1"]');await approval.waitFor({state:'visible'});

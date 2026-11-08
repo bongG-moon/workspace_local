@@ -87,6 +87,7 @@ with log_path.open('wb') as log:
             raise AssertionError('Unauthenticated API was accepted')
         checks.append('authenticated API boundary')
         for route in ['/', '/app.js', '/composer.js', '/inline-controls.js', '/attention.js', '/app.css',
+                      '/row-drafts.js', '/result-explorer.js', '/result-explorer.css',
                       '/app-updates.js', '/app-updates.css',
                       '/startup-health.js', '/startup-health.css',
                       '/capabilities.js', '/rendering.js', '/attachments.js', '/workflow.js', '/desktop.js', '/session-import.js',

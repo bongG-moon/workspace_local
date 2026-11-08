@@ -196,7 +196,7 @@ class WorkQueue:
                    start_time=schedule.get('startTime'), end_time=schedule.get('endTime'))
         for sid, reason in value['holds'].items():
             _sid(sid)
-            if reason not in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required'}:
+            if reason not in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required', 'table_source_changed'}:
                 raise ValueError('Invalid hold')
         for key, receipt in value.get('receipts', {}).items():
             if not isinstance(key, str) or len(key) != 64 or not isinstance(receipt, dict):
@@ -235,6 +235,7 @@ class WorkQueue:
             schedules = [{**row, 'nextRunAt': row['nextAt'], 'pausedByUser': _paused_by_user(row),
                           'lastRun': {'dueAt': row['lastDueAt'], 'status': row['lastStatus']}} for row in schedules]
             return deepcopy({'revision': self.data['revision'], 'queue': rows, 'schedules': schedules,
+                             'tableResumeRequired': any(row.get('reason') == 'table_source_reviewed' for row in rows),
                              'paused': bool(reason), 'reason': reason, 'warning': self.warning, 'policy': POLICY})
 
     def dispatch_candidates(self):
@@ -308,8 +309,13 @@ class WorkQueue:
         context = _context(context) if context is not None else None
         with self.lock:
             row = self._row(sid, identifier)
-            if row['status'] != 'queued':
+            table_repair = row['status'] == 'needs_review' and row.get('reason') == 'table_source_changed'
+            if row['status'] != 'queued' and not table_repair:
                 raise ValueError('전송 전 대기 요청만 수정할 수 있습니다.')
+            if table_repair:
+                row.update(status='queued', reason='table_source_reviewed')
+                self.data['holds'].setdefault(sid, 'table_source_changed')
+                self._schedule_status(row, 'queued')
             row.update(text=text, attachments=attachments, updatedAt=self.clock(),
                        editRevision=row.get('editRevision', 0) + 1)
             if context is not None:
@@ -382,9 +388,17 @@ class WorkQueue:
             self.data['holds'][_sid(sid)] = reason if reason in {'user', 'error', 'stopped', 'restart', 'settings_changed', 'delivery_unknown', 'control_restore_required'} else 'user'
             self._save()
 
-    def resume(self, sid):
+    def resume(self, sid, *, reviewed_tables=False):
         with self.lock:
             self._check()
+            session_rows = [row for row in self.data['queue'] if row['sessionId'] == sid and row['status'] in ACTIVE]
+            if reviewed_tables and any(row.get('reason') == 'table_source_changed' for row in session_rows):
+                raise ValueError('최신 표에서 대기 요청의 행을 다시 선택하거나 해당 요청을 취소해 주세요.')
+            for row in session_rows:
+                if row.get('reason') == 'table_source_reviewed':
+                    if not reviewed_tables:
+                        return
+                    row['reason'] = None
             # Restart never catches up missed occurrences, even inside grace.
             if self.data['holds'].get(sid) == 'restart':
                 for schedule in self.data['schedules']:
@@ -556,7 +570,8 @@ class WorkQueue:
                     session_state.get('_connecting') or session_state.get('_modelUpdating') or
                     session_state.get('_permissionUpdating')):
                 return None
-            if any(row['sessionId'] == sid and row['status'] in {'dispatching', 'submitted', 'needs_review'} for row in self.data['queue']):
+            if any(row['sessionId'] == sid and (row['status'] in {'dispatching', 'submitted', 'needs_review'} or
+                   row['status'] == 'queued' and row.get('reason') == 'table_source_reviewed') for row in self.data['queue']):
                 return None
             row = next((row for row in self.data['queue'] if row['sessionId'] == sid and row['status'] == 'queued'), None)
             if row is None:
@@ -601,15 +616,15 @@ class WorkQueue:
             self.data['holds'].setdefault(row['sessionId'], 'control_restore_required')
             self._save()
 
-    def failed(self, identifier):
+    def failed(self, identifier, *, reason='delivery_unknown'):
         with self.lock:
             self._check()
             row = next((item for item in self.data['queue'] if item['id'] == identifier), None)
             if row is None or row['status'] not in {'dispatching', 'submitted'}:
                 return
-            row.update(status='needs_review', reason='delivery_unknown', updatedAt=self.clock())
+            row.update(status='needs_review', reason=reason, updatedAt=self.clock())
             self._schedule_status(row, 'needs_review')
-            self.data['holds'][row['sessionId']] = 'delivery_unknown'
+            self.data['holds'][row['sessionId']] = reason
             self._save()
 
     def observe(self, sid, kind, data):

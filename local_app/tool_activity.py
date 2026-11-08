@@ -345,7 +345,7 @@ def merge_activity(records, value, *, run_id=None):
 
 class ToolActivityCapture:
     """One turn of correlated evidence. A result is never inferred from text."""
-    def __init__(self, emit, *, clock=time.time, run_id=None, tombstones=None):
+    def __init__(self, emit, *, clock=time.time, run_id=None, tombstones=None, on_write=None, on_command=None):
         self.emit, self.clock, self.run_id = emit, clock, safe_run_id(run_id)
         self.lock = threading.RLock()
         self.records = []
@@ -353,8 +353,12 @@ class ToolActivityCapture:
         self.turn_order = deque()
         self.seen, self.order = tombstones if tombstones is not None else (set(), deque())
         self.closed = False
+        self.on_write = on_write
+        self.write_targets = {}
+        self.on_command = on_command
+        self.command_ids = set()
 
-    def request(self, block, *, parent=None):
+    def request(self, block, *, parent=None, capture_write=False, capture_command=False):
         if not isinstance(block, dict) or not isinstance(block.get('input'), dict):
             return
         tool = block.get('name')
@@ -380,6 +384,15 @@ class ToolActivityCapture:
             if len(self.order) > 4096:
                 self.seen.discard(self.order.popleft())
             self.records = merge_activity(self.records, value)
+            if capture_write and self.on_write and self.run_id and len(self.write_targets) < MAX_RECORDS:
+                from .artifacts import write_target
+                path = write_target(tool, block['input'])
+                if path is not None:
+                    self.write_targets[value['id']] = path
+            if (capture_command and self.on_command and self.run_id and parent is None
+                    and tool in {'Bash', 'PowerShell'} and len(self.command_ids) < MAX_RECORDS
+                    and not block['input'].get('run_in_background')):
+                self.command_ids.add(value['id'])
         self.emit(dict(value))
 
     def _matching(self, identifier, parent):
@@ -398,7 +411,7 @@ class ToolActivityCapture:
             self.records = merge_activity(self.records, value)
         self.emit(dict(value))
 
-    def result(self, block, *, parent=None):
+    def result(self, block, *, parent=None, native=None, metadata=None, capture_write=True, capture_command=True):
         identifier = _identifier(block.get('tool_use_id')) if isinstance(block, dict) else None
         if identifier is None or type(block.get('is_error', False)) is not bool:
             return
@@ -408,11 +421,58 @@ class ToolActivityCapture:
                 return
             value = {**old, 'state': 'error' if block.get('is_error') else 'completed', 'finishedAt': self.clock()}
             self.records = merge_activity(self.records, value)
+            path = self.write_targets.pop(identifier, None)
+            command = identifier in self.command_ids
+            self.command_ids.discard(identifier)
+        if capture_write and path is not None and value['state'] == 'completed':
+            from .artifacts import confirmed_write
+            evidence = confirmed_write(value['tool'], path, native, metadata=metadata, content=block.get('content'))
+            if evidence is not None:
+                self.on_write(dict(evidence, runId=self.run_id))
+        if (capture_command and command and value['state'] == 'completed'
+                and self._completed_command(native, metadata)):
+            # A successful foreground command permits a bounded folder review;
+            # it does not identify any written path or establish file ownership.
+            receipt = {'runId': self.run_id, 'toolUseId': identifier, 'tool': value['tool'],
+                       'startedAt': value['startedAt'], 'finishedAt': value['finishedAt']}
+            try:
+                self.on_command(receipt)
+            except Exception:
+                pass  # Optional observation must never interrupt the CLI reader.
         self.emit(dict(value))
+
+    @staticmethod
+    def _completed_command(native, metadata):
+        if not isinstance(native, dict):
+            return False
+        if metadata is not None:
+            if not isinstance(metadata, dict) or 'non_execution_kind' in metadata:
+                return False
+            remedy = metadata.get('remedy')
+            if remedy is not None and (not isinstance(remedy, dict) or remedy.get('kind') == 'staged_for_review'):
+                return False
+        for source in (native, metadata or {}):
+            if (any(source.get(key) for key in ('error', 'is_error', 'failed', 'staged', 'cancelled', 'canceled',
+                                               'backgroundTaskId', 'background_task_id', 'backgroundedByUser',
+                                               'backgroundEndsWithFinalResponse', 'background'))
+                    or source.get('status') in ('error', 'failed', 'staged', 'cancelled', 'canceled', 'background')
+                    or source.get('timedOutAfterMs') is not None):
+                return False
+        # The native CLI output supplies interrupted=False. Older adapters may
+        # instead expose a numeric exit status. Neither stdout nor command text
+        # is execution evidence, including text claiming success or file paths.
+        if 'interrupted' in native and native['interrupted'] is not False:
+            return False
+        exits = [native[key] for key in ('exit_code', 'exitCode') if key in native]
+        if any(type(code) is not int or code != 0 for code in exits):
+            return False
+        return native.get('interrupted') is False or bool(exits)
 
     def interrupt(self, *, closed=True):
         with self.lock:
             self.closed = self.closed or closed
+            self.write_targets.clear()
+            self.command_ids.clear()
             values = [{**row, 'state': 'interrupted', 'finishedAt': self.clock()}
                       for row in self.records if row['state'] in ACTIVE]
             for value in values:

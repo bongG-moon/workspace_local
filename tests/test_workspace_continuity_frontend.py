@@ -292,6 +292,8 @@ class WorkspaceContinuityFrontendTests(unittest.TestCase):
     def test_desktop_presence_has_only_current_task_and_actual_visibility(self):
         self.run_case(r"""(async()=>{
           const calls=[];api=async(path,body)=>{calls.push({path,body});return {};};
+          $('task-view').hidden=false;$('conversation').hidden=false;
+          const query=document.querySelector;document.querySelector=selector=>selector==='dialog[open]'?null:query(selector);
           document.visibilityState='visible';document.hasFocus=()=>true;await WorkspaceDesktop.presence();
           assert.equal(JSON.stringify(calls[0].body),JSON.stringify({action:'view',id:'A',visible:true}));
           document.hasFocus=()=>false;await WorkspaceDesktop.presence();assert.equal(calls[1].body.visible,false);

@@ -68,6 +68,7 @@ class DesktopNotifications:
         self._inflight = {}
         self._retry_timer = None
         self._automatic_retry = automatic_retry
+        self._revision = 0
         self.warning = None
         self.data = {'schemaVersion': 1, 'preferences': dict(DEFAULTS), 'inbox': [], 'seen': []}
         try:
@@ -116,6 +117,8 @@ class DesktopNotifications:
             raise ValueError('Missing notification receipt')
 
     def _save(self):
+        # Per-process snapshot order; the persisted schema stays unchanged.
+        self._revision += 1
         if self.warning:
             return False
         try:
@@ -128,7 +131,7 @@ class DesktopNotifications:
 
     def snapshot(self):
         with self._lock:
-            return {'preferences': dict(self.data['preferences']),
+            return {'preferences': dict(self.data['preferences']), 'revision': self._revision,
                     'inbox': deepcopy(list(reversed(self.data['inbox']))),
                     'unreadCount': sum(not row['read'] for row in self.data['inbox']),
                     'warning': self.warning,

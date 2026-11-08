@@ -1,4 +1,4 @@
-"""Bounded observations of document metadata, not claims of agent authorship."""
+"""Bounded workspace metadata and request-specific file-write evidence."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -34,6 +34,79 @@ REFERENCE_FILE_TYPES = frozenset(DOCUMENT_TYPES) | frozenset({
 }) | ARCHIVE_FILE_TYPES
 
 EXCLUDED = {'node_modules', 'venv', '__pycache__', 'build', 'dist'}
+WRITE_TOOLS = {'Write', 'Edit', 'MultiEdit', 'NotebookEdit'}
+
+
+def write_target(tool, inputs):
+    # Shell results report stdout/stderr and execution status, never the paths
+    # actually written after hooks, shell expansion or a script's own logic.
+    if tool in WRITE_TOOLS:
+        path = inputs.get('notebook_path' if tool == 'NotebookEdit' else 'file_path')
+        return path if isinstance(path, str) and len(path) <= 4096 else None
+    return None
+
+
+def workspace_write_name(root, value):
+    """Lexical check only; the ending metadata scan checks physical ancestry."""
+    if (not isinstance(value, str) or not value or len(value) > 4096
+            or any(ord(ch) < 32 for ch in value)):
+        return None
+    path = Path(value)
+    if not path.is_absolute() or not path.is_relative_to(root):
+        return None
+    relative = path.relative_to(root)
+    if (not relative.parts or any(private_name(part) or os.path.normcase(part) in EXCLUDED or ':' in part
+                                  for part in relative.parts)):
+        return None
+    return relative.as_posix()
+
+
+def confirmed_write(tool, path, native, *, metadata=None, content=None):
+    """Project the successful native tool receipt without retaining its contents."""
+    if tool not in WRITE_TOOLS:
+        return None
+    if metadata is not None:
+        if not isinstance(metadata, dict) or 'non_execution_kind' in metadata:
+            return None
+        remedy = metadata.get('remedy')
+        if remedy is not None and (not isinstance(remedy, dict) or remedy.get('kind') == 'staged_for_review'):
+            return None
+    if native is not None and not isinstance(native, dict):
+        return None
+    change = 'modified'
+    if native is not None:
+        if native.get('staged') or native.get('error'):
+            return None
+        actual = native.get('notebook_path' if tool == 'NotebookEdit' else 'filePath')
+        if tool == 'Write':
+            if native.get('type') not in ('create', 'update'):
+                return None
+            change = 'created' if native['type'] == 'create' else 'modified'
+            if isinstance(native.get('content'), str) and native['content'] == native.get('originalFile'):
+                return None
+    else:
+        # Earlier CLI versions may send only the built-in tool's result text.
+        # Accept a complete path-specific success receipt, never arbitrary text
+        # mentioning a file, or the input path without an executed destination.
+        if (isinstance(content, list) and len(content) == 1
+                and isinstance(content[0], dict) and content[0].get('type') == 'text'):
+            content = content[0].get('text')
+        if not isinstance(content, str) or len(content) > 4200:
+            return None
+        if tool == 'Write' and content.startswith('File created successfully at: '):
+            actual, change = content.removeprefix('File created successfully at: '), 'created'
+        elif (tool in {'Write', 'Edit', 'MultiEdit'} and content.startswith('The file ')
+              and content.endswith(' has been updated successfully.')):
+            actual = content.removeprefix('The file ').removesuffix(' has been updated successfully.')
+        else:
+            return None
+    if not isinstance(actual, str) or len(actual) > 4096 or any(ord(char) < 32 for char in actual):
+        return None
+    requested, reported = Path(path), Path(actual)
+    if not requested.parts or '..' in requested.parts or not reported.is_absolute():
+        return None
+    comparable = reported if requested.anchor else Path(*reported.parts[-len(requested.parts):])
+    return {'path': actual, 'change': change} if requested == comparable else None
 
 
 @dataclass
@@ -45,6 +118,14 @@ class Snapshot:
     errors: int = 0
     scanned: int = 0
     max_depth: int = 3
+    # Runtime only, keyed by full relative path using native case semantics.
+    writes: dict = field(default_factory=dict)
+    line_counts: dict = field(default_factory=dict)
+    # A completed command permits a separate, explicitly unassigned review.
+    # Neither command text nor stdout is evidence of a written destination.
+    commands: set = field(default_factory=set)
+    foreign_writes: set = field(default_factory=set)
+    observed_changes: list = field(default_factory=list)
 
     def public(self):
         return {'limited': self.limited, 'errors': self.errors, 'scanned': self.scanned,
@@ -56,7 +137,7 @@ def linked(path):
     return redirects_path(info)
 
 
-def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30, seconds=.5, max_depth=3):
+def snapshot(root: Path, *, paths=None, max_files=200, max_entries=2000, max_directories=30, seconds=.5, max_depth=3):
     """Read stat data only, without descending into links or unknown depth.
 
     A directory counts as complete only after its iterator is exhausted. This
@@ -65,11 +146,35 @@ def snapshot(root: Path, *, max_files=200, max_entries=2000, max_directories=30,
     result = Snapshot(max_depth=max_depth)
     deadline = time.monotonic() + seconds
     try:
-        if root.resolve(strict=True) != root or any(linked(p) for p in (root, *root.parents)):
+        if any(linked(p) for p in reversed((root, *root.parents))) or root.resolve(strict=True) != root:
             result.errors += 1
             return result
     except (OSError, ValueError):
         result.errors += 1
+        return result
+    if paths is not None:
+        for name in paths:
+            if time.monotonic() >= deadline or len(result.files) >= max_files:
+                result.limited = True
+                break
+            path = root / name
+            if workspace_write_name(root, str(path)) is None or path.suffix.lower() not in REFERENCE_FILE_TYPES:
+                continue
+            try:
+                parent = root
+                for part in path.relative_to(root).parts[:-1]:
+                    parent /= part
+                    info = parent.lstat()
+                    if redirects_path(info) or not stat.S_ISDIR(info.st_mode):
+                        raise ValueError('연결된 경로는 결과 파일에서 제외합니다.')
+                info = path.lstat()
+                if stat.S_ISREG(info.st_mode) and not redirects_path(info):
+                    result.files[str(path)] = (info.st_mtime_ns, info.st_size)
+                    result.scanned += 1
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+            except (OSError, ValueError):
+                result.errors += 1
         return result
     pending = [(root, 0)]
     entries = 0
@@ -158,12 +263,25 @@ def list_materials(root: Path, directory='', *, max_items=200, max_entries=2000,
             'limited': limited, 'errors': errors}
 
 
-def changes(root: Path, before: Snapshot, after: Snapshot, run_id: str, observed_at: float):
+def changes(root: Path, before: Snapshot, after: Snapshot, run_id: str, observed_at: float, *, writes=None):
     rows = []
+    previous_paths = {Path(path): signature for path, signature in before.files.items()}
     for value, signature in after.files.items():
         path = Path(value)
-        previous = before.files.get(value)
+        previous = previous_paths.get(path)
         if previous == signature:
+            continue
+        if writes is not None:
+            name = path.relative_to(root).as_posix()
+            if name not in writes:
+                continue
+            hint = writes[name]
+            # Even an unsampled deep file has positive write evidence. Call
+            # it modified unless the CLI or a complete baseline proves creation.
+            change = hint or ('created' if previous is None and str(path.parent) in before.complete_directories
+                              else 'modified')
+            rows.append({'path': value, 'name': str(path.relative_to(root)), 'change': change,
+                         'runId': run_id, 'observedAt': observed_at, 'size': signature[1], 'attribution': 'tool'})
             continue
         if previous is None and str(path.parent) not in before.complete_directories:
             # A nested file is new only if an ancestor was absent from a
@@ -240,6 +358,13 @@ def available_artifacts(root: Path, rows, *, seconds=.25):
         relative = path.relative_to(root)
         if not relative.parts or any(private_name(part) for part in relative.parts):
             result['missing'] += 1
+            continue
+        if (row.get('change') == 'deleted' and row.get('attribution') == 'confirmed'
+                and isinstance(row.get('runId'), str) and row['runId']):
+            # A user-confirmed captured deletion is historical evidence, not a
+            # missing live file. Its UI offers comparison only, even if another
+            # process later recreates the same name.
+            visible.append(row)
             continue
         current, available = root, True
         for index, part in enumerate(relative.parts):

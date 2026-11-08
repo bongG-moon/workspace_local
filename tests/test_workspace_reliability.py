@@ -83,7 +83,7 @@ class ReliabilityAppTests(unittest.TestCase):
         self.app = LocalApp(self.root/'state', command=FAKE, info={'version':'fixture'})
         self.addCleanup(self.app.close)
 
-    def test_create_rename_and_first_prompt_titles_do_not_collide(self):
+    def test_create_rename_and_generated_work_titles_do_not_collide(self):
         a = self.app.create(str(self.work), True, title='보고서')
         b = self.app.create(str(self.work), True, title='보고서')
         c = self.app.create(str(self.work), True, title='보고서 (2)')
@@ -95,7 +95,11 @@ class ReliabilityAppTests(unittest.TestCase):
             second = self.app.create(str(self.work), True)
             self.app.send(first['id'],'같은 질문',[])
             self.app.send(second['id'],'같은 질문',[])
-        self.assertEqual(['같은 질문','같은 질문 (2)'],[self.app.get(x['id'])['title'] for x in (first,second)])
+        self.assertEqual(['새 업무','새 업무 (2)'],[self.app.get(x['id'])['title'] for x in (first,second)])
+        for work in (first, second):
+            sid = work['id']
+            self.assertTrue(self.app.apply_work_title(sid, self.app.get(sid)['lastRunId'], '자료 비교'))
+        self.assertEqual(['자료 비교','자료 비교 (2)'],[self.app.get(x['id'])['title'] for x in (first,second)])
 
     def test_title_suffix_handles_double_digits_and_length_without_hydration(self):
         for i in range(12):

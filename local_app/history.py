@@ -19,7 +19,16 @@ MAX_SESSIONS = 500
 MAX_ARCHIVED_SESSIONS = 10000
 MAX_STORED_SESSIONS = MAX_SESSIONS + MAX_ARCHIVED_SESSIONS
 MAX_ARTIFACTS = 100
-INDEX_METADATA = ('lastRunId', 'pendingRunId', 'artifactObservation', 'branch', 'importedConfigRoot', 'choice', 'verification', 'resultReceipt')
+INDEX_METADATA = ('lastRunId', 'pendingRunId', 'artifactObservation', 'branch', 'importedConfigRoot', 'choice', 'verification', 'resultReceipt', 'titleSource', 'titleRevision', 'lastActivityAt')
+
+
+def last_activity_at(item):
+    """A bounded display timestamp; old indexes need no transcript scan."""
+    for key in ('lastActivityAt', 'updated', 'created'):
+        value = item.get(key)
+        if type(value) in (int, float) and math.isfinite(value) and 0 <= value < 1e12:
+            return value
+    return 0
 
 
 def normalize_artifact_observation(value):
@@ -29,6 +38,8 @@ def normalize_artifact_observation(value):
     if value.get('scope') not in {'workspace-bounded-depth', 'workspace-top-two-levels'}:
         return None
     result = {'limited': value['limited'], 'scope': value['scope']}
+    if value.get('attribution') == 'tool':
+        result['attribution'] = 'tool'
     for key, maximum in (('errors', 10000), ('scanned', 2000), ('maxDepth', 8), ('retainedLimit', MAX_ARTIFACTS)):
         number = value.get(key)
         if number is not None:
@@ -112,6 +123,14 @@ def row(item):
     result['runtimeProfile'] = item.get('runtimeProfile', 'chat-v1' if result['kind'] == 'chat' else 'work')
     if result['kind'] not in {'chat', 'work'} or result['runtimeProfile'] != ('chat-v1' if result['kind'] == 'chat' else 'work'):
         raise ValueError('대화 종류와 실행 범위를 확인하지 못했습니다.')
+    if result['kind'] == 'work':
+        # Legacy names, even "새 업무", have no evidence of how they were chosen.
+        # They stay protected. Only creation explicitly grants automatic naming.
+        if item.get('titleSource') in ('default', 'manual', 'generated', 'imported', 'branch'):
+            result['titleSource'] = item['titleSource']
+        revision = item.get('titleRevision')
+        if type(revision) is int and 0 <= revision <= 9007199254740991:
+            result['titleRevision'] = revision
     for key, maximum in (('title',200),('workspace',8192)):
         if not isinstance(result[key], str) or len(result[key]) > maximum:
             raise ValueError('대화 정보의 형식을 확인해 주세요.')
@@ -120,6 +139,7 @@ def row(item):
     result['updated'] = item.get('updated', result['created'])
     if type(result['updated']) not in (float, int) or not math.isfinite(result['updated']):
         result['updated'] = result['created']
+    result['lastActivityAt'] = last_activity_at(item)
     result['pinned'] = item.get('pinned') is True
     if result['sessionId'] is not None:
         # Opaque CLI metadata, never a filename or executable argument here.
@@ -166,7 +186,8 @@ def row(item):
     result['messages'] = messages
     artifacts = []
     for artifact in (item.get('artifacts') or [])[-MAX_ARTIFACTS:]:
-        if not isinstance(artifact, dict) or artifact.get('change') not in {'created', 'modified'}:
+        if (not isinstance(artifact, dict) or artifact.get('change') not in {'created', 'modified', 'deleted'}
+                or artifact.get('attribution') == 'observed'):
             continue
         if any(not isinstance(artifact.get(key), str) or len(artifact[key]) > maximum
                for key, maximum in (('path', 4096), ('name', 1024), ('runId', 64))):
@@ -175,7 +196,12 @@ def row(item):
         if type(observed) not in (int, float) or not math.isfinite(observed):
             continue
         artifacts.append({key: artifact[key] for key in ('path', 'name', 'change', 'runId', 'observedAt')} |
+                         ({'attribution': artifact['attribution']} if artifact.get('attribution') in {'tool', 'confirmed'} else {}) |
                          {'size': artifact.get('size') if type(artifact.get('size')) is int and artifact['size'] >= 0 else None})
+        counts = artifact.get('lineCounts')
+        if (isinstance(counts, dict) and set(counts) == {'added', 'removed'}
+                and all(type(n) is int and 0 <= n <= 128 for n in counts.values())):
+            artifacts[-1]['lineCounts'] = dict(counts)
     result['artifacts'] = artifacts
     observation = normalize_artifact_observation(item.get('artifactObservation'))
     if observation is not None:

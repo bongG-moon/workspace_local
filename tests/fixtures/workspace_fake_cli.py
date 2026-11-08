@@ -78,6 +78,11 @@ for raw in sys.stdin.buffer:
         emit({"type": "system", "subtype": "init", "session_id": session, "model": model, "permissionMode": mode,
               "skills": ["company-agent:html-report"], "plugins": [{"name": "company-agent"}], "mcp_servers": [], **catalog})
         text = value["message"]["content"]
+        if isinstance(text, str) and text.startswith("TABLE_RANGE_STDIN_TEST\n"):
+            # Only this explicit transport fixture records its own input in the temporary test workspace.
+            capture = Path('table-range-stdin.tmp')
+            capture.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
+            capture.replace('table-range-stdin.json')
         if text == "HTML_CHOICES_PROTOCOL_TEST":
             # An explicitly supplied source checkout is optional. Never locate
             # or alter the user's installed Claude/Company Agent for a fixture.

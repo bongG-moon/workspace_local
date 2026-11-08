@@ -3,7 +3,8 @@
 // Reuse the attention poll and its small durable inbox. Reading never approves a request.
 globalThis.WorkspaceDesktop = (() => {
   let snapshot={preferences:{enabled:true,completed:true,attention:true,errors:true},inbox:[],unreadCount:0};
-  let waiting=[], waitingKnown=false, changing=false, reading=false, navigation=null, filter="all", page=0;
+  let waiting=[], waitingKnown=false, changing=false, reading=null, navigation=null, following=null, navigationRetry=0, filter="all", page=0;
+  const readQueue=new Set();let readCurrent=new Set(), readFeedback=false, readRetry=0, observedViews=new Map(), failedNavigation=null;
   let dataKey="", settingsKey="", listKey="", rows=[], returnFocus=null;
   const PAGE_SIZE=30, labels={completed:"작업 완료",attention:"응답 필요",error:"확인 필요"};
   const filters=[["all","전체"],["unread","읽지 않음"],["attention","응답 필요"],["completed","완료"],["error","확인 필요"]];
@@ -56,11 +57,43 @@ globalThis.WorkspaceDesktop = (() => {
     $("desktop-open").setAttribute("aria-label",`통합 알림함 · 읽지 않은 알림 ${unread}개 · 응답이 필요한 요청 ${pending}개`);
     $("desktop-open").classList.toggle("has-pending",pending>0);
   }
-  async function markRead(identifier){
-    if(reading||appClosed)return;reading=true;renderList();
-    const ids=Array.isArray(identifier)?identifier:identifier?[identifier]:null;
-    try{const result=await api("/api/notifications",{action:"read",...(ids?.length===1?{notificationId:ids[0]}:ids?{notificationIds:ids}:{})});apply(result.desktop);}
-    catch(e){toast(e.message);}finally{reading=false;listKey="";renderList();}
+  function markRead(identifier,{automatic=false}={}){
+    if(appClosed)return Promise.resolve(false);
+    // Capture the displayed snapshot. Later arrivals are not "all read".
+    const ids=Array.isArray(identifier)?identifier:identifier?[identifier]:(snapshot.inbox||[]).filter(row=>!row.read).map(row=>row.id);
+    if(!ids.length)return Promise.resolve(true);
+    for(const id of ids)if(!readCurrent.has(id))readQueue.add(id);readFeedback ||= !automatic;
+    if(reading)return reading;
+    reading=Promise.resolve().then(async()=>{
+      let ok=true;
+      while(readQueue.size&&!appClosed){
+        const unread=new Set((snapshot.inbox||[]).filter(row=>!row.read).map(row=>row.id));
+        const batch=[...readQueue].filter(id=>unread.has(id)), feedback=readFeedback;
+        readQueue.clear();readFeedback=false;if(!batch.length)continue;
+        readCurrent=new Set(batch);
+        try{
+          const result=await api("/api/notifications",{action:"read",...(batch.length===1?{notificationId:batch[0]}:{notificationIds:batch})});
+          apply(result.desktop);readRetry=0;
+        }catch(e){ok=false;readRetry=Date.now()+5000;if(feedback)toast(e.message);}
+        finally{readCurrent.clear();}
+      }
+      return ok;
+    }).finally(()=>{reading=null;if(!readQueue.size)readFeedback=false;listKey="";renderList();});
+    renderList();return reading;
+  }
+  function viewVisible(){
+    return !appClosed&&!!active&&!pendingSelection&&document.visibilityState==="visible"&&document.hasFocus?.()===true&&
+      !$("task-view").hidden&&!$("conversation").hidden&&!secondaryViewOpen()&&
+      !document.querySelector("dialog[open]")&&!globalThis.WorkspaceUpgrade?.isLocked?.();
+  }
+  function viewed(){
+    if(!viewVisible()||Date.now()<readRetry)return;
+    const observed=observedViews.get(active.id);
+    // Pair receipt identities with the same attention reply's transcript seq.
+    // A receipt whose messages/requests are still loading remains unread.
+    if(!observed||!Number.isSafeInteger(active.seq)||active.seq<observed.seq)return;
+    const ids=(snapshot.inbox||[]).filter(row=>row.sessionId===active.id&&!row.read&&observed.ids.has(row.id)).map(row=>row.id);
+    if(ids.length)void markRead(ids,{automatic:true});
   }
   async function openRow(row){
     if(appClosed)return;
@@ -69,14 +102,15 @@ globalThis.WorkspaceDesktop = (() => {
     try{
       if(await selectSession(row.sessionId)===false)return;
       close(false);
+      const generation=selectionGeneration;
       if(row.readIds.length)await markRead(row.readIds);
-      if(pendingNow)$("requests").scrollIntoView?.({block:"nearest"});
+      if(pendingNow&&active?.id===row.sessionId&&selectionGeneration===generation&&!pendingSelection)$("requests").scrollIntoView?.({block:"nearest"});
     }catch(e){toast(e.message);}
   }
   function renderList(){
     if(!dialog.open)return;
     const visible=rows.filter(row=>matches(row,filter));page=Math.min(page,Math.max(0,Math.ceil(visible.length/PAGE_SIZE)-1));
-    const key=JSON.stringify([dataKey,filter,page,reading,appClosed]);
+    const key=JSON.stringify([dataKey,filter,page,!!reading,appClosed]);
     if(key===listKey)return;listKey=key;
     list.setAttribute("role","tabpanel");list.setAttribute("aria-labelledby","inbox-filter-"+filter);
     for(const [scope,button] of tabButtons){
@@ -99,7 +133,7 @@ globalThis.WorkspaceDesktop = (() => {
       button.setAttribute("aria-label",`${row.title||"업무"}${row.summary?` · ${row.summary}`:""} · ${row.status} · ${row.read?"읽음":"읽지 않음"} · 업무 열기`);
       button.onclick=()=>openRow(row);card.append(button);
       if(row.readIds.length){
-        const read=el("button","읽음","text-button inbox-read");read.type="button";read.disabled=reading||appClosed;
+        const read=el("button","읽음","text-button inbox-read");read.type="button";read.disabled=!!reading||appClosed;
         read.dataset.inboxKey="read:"+row.id;focusTargets.set(read.dataset.inboxKey,read);read.setAttribute("aria-label",`${row.title||"업무"} 알림 읽음으로 표시`);
         read.onclick=()=>markRead(row.readIds);card.append(read);
       }
@@ -116,27 +150,54 @@ globalThis.WorkspaceDesktop = (() => {
     text($("desktop-empty"),filter==="attention"?"지금 응답을 기다리는 요청이 없어요.":filter==="unread"?"읽지 않은 알림이 없어요.":"이 분류에는 아직 알림이 없어요.");
     const pending=rows.reduce((sum,row)=>sum+row.pending,0);
     text($("desktop-summary"),`${pending?`응답이 필요한 요청 ${pending}개 · `:""}읽음으로 표시해도 승인하거나 답변하지 않습니다.`);
-    $("desktop-read").disabled=reading||appClosed||!(snapshot.inbox||[]).some(row=>!row.read);
+    $("desktop-read").disabled=!!reading||appClosed||!(snapshot.inbox||[]).some(row=>!row.read);
     if(focused){const target=focusTargets.get(focused)||tabButtons.get(filter);target?.focus();}
   }
   function apply(value,attention){
-    if(value&&typeof value==="object"&&Array.isArray(value.inbox)){
+    const accepted=value&&typeof value==="object"&&Array.isArray(value.inbox)&&
+      !(Number.isSafeInteger(value.revision)&&Number.isSafeInteger(snapshot.revision)&&value.revision<snapshot.revision);
+    if(accepted){
       // Read receipts only move forward. A poll started before a read reply may finish later.
       const read=new Set(snapshot.inbox.filter(item=>item.read).map(item=>item.id));
       snapshot={...snapshot,...value,inbox:value.inbox.map(item=>read.has(item.id)&&!item.read?{...item,read:true}:item)};
     }
+    if(accepted&&Array.isArray(attention?.sessions)){
+      const grouped=new Map();
+      for(const item of value.inbox){if(!grouped.has(item.sessionId))grouped.set(item.sessionId,new Set());grouped.get(item.sessionId).add(item.id);}
+      observedViews=new Map(attention.sessions.filter(row=>Number.isSafeInteger(row.seq)&&grouped.has(row.id))
+        .map(row=>[row.id,{seq:row.seq,ids:grouped.get(row.id)}]));
+    }
     if(attention&&Array.isArray(attention.items)){waiting=attention.items;waitingKnown=true;}
     const key=JSON.stringify([snapshot.inbox,waiting,waitingKnown]);
     if(key!==dataKey){dataKey=key;rows=mergeRows();renderHeader();}
-    renderSettings();renderList();
+    renderSettings();renderList();viewed();
   }
   async function configure(change){if(changing||appClosed)return;changing=true;renderSettings();try{const result=await api("/api/notifications",{action:"configure",preferences:change});apply(result.desktop);}catch(e){toast(e.message);}finally{changing=false;renderSettings();}}
   async function follow(value){
-    if(!value?.id||!value.sessionId||value.id===navigation||appClosed)return;navigation=value.id;
-    try{if(sessionStorage.getItem("workspaceNavigation")===value.id)return;sessionStorage.setItem("workspaceNavigation",value.id);}catch(_){}
-    try{await selectSession(value.sessionId);}catch(e){toast(e.message);}
+    if(!value?.id||!value.sessionId||value.id===navigation||following===value.id||
+      failedNavigation?.id===value.id&&Date.now()<navigationRetry||appClosed)return;
+    try{if(sessionStorage.getItem("workspaceNavigation")===value.id)return;}catch(_){}
+    const consume=()=>{
+      navigation=value.id;navigationRetry=0;failedNavigation=null;
+      try{sessionStorage.setItem("workspaceNavigation",value.id);}catch(_){}
+    };
+    // User navigation after a failed lookup cancels that old OS click.
+    if(failedNavigation?.id===value.id&&failedNavigation.generation!==selectionGeneration){consume();return;}
+    following=value.id;
+    try{
+      const selected=await selectSession(value.sessionId);
+      if(following!==value.id)return;
+      // false is a superseding selection/home action, not a network failure.
+      consume();if(selected===false)return;
+    }catch(e){if(following===value.id){
+      if(e.transportFailure===true||e.httpStatus>=500||[408,429].includes(e.httpStatus)){
+        failedNavigation={id:value.id,generation:selectionGeneration};navigationRetry=Date.now()+5000;
+      }else consume();
+      toast(e.message);
+    }}
+    finally{if(following===value.id)following=null;}
   }
-  async function presence(){if(appClosed)return;try{await api("/api/notifications",{action:"view",id:active?.id||null,visible:document.visibilityState==="visible"&&document.hasFocus?.()===true});}catch(_){}}
+  async function presence(){if(appClosed)return;viewed();try{await api("/api/notifications",{action:"view",id:active?.id||null,visible:viewVisible()});}catch(_){}}
   function open(scope="all"){
     if(appClosed)return;
     filter=filters.some(row=>row[0]===scope)?scope:"all";page=0;listKey="";returnFocus=document.activeElement;
@@ -162,5 +223,8 @@ globalThis.WorkspaceDesktop = (() => {
   $("desktop-open").onclick=()=>open();$("desktop-close").onclick=()=>close();$("desktop-read").onclick=()=>markRead();
   $("desktop-toggle").onclick=()=>configure({enabled:!snapshot.preferences.enabled});
   for(const key of ["completed","attention","errors"])$("desktop-"+key).onchange=()=>configure({[key]:$("desktop-"+key).checked});
-  return {apply,follow,presence,open,close,confirmShutdown:confirmationId=>confirmShutdownChallenge(confirmationId)};
+  globalThis.addEventListener?.("focus",viewed);
+  document.addEventListener("visibilitychange",viewed);
+  document.addEventListener("close",viewed,true);
+  return {apply,follow,presence,viewed,open,close,confirmShutdown:confirmationId=>confirmShutdownChallenge(confirmationId)};
 })();

@@ -49,7 +49,8 @@ class ObservationResponsivenessTests(unittest.TestCase):
 
     def arm_finish(self):
         self.item.update(state='running', lastRunId='run-a', _artifactSnapshot=snapshot(self.work))
-        self.app.file_diffs.start(self.work, 'run-a')
+        self.item['_artifactSnapshot'].writes[Path('report.md')] = 'modified'
+        self.app.file_diffs.start(self.work, 'run-a', session_id=self.sid)
         self.source.write_text('changed by fixture only', encoding='utf-8')
 
     def test_slow_finish_keeps_other_cancel_reorder_apply_and_metadata_available(self):

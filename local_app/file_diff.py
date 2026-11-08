@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+from itertools import groupby
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -18,10 +19,11 @@ import threading
 import time
 import uuid
 
+from .file_preview import CODE_LANGUAGES
 
-TEXT_TYPES = frozenset({'.txt', '.md', '.csv', '.tsv', '.html', '.htm', '.css', '.js',
-    '.mjs', '.cjs', '.jsx', '.ts', '.tsx', '.py', '.json', '.yaml', '.yml', '.toml',
-    '.xml', '.sql', '.ps1', '.sh', '.bat', '.cmd', '.ini', '.cfg', '.log', '.svg'})
+
+CODE_REVIEW_TYPES = frozenset(CODE_LANGUAGES) | {'.md', '.bat', '.cmd', '.ini', '.cfg', '.svg'}
+TEXT_TYPES = CODE_REVIEW_TYPES | {'.txt', '.csv', '.tsv', '.html', '.htm', '.log'}
 METADATA_TYPES = frozenset({'.pdf', '.pptx', '.docx', '.xlsx', '.xls', '.ppt', '.doc',
     '.png', '.jpg', '.jpeg', '.webp', '.gif', '.zip'})
 EXCLUDED = frozenset({'node_modules', 'venv', '__pycache__', 'build', 'dist'})
@@ -30,6 +32,9 @@ SECRET_NAME = re.compile(r'(^|[._-])(secret|secrets|credential|credentials|passw
 RUN_ID = re.compile(r'[A-Za-z0-9_-]{1,80}\Z')
 STORE_NAME = re.compile(r'[a-f0-9]{64}\.json\Z')
 TEMP_NAME = re.compile(r'\.capture-[a-f0-9]{32}\.tmp\Z')
+HUNK_HEADER = re.compile(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@\n\Z')
+SOURCE_LINE = re.compile(r'[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z')
+DIFF_TOKEN = re.compile(r'\w+|\s+|[^\w\s]')
 MAX_RUN_BYTES = 4 * 1024 * 1024
 _STORE_LOCK = threading.RLock()
 
@@ -63,6 +68,60 @@ def _file_id(name):
 
 def _signature(info):
     return [info.st_mtime_ns, info.st_size]
+
+
+def _replacement_candidates(removed, added, budget):
+    """Prefer shared words and numbers over common indentation or punctuation."""
+    tokens = [[list(DIFF_TOKEN.finditer(row['text'])) if len(row['text']) <= 512 else []
+               for row in rows] for rows in (removed, added)]
+    before, after = tokens
+    candidates = []
+    for i, old in enumerate(before):
+        for j, new in enumerate(after):
+            work = len(old) * len(new)
+            if not work or work > min(4096, budget):
+                continue
+            budget -= work
+            matcher = difflib.SequenceMatcher(None, [m[0] for m in old], [m[0] for m in new], autojunk=False)
+            blocks = matcher.get_matching_blocks()
+            # A few shared code delimiters don't establish that two lines correspond.
+            shared = sum(len(token[0]) for start, _, count in blocks for token in old[start:start+count]
+                         if token[0][0].isalnum() or token[0][0] == '_')
+            total = sum(len(token[0]) for line in (old, new) for token in line
+                        if token[0][0].isalnum() or token[0][0] == '_')
+            score = 2 * shared / max(1, total)
+            if score >= .36:
+                candidates.append((score, i, j, matcher.get_opcodes()))
+    return candidates, before, after, budget
+
+
+def _mark_inline_edits(patch):
+    """On-demand comparison. Span offsets count Unicode code points in the stored text."""
+    budget = 120_000
+    for hunk in patch['hunks']:
+        for edited, group in groupby(hunk['rows'], key=lambda row: row['kind'] != 'context'):
+            if not edited:
+                continue
+            changed = list(group)
+            removed = [row for row in changed if row['kind'] == 'remove']
+            added = [row for row in changed if row['kind'] == 'add']
+            if not removed or not added or len(removed) * len(added) > 400 or budget == 0:
+                continue
+            candidates, before, after, budget = _replacement_candidates(removed, added, budget)
+            # Anchor the closest matches first, without pairing a line twice or crossing an anchor.
+            anchors = []
+            for _, i, j, ops in sorted(candidates, key=lambda pair: (-pair[0], abs(pair[1]-pair[2]))):
+                if any((i-old) * (j-new) <= 0 for old, new in anchors):
+                    continue
+                anchors.append((i, j))
+                added[j]['pairedBeforeLine'] = removed[i]['beforeLine']
+                for op, a, b, c, d in ops:
+                    if op == 'equal':
+                        continue
+                    if a < b:
+                        removed[i].setdefault('highlights', []).append([before[i][a].start(), before[i][b-1].end()])
+                    if c < d:
+                        added[j].setdefault('highlights', []).append([after[j][c].start(), after[j][d-1].end()])
 
 
 def _decode(raw):
@@ -171,8 +230,12 @@ class FileDiffStore:
         if len(raw) > MAX_RUN_BYTES:
             raise ValueError('변경 비교 기록이 제한을 초과했습니다.')
         data = json.loads(raw.decode('utf-8'))
-        if not isinstance(data, dict) or data.get('version') != 1:
+        if not isinstance(data, dict) or data.get('version') not in {1, 2}:
             raise ValueError('변경 비교 기록의 형식이 올바르지 않습니다.')
+        observed_fields = {'observedCandidates', 'primaryNames', 'observedLimited'}
+        if ((data['version'] == 1 and observed_fields.intersection(data))
+                or (data['version'] == 2 and not observed_fields.issubset(data))):
+            raise ValueError('명령 실행 변경 기록의 형식이 올바르지 않습니다.')
         if not isinstance(data.get('workspace'), str) or not RUN_ID.fullmatch(str(data.get('runId', ''))):
             raise ValueError('변경 비교 기록의 식별자가 올바르지 않습니다.')
         for capture in (data.get('before'), data.get('after')):
@@ -194,6 +257,20 @@ class FileDiffStore:
                     raise ValueError('변경 비교 폴더 기록의 형식이 올바르지 않습니다.')
         if not isinstance(data.get('before'), dict):
             raise ValueError('변경 전 기록을 확인할 수 없습니다.')
+        if 'observedCandidates' in data:
+            candidates = data['observedCandidates']
+            primary = data.get('primaryNames')
+            if (not isinstance(candidates, dict) or len(candidates) > 200
+                    or not isinstance(primary, list) or len(primary) > 400
+                    or not all(isinstance(name, str) for name in primary)):
+                raise ValueError('명령 실행 변경 기록의 형식이 올바르지 않습니다.')
+            names = data['before']['files'].keys() | (data.get('after') or {}).get('files', {}).keys()
+            for file_id, row in candidates.items():
+                if (not isinstance(row, dict) or row.get('name') not in names
+                        or file_id != _file_id(row['name'])
+                        or row.get('decision') not in {'pending', 'include', 'dismiss'}
+                        or not isinstance(row.get('conflict'), bool)):
+                    raise ValueError('명령 실행 변경 기록의 형식이 올바르지 않습니다.')
         return data
 
     def _entries(self):
@@ -242,17 +319,87 @@ class FileDiffStore:
         for _, _, path in sorted(ranked)[:len(entries) - self.max_runs + 1]:
             path.unlink()
 
-    def _capture(self, root):
+    def _capture_file(self, path, info, result, name):
+        _safe_path(path)
+        # Windows directory enumeration may omit the hard-link count.
+        checked = path.lstat()
+        if checked.st_nlink > 1 or _signature(checked) != _signature(info):
+            return
+        row = {'id': _file_id(name), 'name': name, 'signature': _signature(info),
+               'size': info.st_size, 'textStatus': 'unsupported'}
+        result['files'][name] = row
+        result['scanned'] += 1
+        if path.suffix.lower() not in TEXT_TYPES:
+            return
+        if info.st_size > self.file_bytes:
+            row['textStatus'] = 'file_limit'
+            return
+        if result['textBytes'] + info.st_size > self.capture_bytes:
+            row['textStatus'] = 'capture_limit'
+            return
+        row['textStatus'] = 'read_failed'
+        try:
+            raw = self._read_source(path, info)
+            if result['textBytes'] + len(raw) > self.capture_bytes:
+                row['textStatus'] = 'capture_limit'
+                return
+            text, encoding = _decode(raw)
+            row.update(text=text, encoding=encoding, textStatus='captured')
+            result['textBytes'] += len(raw)
+        except UnicodeError:
+            row['textStatus'] = 'encoding_or_binary'
+        except (OSError, ValueError):
+            result['errors'] += 1
+
+    def _capture(self, root, allowed_names=None, *, prioritize_names=()):
         started = time.monotonic()
         result = {'files': {}, 'directories': ['.'], 'complete': [], 'limited': False,
                   'errors': 0, 'scanned': 0, 'textBytes': 0, 'capturedAt': time.time()}
+        if allowed_names is not None and not allowed_names:
+            return result
+        allowed_dirs = None if allowed_names is None else {os.path.dirname(name) for name in allowed_names}
         try:
             _safe_path(root, directory=True)
         except (OSError, ValueError):
             result['errors'] = 1
             return result
         pending = [(root, 0)]
+        queued = {'.'}
         entries = 0
+        # Preserve exact Write/Edit captures when a command also ran. These
+        # reads consume the same time, entries, directories, files and text
+        # budgets as the later observation scan; no extra capture is added.
+        for name in prioritize_names:
+            entries += 1
+            if (entries > self.max_entries or len(result['files']) >= self.max_files
+                    or time.monotonic() - started >= self.seconds):
+                result['limited'] = True
+                return result
+            try:
+                parts = Path(name).parts
+                if (not 1 <= len(parts) <= 2 or Path(name).is_absolute()
+                        or any(part in {'.', '..'} or ':' in part or _hidden_or_secret(part) for part in parts)):
+                    result['limited'] = True
+                    continue
+                path = root.joinpath(*parts)
+                parent = path.parent.relative_to(root).as_posix()
+                if parent not in queued:
+                    if len(pending) > self.max_directories:
+                        result['limited'] = True
+                        continue
+                    _safe_path(path.parent, directory=True)
+                    queued.add(parent)
+                    result['directories'].append(parent)
+                    pending.append((path.parent, 1))
+                info = path.lstat()
+                if (not _redirected(info) and not getattr(info, 'st_file_attributes', 0) & 2
+                        and stat.S_ISREG(info.st_mode) and info.st_nlink <= 1
+                        and path.suffix.lower() in TEXT_TYPES | METADATA_TYPES):
+                    self._capture_file(path, info, result, path.relative_to(root).as_posix())
+            except (FileNotFoundError, NotADirectoryError):
+                pass  # Full directory completion is still needed to prove absence.
+            except (OSError, ValueError):
+                result['errors'] += 1
         for directory, depth in pending:
             if time.monotonic() - started >= self.seconds:
                 result['limited'] = True
@@ -278,45 +425,23 @@ class FileDiffStore:
                                 continue
                             name = path.relative_to(root).as_posix()
                             if stat.S_ISDIR(info.st_mode) and depth == 0:
+                                if allowed_dirs is not None and os.path.normcase(name) not in allowed_dirs:
+                                    continue
+                                if name in queued:
+                                    continue
                                 result['directories'].append(name)
                                 if len(pending) <= self.max_directories:
+                                    queued.add(name)
                                     pending.append((path, 1))
                                 else:
                                     result['limited'] = True
                             elif (stat.S_ISREG(info.st_mode) and info.st_nlink <= 1
                                   and path.suffix.lower() in TEXT_TYPES | METADATA_TYPES):
-                                _safe_path(path)
-                                # Windows directory enumeration may omit the
-                                # hard-link count; lstat queries the file itself.
-                                checked = path.lstat()
-                                if checked.st_nlink > 1 or _signature(checked) != _signature(info):
+                                if allowed_names is not None and os.path.normcase(name) not in allowed_names:
                                     continue
-                                row = {'id': _file_id(name), 'name': name,
-                                       'signature': _signature(info), 'size': info.st_size,
-                                       'textStatus': 'unsupported'}
-                                result['files'][name] = row
-                                result['scanned'] += 1
-                                if path.suffix.lower() not in TEXT_TYPES:
+                                if name in result['files']:
                                     continue
-                                if info.st_size > self.file_bytes:
-                                    row['textStatus'] = 'file_limit'
-                                    continue
-                                if result['textBytes'] + info.st_size > self.capture_bytes:
-                                    row['textStatus'] = 'capture_limit'
-                                    continue
-                                row['textStatus'] = 'read_failed'
-                                try:
-                                    raw = self._read_source(path, info)
-                                    if result['textBytes'] + len(raw) > self.capture_bytes:
-                                        row['textStatus'] = 'capture_limit'
-                                        continue
-                                    text, encoding = _decode(raw)
-                                    row.update(text=text, encoding=encoding, textStatus='captured')
-                                    result['textBytes'] += len(raw)
-                                except UnicodeError:
-                                    row['textStatus'] = 'encoding_or_binary'
-                                except (OSError, ValueError):
-                                    result['errors'] += 1
+                                self._capture_file(path, info, result, name)
                         except (OSError, ValueError):
                             result['errors'] += 1
                     if result['errors'] == errors_before:
@@ -347,7 +472,7 @@ class FileDiffStore:
     def _capture_summary(capture):
         return {key: capture.get(key) for key in ('limited', 'errors', 'scanned', 'textBytes', 'capturedAt')}
 
-    def start(self, workspace, run_id):
+    def start(self, workspace, run_id, *, session_id=None):
         root = Path(workspace).absolute()
         try:
             with self.lock:
@@ -358,6 +483,8 @@ class FileDiffStore:
                 before = self._capture(root)
                 data = {'version': 1, 'workspace': str(root), 'runId': run_id,
                         'startedAt': time.time(), 'before': before, 'after': None}
+                if session_id is not None:
+                    data['sessionId'] = session_id
                 self._reserve(target)
                 self._write(target, data)
                 return {'status': 'captured', 'runId': run_id,
@@ -365,7 +492,8 @@ class FileDiffStore:
         except (OSError, ValueError, UnicodeError, KeyError, TypeError, RecursionError):
             return {'status': 'unavailable', 'runId': run_id, 'reason': 'capture_failed'}
 
-    def finish(self, workspace, run_id):
+    def finish(self, workspace, run_id, *, allowed_paths=None,
+               observe_commands=False, conflict_paths=()):
         root = Path(workspace).absolute()
         try:
             with self.lock:
@@ -375,12 +503,47 @@ class FileDiffStore:
                     raise ValueError('capture mismatch')
                 if data.get('after') is not None:
                     return {'status': 'already_captured', 'runId': run_id}
-                data['after'] = self._capture(root)
+                if observe_commands:
+                    # A shell completion proves execution, not which files it
+                    # touched. Keep boundary deltas separate until the user
+                    # explicitly assigns a candidate to this task.
+                    allowed = {os.path.normcase(name) for name in (allowed_paths or ())}
+                    conflicts = {os.path.normcase(name) for name in conflict_paths}
+                    # Older readers reject version 2 rather than interpreting
+                    # review-only candidates as exact tool-attributed changes.
+                    data['version'] = 2
+                    data['after'] = self._capture(root, prioritize_names=allowed_paths or ())
+                    all_changes = self._changes(data)
+                    data['primaryNames'] = [row['name'] for row in all_changes
+                                            if os.path.normcase(row['name']) in allowed
+                                            and row['change'] != 'deleted']
+                    pending = [row for row in all_changes
+                               if (os.path.normcase(row['name']) not in allowed or row['change'] == 'deleted')
+                               and row['change'] in {'created', 'modified', 'deleted'}]
+                    data['observedCandidates'] = {
+                        row['id']: {'name': row['name'], 'decision': 'pending',
+                                    'conflict': os.path.normcase(row['name']) in conflicts}
+                        for row in pending[:self.max_files]}
+                    data['observedLimited'] = len(pending) > self.max_files
+                elif 'sessionId' in data or allowed_paths is not None:
+                    # A missing write receipt on a scoped run means no attributable
+                    # change. Never fall back to all changes in a shared directory.
+                    allowed = {os.path.normcase(name) for name in (allowed_paths or ())}
+                    old = data['before']['files']
+                    data['before']['files'] = {name: row for name, row in old.items()
+                                               if os.path.normcase(name) in allowed}
+                    data['after'] = self._capture(root, allowed)
+                else:
+                    data['after'] = self._capture(root)
                 data['finishedAt'] = time.time()
                 self._write(self._target(root, run_id), data)
+                files = self._visible_changes(data)
                 return {'status': 'captured', 'runId': run_id,
                         'capture': self._capture_summary(data['after']),
-                        'changeCount': len(self._changes(data)), 'limits': self.limits()}
+                        'changeCount': len(files), 'limits': self.limits(),
+                        'lineCounts': self._small_code_counts(data, files) if 'sessionId' in data else {},
+                        'observedCount': len(data.get('observedCandidates', {})),
+                        'observedLimited': data.get('observedLimited', False)}
         except FileNotFoundError:
             return {'status': 'unavailable', 'runId': run_id, 'reason': 'baseline_not_available'}
         except (OSError, ValueError, UnicodeError, KeyError, TypeError, RecursionError):
@@ -392,6 +555,30 @@ class FileDiffStore:
         return (parent in capture.get('complete', []) or
                 (parent != '.' and '.' in capture.get('complete', [])
                  and parent not in capture.get('directories', [])))
+
+    def _small_code_counts(self, data, files):
+        # Summaries use already-captured text, never a fresh file read. Larger
+        # comparisons remain on demand so completion stays cheap across tasks.
+        counts = {}
+        attempts = 0
+        for file in files:
+            name = file['name']
+            if not file['textAvailable'] or Path(name).suffix.lower() not in CODE_REVIEW_TYPES:
+                continue
+            sides = [data[phase]['files'].get(name, {}).get('text', '') for phase in ('before', 'after')]
+            if sum(map(len, sides)) > 8192:
+                continue
+            old, new = (SOURCE_LINE.findall(side) for side in sides)
+            if max(len(old), len(new)) > 128 or len(old)*len(new) > min(8192, self.diff_work):
+                continue
+            attempts += 1
+            comparison = self._bounded_diff(old, new, name)
+            if not comparison['truncated']:
+                rows = [line['kind'] for hunk in comparison['hunks'] for line in hunk['rows']]
+                counts[os.path.normcase(name)] = {'added': rows.count('add'), 'removed': rows.count('remove')}
+            if attempts == 3:
+                break
+        return counts
 
     def _changes(self, data):
         before, after = data.get('before'), data.get('after')
@@ -420,43 +607,158 @@ class FileDiffStore:
                             all(row is None or row.get('textStatus') == 'captured' for row in (left, right))})
         return rows
 
-    def list(self, workspace, run_id=None):
+    def _visible_changes(self, data, candidate_id=None):
+        rows = self._changes(data)
+        candidates = data.get('observedCandidates')
+        if candidates is None:
+            return [] if candidate_id is not None else rows
+        if candidate_id is not None:
+            candidate = candidates.get(candidate_id)
+            return [row for row in rows if row['id'] == candidate_id] if (
+                candidate and candidate['decision'] == 'pending') else []
+        primary = set(data['primaryNames'])
+        included = {row['name'] for row in candidates.values() if row['decision'] == 'include'}
+        return [dict(row, attribution='confirmed', runId=data['runId'],
+                     conflict=candidates[row['id']]['conflict']) if row['name'] in included
+                else dict(row, attribution='tool')
+                for row in rows if row['name'] in primary | included]
+
+    @staticmethod
+    def _candidate_id(candidate_id):
+        if not isinstance(candidate_id, str) or not re.fullmatch(r'[a-f0-9]{24}', candidate_id):
+            raise ValueError('명령 실행 변경 파일 식별자가 올바르지 않습니다.')
+        return candidate_id
+
+    @staticmethod
+    def _candidate_metadata(data, row, candidate, *, attribution='observed'):
+        return dict(row, path=row['name'], runId=data['runId'], attribution=attribution,
+                    conflict=candidate['conflict'], createdAt=data.get('finishedAt'))
+
+    def candidates(self, workspace, run_id=None, *, session_id=None, legacy_runs=()):
         root = _safe_path(Path(workspace).absolute(), directory=True)
         with self.lock:
             self._ensure_store()
             paths = ([self._target(root, run_id)] if run_id is not None else
                      [path for path, _ in reversed(self._entries())][:self.max_runs])
-            rows, errors = [], 0
+            rows = []
             for path in paths:
                 try:
                     data = self._read(path)
-                    if data.get('workspace') != str(root):
+                    if (data['workspace'] != str(root)
+                            or not self._belongs_to(data, session_id, legacy_runs)):
+                        continue
+                    pending = data.get('observedCandidates', {})
+                    for row in self._changes(data):
+                        candidate = pending.get(row['id'])
+                        if candidate and candidate['decision'] == 'pending':
+                            rows.append(self._candidate_metadata(data, row, candidate))
+                except (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError):
+                    continue
+            return rows
+
+    def resolve_candidate(self, workspace, run_id, candidate_id, *, session_id, action):
+        self._candidate_id(candidate_id)
+        if (not isinstance(action, str) or action not in {'include', 'dismiss'}
+                or not isinstance(session_id, str) or not session_id):
+            raise ValueError('명령 실행 변경 확인 요청이 올바르지 않습니다.')
+        root = _safe_path(Path(workspace).absolute(), directory=True)
+        with self.lock:
+            self._ensure_store()
+            target = self._target(root, run_id)
+            data = self._read(target)
+            if (data['workspace'] != str(root) or data['runId'] != run_id
+                    or data.get('sessionId') != session_id):
+                raise ValueError('이 업무의 명령 실행 변경 기록이 아닙니다.')
+            candidate = data.get('observedCandidates', {}).get(candidate_id)
+            if candidate is None or candidate['decision'] not in {'pending', action}:
+                raise ValueError('이미 처리했거나 확인할 수 없는 변경 기록입니다.')
+            row = next((row for row in self._changes(data) if row['id'] == candidate_id
+                        and row['change'] in {'created', 'modified', 'deleted'}), None)
+            if row is None:
+                raise ValueError('확인할 수 없는 변경 기록입니다.')
+            candidate['decision'] = action
+            self._write(target, data)
+            result = self._candidate_metadata(data, row, candidate,
+                                             attribution='confirmed' if action == 'include' else 'observed')
+            if action == 'include':
+                counts = self._small_code_counts(data, [row]).get(os.path.normcase(row['name']))
+                if counts is not None:
+                    result['lineCounts'] = counts
+            return result
+
+    @staticmethod
+    def _belongs_to(data, session_id, legacy_runs):
+        if session_id is None:
+            return True
+        if 'sessionId' in data:
+            return data['sessionId'] == session_id
+        # Older versions did not record a session ID on the capture. Only the
+        # owning task's saved run history can connect it to this view.
+        return data['runId'] in legacy_runs
+
+    def list(self, workspace, run_id=None, *, session_id=None, legacy_runs=(), candidate_id=None,
+             include_observed=False):
+        if candidate_id is not None:
+            self._candidate_id(candidate_id)
+            if run_id is None:
+                raise ValueError('명령 실행 변경의 요청 기록을 선택하세요.')
+        root = _safe_path(Path(workspace).absolute(), directory=True)
+        with self.lock:
+            self._ensure_store()
+            paths = ([self._target(root, run_id)] if run_id is not None else
+                     [path for path, _ in reversed(self._entries())][:self.max_runs])
+            rows, observed, errors = [], [], 0
+            for path in paths:
+                try:
+                    data = self._read(path)
+                    if (data.get('workspace') != str(root) or (run_id is not None and run_id != data['runId'])
+                            or not self._belongs_to(data, session_id, legacy_runs)):
+                        continue
+                    files = self._visible_changes(data, candidate_id)
+                    if include_observed:
+                        pending = data.get('observedCandidates', {})
+                        for row in self._changes(data):
+                            candidate = pending.get(row['id'])
+                            if (candidate and candidate['decision'] == 'pending'
+                                    and (candidate_id is None or candidate_id == row['id'])):
+                                observed.append(self._candidate_metadata(data, row, candidate))
+                    if candidate_id is not None and not files:
                         continue
                     rows.append({'runId': data['runId'], 'startedAt': data.get('startedAt'),
+                                 'attribution': ('observed' if candidate_id is not None else
+                                                 'tool' if 'sessionId' in data else 'workspace'),
                                  'finishedAt': data.get('finishedAt'),
                                  'status': 'complete' if data.get('after') is not None else 'capturing',
                                  'before': self._capture_summary(data['before']),
                                  'after': self._capture_summary(data['after']) if data.get('after') else None,
-                                 'files': self._changes(data)})
+                                 'files': files})
                 except (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError):
                     errors += 1
-            return {'runs': rows, 'errors': errors, 'limits': self.limits()}
+            result = {'runs': rows, 'errors': errors, 'limits': self.limits()}
+            if include_observed:
+                result['observedChanges'] = observed
+            return result
 
-    def get(self, workspace, run_id, file_id):
+    def get(self, workspace, run_id, file_id, *, session_id=None, legacy_runs=(), candidate_id=None):
         root = _safe_path(Path(workspace).absolute(), directory=True)
         if not isinstance(file_id, str) or not re.fullmatch(r'[a-f0-9]{24}', file_id):
             raise ValueError('변경 비교 파일 식별자가 올바르지 않습니다.')
+        if candidate_id is not None and self._candidate_id(candidate_id) != file_id:
+            raise ValueError('명령 실행 변경 파일이 일치하지 않습니다.')
         with self.lock:
             self._ensure_store()
             data = self._read(self._target(root, run_id))
-            if data.get('workspace') != str(root) or data.get('runId') != run_id:
+            if (data.get('workspace') != str(root) or data.get('runId') != run_id
+                    or not self._belongs_to(data, session_id, legacy_runs)):
                 raise ValueError('변경 비교 기록을 확인할 수 없습니다.')
-            row = next((row for row in self._changes(data) if row['id'] == file_id), None)
+            row = next((row for row in self._visible_changes(data, candidate_id) if row['id'] == file_id), None)
             if row is None:
                 raise ValueError('변경 비교 기록에 없는 파일입니다.')
             result = dict(row, runId=run_id, startedAt=data.get('startedAt'),
                           finishedAt=data.get('finishedAt'), version='captured',
-                          currentFileRead=False, diff='', truncated=False, limits=self.limits())
+                          currentFileRead=False, diff='', truncated=False, limits=self.limits(),
+                          attribution='observed' if candidate_id is not None else row.get('attribution',
+                              'tool' if 'sessionId' in data else 'workspace'))
             if not row['textAvailable']:
                 return dict(result, status='metadata_only', reason=(
                     'observation_incomplete' if row['change'] == 'unconfirmed' else 'text_not_captured'))
@@ -467,19 +769,46 @@ class FileDiffStore:
             # repetitive/adversarial text. Long lines count as work as well.
             if (left.count('\n') > self.diff_input_lines or right.count('\n') > self.diff_input_lines):
                 return dict(result, status='metadata_only', reason='diff_input_limit')
-            a, b = left.splitlines(keepends=True), right.splitlines(keepends=True)
+            # Code editor line numbers count CRLF, CR or LF. Unicode separators
+            # and form feeds inside a source line must stay with that line.
+            a, b = SOURCE_LINE.findall(left), SOURCE_LINE.findall(right)
             if len(a) > self.diff_input_lines or len(b) > self.diff_input_lines:
                 return dict(result, status='metadata_only', reason='diff_input_limit')
             if len(a) * len(b) > self.diff_work:
                 return dict(result, status='metadata_only', reason='diff_work_limit')
-            lines, size = [], 0
-            for line in difflib.unified_diff(a, b, fromfile='before/' + name, tofile='after/' + name, n=3):
-                # Ensure records are distinct when either input lacks a final LF.
-                line = line if line.endswith('\n') else line + '\n'
-                cost = len(line.encode('utf-8'))
-                if len(lines) >= self.diff_lines or size + cost > self.diff_bytes:
-                    result['truncated'] = True
-                    break
-                lines.append(line)
-                size += cost
-            return dict(result, status='text', diff=''.join(lines))
+            patch = self._bounded_diff(a, b, name)
+            _mark_inline_edits(patch)
+            return dict(result, status='text', **patch)
+
+    def _bounded_diff(self, before, after, name):
+        """Project the same finite patch into legacy text and numbered source rows."""
+        lines, hunks = [], []
+        size = old_line = new_line = 0
+        truncated = False
+        for index, raw in enumerate(difflib.unified_diff(
+                before, after, fromfile='before/' + name, tofile='after/' + name, n=3)):
+            line = raw if raw.endswith('\n') else raw + '\n'
+            cost = len(line.encode('utf-8'))
+            if len(lines) >= self.diff_lines or size + cost > self.diff_bytes:
+                truncated = True
+                break
+            size += cost
+            lines.append(line)
+            if index < 2:  # Filenames occupy the first two records even if source begins with +++ or ---.
+                continue
+            header = HUNK_HEADER.fullmatch(raw)
+            if header:
+                old_line, new_line = int(header[1]), int(header[3])
+                hunks.append({'beforeStart': old_line, 'beforeCount': int(header[2] or 1),
+                              'afterStart': new_line, 'afterCount': int(header[4] or 1), 'rows': []})
+                continue
+            marker, original = raw[0], raw[1:]
+            content = original.rstrip('\r\n')
+            hunks[-1]['rows'].append({
+                'kind': {' ': 'context', '+': 'add', '-': 'remove'}[marker],
+                'beforeLine': old_line if marker != '+' else None,
+                'afterLine': new_line if marker != '-' else None,
+                'text': content, 'ending': original[len(content):]})
+            old_line += marker != '+'
+            new_line += marker != '-'
+        return {'diff': ''.join(lines), 'hunks': hunks, 'truncated': truncated}

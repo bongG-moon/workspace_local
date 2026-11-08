@@ -229,7 +229,12 @@ class ProductTests(unittest.TestCase):
         self.assertTrue(loaded[0]['pinned'])
         self.assertEqual(44, loaded[-1]['updated'])
 
-    def test_run_results_are_observed_differences_not_all_source_files(self):
+    def observed_write(self, path):
+        item = self.app.get(self.sid)
+        self.app._emit_bridge(self.sid, item['bridge'], 'file_write',
+                              {'runId': item['lastRunId'], 'path': str(path)})
+
+    def test_run_results_require_write_evidence_and_survive_restart(self):
         unchanged = self.workspace / '원본.txt'
         changed = self.workspace / '수정.md'
         unchanged.write_text('unchanged', encoding='utf-8')
@@ -238,6 +243,9 @@ class ProductTests(unittest.TestCase):
         changed.write_text('after, bigger', encoding='utf-8')
         made = self.workspace / '보고서.txt'
         made.write_text('result', encoding='utf-8')
+        self.observed_write(changed)
+        self.observed_write(made)
+        (self.workspace / '다른 업무.txt').write_text('unrelated', encoding='utf-8')
         self.app.emit(self.sid, 'result', {'sessionId': str(uuid.uuid4())})
         result = self.app.results(self.sid)
         self.assertEqual({'수정.md': 'modified', '보고서.txt': 'created'},
@@ -254,7 +262,9 @@ class ProductTests(unittest.TestCase):
     def test_error_and_stop_capture_only_current_observation_once(self):
         for index, (kind, data) in enumerate([('error', {'message': 'fixture failure'}), ('status', {'state': 'stopped'})]):
             self.start_request()
-            (self.workspace / ('report-%d.txt' % index)).write_text('observed', encoding='utf-8')
+            path = self.workspace / ('report-%d.txt' % index)
+            path.write_text('observed', encoding='utf-8')
+            self.observed_write(path)
             self.app.emit(self.sid, kind, data)
             self.assertEqual(index + 1, len(self.app.results(self.sid)['artifacts']))
             self.assertNotIn('_artifactSnapshot', self.app.get(self.sid))
@@ -266,7 +276,7 @@ class ProductTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.start_request(fail)
         self.assertEqual('error', self.app.get(self.sid)['state'])
-        self.assertEqual('partial.txt', self.app.results(self.sid)['artifacts'][0]['name'])
+        self.assertEqual([], self.app.results(self.sid)['artifacts'])
 
     def test_scanning_is_bounded_and_does_not_claim_unsampled_files_are_new(self):
         for index in range(4):

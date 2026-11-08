@@ -8,6 +8,8 @@ globalThis.WorkspaceStartupHealth = (() => {
     stream:{file:"rendering.js",global:"WorkspaceStream"},
     attachments:{file:"attachments.js",global:"WorkspaceAttachments"},
     drafts:{file:"drafts.js",global:"WorkspaceDraftPersistence"},
+    "row-drafts":{file:"row-drafts.js",global:"WorkspaceRowDrafts"},
+    "result-explorer":{file:"result-explorer.js",global:"WorkspaceResultExplorer"},
     "attachment-storage":{file:"attachment-storage.js",global:"WorkspaceAttachmentStorage"},
     "archived-tasks":{file:"archived-tasks.js",global:"WorkspaceArchivedTasks"},
     "path-picker":{file:"path-picker.js",global:"WorkspacePathPicker"},

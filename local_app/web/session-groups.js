@@ -254,10 +254,16 @@ globalThis.WorkspaceSessionGroups = (() => {
     };
     row.append(button);return row;
   }
-  function render(items,createRow,query){
-    controls();const container=$("sessions"),state=data();prunePreviews(state.groups);
+  function render(items,createRow,query,container=$("sessions")){
+    controls();const state=data();prunePreviews(state.groups);
+    const previous=new Map([...$("sessions").children].filter(node=>node.groupPart).map(node=>[node.groupPart,node]));
+    function part(key,properties,create){
+      const fingerprint=JSON.stringify(properties),prior=previous.get(key);
+      if(prior?.groupFingerprint===fingerprint)return prior;
+      const node=create();node.groupPart=key;node.groupFingerprint=fingerprint;return node;
+    }
     if(state.warning)container.append(el("p",state.warning,"sidebar-empty"));
-    if(!state.groups.length){for(const item of items)container.append(createRow(item));return false;}
+    if(!state.groups.length){for(const item of items){const row=createRow(item);row.classList.remove("grouped-session");row.dataset.groupId="";container.append(row);}return false;}
     const buckets=new Map([[null,[]],...state.groups.map(group=>[group.id,[]])]);
     for(const item of items)(buckets.get(groupFor(item.id))||buckets.get(null)).push(item);
     // Ordering and pin changes must not make the current task silently disappear.
@@ -272,17 +278,17 @@ globalThis.WorkspaceSessionGroups = (() => {
     for(const group of state.groups){
       const members=buckets.get(group.id);
       if(query&&!members.length&&!group.name.toLocaleLowerCase().includes(query))continue;
-      container.append(header(group,members,query));
+      container.append(part("header:"+group.id,[group.name,group.collapsed,query,locked(),members.length,members.some(item=>item.id===active?.id),members.some(item=>globalThis.WorkspaceResultReceipts?.unread(item)===true)],()=>header(group,members,query)));
       if(group.collapsed&&!query)continue;
       const visible=query||expandedPreviews.has(group.id)?members:members.slice(0,previewLimit);
       for(const item of visible){const row=createRow(item);row.classList.add("grouped-session");row.dataset.groupId=group.id;container.append(row);}
-      if(!query&&members.length>previewLimit)container.append(moreRow(group,members.length));
-      if(!members.length){const empty=el("p",query?"일치하는 업무가 없어요":"여기로 업무를 끌어 넣으세요","task-group-empty");empty.dataset.groupId=group.id;container.append(empty);}
-      const tail=el("div",null,"task-group-tail");tail.dataset.groupId=group.id;tail.setAttribute("aria-hidden","true");container.append(tail);
+      if(!query&&members.length>previewLimit)container.append(part("more:"+group.id,[group.name,members.length,expandedPreviews.has(group.id),locked()],()=>moreRow(group,members.length)));
+      if(!members.length)container.append(part("empty:"+group.id,!!query,()=>{const empty=el("p",query?"일치하는 업무가 없어요":"여기로 업무를 끌어 넣으세요","task-group-empty");empty.dataset.groupId=group.id;return empty;}));
+      container.append(part("tail:"+group.id,null,()=>{const tail=el("div",null,"task-group-tail");tail.dataset.groupId=group.id;tail.setAttribute("aria-hidden","true");return tail;}));
     }
-    for(const item of buckets.get(null)){const row=createRow(item);row.dataset.groupId="";container.append(row);}
+    for(const item of buckets.get(null)){const row=createRow(item);row.classList.remove("grouped-session");row.dataset.groupId="";container.append(row);}
     if(query&&!items.length&&!container.children.length)container.append(el("p","찾는 업무나 폴더가 없어요","sidebar-empty"));
-    const exit=el("div",null,"session-root-drop");exit.dataset.groupId="";exit.setAttribute("aria-hidden","true");container.append(exit);
+    container.append(part("root",null,()=>{const exit=el("div",null,"session-root-drop");exit.dataset.groupId="";exit.setAttribute("aria-hidden","true");return exit;}));
     return true;
   }
   function dropTarget(container,hit,y,sourceId){

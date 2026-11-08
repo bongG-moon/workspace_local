@@ -1,0 +1,158 @@
+/* The detail view shares the inspector's existing width and color preferences. */
+.inspector.exploring-result > :is(.inspector-panel,.inspector-tabs,.inspector-foot) {display:none}
+.inspector.exploring-result {overflow:hidden}
+.result-explorer:not([hidden]), .explorer-content, .explorer-content > .preview-body {
+  display:flex; flex:1; flex-direction:column; min-height:0; min-width:0;
+}
+.result-explorer[hidden], .explorer-nav [hidden] {display:none}
+.result-explorer {gap:10px}
+.explorer-nav {display:flex; flex:none; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px}
+.explorer-view-actions {display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; margin-left:auto}
+.explorer-nav button, .explorer-view-tabs button, .explorer-chart-pages button {min-height:32px; padding:4px 10px; font-size:12px}
+.explorer-view-actions button {min-height:36px; padding:6px 11px; border-radius:9px; font-size:13px; line-height:20px; white-space:nowrap; box-shadow:none}
+#explorer-title {margin:0; font-size:16px; font-weight:650; letter-spacing:-.02em; line-height:1.5; overflow-wrap:anywhere}
+.explorer-content {overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable}
+.explorer-dialog {width:min(900px,calc(100vw - 24px)); height:min(870px,calc(100dvh - 32px)); padding:18px; overflow:hidden}
+.explorer-dialog[open] {display:flex}
+@media(min-width:1101px) {
+  .app.result-explorer-expanded:not(.inspector-collapsed):not(.catalog-open):not(.chat-mode) {
+    --inspector-width:max(var(--inspector-resized-width,292px),min(60vw,calc(100vw - var(--sidebar-width) - 420px)));
+  }
+  .result-explorer-expanded > .inspector-resizer {display:none}
+}
+.preview-dialog.html-preview-dialog > .preview-body {
+  display:flex; flex-direction:column; flex:1; min-height:0; overflow:hidden;
+}
+.preview-body > .preview-file-actions:has(>button:not([hidden])) {flex:none}
+.preview-body > .preview-file-actions:not(:has(>button:not([hidden]))) {display:none}
+.explorer-content #preview-content {
+  flex:1; min-height:0; max-height:none; min-width:0; overflow:auto;
+  margin:8px 0 6px; overscroll-behavior:contain;
+}
+.explorer-content #preview-content > img {display:block; max-width:100%; max-height:none; height:auto; object-fit:contain}
+.explorer-content #preview-content > p {line-height:1.6; font-size:13px; overflow-wrap:anywhere}
+.explorer-content .preview-body > .preview-file-actions {
+  display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:6px 0 0;
+  border-top:1px solid var(--line); padding:8px 0 0;
+}
+.explorer-content .preview-file-actions button {display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:36px; max-width:100%; padding:7px 10px; border-radius:9px; font-size:13px; line-height:20px; white-space:normal; word-break:keep-all; box-shadow:none}
+.explorer-content .preview-body > .external-file-note {margin:2px 0; font-size:11px; line-height:1.5}
+.explorer-content .preview-body .preview-modes {flex:none; align-self:flex-start; margin:0}
+.preview-body .preview-modes {gap:3px; padding:3px; border-radius:9px}
+.preview-body .preview-modes button {min-height:28px; padding:4px 13px; border-radius:7px; font-size:12px; line-height:18px}
+.explorer-content .is-html #preview-content {display:flex; flex-direction:column; gap:6px; overflow:hidden}
+.explorer-content .is-html .html-preview-screen > .composer-note {flex:none; margin:0; font-size:11px !important}
+.explorer-content .is-html .html-preview {flex:1; width:100%; min-height:0; height:auto}
+.explorer-content .html-preview-viewport > .html-preview {position:absolute; inset:0 auto auto 0; max-width:none; border:0; transform-origin:top left}
+.explorer-content .html-preview-code > .rich-code {display:flex; flex-direction:column; flex:1; min-height:0; margin:0}
+.explorer-content .html-preview-code > .rich-code > pre,
+.explorer-content .html-preview-code > .preview-source {flex:1; min-height:0; max-height:none; margin:0; overflow:auto; white-space:pre}
+.explorer-content #preview-content:has(> .rich-code > .rich-numbered-source) {
+  display:flex; flex-direction:column; overflow:auto;
+}
+.explorer-content #preview-content > .rich-code:has(> .rich-numbered-source) {
+  display:flex; flex-direction:column; flex:1; min-height:0; margin:0;
+}
+.explorer-content .rich-code > .rich-numbered-source {
+  flex:1; min-height:0; max-height:none;
+}
+.explorer-content #preview-content > .rich-code:has(> .rich-numbered-source[hidden]) {flex:none}
+.explorer-content .rich-code > :is(.rich-content-bar,.source-pages,.rich-limit),
+.explorer-content #preview-content > .composer-note {flex:none}
+.explorer-content #preview-content > .composer-note {margin:6px 0 0; text-align:left}
+.preview-unavailable {display:flex; align-items:flex-start; gap:11px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--theme-surface-raised,#f7f8fc)}
+.preview-unavailable-icon {display:grid; place-items:center; flex:none; width:32px; height:32px; border-radius:9px; color:var(--accent-ink); background:var(--accent-tint)}
+.preview-unavailable-icon .icon {width:18px; height:18px}
+.preview-unavailable-copy {min-width:0}
+.preview-unavailable strong {display:block; color:var(--ink); font-size:14px; font-weight:600; line-height:1.6; overflow-wrap:anywhere}
+.preview-unavailable p {margin:5px 0 0; color:var(--muted); font-size:12px; line-height:1.75; overflow-wrap:anywhere}
+.preview-body[data-preview-kind="unavailable"] #preview-content {flex:none; margin:12px 0 0; overflow:visible}
+.explorer-content .preview-body[data-preview-kind="unavailable"] {flex:none}
+.preview-body[data-preview-kind="unavailable"] > .preview-file-actions {border-top:0; margin:10px 0 0; padding:0; gap:6px 10px}
+.preview-body[data-preview-kind="unavailable"] > .preview-file-actions button {min-height:36px; padding:7px 10px; font-size:13px; line-height:20px; box-shadow:none}
+.explorer-content .preview-text {line-height:1.65; overflow-wrap:anywhere}
+.explorer-view-tabs {display:flex; flex:none; gap:14px; margin:0 0 8px; border-bottom:1px solid var(--line)}
+.explorer-view-tabs[hidden],.explorer-preview-scope[hidden] {display:none}
+.explorer-view-tabs button {min-height:32px; padding:4px 2px; border:0; border-bottom:2px solid transparent; border-radius:0; box-shadow:none; background:transparent; color:var(--muted)}
+.explorer-view-tabs button:hover {background:transparent; color:var(--ink)}
+.explorer-view-tabs [aria-pressed=true] {border-bottom-color:var(--accent); color:var(--accent-ink); font-weight:650}
+.explorer-data-size, .explorer-axis {margin:7px 0; color:var(--muted); font-size:11px; line-height:1.6; overflow-wrap:anywhere}
+.explorer-preview-scope {margin:8px 0; color:var(--muted); font-size:12px; line-height:1.5; overflow-wrap:anywhere}
+.explorer-metric {display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:8px 0; font-size:13px; font-weight:600}
+.explorer-metric select {flex:1 1 135px; min-width:0; max-width:100%; height:36px; padding:2px 8px; border:1px solid var(--line); border-radius:6px; background:var(--theme-surface-raised); color:var(--ink); font:inherit; cursor:pointer}
+.explorer-bars {list-style:none; display:grid; gap:8px; margin:10px 0 6px; padding:0}
+.explorer-bar-row {min-width:0; display:grid; gap:3px}
+.explorer-bar-heading,.explorer-chart-scale {display:flex; justify-content:space-between; align-items:baseline; gap:6px; font-size:11px}
+.explorer-bar-heading > * {min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.explorer-bar-heading strong {flex:none; max-width:50%; font-variant-numeric:tabular-nums; color:var(--ink)}
+.explorer-bar-track {position:relative; height:7px; border-radius:2px; overflow:hidden; background:var(--theme-surface-hover,#dce2ed)}
+.explorer-bar-track::after {position:absolute; left:clamp(0px,var(--chart-zero),calc(100% - 1px)); top:0; bottom:0; width:1px; content:""; background:var(--muted)}
+.explorer-bar-fill {position:absolute; inset-block:0; border-radius:2px; background:var(--theme-accent,#5e60a9)}
+.explorer-bar-fill.is-negative {background:var(--theme-text-secondary,#596578)}
+.explorer-chart-scale {padding-top:4px; border-top:1px solid var(--line); color:var(--muted); font-variant-numeric:tabular-nums}
+.explorer-chart-pages {display:flex; gap:5px}
+.explorer-data-pane > .quiet-button {min-height:32px; font-size:12px}
+.explorer-content #preview-content:has(.explorer-data-pane .rich-table) {display:flex; flex-direction:column; overflow:auto; scrollbar-gutter:auto}
+.explorer-data-pane:has(.rich-table) {display:flex; flex-direction:column; min-height:84px}
+.explorer-data-pane .rich-table {display:flex; flex-direction:column; min-height:0; margin:0; border-radius:8px; box-shadow:none}
+.explorer-data-pane .rich-content-bar {flex:none; gap:6px; padding:4px 8px; min-height:32px; background:var(--theme-surface-raised)}
+.explorer-data-pane .rich-language {font-size:11px; font-weight:500; letter-spacing:0; white-space:normal; overflow-wrap:anywhere}
+.explorer-data-pane .rich-action {flex:none; min-height:28px; font-size:11px}
+.explorer-data-pane .rich-table-scroll {min-width:0; max-width:100%; max-height:none; scrollbar-gutter:auto}
+.explorer-data-pane .rich-table :is(th,td) {min-width:60px; padding:7px 9px; font-size:12px; line-height:1.5}
+.explorer-data-pane .rich-table th {padding-block:2px}
+.explorer-data-pane .explorer-number {text-align:end; font-variant-numeric:tabular-nums}
+.explorer-data-pane .explorer-number .explorer-sort {text-align:end}
+.explorer-range-tools {position:sticky;bottom:0;z-index:2;display:flex;flex:none;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 8px;margin-top:6px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--theme-surface-raised,#fff)}
+.explorer-range-tools[hidden] {display:none}
+.explorer-range-tools .explorer-range-action {min-height:30px;padding:4px 9px;font-size:12px;background:var(--accent-tint);color:var(--accent-ink);border-color:transparent;box-shadow:none}
+.explorer-range-count {font-size:12px;color:var(--muted)}
+.explorer-data-pane td[role=gridcell] {cursor:cell;user-select:none}
+.explorer-data-pane td[aria-selected=true] {background:var(--accent-tint);box-shadow:inset 0 0 0 1px var(--accent);color:var(--ink)}
+.explorer-data-pane td:focus-visible {outline:2px solid var(--accent);outline-offset:-2px}
+.explorer-time-chart,.explorer-bars {user-select:none;cursor:crosshair}
+.explorer-dot[data-selected=true] {fill:var(--theme-accent,#635ac1);stroke:var(--ink);stroke-width:2.2}
+.explorer-bar-row[data-selected=true],.explorer-values button[data-selected=true] {background:var(--accent-tint);outline:1px solid var(--accent);outline-offset:-1px}
+@media (forced-colors:active) {
+  .explorer-data-pane td[aria-selected=true],.explorer-bar-row[data-selected=true],.explorer-values button[data-selected=true] {outline:2px solid Highlight;outline-offset:-2px}
+  .explorer-dot[data-selected=true] {stroke:Highlight;stroke-width:3}
+}
+@media(max-width:600px) {.explorer-dialog {padding:12px}}
+.explorer-bar-heading {width:100%; padding:2px 0; border:0; background:transparent; color:var(--ink); cursor:pointer; text-align:start}
+.explorer-bar-heading:hover {text-decoration:underline}
+.explorer-plot {display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px; min-width:0; margin:8px 0 0}
+.explorer-y-labels {display:flex; flex-direction:column; justify-content:space-between; min-width:0; max-width:6em; padding:2px 0; font-size:10px; color:var(--muted); overflow-wrap:anywhere}
+.explorer-y-labels.constant {justify-content:center}
+.explorer-time-chart {display:block; width:100%; height:auto; overflow:visible; background:var(--theme-surface-raised,#f8f9fd); border-radius:5px}
+.explorer-gridline {stroke:var(--line); stroke-width:1}
+.explorer-series-line {stroke:var(--theme-accent,#635ac1); stroke-width:2; fill:none; vector-effect:non-scaling-stroke}
+.explorer-dot {fill:var(--theme-accent,#635ac1); stroke:var(--theme-surface-raised,#f8f9fd); stroke-width:1; cursor:pointer}
+.explorer-values {font-size:12px}
+.explorer-values summary {cursor:pointer; padding:7px 0}
+.explorer-values ul {list-style:none; max-height:250px; overflow:auto; padding:0; margin:0}
+.explorer-values li .text-button {font-size:11px; text-align:start; min-height:28px}
+.explorer-plot + .explorer-chart-scale span {max-width:52%; overflow-wrap:anywhere}
+.explorer-plot + .explorer-chart-scale span:last-child {text-align:end}
+.preview-static-notice {padding:14px; border:1px solid var(--line); border-radius:8px; font-size:13px; line-height:1.6; overflow:auto}
+.preview-static-notice p {margin:6px 0; color:var(--muted); font-size:12px}
+.explorer-location {margin:-6px 0 0; font-size:11px; color:var(--muted); overflow:hidden; white-space:nowrap; text-overflow:ellipsis}
+.explorer-sort {font:inherit; color:inherit; min-height:28px; padding:0 2px; text-align:start; background:transparent; border:0; cursor:pointer}
+.explorer-sort:hover {text-decoration:underline}
+.row-repair-notice {
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px;
+  border-inline-start:3px solid var(--accent); padding:6px 10px; margin:4px 0;
+  background:var(--accent-tint); color:var(--ink); border-radius:4px;
+  font-size:12px; line-height:1.55;
+}
+.row-repair-notice .text-button {min-height:28px; padding:2px 0; font:inherit; font-weight:650; color:var(--accent-ink)}
+.row-repair-original {margin:0; font-size:12px; line-height:1.5; color:var(--muted)}
+.row-repair-original summary {cursor:pointer}
+.row-repair-original p {white-space:pre-wrap; overflow-wrap:anywhere; max-height:8em; overflow:auto; margin:6px 0}
+.row-repair-status {margin:6px 0; color:var(--ink); font-size:12px}
+.table-citation-list:not([hidden]),.sent-table-citations {display:flex; flex-wrap:wrap; gap:5px; min-width:0; margin:5px 0}
+.table-citation-chip {display:inline-flex; align-items:flex-start; max-width:100%; min-width:0; color:var(--accent-ink); border:1px solid var(--line); border-radius:9px; background:var(--accent-tint); font-size:12px; line-height:1.5}
+.table-citation-chip details {min-width:0; padding:0; margin:0; border:0; background:transparent}
+.table-citation-chip summary {cursor:pointer; padding:5px 8px; overflow-wrap:anywhere; font:inherit}
+.table-citation-chip > button {border:0; background:transparent; color:inherit; min-height:28px; min-width:26px; cursor:pointer}
+.table-citation-chip :is(summary,button):focus-visible {outline:2px solid var(--accent); outline-offset:-2px; border-radius:6px}
+.citation-values {max-height:140px; overflow:auto; padding:3px 9px 7px; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--ink); user-select:text}

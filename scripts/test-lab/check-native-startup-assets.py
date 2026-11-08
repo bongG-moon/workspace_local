@@ -26,6 +26,7 @@ from local_app.ui_health import MODULES, STATES
 
 ASSETS = frozenset({
     '/', '/app.js', '/startup-health.js', '/rich-content.js', '/execution-view.js',
+    '/row-drafts.js', '/result-explorer.js', '/result-explorer.css',
     '/tool-activity.js', '/tool-activity.css', '/path-picker.js', '/path-picker.css',
     '/upgrade-handoff.js', '/upgrade-handoff.css',
     '/rendering.js', '/attachments.js', '/workflow.js', '/composer.js',

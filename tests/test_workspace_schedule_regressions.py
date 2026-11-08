@@ -575,7 +575,7 @@ class ScheduleFrontendRegressionTests(unittest.TestCase):
           const confirmed={id:active.id,generation:selectionGeneration,folderGeneration:folderChoiceGeneration};
           assert.equal($('folder-form').dataset.afterTrust,'workflow');assert.equal(calls.length,0);
           $('trust').checked=true;
-          await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           await WorkspaceWorkflow.resumeAfterTrust(confirmed);
           assert.deepEqual(calls.map(call=>[call.path,call.body.action]),[['/api/trust',undefined],['/api/dispatch','resume']]);
           assert.equal(calls[1].body.id,'A');assert.equal(active.trusted,true);
@@ -588,7 +588,7 @@ class ScheduleFrontendRegressionTests(unittest.TestCase):
           const calls=[];api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};
           await WorkspaceWorkflow.requestResume({action:'schedule_resume',requestId:'paused-schedule'});
           $('trust').checked=true;
-          await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.length,2);assert.equal(calls[1].body.action,'schedule_resume');
           assert.equal(calls[1].body.requestId,'paused-schedule');
         })()""", ('workflow',))
@@ -609,7 +609,7 @@ class ScheduleFrontendRegressionTests(unittest.TestCase):
           active.state='idle';active.trusted=false;let resolveTrust;const calls=[];
           api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>{resolveTrust=resolve;});};
           await WorkspaceWorkflow.requestResume();$('trust').checked=true;
-          const submission=$('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          const submission=$('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           selectionGeneration++;WorkspaceWorkflow.contextChanged();
           active={id:'B',workspace:'C:/fixture/B',state:'idle',trusted:false};
           $('prompt').value='task B draft';attachments=['C:/B.csv'];resolveTrust({});await submission;
@@ -623,13 +623,13 @@ class ScheduleFrontendRegressionTests(unittest.TestCase):
           active.state='idle';active.trusted=false;let resolveTrust;const calls=[];
           api=(path,body)=>{calls.push({path,body});return new Promise(resolve=>{resolveTrust=resolve;});};
           await WorkspaceWorkflow.requestResume();$('trust').checked=true;
-          const submission=$('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          const submission=$('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           emit($('folder-dialog'),'cancel');$('folder-dialog').close();
           await WorkspaceWorkflow.requestResume({action:'schedule_resume',requestId:'new-intent'});
           resolveTrust({});await submission;
           assert.equal(calls.length,1);assert.equal(active.trusted,false);assert.equal($('folder-dialog').open,true);
           api=async(path,body)=>{calls.push({path,body});return {queue:[],schedules:[],revision:1};};
-          $('trust').checked=true;await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          $('trust').checked=true;await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.length,3);assert.equal(calls[2].body.action,'schedule_resume');
           assert.equal(calls[2].body.requestId,'new-intent');
         })()""", ('workflow',))

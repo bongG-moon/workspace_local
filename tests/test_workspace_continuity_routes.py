@@ -181,6 +181,8 @@ class ContinuityRoutesTests(unittest.TestCase):
         sid = self.imported()
         reloaded = self.new_app()
         original = reloaded.get(sid)
+        self.assertEqual('imported', original['titleSource'])
+        self.assertFalse(reloaded.apply_work_title(sid, 'older-work', '새 자동 제목'))
         self.assertFalse(original['trusted'])
         self.assertEqual(str(self.config.resolve()), original['importedConfigRoot'])
         self.app.get(sid)['trusted'] = False

@@ -147,6 +147,7 @@ class StaticPreview(HTMLParser):
         self.parts = []
         self.dropped = []
         self.styling = False
+        self.in_head = self.in_title = self.has_script = self.has_static_body = False
         self.report_body = self.report_main = False
         self.picker_ids = set()
         self.report_views = []
@@ -154,12 +155,25 @@ class StaticPreview(HTMLParser):
         self.styles = []
 
     def handle_starttag(self, tag, attrs):
+        if tag == 'canvas' and not self.dropped:
+            self.parts.append('<p>캔버스 그래프는 기본 앱에서 원본을 열어 확인하세요.</p>')
+            self.has_static_body = True
+            return
         if tag in DROP:
+            if tag == 'script' and not self.dropped:
+                self.has_script = True
             if tag != 'embed':
                 self.dropped.append(tag)
             return
         if self.dropped or tag not in ALLOWED:
             return
+        if tag in {'head', 'body'}:
+            self.in_head = tag == 'head'
+        if tag == 'title':
+            self.in_title = True
+        if not self.in_head and tag in {'img', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+                                         'input', 'button', 'textarea', 'select', 'progress', 'meter', 'hr'}:
+            self.has_static_body = True
         attributes = {}
         for key, value in attrs:
             attributes.setdefault(key, value)  # Like HTML, the first duplicate wins.
@@ -200,6 +214,10 @@ class StaticPreview(HTMLParser):
             if tag == self.dropped[-1]:
                 self.dropped.pop()
             return
+        if tag == 'head':
+            self.in_head = False
+        if tag == 'title':
+            self.in_title = False
         if tag in ALLOWED and tag not in VOID:
             self.parts.append('</'+tag+'>')
         if tag == 'style':
@@ -210,6 +228,8 @@ class StaticPreview(HTMLParser):
             value = static_css(data) if self.styling else escape(data)
             if self.styling:
                 self.styles.append(value)
+            elif not self.in_head and not self.in_title and data.strip():
+                self.has_static_body = True
             self.parts.append(value)
 
 
@@ -350,7 +370,7 @@ def _fixed_canvas_width(parser):
     return int(maximum + 32) if maximum else 0
 
 
-def render(text: str) -> str:
+def render_preview(text: str) -> tuple[str, bool]:
     parser = StaticPreview()
     parser.feed(text)
     parser.close()
@@ -365,5 +385,10 @@ def render(text: str) -> str:
     width = _fixed_canvas_width(parser)
     fit = f'<meta name="ax-preview-width" content="{width}">' if width else ''
     # The CSP must precede all source content. Sandbox is also applied by the UI.
-    return ('<!doctype html><meta http-equiv="Content-Security-Policy" content="'+escape(CSP, quote=True)+'">'
+    html = ('<!doctype html><meta http-equiv="Content-Security-Policy" content="'+escape(CSP, quote=True)+'">'
             + fit + ''.join(parser.parts) + ('<style>' + ''.join(fixes) + '</style>' if fixes else ''))
+    return html, parser.has_script and not parser.has_static_body
+
+
+def render(text: str) -> str:
+    return render_preview(text)[0]

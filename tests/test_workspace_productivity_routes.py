@@ -7,6 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import uuid
 
@@ -89,12 +90,12 @@ class ProductivityRoutesTests(unittest.TestCase):
         path.write_text('\n'.join(json.dumps(row) for row in rows) + '\n', encoding='utf-8')
         return path
 
-    def request(self, route='/api/session/branch', data=None, *, sid=None, authorized=True):
+    def request(self, route='/api/session/branch', data=None, *, sid=None, authorized=True, query=None):
         sid = sid or self.parent_id
         headers = {'Content-Type': 'application/json'}
         if authorized:
             headers['Authorization'] = 'Bearer ' + self.app.token
-        request = Request(self.server.origin + route + '?id=' + sid,
+        request = Request(self.server.origin + route + '?' + urlencode({'id': sid, **(query or {})}),
                           data=json.dumps({'id': sid, **data}).encode('utf-8') if data is not None else None,
                           headers=headers)
         try:
@@ -108,6 +109,45 @@ class ProductivityRoutesTests(unittest.TestCase):
         status, value = self.request(data={})
         self.assertEqual(200, status, value)
         return value['session']
+
+    def test_shared_workspace_diff_list_and_direct_file_links_respect_task(self):
+        other = self.app.create(str(self.work), True, title='다른 업무')['id']
+        captures = self.app.file_diffs
+        captures.start(self.work, 'first', session_id=self.parent_id)
+        captures.start(self.work, 'second', session_id=other)
+        for name in ('a.md', 'b.md', 'shared.md', 'external.md'):
+            (self.work / name).write_text(name, encoding='utf-8')
+        captures.finish(self.work, 'first', allowed_paths={'a.md', 'shared.md'})
+        captures.finish(self.work, 'second', allowed_paths={'b.md', 'shared.md'})
+        for owner, own, name, sibling in [(self.parent_id, 'first', 'a.md', 'second'),
+                                          (other, 'second', 'b.md', 'first')]:
+            code, value = self.request('/api/changes', sid=owner)
+            self.assertEqual(200, code)
+            self.assertEqual([own], [r['runId'] for r in value['runs']])
+            run = value['runs'][0]
+            self.assertEqual('tool', run['attribution'])
+            self.assertEqual({name, 'shared.md'}, {row['name'] for row in run['files']})
+            file_id = next(row['id'] for row in run['files'] if row['name'] == 'shared.md')
+            self.assertEqual(200, self.request('/api/changes/file', sid=owner,
+                                              query={'run': own, 'file': file_id})[0])
+            self.assertEqual([], self.request('/api/changes', sid=owner, query={'run': sibling})[1]['runs'])
+            self.assertEqual(400, self.request('/api/changes/file', sid=owner,
+                                              query={'run': sibling, 'file': file_id})[0])
+
+    def test_legacy_comparison_requires_a_run_in_the_tasks_own_history(self):
+        other = self.app.create(str(self.work), True, title='다른 업무')['id']
+        captures = self.app.file_diffs
+        captures.start(self.work, 'older')
+        (self.work / 'old.md').write_text('old', encoding='utf-8')
+        captures.finish(self.work, 'older')
+        self.app.get(self.parent_id)['messages'][0]['runId'] = 'older'
+        code, result = self.request('/api/changes')
+        self.assertEqual(200, code)
+        run, = result['runs']
+        self.assertEqual('workspace', run['attribution'])
+        self.assertEqual([], self.request('/api/changes', sid=other)[1]['runs'])
+        self.assertEqual(400, self.request('/api/changes/file', sid=other,
+                                          query={'run': 'older', 'file': run['files'][0]['id']})[0])
 
     def test_preview_is_read_only_and_api_requires_authorization(self):
         before = self.source.read_bytes()
@@ -129,6 +169,8 @@ class ProductivityRoutesTests(unittest.TestCase):
         with patch('local_app.server.ClaudeSession') as bridge:
             child = self.create_branch()
         bridge.assert_not_called()
+        self.assertEqual('branch', self.app.get(child['id'])['titleSource'])
+        self.assertFalse(self.app.apply_work_title(child['id'], 'stale-parent-run', '다른 업무 제목'))
         self.assertTrue(child['trusted'])
         self.assertEqual('idle', child['state'])
         self.assertIsNone(child['sessionId'])

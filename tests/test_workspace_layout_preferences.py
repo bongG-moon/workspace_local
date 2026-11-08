@@ -30,6 +30,18 @@ class LayoutPreferencesTests(unittest.TestCase):
             self.assertEqual(LAYOUT, LayoutPreferences(directory).snapshot())
             self.assertEqual(['layout.json'], [path.name for path in Path(directory).iterdir()])
 
+    def test_width_mode_is_optional_for_legacy_clients_and_persists_new_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            layout = LayoutPreferences(directory)
+            self.assertEqual(LAYOUT, layout.configure(LAYOUT))
+            for mode in ('auto', 'manual'):
+                value = {**LAYOUT, 'inspectorWidthMode': mode}
+                self.assertEqual(value, layout.configure(value))
+                self.assertEqual(value, LayoutPreferences(directory).snapshot())
+            for invalid in (None, True, 1, [], {}, 'unexpected'):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    layout.configure({**LAYOUT, 'inspectorWidthMode': invalid})
+
     def test_exact_fields_types_and_width_range(self):
         with tempfile.TemporaryDirectory() as directory:
             layout = LayoutPreferences(directory)

@@ -8,13 +8,18 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
+from local_app.bridge import probe_discovered_cli, resolve_cli
 from tests.test_workspace_startup import HELPER, LAUNCHER, ps_quote
+
+
+SHIM_FIXTURES = Path(__file__).parent / 'fixtures' / 'npm_claude_shims'
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell launcher')
 class LauncherResolutionTests(unittest.TestCase):
-    def launch(self, resolution, *, explicit=False, native=False, unicode_python=False, windowless=False):
+    def launch(self, resolution, *, explicit=False, native=False, npm=False, unicode_python=False, windowless=False):
         with tempfile.TemporaryDirectory(prefix='workspace-resolution-한글 & ') as raw:
             root = Path(raw)
             deploy = root / 'deploy'
@@ -27,6 +32,10 @@ class LauncherResolutionTests(unittest.TestCase):
             if native:
                 native_executable.parent.mkdir(parents=True)
                 native_executable.touch()
+            npm_shim = root / 'npm' / 'claude.ps1'
+            if npm:
+                npm_shim.parent.mkdir()
+                npm_shim.write_bytes((SHIM_FIXTURES / 'node.ps1.txt').read_bytes())
             reported_python = root / '바탕 화면 & 실행 경로' / 'python.exe'
             if unicode_python:
                 reported_python.parent.mkdir(parents=True)
@@ -70,6 +79,8 @@ function Start-Process {
         shellPresent=(-not [string]::IsNullOrWhiteSpace($env:COMPANY_WORKSPACE_SHELL));
         shellValid=($env:COMPANY_WORKSPACE_SHELL -and (Test-Path -LiteralPath $env:COMPANY_WORKSPACE_SHELL -PathType Leaf));
         nativeSelected=($env:COMPANY_WORKSPACE_CLAUDE_ENTRY -eq NATIVE_FILE);
+        nativeCandidate=$env:COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE;
+        npmSelected=($env:COMPANY_WORKSPACE_CLAUDE_ENTRY -eq NPM_FILE);
         path=$env:PATH;
         explicit=$env:COMPANY_AGENT_CLAUDE;
         config=$env:CLAUDE_CONFIG_DIR;
@@ -89,7 +100,7 @@ function Start-Process {
             overrides = overrides.replace('FIXTURE_ROOT', ps_quote(root)).replace('RESOLUTION', resolution)
             overrides = overrides.replace('FIXTURE_SID', str(uuid.uuid4().int & 0x7fffffff))
             overrides = overrides.replace('RESULT_FILE', ps_quote(result_file)).replace('STATE_ROOT', ps_quote(state))
-            overrides = overrides.replace('NATIVE_FILE', ps_quote(native_executable))
+            overrides = overrides.replace('NATIVE_FILE', ps_quote(native_executable)).replace('NPM_FILE', ps_quote(npm_shim))
             overrides = overrides.replace('REAL_PYTHON', ps_quote(sys.executable))
             overrides = overrides.replace('REPORTED_PYTHON', ps_quote(reported_python))
             python_prelude = ("import sys; sys.executable = bytes.fromhex('"
@@ -103,7 +114,10 @@ function Start-Process {
             script = ('& ' + ps_quote(launcher) + ' -NoBrowser -PythonCommand ' + ps_quote(python_command)
                       + ' -StateRoot ' + ps_quote(state) + '; exit $LASTEXITCODE')
             env = os.environ.copy()
+            if npm:
+                env['PATH'] = str(npm_shim.parent) + os.pathsep + env['PATH']
             env.update(COMPANY_AGENT_CLAUDE='explicit-fixture-wrapper' if explicit else '',
+                       COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE='stale-candidate',
                        COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE='1',
                        COMPANY_WORKSPACE_CLAUDE_ENTRY='stale-entry', COMPANY_WORKSPACE_CLAUDE_PROFILE='1',
                        COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH='stale-hash', COMPANY_WORKSPACE_SHELL='stale-shell',
@@ -120,6 +134,8 @@ function Start-Process {
             self.assertEqual('fixture-config-preserved', value['config'])
             self.assertEqual('fixture-model-preserved', value['model'])
             self.assertEqual(env.get('PATH'), value.pop('path'))
+            if value['nativeCandidate']:
+                self.assertEqual(str(native_executable), value['nativeCandidate'])
             if unicode_python:
                 expected_python = reported_python.with_name('pythonw.exe') if windowless else reported_python
                 self.assertEqual(str(expected_python), value['python'])
@@ -133,6 +149,7 @@ function Start-Process {
         for name in ('entry', 'profile', 'definitionHash'):
             self.assertIn(value[name], (None, ''))
         self.assertFalse(value['shellPresent'])
+        self.assertFalse(value['nativeCandidate'])
 
     def test_unsupported_and_unresolved_alias_do_not_block_app_or_reuse_stale_entry(self):
         for resolution in ("return [pscustomobject]@{CommandType='Cmdlet'}",
@@ -163,6 +180,7 @@ function Start-Process {
         self.assertIn(value['unavailable'], (None, ''))
         self.assertEqual('explicit-fixture-wrapper', value['explicit'])
         self.assertTrue(value['shellValid'])
+        self.assertFalse(value['nativeCandidate'])
         for name in ('entry', 'profile', 'definitionHash'):
             self.assertIn(value[name], (None, ''))
 
@@ -192,6 +210,24 @@ function Start-Process {
         self.assertEqual('claude', value['entry'])
         self.assertEqual('1', value['profile'])
         self.assertFalse(value['nativeSelected'])
+        self.assertFalse(value['nativeCandidate'])
+
+    def test_stale_path_finds_stock_npm_and_offers_verified_user_native(self):
+        value = self.launch('', native=True, npm=True)
+        self.assertTrue(value['npmSelected'])
+        self.assertTrue(value['nativeCandidate'])
+        self.assertEqual('0', value['profile'])
+
+    def test_alias_explicitly_pointing_at_npm_retains_that_entry(self):
+        value = self.launch("return [pscustomobject]@{CommandType='Alias';ResolvedCommand=(Microsoft.PowerShell.Core\\Get-Command NPM_FILE)}",
+                            native=True, npm=True)
+        self.assertTrue(value['npmSelected'])
+        self.assertFalse(value['nativeCandidate'])
+
+    def test_npm_only_uses_the_existing_entry(self):
+        value = self.launch('', npm=True)
+        self.assertTrue(value['npmSelected'])
+        self.assertFalse(value['nativeCandidate'])
 
     def test_hidden_cp949_launcher_preserves_unicode_python_probe_path(self):
         self.launch("throw 'Automatic discovery should not run'", explicit=True, unicode_python=True)
@@ -199,6 +235,97 @@ function Start-Process {
     def test_hidden_cp949_launcher_finds_unicode_pythonw_path(self):
         self.launch("throw 'Automatic discovery should not run'", explicit=True,
                     unicode_python=True, windowless=True)
+
+
+@unittest.skipUnless(os.name == 'nt', 'Windows Claude entry selection')
+class ClaudeDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='workspace-cli-한글 & ')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.native = self.root / '.local' / 'bin' / 'claude.exe'
+        self.native.parent.mkdir(parents=True)
+        self.native.touch()
+        self.shim = self.root / 'npm' / 'claude.ps1'
+        self.shim.parent.mkdir()
+        self.shim.write_bytes((SHIM_FIXTURES / 'node.ps1.txt').read_bytes())
+        self.enterContext(patch.dict(os.environ, {
+            'COMPANY_WORKSPACE_CLAUDE_ENTRY': str(self.shim),
+            'COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE': str(self.native),
+            'COMPANY_WORKSPACE_CLAUDE_PROFILE': '0', 'COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE': '',
+            'COMPANY_WORKSPACE_SHELL': sys.executable, 'COMPANY_AGENT_CLAUDE': '',
+        }))
+        self.info = {'version': '2.1.306 (Claude Code)', 'help': '--input-format --output-format --permission-prompt-tool'}
+        self.calls = []
+        self.native_compatible = True
+        self.enterContext(patch('local_app.bridge.run_owned', side_effect=self.run_probe))
+
+    def run_probe(self, args, **kwargs):
+        entry, flag = args[-2:]
+        self.assertIn(flag, ('--version', '--help'))
+        self.calls.append((entry, flag))
+        stdout = self.info['version'] if flag == '--version' else self.info['help']
+        if entry == str(self.native) and not self.native_compatible and flag == '--help':
+            stdout = 'fixture without stream support'
+        return subprocess.CompletedProcess(args, 0, stdout=stdout)
+
+    def test_unmodified_npm_templates_select_native_with_one_set_of_probes(self):
+        for filename in ('native.ps1', 'native.cmd', 'node.ps1', 'node.cmd'):
+            with self.subTest(fixture=filename):
+                fixture = SHIM_FIXTURES / (filename + '.txt')
+                shim = self.shim.with_suffix(Path(filename).suffix)
+                # npm may write LF or CRLF on Windows.
+                shim.write_bytes(fixture.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+                with patch.dict(os.environ, {'COMPANY_WORKSPACE_CLAUDE_ENTRY': str(shim)}):
+                    self.calls.clear()
+                    command, info = probe_discovered_cli(resolve_cli())
+                self.assertEqual([str(self.native)], command)
+                self.assertEqual(self.info, info)
+                self.assertEqual([(str(self.native), '--version'), (str(self.native), '--help')], self.calls)
+
+    def test_custom_wrapper_and_explicit_npm_selection_are_respected(self):
+        stock = self.shim.read_bytes()
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                self.shim.write_bytes(stock if explicit else b"$env:FIXTURE_TEAM='test'\n" + stock)
+                with patch.dict(os.environ, {'COMPANY_AGENT_CLAUDE': str(self.shim) if explicit else ''}):
+                    self.calls.clear()
+                    command, info = probe_discovered_cli(resolve_cli())
+                self.assertEqual(str(self.shim), command[-1])
+                self.assertEqual(self.info, info)
+                self.assertEqual([(str(self.shim), '--version'), (str(self.shim), '--help')], self.calls)
+
+    def test_startup_and_recheck_report_the_entry_that_passed_the_existing_probe(self):
+        from local_app.server import LocalApp
+        self.native_compatible = False
+        app = LocalApp(self.root / 'state', managed_workspace_root=self.root / 'workspaces')
+        self.addCleanup(app.close)
+        self.assertIsNone(app.error)
+        self.assertEqual(str(self.shim), app.bootstrap()['runtime']['entry'])
+        self.assertEqual([(str(path), flag) for path in (self.native, self.shim)
+                          for flag in ('--version', '--help')], self.calls)
+        self.native_compatible = True
+        self.calls.clear()
+        result = app.reconnect()
+        self.assertTrue(result['ok'])
+        self.assertEqual(str(self.native), result['runtime']['entry'])
+        self.assertEqual([(str(self.native), '--version'), (str(self.native), '--help')], self.calls)
+
+    def test_native_removed_after_discovery_uses_the_original_npm_entry(self):
+        self.native.unlink()
+        command, info = probe_discovered_cli(resolve_cli())
+        self.assertEqual(str(self.shim), command[-1])
+        self.assertEqual(self.info, info)
+        self.assertEqual([(str(self.shim), '--version'), (str(self.shim), '--help')], self.calls)
+
+    def test_failed_native_probe_cannot_execute_a_replaced_shim_as_fallback(self):
+        def replace_during_probe(command):
+            self.shim.write_text('Write-Output changed', encoding='utf-8')
+            raise OSError('fixture native failed')
+        with patch('local_app.bridge.probe_cli', side_effect=replace_during_probe) as probe:
+            with self.assertRaisesRegex(OSError, 'fixture native failed'):
+                probe_discovered_cli(resolve_cli())
+        probe.assert_called_once_with([str(self.native)])
 
 
 @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell dependency checks')

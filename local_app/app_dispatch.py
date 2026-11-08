@@ -9,6 +9,7 @@ import time
 from .work_queue import WorkQueue
 from .schedule_time import first_run as scheduled_first_run
 from .bridge import ControlRestoreRequired
+from .drafts import StaleTableReference
 from .idle_connections import (MAX_CONNECTIONS, connection_slot, ConnectionCapacityUnavailable,
                                trim_idle_connection)
 
@@ -81,6 +82,7 @@ class DispatchController:
                                'reason': '현재 요청을 중지한 뒤 같은 대화에서 이어갑니다.'}
             result['warning'] = result.get('warning') or self.error
             reasons = {'stopped': '작업을 중지했습니다. 준비되면 이어 실행해 주세요.',
+                       'table_source_changed': '인용한 표가 바뀌어 요청을 보내지 않았어요. 최신 행으로 수정한 뒤 이어 실행해 주세요.',
                        'error': '현재 작업을 확인한 뒤 이어 실행해 주세요.',
                        'restart': '앱을 다시 열었습니다. 업무 폴더와 대기·예약 내용을 확인한 뒤 이어 실행해 주세요.',
                        'settings_changed': '모델·Effort·승인 설정이 바뀌었습니다. 이어 실행하면 대기 요청과 활성 예약에 현재 선택한 설정을 사용합니다.',
@@ -425,6 +427,8 @@ class DispatchController:
                             self.queue.dispatched(claim['id'], self.app.get(sid).get('lastRunId'))
                     except ControlRestoreRequired:
                         self.queue.defer_unsubmitted(claim['id'])
+                    except StaleTableReference:
+                        self.queue.failed(claim['id'], reason='table_source_changed')
                     except (ValueError, OSError, RuntimeError):
                         self.queue.failed(claim['id'])
                     except Exception:
@@ -477,6 +481,8 @@ class DispatchController:
                 or item.get('_permissionUpdating') or getattr(item.get('bridge'), '_control_active', False)):
             raise ValueError('연결 또는 설정을 준비하고 있습니다. 잠시 뒤 다시 실행해 주세요.')
         before = self.queue.snapshot(sid)
+        if before.get('tableResumeRequired'):
+            raise ValueError('표 인용을 수정한 요청이 있어요. 대기 목록에서 이어 실행을 눌러 주세요.')
         if self.error or before.get('warning'):
             raise ValueError(self.error or before['warning'])
         if any(entry['status'] == 'needs_review' for entry in before['queue']):
@@ -511,6 +517,14 @@ class DispatchController:
         return {'ok': True, **self.snapshot(sid)}
 
     def action(self, sid, data):
+        action = data.get('action')
+        if action in {'enqueue', 'steer', 'update', 'schedule', 'schedule_update'}:
+            self.app.validate_table_sources(sid, data.get('text'))
+        elif action == 'apply_now':
+            entry = next((row for row in self.queue.snapshot(sid)['queue']
+                          if row['id'] == data.get('requestId')), None)
+            if entry:
+                self.app.validate_table_sources(sid, entry['text'])
         with self.app.lock:
             item = self.app.require_work(sid)
             if item.get('_restarting'):
@@ -534,6 +548,8 @@ class DispatchController:
                 if action == 'steer' and sid in self.steering:
                     raise ValueError('앞서 보낸 요청으로 전환하고 있습니다. 잠시 기다려 주세요.')
                 before = self.queue.snapshot(sid)
+                if action == 'steer' and before.get('tableResumeRequired'):
+                    raise ValueError('표 인용을 수정한 요청이 있어요. 대기 목록에서 이어 실행을 눌러 주세요.')
                 client_id = data.get('clientRequestId')
                 if client_id is not None and (not isinstance(client_id, str) or not client_id or len(client_id) > 150):
                     raise ValueError('요청 식별자를 확인해 주세요.')
@@ -561,6 +577,8 @@ class DispatchController:
                 self.app._check_stopping(item)
                 # Explicit re-confirmation adopts only app-selected controls.
                 current = self.queue.snapshot(sid)
+                if any(row.get('reason') == 'table_source_changed' for row in current['queue']):
+                    raise ValueError('최신 표에서 대기 요청의 행을 다시 선택하거나 해당 요청을 취소해 주세요.')
                 if item.get('_controlRestore'):
                     raise ValueError('모델·Effort·승인 설정을 먼저 확인해 주세요. 대기 요청은 아직 보내지 않았습니다.')
                 if current['reason'] in {'settings_changed', 'control_restore_required'}:
@@ -574,7 +592,7 @@ class DispatchController:
                     if bridge and getattr(bridge, 'cleanup_complete', False) is not True and not (restored or soft_stopped):
                         raise ValueError('이전 연결의 종료를 확인한 뒤 이어 실행해 주세요.')
                     item['state'] = 'idle'
-                self.queue.resume(sid)
+                self.queue.resume(sid, reviewed_tables=True)
             elif action in {'schedule', 'schedule_update'}:
                 schedule = data.get('schedule')
                 if not isinstance(schedule, dict):

@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 import hmac
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -19,18 +20,19 @@ from urllib.parse import parse_qs, unquote, urlsplit
 import uuid
 import webbrowser
 
-from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, resolve_cli, runtime_context
+from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, probe_discovered_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
-from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, normalize_result_receipt, normalize_run_timing, retain_run_timings, safe
+from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, last_activity_at, normalize_result_receipt, normalize_run_timing, retain_run_timings, safe
 from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
 from .build_identity import BUILD_ID
 from .session_order import SessionOrder
 from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
-from .artifacts import Snapshot, available_artifacts, changes, linked, snapshot, list_materials
-from .file_preview import build_preview, source_preview_allowed
+from .artifacts import Snapshot, available_artifacts, changes, linked, snapshot, list_materials, workspace_write_name
+from .file_preview import MAX_TEXT_BYTES, build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
+from .work_titles import WorkTitles
 from .capabilities import catalog
 from .completions import CompletionDiscovery, REFERENCE_FILE_TYPES, workspace_commands
 from .picker_protocol import read_result as read_picker_result
@@ -41,7 +43,7 @@ from .owned_process import run_owned, CancelledError
 from .extensions import ExtensionHost, ExtensionError, UI_CSP
 from .attention import AttentionNotifier, snapshot as attention_snapshot
 from .attachments import AttachmentStore, UploadReader, MAX_UPLOAD, attachment_policy
-from .drafts import DraftStore, MAX_REQUEST as MAX_DRAFT_REQUEST
+from .drafts import DraftStore, StaleTableReference, MAX_REQUEST as MAX_DRAFT_REQUEST
 from .app_dispatch import DispatchController
 from .progress_log import ProgressStore
 from .idle_connections import MAX_CONNECTIONS, with_connection_slot, occupies_slot
@@ -173,6 +175,7 @@ class LocalApp:
         self.chat_spaces = ChatSpaces(state)
         self._chat_io = {}
         self.drafts = DraftStore(state)
+        self.work_titles = WorkTitles(self.pending_work_title, self.apply_work_title)
         self.file_diffs = FileDiffStore(state / 'file-changes')
         self.progress_logs = ProgressStore(state / 'progress')
         self.error = None
@@ -198,7 +201,7 @@ class LocalApp:
         if command is None and not demo:
             try:
                 self.command = resolve_cli()
-                self.info = probe_cli(self.command)
+                self.command, self.info = probe_discovered_cli(self.command)
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.error = str(exc)
         self._load()
@@ -304,9 +307,11 @@ class LocalApp:
             if sid in self.sessions:
                 raise ValueError('같은 세션의 업무 기록이 이미 존재합니다. 기존 업무를 확인해 주세요.')
             item = {key: record[key] for key in ('id', 'sessionId', 'title', 'workspace', 'created', 'updated', 'messages')}
+            item['lastActivityAt'] = time.time()
             if Path(item['workspace']).absolute().is_relative_to(self.chat_spaces.root):
                 raise ValueError('앱이 관리하는 일반 대화는 일반 대화 목록에서 이어 주세요. 업무로 가져오지 않습니다.')
             item['title'] = self.unique_title(item['title'][:100])
+            item.update(titleSource='imported', titleRevision=0)
             workspace_folder(item)
             item.update(pinned=False, trusted=self.workspace_preferences.approved(item['workspace']), state='idle', seq=0, events=[], requests={},
                         bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
@@ -533,16 +538,19 @@ class LocalApp:
                     raise ValueError('대화가 변경되어 불러오기를 중단했어요. 다시 시도해 주세요.')
                 if additions:
                     previous_updated = item['updated']
+                    previous_activity = last_activity_at(item)
                     for index, row in enumerate(original):
                         if id(row) in legacy_resolved:
                             item['messages'][index]['_syncContentHash'] = legacy_resolved[id(row)][0]
                     item['messages'].extend(additions)
                     item['updated'] = time.time()
+                    item['lastActivityAt'] = item['updated']
                     try:
                         self.save(sid)
                     except (OSError, ValueError):
                         item['messages'] = original
                         item['updated'] = previous_updated
+                        item['lastActivityAt'] = previous_activity
                         raise
                 # Release the per-task admission reservation before exposing
                 # the result; its returned connection status must not remain
@@ -944,14 +952,17 @@ class LocalApp:
         item = self.get(item['id'])
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
+            'lastActivityAt': last_activity_at(item),
             'resultReceipt': normalize_result_receipt(item.get('resultReceipt')),
             'pendingRunId': item.get('pendingRunId'),
             'runStartedAt': self._run_started_at(item),
+            **self._work_title_metadata(item),
             'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
             'permissionPreferenceNotice': item.get('permissionPreferenceNotice') or '',
             'attachmentReads': item.get('attachmentReads', []),
             'imported': bool(item.get('importedConfigRoot')),
             "artifacts": list(item.get("artifacts", [])),
+            "observedChanges": list(item.get("observedChanges", [])),
             "executions": list(item.get("executions", [])),
             "toolActivity": list(item.get("toolActivity", [])),
             "progress": self.progress_logs.metadata(item['id']),
@@ -1009,6 +1020,8 @@ class LocalApp:
                     "visibilityWarning": self.session_visibility.warning,
                     "runtime": runtime_context(self.command) if self.command and not self.demo else None,
                     "sessions": [{key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "state")} |
+                                 {'lastActivityAt': last_activity_at(item)} |
+                                 self._work_title_metadata(item) |
                                  {'kind': item.get('kind', 'work'), 'resultReceipt': normalize_result_receipt(item.get('resultReceipt'))} |
                                  {"connectionState": 'live' if item.get('bridge') and not item['bridge'].closed else 'last-seen' if item.get('connection') else 'unavailable'} |
                                  {"artifactCount": item.get('_artifactCount', 0) if item.get('_historyUnloaded') else len(item.get('artifacts', [])),
@@ -1089,8 +1102,10 @@ class LocalApp:
             for item in pending['items']:
                 item['notificationId'] = notification_id(item['sessionId'], 'attention', item['id'])
             return {**pending,
-                    'sessions': [{'id': row['id'], 'kind': row.get('kind', 'work'), 'state': row['state'],
-                                  'resultReceipt': normalize_result_receipt(row.get('resultReceipt'))} for row in visible],
+                    'sessions': [{'id': row['id'], 'kind': row.get('kind', 'work'), 'state': row['state'], 'seq': row.get('seq', 0),
+                                  'lastActivityAt': last_activity_at(row),
+                                  'resultReceipt': normalize_result_receipt(row.get('resultReceipt')),
+                                  **self._work_title_metadata(row)} for row in visible],
                     'pendingHistoryCount': sum(bool(item.get('_historyMetadataPending')) for item in visible),
                     'native': self.notifier.native_state, 'windowTitle': self.notifier.window_title,
                     'windowTheme': self.notifier.theme_state, 'desktop': {**self.desktop.snapshot(),
@@ -1226,6 +1241,34 @@ class LocalApp:
                 return candidate
         raise ValueError('업무 이름을 구분할 수 없습니다. 다른 이름을 입력해 주세요.')
 
+    @staticmethod
+    def _work_title_metadata(item):
+        if item.get('kind', 'work') != 'work':
+            return {}
+        return {'title': item['title'], 'titleRevision': item.get('titleRevision', 0)}
+
+    def pending_work_title(self, sid, run_id):
+        with self.lock:
+            item = self.sessions.get(sid)
+            return bool(run_id and self._shutdown_state == 'running' and self._event_current(sid) and not item.get('_removingFromList')
+                        and item.get('kind', 'work') == 'work' and item.get('titleSource') == 'default'
+                        and item.get('titleRevision') == 0 and item.get('_pendingWorkTitleRun') == run_id)
+
+    def apply_work_title(self, sid, run_id, candidate):
+        """Apply a model proposal once, only to the originating work's first request."""
+        if not isinstance(candidate, str) or not candidate.isprintable():
+            return False
+        try:
+            candidate = self.clean_title(candidate)
+        except ValueError:
+            return False
+        with self.lock:
+            if self.history.warning or not self.pending_work_title(sid, run_id):
+                return False
+            item = self.get(sid)
+            self._save_session_details(item, title=candidate, source='generated')
+            return True
+
     def create(self, workspace='', trusted=False, *, managed=False, title=None, managed_root=None, kind='work'):
         if kind not in {'work', 'chat'}:
             raise ValueError('일반 대화 또는 업무를 선택해 주세요.')
@@ -1239,7 +1282,7 @@ class LocalApp:
                 now = time.time()
                 item = {'id': sid, 'kind': 'chat', 'runtimeProfile': CHAT_PROFILE,
                         'workspace': str(root), 'title': self.unique_title(self.clean_title(title) if title else '새 대화'),
-                        'created': now, 'updated': now, 'pinned': False, 'messages': [], 'state': 'idle',
+                        'created': now, 'updated': now, 'lastActivityAt': now, 'pinned': False, 'messages': [], 'state': 'idle',
                         'seq': 0, 'events': [], 'requests': {}, 'sessionId': None, 'bridge': None,
                         'trusted': True, 'attachments': [], 'artifacts': [], 'lastRunId': None, 'modelOverride': None}
                 self.sessions[sid] = item
@@ -1257,6 +1300,7 @@ class LocalApp:
         if managed_root is not None and (not managed or not isinstance(managed_root, str) or not managed_root
                                          or not Path(managed_root).is_absolute() or '..' in Path(managed_root).parts):
             raise ValueError('새 업무를 만들 저장 폴더를 선택해 주세요.')
+        title_source = 'manual' if title is not None else 'default'
         title = self.clean_title(title) if title is not None else '새 업무'
         with self.lock:
             self._check_session_capacity()
@@ -1291,7 +1335,7 @@ class LocalApp:
                 if root.is_relative_to(self.chat_spaces.root):
                     raise ValueError('일반 대화 전용 공간은 업무 폴더로 사용할 수 없습니다.')
             now = time.time()
-            item = {"id": sid, "kind": "work", "runtimeProfile": "work", "workspace": str(root), "title": title, "created": now, "updated": now, "pinned": False,
+            item = {"id": sid, "kind": "work", "runtimeProfile": "work", "workspace": str(root), "title": title, "titleSource": title_source, "titleRevision": 0, "created": now, "updated": now, "lastActivityAt": now, "pinned": False,
                     "messages": [], "state": "idle", "seq": 0, "events": [], "requests": {},
                     "sessionId": None, "bridge": None, "trusted": True, "attachments": [], "artifacts": [], "lastRunId": None,
                     "modelOverride": None}
@@ -1310,18 +1354,41 @@ class LocalApp:
             item = self.get(sid)
             if self.history.warning:
                 raise ValueError(self.history.warning)
-            previous = {key: item.get(key) for key in ('title', 'pinned', 'updated')}
-            if title is not None:
-                item['title'] = self.unique_title(title, sid)
-            if 'pinned' in data:
-                item['pinned'] = data['pinned']
-            item['updated'] = time.time()
-            try:
-                self.save(sid)
-            except (OSError, ValueError):
-                item.update(previous)
-                raise
+            self._save_session_details(item, title=title, pinned=data.get('pinned'), source='manual')
             return self.public(item)
+
+    def _save_session_details(self, item, *, title, source, pinned=None):
+        # Caller holds the session lock across ownership check, write and notification.
+        sid = item['id']
+        keys = ('title', 'pinned', 'updated', 'titleSource', 'titleRevision', 'lastActivityAt')
+        previous = {key: item[key] for key in keys if key in item}
+        # Freeze legacy fallback before a name/pin update changes `updated`.
+        item['lastActivityAt'] = last_activity_at(item)
+        title_changed = False
+        if title is not None:
+            effective = self.unique_title(title, sid)
+            if item.get('kind', 'work') == 'work' and (effective != item['title'] or source != item.get('titleSource')):
+                title_changed = True
+                item['titleSource'] = source
+                item['titleRevision'] = item.get('titleRevision', 0) + 1
+            item['title'] = effective
+        if pinned is not None:
+            item['pinned'] = pinned
+        if source != 'generated':
+            item['updated'] = time.time()
+        try:
+            self.save(sid)
+        except (OSError, ValueError):
+            for key in keys:
+                if key not in previous:
+                    item.pop(key, None)
+            item.update(previous)
+            raise
+        if title_changed:
+            item.pop('_pendingWorkTitleRun', None)
+            if source != 'generated':
+                self.work_titles.cancel(sid)
+            self.emit(sid, 'title_updated', {'id': sid, **self._work_title_metadata(item)})
 
     def reorder_session(self, sid, target, position):
         with self.lock:
@@ -1455,6 +1522,8 @@ class LocalApp:
                         or (item.get('verification') or {}).get('state') in {'checking', 'needs-review'}):
                     raise ValueError('연결을 마무리하는 동안 확인할 내용이 도착해 목록을 유지했습니다. 업무 내용을 확인해 주세요.')
                 self.session_visibility.set_hidden(sid, True)
+                item.pop('_pendingWorkTitleRun', None)
+                self.work_titles.cancel(sid)
                 item['bridge'] = None
                 item['trusted'] = False
                 if self._navigation and self._navigation.get('sessionId') == sid:
@@ -1499,29 +1568,50 @@ class LocalApp:
 
     def _finish_observation(self, root, run_id, before):
         """Finite filesystem work; caller must not hold app.lock."""
-        after = self._capture_observation(root, run_id, finishing=True)
-        found = changes(root, before, after, run_id, time.time())
+        writes = {path.as_posix(): change for path, change in before.writes.items()}
+        after = self._capture_observation(root, run_id, finishing=True, writes=writes,
+                                          observe_commands=bool(before.commands),
+                                          conflict_paths=tuple(path.as_posix() for path in before.foreign_writes))
+        if before.commands:
+            try:
+                before.observed_changes = self._observed_rows(root, self.file_diffs.candidates(root, run_id))
+            except (OSError, ValueError, RuntimeError):
+                after.errors += 1
+                after.limited = True
+        found = changes(root, before, after, run_id, time.time(), writes=writes)
+        for file in found:
+            counts = after.line_counts.get(os.path.normcase(file['name']))
+            if counts is not None:
+                file['lineCounts'] = counts
         observation = after.public() | {'limited': before.limited or after.limited,
                                        'errors': before.errors + after.errors,
+                                       'attribution': 'tool',
                                        'retainedLimit': MAX_ARTIFACTS}
         return found, observation
 
-    def _capture_observation(self, root, run_id, *, finishing=False):
+    def _capture_observation(self, root, run_id, *, session_id=None, finishing=False, writes=None,
+                             observe_commands=False, conflict_paths=()):
         # File review is best effort and must not turn a successful Claude
         # result into a hung request when a drive/cache becomes unavailable.
         failed = False
+        comparison = None
         if finishing:
             try:
-                self.file_diffs.finish(root, run_id)
+                comparison = self.file_diffs.finish(root, run_id, allowed_paths=writes,
+                                                    observe_commands=observe_commands, conflict_paths=conflict_paths)
             except (OSError, ValueError, RuntimeError):
                 failed = True
         try:
-            captured = snapshot(root)
+            captured = snapshot(root, paths=writes) if finishing else snapshot(root)
         except (OSError, ValueError, RuntimeError):
             captured = Snapshot(errors=1, limited=True)
+        if isinstance(comparison, dict):
+            captured.line_counts = comparison.get('lineCounts', {})
+            if comparison.get('status') == 'unavailable' or comparison.get('observedLimited'):
+                captured.limited = True
         if not finishing:
             try:
-                self.file_diffs.start(root, run_id)
+                self.file_diffs.start(root, run_id, session_id=session_id)
             except (OSError, ValueError, RuntimeError):
                 failed = True
         if failed:
@@ -1564,8 +1654,14 @@ class LocalApp:
                 if (not self._observation_current(item, ticket) or item.get('lastRunId') != run_id
                         or item.get('_artifactSnapshot') is not before):
                     return
+                for row in before.observed_changes:
+                    name = workspace_write_name(Path(ticket['workspace']), row['path'])
+                    if name is not None and Path(name) in before.foreign_writes:
+                        row['conflict'] = True
                 item.pop('_artifactSnapshot', None)
                 item['artifacts'] = (item.get('artifacts', []) + found)[-MAX_ARTIFACTS:]
+                item['observedChanges'] = ([row for row in item.get('observedChanges', [])
+                                             if row.get('runId') != run_id] + before.observed_changes)[-MAX_ARTIFACTS:]
                 item['artifactObservation'] = observation
                 item.pop('_observationPending', None)
                 # Publish state/history/queue completion together, after the
@@ -1580,20 +1676,116 @@ class LocalApp:
             result = {'artifacts': [dict(row) for row in item.get('artifacts', [])[-MAX_ARTIFACTS:]],
                       'lastRunId': item.get('lastRunId'),
                       'observation': item.get('artifactObservation'), 'workspace': item['workspace']}
+            known_conflicts = {(row.get('runId'), row.get('id')) for row in item.get('observedChanges', [])
+                               if row.get('conflict')}
         # Files can disappear outside Claude too. Reconcile on this read path,
         # without holding the app lock during disk access or changing history.
-        result['artifacts'], result['availability'] = available_artifacts(Path(result['workspace']), result['artifacts'])
+        root = Path(result['workspace'])
+        review_failed = False
+        try:
+            review = self.file_diffs.list(root, session_id=sid, include_observed=True)
+            result['observedChanges'] = self._observed_rows(root, review['observedChanges'])
+            review_failed = bool(review.get('errors'))
+            if len(review['observedChanges']) > MAX_ARTIFACTS:
+                result['observation'] = dict(result.get('observation') or {}, limited=True)
+            for row in result['observedChanges']:
+                if (row.get('runId'), row.get('id')) in known_conflicts:
+                    row['conflict'] = True
+            # The bounded comparison record commits the review decision first.
+            # Recover it after restart even if a later history save failed.
+            known = {(row.get('runId'), os.path.normcase(row['path'])) for row in result['artifacts']}
+            for run in review['runs']:
+                for file in run['files']:
+                    if file.get('attribution') != 'confirmed':
+                        continue
+                    row = self._confirmed_artifact(root, dict(file, runId=run['runId'],
+                        observedAt=run.get('finishedAt') or run.get('startedAt')))
+                    if (row['runId'], os.path.normcase(row['path'])) not in known:
+                        result['artifacts'].append(row)
+            result['artifacts'] = sorted(result['artifacts'], key=lambda row: row.get('observedAt', 0))[-MAX_ARTIFACTS:]
+        except (OSError, ValueError, RuntimeError):
+            result['observedChanges'] = []
+            review_failed = True
+        result['artifacts'], result['availability'] = available_artifacts(root, result['artifacts'])
+        if review_failed:
+            result['availability']['errors'] += 1
+        with self.lock:
+            if self.sessions.get(sid) is item and item['workspace'] == result['workspace']:
+                item['observedChanges'] = result['observedChanges']
         return result
 
-    def file_changes(self, sid, run_id=None, file_id=None):
+    @staticmethod
+    def _observed_rows(root, rows):
+        result = []
+        for row in rows[:MAX_ARTIFACTS]:
+            name = row.get('name')
+            if not isinstance(name, str):
+                continue
+            path = root / name
+            if workspace_write_name(root, str(path)) is not None:
+                result.append(dict(row, path=str(path)))
+        return result
+
+    @staticmethod
+    def _confirmed_artifact(root, row):
+        name = row['name']
+        path = root / name
+        if workspace_write_name(root, str(path)) is None:
+            raise ValueError('이 업무에서 확인할 수 없는 파일입니다.')
+        result = {'path': str(path), 'name': str(Path(name)), 'runId': row['runId'],
+                  'change': row['change'], 'attribution': 'confirmed',
+                  'observedAt': row.get('observedAt') or row.get('finishedAt') or row.get('createdAt') or time.time(),
+                  'size': row.get('afterSize') or 0}
+        if isinstance(row.get('lineCounts'), dict):
+            result['lineCounts'] = row['lineCounts']
+        return result
+
+    def confirm_result(self, sid, run_id, candidate_id, action):
+        if (not isinstance(action, str) or action not in {'include', 'dismiss'}
+                or not isinstance(run_id, str) or not isinstance(candidate_id, str)):
+            raise ValueError('변경 파일을 추가하거나 제외해 주세요.')
+        claim = (run_id, candidate_id)
+        with self.lock:
+            self._require_running()
+            item = self.require_work(sid)
+            root = workspace_folder(item)
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            pending = item.setdefault('_resultReviews', set())
+            if claim in pending:
+                raise ValueError('이 파일의 확인 결과를 저장하고 있습니다.')
+            pending.add(claim)
+        try:
+            resolved = self.file_diffs.resolve_candidate(root, run_id, candidate_id, session_id=sid, action=action)
+            with self.lock:
+                if (self.sessions.get(sid) is not item or item['workspace'] != str(root)
+                        or item.get('_deleting') or self.session_visibility.contains(sid)):
+                    raise ValueError('업무가 변경되었습니다. 해당 업무에서 다시 확인해 주세요.')
+                if action == 'include':
+                    row = self._confirmed_artifact(root, resolved)
+                    artifacts = item.get('artifacts', [])
+                    key = (row['runId'], os.path.normcase(row['path']))
+                    if not any((old.get('runId'), os.path.normcase(old['path'])) == key for old in artifacts):
+                        item['artifacts'] = (artifacts + [row])[-MAX_ARTIFACTS:]
+                        self.save(sid)
+            result = self.results(sid)
+            self.emit(sid, 'results_changed', {key: result[key] for key in ('artifacts', 'observedChanges', 'lastRunId')})
+            return result
+        finally:
+            with self.lock:
+                item.get('_resultReviews', set()).discard(claim)
+
+    def file_changes(self, sid, run_id=None, file_id=None, *, candidate_id=None):
         with self.lock:
             item = self.get(sid)
             root = workspace_folder(item)
-            # Captures contain only files read after the task's trust decision.
-            # Reviewing app-owned records after restart doesn't execute settings.
+            legacy_runs = {row['runId'] for field in ('messages', 'artifacts') for row in item.get(field, [])
+                           if isinstance(row.get('runId'), str)}
+            legacy_runs.add(item.get('lastRunId'))
         if file_id is not None:
-            return self.file_diffs.get(root, run_id, file_id)
-        return self.file_diffs.list(root, run_id)
+            return self.file_diffs.get(root, run_id, file_id, session_id=sid, legacy_runs=legacy_runs,
+                                       candidate_id=candidate_id)
+        return self.file_diffs.list(root, run_id, session_id=sid, legacy_runs=legacy_runs, candidate_id=candidate_id)
 
     def fork_session(self, sid, *, preview=False):
         from .conversation_fork import prepare_fork
@@ -1616,6 +1808,8 @@ class LocalApp:
                         attachments=[], artifacts=[], lastRunId=None)
             reset_display(item)
             item['title'] = self.unique_title(item['title'][:100])
+            item.update(titleSource='branch', titleRevision=0)
+            item['lastActivityAt'] = item['created']
             self.sessions[item['id']] = item
             try:
                 self.save(item['id'])
@@ -1643,8 +1837,10 @@ class LocalApp:
             raise ValueError('연결을 확인하고 있습니다. 잠시 후 결과를 확인해 주세요.')
         try:
             # Probe only --version/--help. Never stop an active child or replay a request.
-            command = self.command if self._injected_command else resolve_cli()
-            info = probe_cli(command)
+            if self._injected_command:
+                command, info = self.command, probe_cli(self.command)
+            else:
+                command, info = probe_discovered_cli(resolve_cli())
             with self.lock:
                 self.command, self.info, self.error = command, info, None
                 self.customizations.command, self.customizations.info = command, info
@@ -2134,9 +2330,43 @@ class LocalApp:
             if (kind == 'status' and data.get('state') == 'stopped' and data.get('runId')
                     and data['runId'] != item.get('lastRunId')):
                 return  # An earlier stop must not overwrite a newly accepted turn.
-            if kind in {'tool_activity', 'progress_record', 'run_activity'} and (not getattr(bridge, '_tool_activity_run_id', None)
+            if kind in {'tool_activity', 'progress_record', 'run_activity', 'file_write', 'file_command'} and (not getattr(bridge, '_tool_activity_run_id', None)
                     or bridge._tool_activity_run_id != item.get('lastRunId')):
                 return  # Connection preparation is not a submitted user turn.
+            if kind == 'file_command':
+                before = item.get('_artifactSnapshot')
+                identifier = data.get('toolUseId')
+                if (before is not None and not item.get('_observationPending')
+                        and data.get('runId') == item.get('lastRunId')
+                        and data.get('tool') in {'Bash', 'PowerShell'}
+                        and isinstance(identifier, str) and 0 < len(identifier) <= 256):
+                    if len(before.commands) < 200:
+                        before.commands.add(identifier)
+                    else:
+                        before.limited = True
+                return
+            if kind == 'file_write':
+                before = item.get('_artifactSnapshot')
+                if (before is None or item.get('_observationPending') or data.get('runId') != item.get('lastRunId')
+                        or data.get('change') not in (None, 'created', 'modified')):
+                    return
+                name = workspace_write_name(Path(item['workspace']), data.get('path'))
+                if name is not None:
+                    key = Path(name)
+                    if key not in before.writes and len(before.writes) >= 200:
+                        before.limited = True
+                    else:
+                        before.writes.setdefault(key, data.get('change'))
+                    # Other runs may observe this same disk delta, but must
+                    # never acquire ownership from it. Preserve a conflict hint
+                    # even when the writer finishes before those runs do.
+                    for other in self.sessions.values():
+                        other_before = other.get('_artifactSnapshot')
+                        if (other is not item and other_before is not None
+                                and other['workspace'] == item['workspace']):
+                            if len(other_before.foreign_writes) < 200:
+                                other_before.foreign_writes.add(key)
+                return  # This evidence is internal. It is never a UI activity.
             origin = (item, item.get('lastRunId'))
         # Terminal observation must not inherit this validation lock. emit()
         # repeats the owned-child check before and after its filesystem work.
@@ -2438,9 +2668,17 @@ class LocalApp:
                 item['toolActivity'] = normalize_activities(item.get('toolActivity', []), interrupted=True)
                 data['toolActivity'] = list(item['toolActivity'])
                 data['artifacts'] = list(item.get('artifacts', []))
+                data['observedChanges'] = list(item.get('observedChanges', []))
                 data['lastRunId'] = item.get('lastRunId')
-            if kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal:
-                item['updated'] = time.time()
+            metadata_updated = kind in {'assistant', 'connected', 'result', 'error', 'model_changed', 'choice', 'permission_mode_changed'} or terminal
+            activity = (kind in {'assistant', 'queued_user', 'request', 'request_closed', 'choice', 'choice_closed'}
+                        or terminal and timing is not None)
+            activity = activity and not any(item.get(key) for key in ('_connecting', '_modelUpdating', '_permissionUpdating'))
+            if metadata_updated or activity:
+                previous_activity, now = last_activity_at(item), time.time()
+                item['lastActivityAt'] = now if activity else previous_activity
+                if metadata_updated:
+                    item['updated'] = now
             if kind in {'connected', 'permission_mode_changed', 'control_restore_changed',
                         'model_changed', 'effort_changed', 'status', 'result', 'error'}:
                 data = dict(data, permissionDefaultNotice=item.get('permissionDefaultNotice') or '',
@@ -2467,6 +2705,16 @@ class LocalApp:
                         notification_kind = 'error' if kind == 'error' or (data.get('verification') or {}).get('state') == 'needs-review' else 'completed'
                         self._publish_notification(sid, item['title'], notification_kind,
                                              kind + ':' + item['lastRunId'])
+            if kind == 'result' and _bridge is not None and self._shutdown_state == 'running':
+                run_id = item.get('lastRunId')
+                if self.pending_work_title(sid, run_id) and item.get('_attemptedWorkTitleRun') != run_id:
+                    item['_attemptedWorkTitleRun'] = run_id
+                    question = next((m.get('text', '') for m in item.get('messages', ())
+                                     if m.get('role') == 'user' and m.get('runId') == run_id), '')
+                    model = getattr(_bridge, 'turn_model', None) or getattr(_bridge, 'model', None)
+                    if getattr(_bridge, 'command', None):
+                        self.work_titles.offer(sid, run_id, _bridge.command, _bridge.info, _bridge.cwd,
+                                               model, question, getattr(_bridge, 'effort', None))
             if hasattr(self, 'dispatch'):
                 self.dispatch.observe(sid, kind, data)
 
@@ -2500,6 +2748,7 @@ class LocalApp:
 
     @with_connection_slot
     def send(self, sid, text, attachments, trusted=False, *, _choice_claim=None, _dispatch_claim=None):
+        self.validate_table_sources(sid, text)
         with self.chat_io(sid) as item:
             chat = item.get('kind') == 'chat'
             with self.lock:
@@ -2619,7 +2868,7 @@ class LocalApp:
         send_error = None
         try:
             if start_ticket:
-                captured = self._capture_observation(Path(start_ticket['workspace']), run_id)
+                captured = self._capture_observation(Path(start_ticket['workspace']), run_id, session_id=sid)
             with self.lock:
                 if start_ticket:
                     if (not self._observation_current(item, start_ticket) or start_ticket.get('cancelled')
@@ -2650,8 +2899,10 @@ class LocalApp:
                 item.pop('verification', None)
                 item["trusted"] = True
                 item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
-                if not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
+                if chat and not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
                     item["title"] = self.unique_title(text.strip().splitlines()[0][:35], sid)
+                if not chat and item.get('titleSource') == 'default' and not item['messages']:
+                    item['_pendingWorkTitleRun'] = run_id
                 item["messages"].append({"role": "user", "text": text.strip(), "files": paths})
                 if chat:
                     item['messages'][-1]['attachmentReads'] = notices
@@ -2662,6 +2913,7 @@ class LocalApp:
                     item['messages'][-1]['requestId'] = _dispatch_claim
                 item["state"] = "starting"
                 item['updated'] = time.time()
+                item['lastActivityAt'] = item['updated']
                 item['lastRunId'] = run_id
                 # Runtime-only: the server owns this request even while its view is closed.
                 # A restarted app restores stopped history, not an in-flight execution.
@@ -2672,7 +2924,7 @@ class LocalApp:
                 item['messages'][-1]['runId'] = item['lastRunId']
                 if not chat:
                     item['_artifactSnapshot'] = captured
-                    item['artifactObservation'] = item['_artifactSnapshot'].public()
+                    item['artifactObservation'] = item['_artifactSnapshot'].public() | {'attribution': 'tool'}
                 if start_ticket:
                     item.pop('_observationPending', None)
                 self.save(sid)
@@ -2736,6 +2988,8 @@ class LocalApp:
                 raise ValueError('Claude 연결을 재시작하고 있습니다. 끝난 뒤 다시 시도해 주세요.')
             if item.get('_stopAdmission'):
                 raise BridgeError('stop_in_progress', '현재 작업을 중지하고 있습니다.', '중지 완료 후 이어서 보내기')
+            item.pop('_pendingWorkTitleRun', None)
+            self.work_titles.cancel(sid)
             self.dispatch.manual_stop(sid)
             preparing = item.get('_observationPending')
             if preparing and preparing['phase'] == 'start':
@@ -2788,6 +3042,131 @@ class LocalApp:
         if not path.is_relative_to(root) and str(path) not in item.get("attachments", []):
             raise ValueError("이 대화의 작업 폴더 또는 직접 선택한 파일만 열 수 있습니다.")
         return path
+
+    def _trusted_table_owner(self, sid):
+        item = self.require_work(sid)
+        self._validate_remembered_trust(item)
+        if not item['trusted']:
+            raise ValueError('먼저 이 업무의 폴더를 확인해 주세요.')
+        return item
+
+    def _table_preview(self, sid, value):
+        self._trusted_table_owner(sid)
+        path = self.allowed_file(sid, value)
+        if path.suffix.lower() not in {'.csv', '.tsv'}:
+            raise ValueError('CSV 또는 TSV 표를 선택해 주세요.')
+        table = build_preview(path)
+        # Recheck access after the potentially slow read; an attachment or task can
+        # be withdrawn while the preview is being parsed.
+        item = self._trusted_table_owner(sid)
+        if self.allowed_file(sid, value) != path:
+            raise ValueError('표 경로가 변경되었어요. 사용할 파일을 다시 확인해 주세요.')
+        return item, path, table
+
+    @staticmethod
+    def table_coordinates(data):
+        if 'rows' in data or 'columns' in data:
+            if 'rowNumber' in data or 'rows' not in data or 'columns' not in data:
+                raise ValueError('표 범위의 행과 열을 함께 선택해 주세요.')
+            return {'rows': data['rows'], 'columns': data['columns']}
+        return {'row_number': data.get('rowNumber')}
+
+    def table_reference(self, sid, value, version, row_number=None, *, rows=None, columns=None):
+        item, path, table = self._table_preview(sid, value)
+        return self._issue_table_reference(item, path, table, version, row_number, rows=rows, columns=columns)
+
+    def review_table_reference(self, sid, data):
+        action, number = data.get('action'), data.get('referenceId')
+        if action == 'check':
+            if set(data) != {'id', 'action', 'text'} or not isinstance(data['text'], str) or len(data['text']) > 100000:
+                raise ValueError('확인할 표 인용 내용을 확인해 주세요.')
+            self._trusted_table_owner(sid)
+            self.validate_table_sources(sid, data['text'])
+            return {'ok': True}
+        fields = {'id', 'action', 'referenceId'}
+        if action == 'replace':
+            fields.add('version')
+            fields.update({'rows', 'columns'} if 'rows' in data or 'columns' in data else {'rowNumber'})
+        if action not in ('review', 'replace') or set(data) != fields:
+            raise ValueError('표 인용 교체 요청을 확인해 주세요.')
+        # A review has exactly one source: the receipt issued to this session.
+        # Row numbers identify positions within a single version, never records across versions.
+        value, _, previous_row, previous_scope = self.drafts.issued_table_source(sid, number)
+        try:
+            item, path, table = self._table_preview(sid, value)
+        except (ValueError, OSError) as exc:
+            raise StaleTableReference('이 업무에서 인용한 원본 표를 열 수 없어요. 폴더 접근과 파일을 확인해 주세요.', number) from exc
+        if table.get('kind') != 'table' or not table.get('rows'):
+            raise StaleTableReference('원본 표에 선택할 수 있는 행이 없어요.', number)
+        if action == 'review':
+            result = {'referenceId': number, 'path': str(path), 'previousRowNumber': previous_row, 'version': table['version']}
+            if previous_scope is not None:
+                result['previousRows'], result['previousColumns'] = previous_scope
+            return result
+        return self._issue_table_reference(item, path, table, data['version'], replaces=number, **self.table_coordinates(data))
+
+    @staticmethod
+    def _range_excerpt(table, rows, columns):
+        for indexes, limit in ((rows, len(table['rows'])), (columns, len(table['columns']))):
+            if (not isinstance(indexes, list) or not 1 <= len(indexes) <= limit or
+                    any(type(index) is not int or not 1 <= index <= limit for index in indexes) or
+                    len(set(indexes)) != len(indexes)):
+                raise ValueError('미리보기에 표시된 원본 행과 열을 중복 없이 선택해 주세요.')
+        data = {'열': [[col, table['columns'][col - 1]] for col in columns],
+                '행': [[row, [table['rows'][row - 1][col - 1] for col in columns]] for row in rows]}
+        quote = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+        # Preserve all original cell values, including Unicode line breaks, in one physical line.
+        for separator in ('\x85', '\u2028', '\u2029'):
+            quote = quote.replace(separator, f'\\u{ord(separator):04x}')
+        return f"데이터 {','.join(map(str, rows))}행 · {','.join(map(str, columns))}열", quote
+
+    def _issue_table_reference(self, item, path, table, version, row_number=None, *, rows=None, columns=None, replaces=None):
+        if (not isinstance(version, str) or not re.fullmatch(r'[0-9a-f]{64}', version)
+                or table.get('kind') != 'table' or table.get('version') != version):
+            raise StaleTableReference('표가 변경되었어요. 최신 표를 열고 인용할 행을 선택해 주세요.',
+                                      replaces, can_review=replaces is not None)
+        def inline(value):
+            return ' '.join(value.split())
+        scope = None
+        if rows is not None or columns is not None:
+            if row_number is not None:
+                raise ValueError('단일 행과 표 범위 중 하나를 선택해 주세요.')
+            label, quote = self._range_excerpt(table, rows, columns)
+            row_number, scope = rows[0], [rows, columns]
+        else:
+            if type(row_number) is not int or not 1 <= row_number <= len(table['rows']):
+                raise ValueError('미리보기에 표시된 행을 선택해 주세요.')
+            label = f'데이터 {row_number}행'
+            quote = ' | '.join(f'{inline(col)}: {inline(cell)}' for col, cell in zip(table['columns'], table['rows'][row_number - 1]))
+        if len(quote) > 8000:
+            raise ValueError('표 인용은 본문 8,000자까지 가능해요. 필요한 행과 열을 줄여 주세요.')
+        number = self.drafts.record_table_source(item['id'], str(path), version, row_number, scope=scope, replaces=replaces)
+        root = workspace_folder(item)
+        name = path.relative_to(root).as_posix() if path.is_relative_to(root) else path.name
+        reference = {'referenceId': number, 'text': f'〔표 인용 {number}〕 {inline(name)} · {label}\n{quote}'}
+        if replaces is not None:
+            reference['replaces'] = replaces
+        return reference
+
+    def validate_table_sources(self, sid, text):
+        # No file or database reads for messages without a selected-row receipt.
+        if not isinstance(text, str) or '〔표 인용 ' not in text:
+            return
+        checked = {}
+        for number, value, expected in self.drafts.table_sources(sid, text):
+            if value not in checked:
+                try:
+                    path = self.allowed_file(sid, value)
+                    if path.suffix.lower() not in {'.csv', '.tsv'}:
+                        raise ValueError('Unexpected table type')
+                    with path.open('rb') as source:
+                        raw = source.read(MAX_TEXT_BYTES + 1)
+                    checked[value] = hashlib.sha256(raw).hexdigest() if len(raw) <= MAX_TEXT_BYTES else None
+                except (ValueError, OSError):
+                    checked[value] = None
+            if expected != checked[value]:
+                raise StaleTableReference(f'표 인용 {number}의 원본이 바뀌었거나 열 수 없어요. 최신 표에서 인용할 행을 확인해 주세요.',
+                                          number, can_review=checked[value] is not None)
 
     def file_listing(self, sid, directory=''):
         item = self.get(sid)
@@ -2856,6 +3235,8 @@ class LocalApp:
             if hasattr(self, 'dispatch'):
                 self.dispatch.stop()
             issues = []
+            if not self.work_titles.close():
+                issues.append({'code':'title_cleanup_pending'})
             if not self.extensions.close():
                 issues.append({'code': 'extension_cleanup_pending'})
             cleaned = {}
@@ -3134,9 +3515,11 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == "/api/files":
                 return self.reply(app.file_listing(sid, query.get("directory", [""])[0]))
             if route.path == '/api/changes':
-                return self.reply(app.file_changes(sid, query.get('run', [None])[0]))
+                return self.reply(app.file_changes(sid, query.get('run', [None])[0],
+                                                   candidate_id=query.get('candidate', [None])[0]))
             if route.path == '/api/changes/file':
-                return self.reply(app.file_changes(sid, query.get('run', [''])[0], query.get('file', [''])[0]))
+                return self.reply(app.file_changes(sid, query.get('run', [''])[0], query.get('file', [''])[0],
+                                                   candidate_id=query.get('candidate', [None])[0]))
             if route.path == '/api/session/branch':
                 return self.reply(app.fork_session(sid, preview=True))
             if route.path == "/api/results":
@@ -3169,6 +3552,9 @@ class Handler(BaseHTTPRequestHandler):
                       "/input-keys.js": ("input-keys.js", "text/javascript; charset=utf-8"),
                       "/focus-navigation.js": ("focus-navigation.js", "text/javascript; charset=utf-8"),
                       "/html-preview.js": ("html-preview.js", "text/javascript; charset=utf-8"),
+                      "/result-explorer.js": ("result-explorer.js", "text/javascript; charset=utf-8"),
+                      "/result-explorer.css": ("result-explorer.css", "text/css; charset=utf-8"),
+                      "/row-drafts.js": ("row-drafts.js", "text/javascript; charset=utf-8"),
                       "/zoom-feedback.js": ("zoom-feedback.js", "text/javascript; charset=utf-8"),
                       "/zoom-feedback.css": ("zoom-feedback.css", "text/css; charset=utf-8"),
                       "/chat-shortcuts.js": ("chat-shortcuts.js", "text/javascript; charset=utf-8"),
@@ -3352,11 +3738,15 @@ class Handler(BaseHTTPRequestHandler):
                                   '/api/attachments/prepare', '/api/drafts', '/api/session/result-read'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
             read_only = read_only or route == '/api/session/import-status'
+            read_only = read_only or route == '/api/table-reference' and data.get('action') in {'review', 'check'}
             read_only = read_only or route == '/api/llm-usage' and not (set(data) - {'refresh', 'team'})
             with app.operation(upgrade_change=not read_only):
                 return self.dispatch_post(route, data)
         except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             payload = {"error": str(exc)}
+            if isinstance(exc, StaleTableReference):
+                payload.update(code=exc.code, referenceId=exc.reference_id, canReview=exc.can_review)
+                return self.reply(payload, 409)
             if isinstance(exc, ExtensionError):
                 payload.update(code=exc.code, verificationRequired=exc.verification_required)
                 return self.reply(payload, exc.status)
@@ -3432,6 +3822,10 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/results/confirm':
+            if set(data) != {'id', 'runId', 'candidateId', 'action'}:
+                raise ValueError('확인할 변경 파일을 다시 선택해 주세요.')
+            return self.reply(app.confirm_result(sid, data['runId'], data['candidateId'], data['action']))
         if route == "/api/llm-usage":
             if set(data) == {'configure'}:
                 return self.reply(app.llm_usage.configure_test(data['configure']))
@@ -3598,6 +3992,10 @@ class Handler(BaseHTTPRequestHandler):
             if not app._open_window_callback:
                 raise ValueError('앱 창 연결을 준비하지 못했습니다.')
             return self.reply(app._open_window_callback())
+        if route == '/api/table-reference':
+            if 'action' in data:
+                return self.reply(app.review_table_reference(sid, data))
+            return self.reply(app.table_reference(sid, data.get('path'), data.get('version'), **app.table_coordinates(data)))
         if route == '/api/dispatch':
             app.require_work(sid)
             return self.reply(app.dispatch.action(sid, data))

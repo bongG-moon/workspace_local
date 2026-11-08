@@ -136,6 +136,21 @@ class WorkspaceAttentionFrontendTests(unittest.TestCase):
           api=async()=>attention([]);await WorkspaceAttention.refresh();assert.equal(rebuilds,rendered+1);
         })()""")
 
+    def test_activity_summary_reorders_work_home_without_changing_manual_sidebar(self):
+        self.run_case(r"""(async()=>{
+          currentMode='work';boot.sessionOrder={manual:true,ids:['A','B']};
+          sessions=sessions.map((row,index)=>({...row,lastActivityAt:index+1,updated:100-index}));renderSessions();
+          const displayed=id=>$(id).children.filter(row=>row.dataset.sessionId).map(row=>row.dataset.sessionId).join(',');
+          assert.equal(displayed('home-recents'),'B,A');assert.equal(displayed('sessions'),'A,B');
+          api=async()=>({...attention([]),sessions:[{id:'A',state:'idle',lastActivityAt:20},{id:'B',state:'running',lastActivityAt:2}]});
+          WorkspaceAttention.start();await flush();
+          assert.equal(displayed('home-recents'),'A,B');assert.equal(displayed('sessions'),'A,B');
+          assert.equal(sessions[0].lastActivityAt,20);
+          api=async()=>({...attention([]),sessions:[{id:'A',state:'idle',lastActivityAt:1},{id:'B',state:'running',lastActivityAt:2}]});
+          await WorkspaceAttention.refresh();assert.equal(sessions[0].lastActivityAt,20);
+          WorkspaceAttention.stop();
+        })()""")
+
     def test_successful_poll_restores_native_status_after_temporary_error(self):
         self.run_case(r"""(async()=>{
           api=async()=>attention([], {supported:true,bound:true});WorkspaceAttention.start();await flush();

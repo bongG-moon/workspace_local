@@ -111,7 +111,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(get('inspector-panel').hidden,true);assert.equal(get('inspector-panel').inert,true);
           assert.equal(get('sidebar-toggle').attributes['aria-expanded'],'false');
           assert.equal(get('materials-button').attributes['aria-controls'],'inspector-panel');
-          assert.equal(JSON.stringify(writes.at(-1)),JSON.stringify({sidebarCollapsed:true,inspectorCollapsed:true,inspectorWidth:292,miniMode:false}));
+          assert.equal(JSON.stringify(writes.at(-1)),JSON.stringify({sidebarCollapsed:true,inspectorCollapsed:true,inspectorWidth:292,inspectorWidthMode:"auto",miniMode:false}));
           const reloaded=boot({saved:JSON.stringify(writes.at(-1))});
           assert.equal(reloaded.api.snapshot().sidebarCollapsed,true);assert.equal(reloaded.api.snapshot().inspectorVisible,false);
           api.toggleSidebar();api.openInspector();assert.equal(key().defaultPrevented,false);
@@ -157,7 +157,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
             const {api}=boot({saved});assert.equal(api.snapshot().sidebarCollapsed,false);assert.equal(api.snapshot().inspectorVisible,true);
           }
           const {api,writes}=boot({saved:'{"sidebarCollapsed":true,"inspectorCollapsed":false,"token":"do not copy"}'});
-          api.toggleInspector();assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);
+          api.toggleInspector();assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','inspectorWidthMode','miniMode','sidebarCollapsed']);
           const denied=boot({failRead:true,failWrite:true});denied.get('sidebar-toggle').click();denied.get('close-materials').click();
           assert.equal(denied.api.snapshot().sidebarCollapsed,true);assert.equal(denied.api.snapshot().inspectorVisible,false);
         """)
@@ -165,7 +165,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
     def test_mini_mode_restores_full_layout_and_keeps_sidebar_changes_temporary(self):
         self.run_case(r"""
           for(const sidebarCollapsed of [false,true])for(const inspectorCollapsed of [false,true]){
-            const saved={sidebarCollapsed,inspectorCollapsed,inspectorWidth:480};
+            const saved={sidebarCollapsed,inspectorCollapsed,inspectorWidth:480,inspectorWidthMode:"manual"};
             const {api,get,writes}=boot({saved:JSON.stringify(saved)});
             get('mini-mode-toggle').click();
             assert.equal(api.snapshot().miniMode,true);assert.equal(api.snapshot().sidebarCollapsed,false);
@@ -201,7 +201,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(api.snapshot().inspectorVisible,false);assert.equal(writes.length,0);
           assert.equal(api.setMiniMode(true).miniMode,true);assert.equal(writes.length,0);
           api.toggleSidebar();api.setMiniMode(false);
-          assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);
+          assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','inspectorWidthMode','miniMode','sidebarCollapsed']);
           assert.equal(api.snapshot().sidebarCollapsed,true);assert.equal(api.snapshot().inspectorVisible,true);
           assert.equal(get('inspector-resizer').getAttribute('aria-valuenow'),'440');
           api.setMiniMode(true);const reloaded=boot({saved:JSON.stringify(writes.at(-1))});
@@ -306,7 +306,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(api.snapshot().inspectorVisible,false);assert.equal(api.snapshot().preferences.sidebarCollapsed,true);
           assert.equal(api.snapshot().preferences.inspectorWidth,470);assert.equal(get('mini-mode-toggle').getAttribute('aria-pressed'),'true');
           assert.equal(requests.length,0);assert.equal(writes.length,1);
-          assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);
+          assert.deepEqual(Object.keys(writes[0]).sort(),['inspectorCollapsed','inspectorWidth','inspectorWidthMode','miniMode','sidebarCollapsed']);
           assert.equal(context.document.activeElement,get('prompt'));assert.equal(get('prompt').value,'복원 중 작성한 내용');
           assert.equal(get('prompt').selectionStart,4);assert.equal(get('prompt').selectionEnd,7);
           api.hydrate({miniMode:false,inspectorWidth:292});assert.equal(api.snapshot().miniMode,true);assert.equal(writes.length,1);
@@ -362,7 +362,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(maximum,1);assert.equal(get('mini-mode-toggle').getAttribute('aria-pressed'),'true');
           pending.shift()(requests[1].value);await flush();api.refresh();resize(1000);api.toggleSidebar();
           assert.equal(requests.length,2);assert.equal(inflight,0);assert.equal(writes.length,5);
-          for(const row of requests){assert.equal(row.path,'/api/layout');assert.deepEqual(Object.keys(row.value).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);}
+          for(const row of requests){assert.equal(row.path,'/api/layout');assert.deepEqual(Object.keys(row.value).sort(),['inspectorCollapsed','inspectorWidth','inspectorWidthMode','miniMode','sidebarCollapsed']);}
         })()""")
 
     def test_failed_layout_save_keeps_live_state_warns_once_and_does_not_retry(self):
@@ -484,14 +484,34 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
             const {api,get,writes}=boot({saved:`{"sidebarCollapsed":true,"inspectorCollapsed":false,"inspectorWidth":${raw}}`});
             assert.equal(api.snapshot().preferences.inspectorWidth,expected);
             assert.equal(api.snapshot().sidebarCollapsed,true);assert.equal(api.snapshot().inspectorVisible,true);
-            assert.equal(get('app').style.getPropertyValue('--inspector-resized-width'),`${expected}px`);
+            assert.equal(get('app').style.getPropertyValue('--inspector-resized-width'),`${expected === 292 ? 334 : expected}px`);
             assert.equal(get('app').style.getPropertyValue('--inspector-width'),'');assert.equal(writes.length,0);
           }
           const old=boot({saved:'{"sidebarCollapsed":false,"inspectorCollapsed":true}'});
           assert.equal(old.api.snapshot().preferences.inspectorWidth,292);old.api.openInspector();
           assert.equal(old.writes[0].inspectorWidth,292);assert.equal(old.writes[0].inspectorCollapsed,false);
           const denied=boot({failRead:true,failWrite:true});denied.get('inspector-resizer').focus();
-          denied.key({key:'ArrowLeft'});assert.equal(denied.api.snapshot().preferences.inspectorWidth,302);
+          denied.key({key:'ArrowLeft'});assert.equal(denied.api.snapshot().preferences.inspectorWidth,344);
+        """)
+
+    def test_responsive_default_migrates_legacy_width_and_preserves_explicit_manual_width(self):
+        self.run_case(r"""
+          const state=boot({width:1480,saved:'{"inspectorWidth":292}'});
+          const handle=state.get('inspector-resizer');
+          assert.equal(state.api.snapshot().preferences.inspectorWidthMode,'auto');
+          assert.equal(handle.getAttribute('aria-valuenow'),'343');
+          state.resize(2048);assert.equal(handle.getAttribute('aria-valuenow'),'475');
+          state.api.toggleSidebar();
+          const reloaded=boot({width:1480,saved:JSON.stringify(state.writes[0])});
+          assert.equal(reloaded.get('inspector-resizer').getAttribute('aria-valuenow'),'343');
+          for(const width of [260,292,400]) {
+            const manual=boot({width:1480,saved:JSON.stringify({inspectorWidth:width,inspectorWidthMode:'manual'})});
+            assert.equal(manual.get('inspector-resizer').getAttribute('aria-valuenow'),String(width));
+            manual.resize(2048);assert.equal(manual.get('inspector-resizer').getAttribute('aria-valuenow'),String(width));
+            manual.get('inspector-resizer').emit('dblclick');
+            assert.equal(manual.api.snapshot().preferences.inspectorWidthMode,'auto');
+            assert.equal(manual.get('inspector-resizer').getAttribute('aria-valuenow'),'475');
+          }
         """)
 
     def test_dynamic_maximum_uses_container_and_current_sidebar_without_overwriting_saved_width(self):
@@ -513,7 +533,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
 
     def test_pointer_moves_coalesce_and_only_completed_change_is_saved(self):
         self.run_case(r"""
-          const {api,get,pointer,flushFrames,pendingFrames,writes}=boot(),handle=get('inspector-resizer'),app=get('app');
+          const {api,get,pointer,flushFrames,pendingFrames,writes}=boot({saved:'{"inspectorWidth":292,"inspectorWidthMode":"manual"}'}),handle=get('inspector-resizer'),app=get('app');
           const styleCount=app.styleWrites.length,ariaCount=handle.attributeWrites.length;
           assert.equal(pointer('pointerdown').defaultPrevented,true);assert.equal(handle.hasPointerCapture(1),true);
           assert.equal(app.classList.contains('inspector-resizing'),true);
@@ -559,12 +579,12 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
         self.run_case(r"""
           const {api,get,key,writes,context}=boot({width:1101}),handle=get('inspector-resizer');handle.focus();
           for(const [name,value] of Object.entries({role:'separator','aria-orientation':'vertical','aria-controls':'inspector-panel',
-            'aria-valuemin':'260','aria-valuemax':'433','aria-valuenow':'292','aria-valuetext':'292픽셀'}))assert.equal(handle.getAttribute(name),value);
+            'aria-valuemin':'260','aria-valuemax':'433','aria-valuenow':'320','aria-valuetext':'320픽셀'}))assert.equal(handle.getAttribute(name),value);
           assert.equal(handle.hidden,false);assert.equal(handle.inert,false);assert.equal(handle.tabIndex,0);
-          assert.equal(key({key:'ArrowLeft'}).defaultPrevented,true);assert.equal(api.snapshot().preferences.inspectorWidth,302);
-          key({key:'ArrowLeft',shiftKey:true});assert.equal(api.snapshot().preferences.inspectorWidth,352);
-          key({key:'ArrowRight',shiftKey:true});assert.equal(api.snapshot().preferences.inspectorWidth,302);
-          key({key:'ArrowRight'});assert.equal(api.snapshot().preferences.inspectorWidth,292);
+          assert.equal(key({key:'ArrowLeft'}).defaultPrevented,true);assert.equal(api.snapshot().preferences.inspectorWidth,330);
+          key({key:'ArrowLeft',shiftKey:true});assert.equal(api.snapshot().preferences.inspectorWidth,380);
+          key({key:'ArrowRight',shiftKey:true});assert.equal(api.snapshot().preferences.inspectorWidth,330);
+          key({key:'ArrowRight'});assert.equal(api.snapshot().preferences.inspectorWidth,320);
           key({key:'Home'});assert.equal(api.snapshot().preferences.inspectorWidth,260);
           key({key:'Home'});assert.equal(writes.length,5);key({key:'ArrowRight'});assert.equal(writes.length,5);
           key({key:'End'});assert.equal(api.snapshot().preferences.inspectorWidth,433);
@@ -589,7 +609,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           const state=boot();state.pointer('pointerdown');state.pointer('pointermove',{clientX:900});state.api.closeInspector();
           assert.equal(state.get('inspector-resizer').hidden,true);assert.equal(state.writes[0].inspectorWidth,292);
           assert.equal(state.context.document.activeElement,state.get('materials-button'));state.api.openInspector();
-          assert.equal(state.get('inspector-resizer').getAttribute('aria-valuenow'),'292');
+          assert.equal(state.get('inspector-resizer').getAttribute('aria-valuenow'),'334');
         """)
 
     def test_window_resize_is_coalesced_and_overlay_keeps_width_and_focus_contract(self):
@@ -618,7 +638,7 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(get('app').classList.contains('inspector-resizing'),false);
           pointer('pointerdown');pointer('pointermove',{pointerId:2,clientX:800});pointer('pointercancel',{pointerId:2});
           pointer('pointerup',{pointerId:2,clientX:800});flushFrames();
-          assert.equal(get('app').classList.contains('inspector-resizing'),true);assert.equal(get('inspector-resizer').getAttribute('aria-valuenow'),'292');
+          assert.equal(get('app').classList.contains('inspector-resizing'),true);assert.equal(get('inspector-resizer').getAttribute('aria-valuenow'),'334');
           pointer('pointerup');assert.equal(writes.length,0);
           for(const width of [1100,700,640]){
             const state=boot({width});state.api.openInspector();assert.equal(state.pointer('pointerdown').defaultPrevented,false);

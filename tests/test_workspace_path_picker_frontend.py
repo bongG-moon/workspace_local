@@ -12,8 +12,11 @@ const ids=new Map();
 class Element {
  constructor(tag){this.tagName=tag.toUpperCase();this.children=[];this.parent=null;this.attributes={};this.dataset={};this.isConnected=true;this.disabled=false;this.value='';this.textContent='';this.className='';this.classList={toggle:(name,enabled)=>{const values=new Set(this.className.split(' '));enabled?values.add(name):values.delete(name);this.className=[...values].join(' ');},contains:name=>this.className.split(' ').includes(name)};}
  set id(value){this._id=value;ids.set(value,this);}get id(){return this._id;}
- append(...children){for(const n of children){n.parent=this;this.children.push(n);}}
- replaceChildren(...children){this.children=[];this.append(...children);}
+ append(...children){for(const n of children){n.remove();n.parent=this;this.children.push(n);}}
+ replaceChildren(...children){for(const node of this.children)node.parent=null;this.children=[];this.append(...children);}
+ contains(node){for(let n=node;n;n=n.parent)if(n===this)return true;return false;}
+ remove(){if(this.parent)this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;}
+ insertBefore(n,next){n.remove();n.parent=this;this.children.splice(this.children.indexOf(next),0,n);}
  setAttribute(name,value){this.attributes[name]=String(value);}
  showModal(){this.open=true;}close(){this.open=false;this.onclose?.();}
  focus(){context.document.activeElement=this;}scrollIntoView(){}
@@ -85,6 +88,28 @@ class PathPickerFrontendTests(unittest.TestCase):
           byLabel('폴더 전체 경로').value='D:/second';byClass('path-picker-location').onsubmit({preventDefault(){}});
           second(result('D:/second'));await flush();first(result('C:/first'));await flush();
           assert.equal(byLabel('폴더 전체 경로').value,'D:/second');finish();assert.equal((await opened).paths[0],'D:/second');
+        })()""")
+
+    def test_search_preserves_matching_row_and_rechecks_click_before_response(self):
+        self.case(r"""(async()=>{
+          const calls=[];let reply;
+          api=listing(async(route,data)=>{
+            calls.push(data);
+            if(data.query)return new Promise(resolve=>reply=resolve);
+            return result(data.path||'C:/Desktop',[folder('Alpha'),folder('Beta')]);
+          });
+          const opened=WorkspacePathPicker.open({kind:'folder'});await flush();
+          const search=byLabel('현재 폴더 검색'),original=byText('Alpha').parent,removed=byText('Beta').parent;
+          search.value='Al';search.oninput();removed.onclick();
+          await new Promise(resolve=>setTimeout(resolve,200));
+          reply(result('C:/Desktop',[folder('Alpha')]));await flush();
+          assert.equal(byText('Alpha').parent,original);assert.equal(calls.length,2);
+          removed.onclick();assert.equal(calls.length,2);
+          search.value='Alp';search.oninput();original.onclick();assert.equal(calls.length,2);
+          await new Promise(resolve=>setTimeout(resolve,200));
+          reply(result('C:/Desktop',[folder('Alpha')]));await flush();
+          assert.deepEqual(calls.map(c=>c.path||''),['','C:/Desktop','C:/Desktop','C:/Desktop/Alpha']);
+          byText('취소').onclick();await opened;
         })()""")
 
     def test_error_does_not_offer_previous_folder_as_new_selection(self):

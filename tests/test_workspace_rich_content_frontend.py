@@ -9,7 +9,7 @@ NODE = shutil.which("node")
 HARNESS = r"""
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 class Element {
-  constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.parentNode=null;this.attributes={};this.className='';this._text='';this.hidden=false;}
+  constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.parentNode=null;this.attributes={};this.style={};this.className='';this._text='';this.hidden=false;}
   get isConnected(){return this.root===true||!!this.parentNode?.isConnected;}
   set textContent(value){this.children.forEach(c=>c.parentNode=null);this.children=[];this._text=String(value);}
   get textContent(){return this._text+this.children.map(c=>c.textContent||'').join('');}
@@ -71,12 +71,84 @@ class WorkspaceRichContentFrontendTests(unittest.TestCase):
           assert.equal(apiCalls.length,0);assert.ok(!parent.textContent.includes('실행 완료'));
         })()""")
 
+    def test_analysis_chart_shows_only_in_valid_closed_assistant_fence_and_preserves_numbers(self):
+        self.run_case(r"""(()=>{
+          const data={title:'설비별 변화',type:'bar',unit:'건',labels:['A','B'],series:[{name:'전주',values:[-14,7.7]},{name:'이번 주',values:[0,21]}],source:'점검.csv'};
+          const fence=(d)=>'~~~ax-chart\n'+JSON.stringify(d)+'\n~~~', options={role:'assistant'};
+          R.render(parent,'비교 결과\n'+fence(data),options);
+          assert.equal(tag(parent,'figure').length,1);
+          assert.equal(tag(parent,'rect').length,4);
+          const detail=tag(parent,'details')[0];
+          assert.equal(tag(parent,'table').length,0);
+          detail.open=true;detail.ontoggle();detail.ontoggle();
+          assert.equal(tag(parent,'table').length,1);
+          assert.equal(tag(parent,'td').map(n=>n.textContent).join('|'),'A|-14|0|B|7.7|21');
+          for (const d of [{...data,series:[{name:'A',values:[1]}]}, {...data,labels:['A',5]}, {...data,type:'html'}]) {
+            R.render(parent,fence(d),options);
+            assert.equal(tag(parent,'figure').length,0);
+            assert.equal(tag(parent,'pre')[0].textContent,JSON.stringify(d));
+          }
+          R.render(parent,fence(data).slice(0,-3),options);
+          assert.equal(tag(parent,'figure').length,0);
+          R.render(parent,fence(data),{role:'user'});
+          assert.equal(tag(parent,'figure').length,0);
+          R.render(parent,fence({...data,title:'<img onerror=alert()>',type:'line'}),options);
+          assert.equal(tag(parent,'polyline').length,2);
+          assert.ok(tag(parent,'title').some(n=>n.textContent==='A · 전주 -14건'));
+          assert.equal(tag(parent,'img').length,0);
+          assert.ok(parent.textContent.includes('<img onerror=alert()>'));
+          assert.equal(apiCalls.length,0);
+        })()""")
+
+    def test_stream_hides_chart_payload_but_keeps_preceding_and_following_prose_and_code_examples(self):
+        self.run_case(r"""(()=>{
+          let content='';
+          const send=chunk=>{const offset=content.length;content+=chunk;return R.streamChart(parent,content,offset);};
+          assert.equal(send('설명\n````text\n```ax-chart\nexample\n```\n````\n'),false);
+          assert.equal(send('~~~ax-'),false);
+          assert.equal(send('chart\n{"type":'),true);
+          assert.ok(parent.textContent.includes('example'));
+          assert.ok(parent.textContent.includes('그래프 준비 중'));
+          assert.ok(!parent.textContent.includes('{"type"'));
+          assert.equal(send('"bar",'),true);
+          assert.ok(!parent.textContent.includes('"bar"'));
+          assert.equal(send('\n~~~\n이후 설명'),true);
+          assert.ok(parent.textContent.endsWith('이후 설명'));
+          R.finishChartStream(parent,content,{});
+          assert.ok(!parent.textContent.includes('그래프 준비 중'));
+          assert.ok(parent.textContent.includes('{"type":"bar",'));
+        })()""")
+
     def test_code_truncation_is_explicit_and_copy_uses_visible_scope(self):
         self.run_case(r"""(async()=>{
           R.code(parent,'a'.repeat(100010),'txt',{collapsed:true});
           assert.equal(tag(parent,'pre')[0].hidden,true);
           await tag(parent,'button')[0].onclick();assert.equal(readClipboard().length,100000);
           assert.match(parent.textContent,/표시된 부분/);
+        })()""")
+
+    def test_numbered_source_preserves_blank_lines_and_copies_original_without_numbers(self):
+        self.run_case(r"""(async()=>{
+          const text='# heading\r\n\r\n\tvalue\rfinal\n';
+          const card=R.code(parent,text,'markdown',{lineNumbers:true});
+          const gutter=cls(card,'source-line-numbers')[0];
+          assert.equal(gutter.attributes['data-numbers'],'1\n2\n3\n4\n5');
+          assert.equal(gutter.attributes['aria-hidden'],'true');
+          assert.equal(gutter.textContent,'');
+          assert.equal(tag(card,'code')[0].textContent,'# heading\n\n\tvalue\nfinal\n');
+          assert.equal(cls(card,'source-markdown-heading')[0].textContent,'# heading\n');
+          await tag(card,'button')[0].onclick();assert.equal(readClipboard(),text);
+        })()""")
+
+    def test_many_source_lines_render_one_page_with_absolute_line_numbers(self):
+        self.run_case(r"""(async()=>{
+          const text=Array.from({length:1200},(_,i)=>String(i+1)).join('\n');
+          const card=R.code(parent,text,'python',{lineNumbers:true}), gutter=cls(card,'source-line-numbers')[0];
+          const next=tag(card,'button').find(n=>n.title==='다음 500줄 보기');
+          next.onclick();
+          assert.equal(gutter.attributes['data-numbers'].split('\n')[0],'501');
+          assert.equal(tag(card,'code')[0].textContent.split('\n').at(-1),'1000');
+          await tag(card,'button')[0].onclick();assert.equal(readClipboard(),text);
         })()""")
 
     def test_many_tiny_fences_are_bounded_without_thousands_of_controls(self):

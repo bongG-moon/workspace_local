@@ -68,6 +68,27 @@ class ExecutionViewTests(unittest.TestCase):
           assert.equal(second.dataset.runId,'run-b');
         ''')
 
+    def test_new_noncode_files_have_their_own_request_change_entry(self):
+        self.run_case(r"""
+          active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
+          const opened=[],previews=[];let fileOptions;
+          globalThis.WorkspaceRichContent={files(parent,paths,options){fileOptions=options;}};
+          globalThis.WorkspaceProductivityActions={openChanges:options=>opened.push(options)};
+          preview=async(path,options)=>previews.push({path,options});
+          const files=['new.html','new.csv'].map(name=>({path:'C:/task/'+name,runId:'new-run',
+            name,observedAt:1,attribution:'tool',change:'created'}));
+          WorkspaceExecutionView.results('new-run',files);
+          const actions=$('conversation').querySelector('.run-result-actions');
+          const all=actions.children.find(node=>node.textContent==='전체 변경 내용 보기');
+          assert.ok(all);all.onclick();
+          assert.equal(opened[0].sessionId,'A');assert.equal(opened[0].runId,'new-run');
+          assert.equal(opened[0].path,undefined);
+          fileOptions.onOpenFile(files[1].path);
+          assert.equal(previews[0].options.changeRunId,'new-run');
+          active={id:'B',workspace:'C:/task',messages:[]};
+          all.onclick();assert.equal(opened.length,1);
+        """)
+
     def test_restored_execution_and_files_join_the_correct_finalized_stream(self):
         self.run_case(r'''
           active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
@@ -107,10 +128,13 @@ class ExecutionViewTests(unittest.TestCase):
         self.run_case(r'''
           active={id:'A',workspace:'C:/task',messages:[]};WorkspaceExecutionView.reset('A');
           let rows=[];globalThis.WorkspaceRichContent={files(parent,paths){rows.push(paths);}};
-          const files=[{path:'C:/task/a.png',runId:'a',observedAt:1},{path:'C:/task/b.png',runId:'b',observedAt:1}];
+          const files=[{path:'C:/task/a.png',runId:'a',observedAt:1,attribution:'tool'},{path:'C:/task/b.png',runId:'b',observedAt:1}];
           WorkspaceExecutionView.results('a',files);WorkspaceExecutionView.results('a',files);
           assert.equal(rows.length,1);assert.equal(rows[0].join(','),'C:/task/a.png');
           assert.equal($('conversation').children.length,1);
+          assert.equal($('conversation').children[0].querySelector('.run-results-label').textContent,'이번 요청 중 바뀐 파일');
+          WorkspaceExecutionView.results('b',files);
+          assert.equal($('conversation').children[1].querySelector('.run-results-label').textContent,'이전 버전의 폴더 변경 기록');
         ''')
 
     def test_disclosure_follows_native_toggle_and_live_record_replacement(self):

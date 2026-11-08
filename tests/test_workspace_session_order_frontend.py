@@ -34,6 +34,19 @@ class SessionOrderFrontendTests(unittest.TestCase):
                                 input=HARNESS, text=True, encoding='utf-8', capture_output=True, timeout=10)
         self.assertEqual(0, result.returncode, result.stderr or result.stdout)
 
+    def test_polling_preserves_pressed_actions_and_uses_latest_pin_state(self):
+        self.run_case(r"""(async()=>{
+          const current=row('A'),originalPin=pin('A'),remove=current.querySelector('.session-remove');
+          originalPin.focus();sessions[1].state='running';renderSessions();
+          assert.equal(pin('A'),originalPin);assert.equal(row('A').querySelector('.session-remove'),remove);
+          sessions=sessions.map(item=>item.id==='A'?{...item,pinned:true,title:'새 이름'}:item);
+          renderSessions();assert.equal(pin('A'),originalPin);
+          assert.equal(originalPin.attributes['aria-label'],'새 이름 고정 해제');
+          const calls=[];updateSession=async(id,change)=>calls.push([id,change.pinned]);
+          await originalPin.onclick();assert.deepEqual(calls,[['A',false]]);
+          assert.equal(document.activeElement,originalPin);
+        })()""")
+
     def test_manual_order_ignores_metadata_poll_updates_and_keeps_pin_group(self):
         self.run_case(r"""(()=>{
           assert.equal(ids(),'C,B,A');boot.sessionOrder={manual:true,ids:['A','C','B']};
@@ -93,22 +106,74 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.deepEqual(selected,['A']);assert.equal($('prompt').value,'keep title-drag draft');assert.equal(attachments[0],'keep.zip');
         })()""")
 
-    def test_recent_and_all_tasks_use_grips_for_drag_and_titles_for_click(self):
+    def test_work_home_opens_without_reorder_while_all_tasks_keeps_its_grip(self):
         self.run_case(r"""(async()=>{
           const selected=[],calls=[];selectSession=async id=>{selected.push(id);return true;};
           api=async(path,body)=>{calls.push({path,body});return {sessionOrder:boot.sessionOrder};};
+          const home=row('A','home-recents'),homeHandle=home.querySelector('.session-drag');
+          assert.equal(homeHandle.hidden,true);assert.equal(homeHandle.disabled,true);
+          assert.equal(homeHandle.onpointerdown,undefined);assert.equal(homeHandle.onkeydown,undefined);
+          const homeTitle=home.querySelector('.recent-card');
+          assert.equal(homeTitle.onpointerdown,undefined);assert.equal(homeTitle.onkeydown,undefined);
+          assert.equal(home.querySelector('.recent-kicker'),null);
+          await homeTitle.onclick({detail:1,target:homeTitle});assert.equal(selected.pop(),'A');
+          assert.equal(calls.length,0);assert.equal(ids(),'C,B,A');
           showDialog('tasks-dialog');
-          for(const container of ['home-recents','all-sessions']){
-            boot.sessionOrder={};renderSessions();hitContainer=container;
-            const title=row('A',container).querySelector('.session-drag');
-            title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
-            await title.onpointerup(event(80,15,{target:title}));
-            assert.equal(ids(),'A,C,B');assert.equal(selected.length,0);
-            const click=row('B',container).querySelector(container==='home-recents'?'.recent-card':'.session');
-            click.onpointerdown(event(80,250,{target:click}));await click.onpointerup(event(80,250,{target:click}));
-            await click.onclick(event(80,250,{detail:1,target:click}));assert.equal(selected.pop(),'B');
-          }
-          assert.equal(calls.length,2);assert.ok(calls.every(call=>call.path==='/api/session/reorder'));
+          renderSessions();hitContainer='all-sessions';
+          const title=row('A','all-sessions').querySelector('.session-drag');
+          title.onpointerdown(event(80,250,{target:title}));title.onpointermove(event(80,15,{target:title}));
+          await title.onpointerup(event(80,15,{target:title}));
+          assert.equal(ids(),'A,C,B');assert.equal(selected.length,0);
+          const click=row('B','all-sessions').querySelector('.session');
+          click.onpointerdown(event(80,250,{target:click}));await click.onpointerup(event(80,250,{target:click}));
+          await click.onclick(event(80,250,{detail:1,target:click}));assert.equal(selected.pop(),'B');
+          assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/session/reorder');
+        })()""")
+
+    def test_work_home_shows_six_recent_activities_without_pin_manual_or_chat_bias(self):
+        self.run_case(r"""(()=>{
+          $('new-chat').append(el('span','새 업무'));
+          sessions='ABCDEFGH'.split('').map((id,index)=>({id,title:'업무 '+id,workspace:'C:/'+id,
+            kind:'work',state:'idle',created:1,updated:100-index,lastActivityAt:index===0?1:9-index,pinned:index===0}));
+          sessions.push({id:'chat',title:'일반 대화',kind:'chat',created:1000,updated:1000,lastActivityAt:1000});
+          boot.sessionOrder={manual:true,ids:'ABCDEFGH'.split('')};renderSessions();
+          const displayed=id=>$(id).children.filter(row=>row.dataset.sessionId).map(row=>row.dataset.sessionId).join(',');
+          assert.equal(displayed('sessions'),'A,B,C,D,E,F,G,H');
+          assert.equal(displayed('home-recents'),'B,C,D,E,F,G');
+          assert.equal(document.querySelector('.recent-heading h3').textContent,'최근 진행 업무');
+          assert.equal(row('B','home-recents').querySelector('.recent-meta').textContent,'B · '+when(8));
+          hiddenSessionIds.add('B');renderSessions();assert.equal(displayed('home-recents'),'C,D,E,F,G,H');
+          $('session-search').value='업무 C';renderSessions();assert.equal(displayed('home-recents'),'C');
+        })()""")
+
+    def test_pin_and_rename_refresh_keep_home_activity_order_and_actions(self):
+        self.run_case(r"""(async()=>{
+          sessions=sessions.map(item=>({...item,lastActivityAt:item.updated}));renderSessions();
+          const homeIds=()=>$('home-recents').children.map(row=>row.dataset.sessionId).join(',');
+          api=async(path,body)=>({session:{...sessions.find(row=>row.id===body.id),...body,updated:1000,lastActivityAt:1}});
+          await pin('A').onclick();assert.equal(ids(),'A,C,B');assert.equal(homeIds(),'C,B,A');
+          await updateSession('A',{title:'이름 변경됨'});assert.equal(homeIds(),'C,B,A');
+          assert.equal(row('A','home-recents').querySelector('.session-title').textContent,'이름 변경됨');
+          assert.equal(row('A','home-recents').querySelector('.recent-meta').textContent,'A · '+when(1));
+          assert.equal(row('A','home-recents').querySelector('.session-pin').attributes['aria-pressed'],'true');
+          assert.ok(row('A','home-recents').querySelector('.session-rename'));
+          assert.ok(row('A','home-recents').querySelector('.session-remove'));
+        })()""")
+
+    def test_legacy_activity_fallback_and_general_chat_home_keep_existing_behavior(self):
+        self.run_case(r"""(()=>{
+          $('new-chat').append(el('span','새 업무'));
+          sessions=[{id:'A',title:'A',workspace:'C:/A',created:1,updated:3,state:'idle'},
+            {id:'B',title:'B',workspace:'C:/B',created:2,updated:2,lastActivityAt:NaN,state:'idle'},
+            {id:'C',title:'C',workspace:'C:/C',created:4,lastActivityAt:-1,state:'idle'}];renderSessions();
+          assert.equal($('home-recents').children.map(row=>row.dataset.sessionId).join(','),'C,A,B');
+          sessions.push(...['X','Y','Z','V','W'].map((id,index)=>({id,title:'대화 '+id,kind:'chat',created:10+index,updated:10+index,lastActivityAt:100-index,pinned:id==='X',state:'idle'})));
+          currentMode='chat';boot.sessionOrder={manual:true,ids:['X','Y','Z','V','W']};renderSessions();
+          assert.equal($('home-recents').children.map(row=>row.dataset.sessionId).join(','),'X,Y,Z,V');
+          const chat=row('X','home-recents');assert.equal(chat.querySelector('.session-drag').hidden,false);
+          assert.equal(typeof chat.querySelector('.session-drag').onpointerdown,'function');
+          assert.ok(chat.querySelector('.recent-kicker'));
+          assert.equal(document.querySelector('.recent-heading h3').textContent,'최근 대화');
         })()""")
 
     def test_title_cancel_capture_loss_and_escape_cannot_open_or_reorder(self):
@@ -254,13 +319,14 @@ class SessionOrderFrontendTests(unittest.TestCase):
           assert.equal(sessionOrderSaving,false);
         })()""")
 
-    def test_poll_keeps_keyboard_focus_and_home_keyboard_stays_in_visible_rows(self):
+    def test_poll_keeps_sidebar_keyboard_focus_and_home_has_no_reorder_shortcut(self):
         self.run_case(r"""(async()=>{
           sessions.push({id:'D',title:'D',created:4,updated:4,pinned:false},{id:'E',title:'E',created:5,updated:5,pinned:false});renderSessions();
           handle('C').focus();sessions[2].state='running';renderSessions();assert.equal(document.activeElement,handle('C'));
           api=()=>{throw Error('No hidden-row move expected');};
           const last=row('B','home-recents').querySelector('.session-drag');
-          await last.onkeydown({key:'ArrowDown',altKey:true,preventDefault(){}});assert.equal(ids(),'E,D,C,B,A');
+          assert.equal(last.hidden,true);assert.equal(last.disabled,true);assert.equal(last.onkeydown,undefined);
+          assert.equal(row('B','home-recents').querySelector('.recent-card').onkeydown,undefined);assert.equal(ids(),'E,D,C,B,A');
         })()""")
 
     def test_pending_pin_blocks_reorder_until_its_actual_reply(self):

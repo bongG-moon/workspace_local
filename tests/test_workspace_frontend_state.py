@@ -29,6 +29,7 @@ class Element {
   }
   append(...nodes){for(const n of nodes){if(n&&typeof n==='object'){if(n.parent)n.parent.children=n.parent.children.filter(c=>c!==n);n.parent=this;n.isConnected=true;}this.children.push(n);}}
   prepend(...nodes){for(const n of [...nodes].reverse()){if(n&&typeof n==='object'){if(n.parent)n.parent.children=n.parent.children.filter(c=>c!==n);n.parent=this;n.isConnected=true;}this.children.unshift(n);}}
+  insertBefore(node,next){node.remove();const index=this.children.indexOf(next);if(index<0)throw Error('missing sibling');node.parent=this;node.isConnected=true;this.children.splice(index,0,node);}
   replaceChildren(...nodes){for(const n of this.children)if(n&&typeof n==='object')n.parent=null;this.children=[];this.append(...nodes);}
   remove(){if(this.parent){this.parent.children=this.parent.children.filter(n=>n!==this);this.parent=null;this.isConnected=false;}}
   setAttribute(name,value){this.attributes[name]=String(value);}
@@ -96,9 +97,38 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
         self.run_case(r"""(async()=>{
           boot={managedWorkspaceRoot:null,workspaceLocationError:'위치 확인 필요'};chooseFolder();$('trust').checked=true;
           let calls=0;api=async()=>{calls++;};let message;toast=text=>message=text;
-          const button={value:'ok',disabled:false};
+          const button=$('confirm-folder');button.value='ok';
           await $('folder-form').onsubmit({submitter:button,preventDefault(){}});
           assert.equal(calls,0);assert.match(message,/저장할 위치/);assert.equal(button.disabled,false);
+        })()""")
+
+    def test_switch_aborts_previous_read_and_cannot_submit_from_the_old_task(self):
+        self.run_case(r"""(async()=>{
+          active={id:'A',title:'A',state:'idle',trusted:true,workspace:'C:/A',messages:[]};
+          sessions=['A','B','C'].map(id=>({...active,id,title:id}));$('prompt').value='보존할 초안';
+          const reads=[];api=(path,body,signal)=>new Promise((resolve,reject)=>reads.push({path,body,signal,resolve,reject}));
+          const b=selectSession('B'),c=selectSession('C');assert.equal(reads[0].signal.aborted,true);
+          assert.match($('selection-status').textContent,/C/);assert.equal($('task-view').inert,true);
+          await submit();assert.equal(reads.length,2);assert.equal(drafts.get('A').text,'보존할 초안');
+          reads[0].reject(Error('늦은 오류'));assert.equal(await b,false);
+          assert.equal($('selection-status').hidden,false);assert.match($('selection-status').textContent,/C/);
+          poll=()=>{};reads[1].reject(Error('읽기 실패'));await assert.rejects(c,/읽기 실패/);
+          assert.equal(active.id,'A');assert.equal($('selection-status').hidden,true);assert.equal($('task-view').inert,false);
+          const home=selectSession('B');showHome();assert.equal(reads[2].signal.aborted,true);
+          reads[2].resolve({...active,id:'B'});assert.equal(await home,false);assert.equal(active,null);
+        })()""")
+
+    def test_create_busy_feedback_and_cancellation_do_not_open_an_old_form(self):
+        self.run_case(r"""(async()=>{
+          boot={managedWorkspaceRoot:'C:/managed'};chooseFolder();$('trust').checked=true;
+          const button=$('confirm-folder');button.value='ok';const event={submitter:button,preventDefault(){}};
+          const reads=[];api=(path,body)=>new Promise(resolve=>reads.push({path,body,resolve}));
+          const first=$('folder-form').onsubmit(event);await $('folder-form').onsubmit(event);
+          assert.equal(reads.length,1);assert.equal(button.attributes['aria-busy'],'true');
+          assert.match($('confirm-folder-label').textContent,/생성 중/);
+          $('folder-dialog').close();chooseFolder();reads[0].resolve({id:'old',title:'Old',workspace:'C:/old'});
+          await first;assert.equal(reads.length,1);assert.equal(active,null);assert.equal(sessions[0].id,'old');
+          assert.equal($('folder-dialog').open,true);assert.equal($('confirm-folder-label').textContent,'업무 시작');
         })()""")
 
     def test_delayed_pin_response_never_changes_selected_workspace(self):

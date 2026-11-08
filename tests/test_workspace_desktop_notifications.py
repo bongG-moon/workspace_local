@@ -45,6 +45,17 @@ class DesktopNotificationTests(unittest.TestCase):
     def publish(self, event='run:one', kind='completed', sid=None, title='검증 업무'):
         return self.center.publish(sid or self.sid, title, kind, event)
 
+    def test_snapshot_revision_orders_concurrent_replies_without_changing_saved_schema(self):
+        before = self.center.snapshot()['revision']
+        row = self.publish()
+        published = self.center.snapshot()['revision']
+        self.assertGreater(published, before)
+        self.center.mark_read(row['id'])
+        self.assertGreater(self.center.snapshot()['revision'], published)
+        stored = json.loads(self.center.path.read_text('utf-8'))
+        self.assertNotIn('revision', stored)
+        self.assertEqual({'schemaVersion', 'preferences', 'inbox', 'seen'}, set(stored))
+
     def test_completed_attention_and_error_use_fixed_messages_and_only_task_metadata(self):
         for kind in ('completed', 'attention', 'error'):
             row = self.publish(kind=kind)

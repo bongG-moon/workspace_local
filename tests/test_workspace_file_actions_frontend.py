@@ -18,6 +18,41 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
                               text=True,encoding='utf-8',capture_output=True,timeout=10)
         self.assertEqual(0,result.returncode,result.stderr or result.stdout)
 
+    def test_created_html_and_popup_preview_open_the_recorded_request_only(self):
+        self.run_case(r"""(async()=>{
+          active.artifacts=[
+            {path:'C:/fixture/A/new.html',runId:'old',attribution:'tool'},
+            {path:'C:/fixture/A/new.html',runId:'new',attribution:'tool'}
+          ];
+          const calls=[],opened=[];
+          globalThis.WorkspaceResultExplorer={openCustom(){},close(){},isPopup:()=>true};
+          globalThis.WorkspaceProductivityActions={openChanges:options=>opened.push(options)};
+          api=async(path)=>{calls.push(path);return {kind:'html',name:'new.html',html:'<h1>Created</h1>'};};
+          await preview('C:/fixture/A/new.html',{changeRunId:'old'});
+          assert.equal($('preview-changes').hidden,false);
+          await $('preview-changes').onclick();
+          assert.equal(opened.length,1);assert.equal(opened[0].sessionId,'A');
+          assert.equal(opened[0].runId,'old');assert.equal(opened[0].path,'C:/fixture/A/new.html');
+          assert.equal(opened[0].popup,true);assert.equal(calls.length,1);
+          active={...active,id:'B',artifacts:[]};
+          await $('preview-changes').onclick();assert.equal(opened.length,1);
+          await preview('C:/fixture/A/new.html');assert.equal($('preview-changes').hidden,true);
+          clearPreview();assert.equal($('preview-changes').onclick,null);
+        })()""")
+
+    def test_preview_never_claims_a_change_for_foreign_or_legacy_file(self):
+        self.run_case(r"""(async()=>{
+          active.artifacts=[
+            {path:'C:/fixture/B/new.csv',runId:'foreign',attribution:'tool'},
+            {path:'C:/fixture/A/new.csv',runId:'legacy',attribution:'legacy'}
+          ];
+          globalThis.WorkspaceProductivityActions={openChanges(){throw Error('unexpected change action');}};
+          api=async()=>({kind:'text',name:'new.csv',text:'x'});
+          await preview('C:/fixture/A/new.csv');assert.equal($('preview-changes').hidden,true);
+          active.artifacts.push({path:'C:/fixture/A/new.csv',runId:'known',attribution:'tool'});
+          await preview('c:/FIXTURE/A/new.csv');assert.equal($('preview-changes').hidden,false);
+        })()""")
+
     def test_html_preview_remains_sandboxed_and_external_actions_require_click(self):
         self.run_case(r"""(async()=>{
           const calls=[];api=async(path,body)=>{calls.push({path,body});return body?{ok:true}:{kind:'html',name:'보고서.html',html:'<p>보고서</p>',message:'정적 미리보기'};};
@@ -35,6 +70,25 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
           assert.equal($('open-file').hidden,false);assert.equal($('reveal-file').hidden,false);
           assert.equal($('open-text-file').hidden,true);assert.equal($('external-html-note').hidden,true);
           boot.demo=true;await preview('C:/fixture/A/업무.xlsx');assert.equal($('open-file').hidden,true);assert.equal($('reveal-file').hidden,true);
+        })()""")
+
+    def test_markdown_and_code_open_as_numbered_source_and_document_mode_is_optional(self):
+        self.run_case(r"""(async()=>{
+          let rendered;
+          globalThis.WorkspaceRichContent={code:(node,source,language,options)=>{
+            rendered={source,language,options};node.append(el('pre',source));}};
+          const source='# 제목\n\n`literal`';
+          api=async()=>({kind:'text',name:'설명.md',text:source});
+          await preview('C:/fixture/A/설명.md');
+          assert.equal(rendered.language,'markdown');assert.equal(rendered.source,source);
+          assert.equal(rendered.options.lineNumbers,true);
+          assert.equal($('preview-screen').textContent,'원문');
+          globalThis.WorkspaceRichContent.render=()=>false;
+          $('preview-code').onclick();assert.ok($('preview-content').querySelector('h3'));
+          $('preview-screen').onclick();assert.ok($('preview-content').querySelector('pre'));
+          api=async()=>({kind:'code',language:'python',name:'a.py',text:'x = 1'});
+          await preview('C:/fixture/A/a.py');assert.equal(rendered.language,'python');
+          assert.equal(rendered.options.lineNumbers,true);assert.equal($('preview-modes').hidden,true);
         })()""")
 
     def test_html_mode_switch_is_local_literal_and_releases_frame_on_close(self):

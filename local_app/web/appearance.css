@@ -108,17 +108,18 @@
 .sidebar .sidebar-label{margin:18px 10px 6px;font-size:12px;line-height:18px;font-weight:550;letter-spacing:.15px}
 .sidebar .task-group-create{font-size:12px;font-weight:450;gap:6px}
 .sidebar .task-group-create .icon{width:15px;height:15px}
-.sidebar .session-list .session-row{grid-template-columns:12px minmax(0,1fr);min-height:var(--sidebar-row-height);margin:1px 0;border-radius:8px}
-.sidebar .session-list .session{min-height:var(--sidebar-row-height);padding:8px;margin:0;gap:6px;border-radius:8px}
+.sidebar .session-list .session-row{grid-template-columns:12px minmax(0,1fr);min-height:34px;margin:1px 0;border-radius:8px}
+.sidebar .session-list .session{min-height:34px;padding:7px 8px;margin:0;gap:6px;border-radius:8px}
 .sidebar .session-list .session-title{font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:400;letter-spacing:0}
 .sidebar .session-list .session.active .session-title{font-weight:500}
 .sidebar .session-list .session-row.grouped-session{margin-left:28px}
-.sidebar .task-group-toggle{min-height:var(--sidebar-row-height);font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:500;gap:7px;padding:7px 4px}
+.sidebar .task-group-toggle{min-height:34px;font-size:var(--sidebar-text-size);line-height:var(--sidebar-text-line);font-weight:500;gap:7px;padding:7px 4px}
 .sidebar .task-folder-icon{width:16px;height:16px}
 .sidebar .task-group-count{font-size:11px;font-weight:400}
 .sidebar .task-group-menu{font-size:16px}
-.sidebar .task-group-header{margin:8px 0 2px;min-height:var(--sidebar-row-height)}
+.sidebar .task-group-header{margin:4px 0 1px;min-height:34px}
 .sidebar .task-group-header:first-child{margin-top:0}
+.sidebar .task-group-tail{height:6px;margin-bottom:2px}
 /* Hidden row actions must not consume the title's reading width. Focus reveals
    the same actions as hover; touch screens keep them visible. */
 .sidebar .session-list .session-row>:is(.session-rename,.session-pin,.session-remove){position:absolute;z-index:1;top:50%;transform:translateY(-50%);width:24px;height:28px;min-height:0;padding:4px;border-radius:6px;opacity:0;pointer-events:none}
@@ -203,6 +204,26 @@
 @media(hover:none){.app.chat-mode .home-recents .recent-row>:is(.session-rename,.session-pin,.session-remove){opacity:1;pointer-events:auto}}
 @media(prefers-reduced-motion:reduce){.app.chat-mode .chat-starter,.app.chat-mode .home-recents .recent-row{transition:none}}
 @media(forced-colors:active){.app.chat-mode .chat-home-hero::before{display:none}.app.chat-mode .chat-home-mark,.app.chat-mode .chat-starter,.app.chat-mode .chat-recents-empty,.app.chat-mode .home-recents .recent-row{background:Canvas;border:1px solid ButtonBorder;box-shadow:none}.app.chat-mode .chat-starter-icon{background:Canvas;color:CanvasText}}
+/* Work home follows recent activity; a two-line list leaves room for more tasks. */
+.app:not(.chat-mode) .home-recents{grid-template-columns:minmax(0,1fr);gap:0;border:1px solid var(--line);border-radius:11px;background:var(--theme-surface-raised);overflow:hidden}
+.app:not(.chat-mode) .home-recents .recent-row{grid-template-columns:minmax(0,1fr) repeat(3,26px);gap:2px;min-height:62px;padding:0 9px 0 14px;border-radius:0;background:transparent}
+.app:not(.chat-mode) .home-recents .recent-row+.recent-row{border-top:1px solid var(--line)}
+.app:not(.chat-mode) .home-recents .recent-row:is(:hover,:focus-within){background:var(--theme-surface-hover)}
+.app:not(.chat-mode) .home-recents .session-drag{display:none}
+.app:not(.chat-mode) .home-recents .recent-card{grid-column:1;min-height:61px;padding:9px 0;margin:0;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-content:center;border:0;border-radius:0;background:transparent;box-shadow:none}
+.app:not(.chat-mode) .home-recents .recent-card:hover{background:transparent}
+.app:not(.chat-mode) .home-recents .recent-card>strong{grid-column:1;grid-row:1;font-size:13px;line-height:1.5}
+.app:not(.chat-mode) .home-recents .recent-meta{grid-column:1;grid-row:2;margin:0;font-size:10.5px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.app:not(.chat-mode) .home-recents .recent-status{grid-column:2;grid-row:1/3;align-self:center;max-width:150px;margin:0;padding:2px 5px;font-size:10px;line-height:1.5;overflow:hidden;text-overflow:ellipsis;background:transparent}
+.app:not(.chat-mode) .home-recents .recent-status:is([data-state=starting],[data-state=running]){color:var(--theme-success,#438560)}
+.app:not(.chat-mode) .home-recents .recent-status[data-state=error]{color:var(--theme-danger,#b94b58)}
+.app:not(.chat-mode) .home-recents .recent-row>:is(.session-rename,.session-pin,.session-remove){width:26px;height:30px;padding:5px;border-radius:6px}
+.app:not(.chat-mode) .home-recents .session-pin:not([aria-pressed=true]){opacity:0}
+.app:not(.chat-mode) .home-recents .recent-row:is(:hover,:focus-within)>.session-pin{opacity:1}
+.app:not(.chat-mode) .home-recents .empty-recents{margin:0;padding:17px 14px;font-size:12px;color:var(--muted);line-height:1.7}
+@media(max-width:700px){.app:not(.chat-mode) .home-recents .recent-row{padding-inline:10px 6px;grid-template-columns:minmax(0,1fr) repeat(3,24px)}.app:not(.chat-mode) .home-recents .recent-card{gap:2px 7px}.app:not(.chat-mode) .home-recents .recent-card>strong{grid-column:1/-1}.app:not(.chat-mode) .home-recents .recent-status{grid-row:2;max-width:95px;padding:0;font-size:9px}.app:not(.chat-mode) .home-recents .recent-row>:is(.session-rename,.session-pin,.session-remove){width:24px}}
+@media(hover:none){.app:not(.chat-mode) .home-recents .session-pin:not([aria-pressed=true]){opacity:1}}
+@media(forced-colors:active){.app:not(.chat-mode) .home-recents{background:Canvas;border-color:ButtonBorder}.app:not(.chat-mode) .home-recents .recent-row+.recent-row{border-color:ButtonBorder}}
 .app.chat-mode .conversation-empty{color:var(--muted)}
 body:has(.app.chat-mode) #settings-dialog .settings-section:has(#permission-mode-select),
 body:has(.app.chat-mode) #settings-dialog .settings-section:has(#model-select),
@@ -271,6 +292,57 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 .sidebar-collapsed .sidebar-footer-actions{grid-template-columns:42px;gap:3px}
 .sidebar-collapsed .sidebar .sidebar-footer-actions .nav-button{grid-column:1;width:42px;padding:9px;justify-content:center}
 .sidebar .brand:hover .brand-name{color:var(--accent-ink)}
+.sidebar-launchers{display:flex;flex-direction:column;gap:4px;margin-bottom:6px;flex:none}
+.sidebar-launchers .primary-nav{min-width:0;margin:0;gap:2px}
+.sidebar .sidebar-launchers .new-chat,.sidebar .sidebar-launchers .nav-button{min-height:32px;padding:4px 8px;font-size:12px;line-height:20px;gap:6px;border-radius:8px;box-shadow:none}
+.sidebar .sidebar-launchers .nav-button{display:flex;align-items:center;min-width:0;margin:0;border:1px solid transparent;background:transparent}
+.app:not(.sidebar-collapsed) .sidebar-launchers .nav-button{justify-content:flex-start;width:100%}
+.sidebar .sidebar-launchers .nav-button:hover{background:var(--theme-surface-hover,var(--surface-raised))}
+.app:not(.sidebar-collapsed):not(.mini-mode) .sidebar .primary-nav.workspace-extension-navigation{display:flex;flex-direction:column;max-height:24dvh;overflow-y:auto}
+.app:not(.sidebar-collapsed) .sidebar-launchers .workspace-extension-menu span{min-width:0;white-space:normal!important;overflow:visible!important;overflow-wrap:anywhere;text-align:left}
+.app:not(.sidebar-collapsed):not(.mini-mode) .sidebar{padding:11px 12px 8px}
+.app:not(.sidebar-collapsed) .sidebar-head{min-height:34px;margin-bottom:8px}
+/* Static frosted glass with a restrained satin star; no backdrop blur or motion. */
+.sidebar .brand-mark{
+  --brand-star-top:#9377e9;--brand-star-middle:#8368d8;--brand-star-bottom:#775ec8;
+  color:#8065d5;
+  background:linear-gradient(145deg,rgba(255,255,255,.28),rgba(255,255,255,.04) 52%,rgba(160,136,229,.1)),#e2dcf5;
+  border-color:rgba(135,115,182,.22);
+  box-shadow:inset 0 1px 1px rgba(255,255,255,.2),inset 0 -1px 1px rgba(114,88,177,.09),0 2px 4px rgba(78,64,125,.1);
+}
+.sidebar .brand-mark>.icon{display:block;stroke:url(#brand-spark-satin)}
+.sidebar .brand-mark .brand-satin-start{stop-color:var(--brand-star-top)}
+.sidebar .brand-mark .brand-satin-middle{stop-color:var(--brand-star-middle)}
+.sidebar .brand-mark .brand-satin-end{stop-color:var(--brand-star-bottom)}
+:root[data-theme="dark"] .sidebar .brand-mark{
+  --brand-star-top:#d2c2f7;--brand-star-middle:#c5b2ed;--brand-star-bottom:#b9a5e3;
+  color:#c5b2ed;
+  background:linear-gradient(145deg,rgba(224,213,255,.18),rgba(215,201,255,.025) 54%,rgba(167,143,223,.08)),#39394f;
+  border-color:rgba(202,186,239,.38);
+  box-shadow:inset 0 1px 1px rgba(238,228,255,.23),inset 0 -1px 1px rgba(183,161,230,.09),0 2px 5px rgba(6,8,18,.24);
+}
+@media(forced-colors:active){
+  :root[data-theme] .sidebar .brand-mark{background:Canvas;color:CanvasText;border-color:ButtonBorder;box-shadow:none}
+  .sidebar .brand-mark>.icon{stroke:CanvasText}
+}
+.app:not(.sidebar-collapsed) .sidebar .brand{min-height:29px}
+.app:not(.sidebar-collapsed) .sidebar .brand-mark{width:27px;height:27px;flex-basis:27px;border-radius:8px}
+.app:not(.sidebar-collapsed) .sidebar .brand-mark>.icon{width:19px;height:19px}
+.app:not(.sidebar-collapsed) .sidebar .mode-switch{padding:2px;margin:0 0 7px;border-radius:9px}
+.app:not(.sidebar-collapsed) .sidebar .mode-switch button{min-height:29px;padding-block:3px;border-radius:7px}
+.app:not(.sidebar-collapsed) .sidebar .session-search{min-height:30px;padding:4px 9px;margin:0}
+.app:not(.sidebar-collapsed) .sidebar .sidebar-label{margin:7px 5px 2px}
+.app:not(.sidebar-collapsed) .sidebar .sidebar-footer{padding-top:6px;gap:4px}
+.app:not(.sidebar-collapsed) .sidebar-footer-actions{gap:2px 6px}
+.app:not(.sidebar-collapsed) .sidebar .sidebar-footer-actions .nav-button{min-height:29px;padding:3px 7px;font-size:12px}
+.app.sidebar-collapsed .sidebar-launchers{display:flex;flex-direction:column;align-items:center;margin-bottom:0}
+.app.sidebar-collapsed .sidebar-launchers .primary-nav{margin:0}
+.app.sidebar-collapsed .sidebar-launchers .nav-button{border:0}
+@media(min-width:1200px){.app:not(.sidebar-collapsed):not(.mini-mode){--sidebar-width:clamp(256px,18.4vw,272px)}}
+@media(pointer:coarse){
+  .app:not(.sidebar-collapsed) .sidebar .mode-switch button,.sidebar .sidebar-launchers .new-chat,.sidebar .sidebar-launchers .nav-button,.app:not(.sidebar-collapsed) .sidebar .sidebar-footer-actions .nav-button{min-height:38px}
+  .app:not(.sidebar-collapsed) .sidebar .session-search{min-height:36px}
+}
 .sidebar .brand:focus-visible{border-radius:10px;outline:2px solid var(--accent);outline-offset:4px}
 .sidebar .task-group-overflow{margin-left:28px}
 .sidebar .task-group-more{font-size:12px;line-height:20px;min-height:32px;padding:5px 12px 5px 20px}
@@ -298,7 +370,7 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 /* Reserve three digits without moving the labels or changing the two tab widths. */
 .inspector .inspector-tab>span{flex:0 0 24px;width:24px;padding:2px;box-sizing:border-box;font-variant-numeric:tabular-nums;text-align:center}
 .inspector .inspector-tab[aria-selected=true]{border-color:var(--line);background:var(--theme-surface-raised,#fafbff);box-shadow:0 1px 3px #0000000a}
-.inspector .inspector-panel{margin-top:18px}
+.inspector .inspector-panel{margin-top:8px}
 #results-panel .result-intro{padding:0 0 12px}
 #results-panel .result-intro h2{font-size:13px;line-height:1.5;font-weight:600;margin:0 0 5px}
 #results-panel .result-intro p{font-size:11px;line-height:1.65;color:var(--muted)}
@@ -310,6 +382,13 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 .result-file-heading .result-file-name{min-width:0;flex:1;font-size:13px;line-height:1.6;font-weight:550;margin:0;padding-top:1px;overflow-wrap:anywhere}
 .result-meta-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:5px 8px;margin-top:10px}
 .result-meta-row .result-change{margin:0;padding:3px 6px;border-radius:5px;font-size:10px;font-weight:500;line-height:1.4;background:var(--accent-tint);color:var(--accent-ink)}
+/* Quiet status tints share the existing badge shape and keep text labels. */
+:root{--file-change-created-bg:#e6f0e9}
+:root[data-theme="dark"]{--file-change-created-bg:#283d35}
+.file-change-badge[data-change="created"]{background:var(--file-change-created-bg);color:var(--theme-success,#356e50)}
+.file-change-badge[data-change="modified"]{background:var(--theme-warning-tint,#f7efd9);color:var(--theme-warning,#80611f)}
+.file-change-badge[data-change="deleted"]{background:var(--theme-danger-tint,#f5e7e9);color:var(--theme-danger,#98505b)}
+@media(forced-colors:active){.file-change-badge[data-change]{background:Canvas;color:CanvasText;border:1px solid ButtonBorder}}
 .result-meta-row .result-meta{margin:0;font-size:10px;line-height:1.4;color:var(--muted)}
 .result-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:12px}
 .result-card .result-actions>button{display:flex;align-items:center;justify-content:center;min-width:0;min-height:34px;margin:0;padding:7px 5px;border:1px solid var(--line);border-radius:8px;background:transparent;box-shadow:none;font-family:inherit;font-size:11px;font-weight:500;line-height:1.5;text-align:center;white-space:normal;word-break:keep-all;color:var(--ink)}
@@ -436,7 +515,7 @@ dialog.path-picker .path-picker-location .quiet-button{
 .inspector-resizer:hover::before,.inspector-resizer:focus-visible::before,.inspector-resizing .inspector-resizer::before{background:var(--accent-ink)}
 .inspector-resizer:focus-visible::before{width:4px}
 .app.inspector-resizing,.app.inspector-resizing *{cursor:col-resize!important;user-select:none!important}
-@media not all and (max-width:1100px){.app:not(.inspector-collapsed):not(.catalog-open):not(.chat-mode){--inspector-width:var(--inspector-resized-width,292px)}}
+@media not all and (max-width:1100px){.app:not(.inspector-collapsed):not(.catalog-open):not(.chat-mode){--inspector-width:var(--inspector-resized-width,clamp(320px,23.2vw,480px))}}
 @media(max-width:1100px){.inspector-resizer{display:none}}
 @media(prefers-reduced-motion:reduce){.inspector-resizer::before{transition:none}}
 @media(forced-colors:active){.inspector-resizer:hover::before,.inspector-resizer:focus-visible::before,.inspector-resizing .inspector-resizer::before{background:Highlight}}
@@ -489,8 +568,8 @@ dialog.path-picker .path-picker-location .quiet-button{
 
 /* Compact source-file rows while preserving full filenames and a comfortable hit area. */
 #files>.file{min-height:44px;padding:7px 3px;gap:8px}
-#files .file-name{font-size:13px;line-height:20px}
-#files .file-extension{flex-basis:34px;width:34px;min-height:28px;height:28px;border-radius:7px;line-height:16px}
+#files .file-name{font-size:12px;line-height:20px}
+#files .file-extension{flex-basis:31px;width:31px;min-height:25px;height:25px;border-radius:7px;font-size:9px;line-height:16px}
 
 /* Automatic/native focus is functional, but is not keyboard navigation.
    The script enables existing focus rings immediately on Tab/navigation keys.
@@ -513,7 +592,7 @@ dialog.path-picker .path-picker-location .quiet-button{
 .app.mini-mode .primary-nav,.app.mini-mode .sidebar-footer,.app.mini-mode .brand-type small,
 .app.mini-mode #task-title,.app.mini-mode #task-pin,.app.mini-mode #branch-open,.app.mini-mode #workspace-summary,
 .app.mini-mode #connection-badge,.app.mini-mode #restart-connection,.app.mini-mode #materials-button,.app.mini-mode #workspace-button,
-.app.mini-mode #workflow-open,.app.mini-mode .attachment-tools,.app.mini-mode .composer-runtime-controls,.app.mini-mode .composer-trigger-hints{display:none!important}
+.app.mini-mode #workflow-open,.app.mini-mode #schedule-open,.app.mini-mode .composer-runtime-controls,.app.mini-mode .composer-trigger-hints{display:none!important}
 .app.mini-mode .workflow-toolbar:has(#session-sync[hidden]){display:none!important}
 .app.mini-mode .topbar{min-height:64px;padding-top:14px;padding-bottom:14px;align-items:center}
 .app.mini-mode .topbar-context{padding-bottom:0!important}
@@ -537,10 +616,11 @@ dialog.path-picker .path-picker-location .quiet-button{
 .app.mini-mode:not(.task-open) .composer-wrap{max-width:none;width:100%}
 .app.mini-mode .composer{padding:12px 14px;border-radius:18px}
 .app.mini-mode #prompt{min-height:54px;font-size:13px;line-height:25px}
+.app #prompt.with-row-citation:focus{min-height:5.8em}
 .app.mini-mode .composer-input-hints{justify-content:flex-start;margin-top:4px}
 .app.mini-mode .composer-shortcut-note{font-size:10px}
-.app.mini-mode .composer-tools{margin-top:4px;min-height:32px;justify-content:flex-end}
-.app.mini-mode .composer-tools:has(#send[hidden]){display:none}
+.app.mini-mode .composer-tools{margin-top:4px;min-height:32px;justify-content:space-between}
+.app.mini-mode #attach{min-height:32px;padding:0 8px;gap:4px}
 .app.mini-mode .composer-tools>.send-tools{margin-left:auto}
 .app.mini-mode .send-tools .send-button{height:32px;min-height:32px;padding:0 12px;gap:7px;font-size:12px;border-radius:10px}
 .app.mini-mode .send-tools .send-button .icon{width:16px;height:16px}
@@ -558,7 +638,7 @@ dialog.path-picker .path-picker-location .quiet-button{
 #files .material-folder-row{display:flex;align-items:center;min-width:0;border-bottom:1px solid var(--theme-line);gap:4px}
 #files .material-folder-row .file{min-width:0;flex:1;min-height:44px;padding:7px 3px;gap:8px;border:0}
 #files .material-folder-row .file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#files .file-extension .icon{width:18px;height:18px}
+#files .file-extension .icon{width:16px;height:16px}
 #files .material-open{flex:0 0 28px;width:28px;height:28px;min-height:28px;padding:5px;border-radius:7px}
 #files .material-open .icon{width:16px;height:16px}
 .material-location{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:0 0 8px;min-width:0;padding:4px 0}
@@ -600,7 +680,7 @@ dialog.path-picker .path-picker-location .quiet-button{
 .folder-card-icon{grid-column:1;grid-row:1 / 3;width:36px;height:36px;margin:0;align-self:center;border-radius:10px}
 .folder-card>.eyebrow{grid-column:2;grid-row:1;align-self:end;font-size:11px;line-height:18px;letter-spacing:0}
 .folder-card>strong{grid-column:2;grid-row:2;min-width:0;margin:0;font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.folder-card>p{grid-column:1 / -1;margin:10px 0 4px;font-size:12px;line-height:20px;overflow-wrap:anywhere}
+.folder-card>p{grid-column:1 / -1;margin:10px 0 4px;font-size:11px;line-height:18px;overflow-wrap:anywhere}
 .folder-card>.text-button{grid-column:1 / -1;justify-self:start;min-height:28px;padding:4px 0;font-size:11px;line-height:20px}
 
 /* Preview cleanup immediately releases iframe content and resize observers. */

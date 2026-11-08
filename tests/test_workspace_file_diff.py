@@ -48,6 +48,83 @@ class FileDiffTests(unittest.TestCase):
         self.assertFalse(result['currentFileRead'])
         self.assertEqual(path.read_text(encoding='utf-8'), 'third version\n')
 
+    def test_scoped_markdown_and_source_previews_support_captured_review(self):
+        names = ['guide.md', 'script.go']
+        for name in names:
+            self.write(name, 'one\ntwo\n')
+        self.store.start(self.workspace, 'docs-code', session_id='task')
+        for name in names:
+            self.write(name, 'one\nupdated\nthree\n')
+        result = self.store.finish(self.workspace, 'docs-code', allowed_paths=names)
+        self.assertEqual(result['lineCounts'], {name: {'added': 2, 'removed': 1} for name in names})
+        for row in self.changes('docs-code'):
+            self.assertEqual(self.compare(row, 'docs-code')['status'], 'text')
+
+    def test_scoped_run_without_write_evidence_drops_unrelated_text(self):
+        self.write('changed-by-other-task.md', 'private baseline')
+        self.store.start(self.workspace, 'scoped', session_id='task-a')
+        self.write('changed-by-other-task.md', 'other task result')
+        with mock.patch.object(self.store, '_read_source', side_effect=AssertionError('unattributed read')):
+            result = self.store.finish(self.workspace, 'scoped')
+        self.assertEqual(0, result['changeCount'])
+        self.assertEqual([], self.changes('scoped'))
+        stored = self.store._read(self.store._target(self.workspace, 'scoped'))
+        for phase in ('before', 'after'):
+            self.assertEqual({}, stored[phase]['files'])
+
+    def test_inline_edits_align_related_lines_across_insertions_and_preserve_unicode_offsets(self):
+        path = self.workspace / 'report.md'
+        original = ['# Report', '', '🗂 수율 목표 90 퍼센트', '최종 점검 기간 3일 이내', '',
+                    'fixed', 'x' * 520 + ' old']
+        updated = ['# Report', '', '새 섹션', '🗂 수율 목표 95 퍼센트', '담당자 참고',
+                   '최종 점검 기간 7일 이내', '추가 안내', '끝', '', 'fixed', 'x' * 520 + ' new']
+        path.write_bytes('\n'.join(original).encode())
+        self.store.start(self.workspace, 'report')
+        path.write_bytes('\n'.join(updated).encode())
+        self.store.finish(self.workspace, 'report')
+        rows = [row for hunk in self.compare(self.changes('report')[0], 'report')['hunks'] for row in hunk['rows']]
+        for row in rows:
+            if row['beforeLine'] is not None:
+                self.assertEqual(row['text'], original[row['beforeLine']-1])
+            if row['afterLine'] is not None:
+                self.assertEqual(row['text'], updated[row['afterLine']-1])
+        self.assertEqual([(r['pairedBeforeLine'], r['afterLine']) for r in rows if 'pairedBeforeLine' in r],
+                         [(3, 4), (4, 6)])
+        self.assertEqual([r['text'][start:end] for r in rows for start, end in r.get('highlights', ())],
+                         ['90', '3일', '95', '7일'])
+
+    def test_numbered_hunks_follow_stored_versions_and_preserve_source_whitespace(self):
+        path = self.workspace / 'code.py'
+        original = [f'unchanged {i}\r\n' for i in range(1, 20)]
+        original[0] = '\t--- old  \r\n'
+        original[-1] = 'last\u2028line\fhere'
+        updated = ['\t+++ new  \n', 'extra\n', *original[1:-1], 'final\n']
+        path.write_bytes(''.join(original).encode())
+        self.store.start(self.workspace, 'scoped', session_id='A')
+        path.write_bytes(''.join(updated).encode())
+        self.store.finish(self.workspace, 'scoped', allowed_paths=['code.py'])
+        path.write_bytes(b'unrelated current content')
+        files = self.store.list(self.workspace, 'scoped', session_id='A')['runs'][0]['files']
+        result = self.store.get(self.workspace, 'scoped', files[0]['id'], session_id='A')
+        first, last = result['hunks']
+        self.assertEqual((1, 4, 1, 5), (first['beforeStart'], first['beforeCount'],
+                                         first['afterStart'], first['afterCount']))
+        rows = [r for h in (first, last) for r in h['rows']]
+        for row in rows:
+            line = row['text'] + row['ending']
+            if row['beforeLine'] is not None:
+                self.assertEqual(line, original[row['beforeLine'] - 1])
+            if row['afterLine'] is not None:
+                self.assertEqual(line, updated[row['afterLine'] - 1])
+        self.assertEqual([(r['kind'], r['beforeLine'], r['afterLine']) for r in rows
+                          if r['kind'] != 'context'], [('remove', 1, None), ('add', None, 1),
+                          ('add', None, 2), ('remove', 19, None), ('add', None, 20)])
+        self.assertEqual(first['rows'][1]['text'], '\t+++ new  ')
+        self.assertEqual(last['rows'][-2]['ending'], '')
+        self.assertNotIn('unrelated current content', str(result))
+        with self.assertRaises(ValueError):
+            self.store.get(self.workspace, 'scoped', files[0]['id'], session_id='B')
+
     def test_create_and_delete_including_new_and_removed_child_folders(self):
         path = self.write('old/report.txt', 'deleted\n')
         self.store.start(self.workspace, 'run1')
@@ -60,6 +137,12 @@ class FileDiffTests(unittest.TestCase):
         self.assertEqual(rows['new/result.txt']['change'], 'created')
         self.assertIn('-deleted', self.compare(rows['old/report.txt'])['diff'])
         self.assertIn('+created', self.compare(rows['new/result.txt'])['diff'])
+        deleted = self.compare(rows['old/report.txt'])['hunks'][0]
+        created = self.compare(rows['new/result.txt'])['hunks'][0]
+        self.assertEqual((deleted['afterStart'], deleted['afterCount']), (0, 0))
+        self.assertEqual((created['beforeStart'], created['beforeCount']), (0, 0))
+        self.assertIsNone(deleted['rows'][0]['afterLine'])
+        self.assertIsNone(created['rows'][0]['beforeLine'])
 
     def test_incomplete_baseline_never_invents_creation(self):
         with mock.patch('local_app.file_diff.os.scandir', side_effect=PermissionError()):
@@ -248,6 +331,11 @@ class FileDiffTests(unittest.TestCase):
         result = self.compare(self.changes()[0])
         self.assertTrue(result['truncated'])
         self.assertLessEqual(len(result['diff'].splitlines()), 3)
+        self.assertFalse(any(h['rows'] for h in result['hunks']))
+        self.store.diff_lines = 5
+        result = self.compare(self.changes()[0])
+        self.assertTrue(result['truncated'])
+        self.assertEqual([r['beforeLine'] for r in result['hunks'][0]['rows']], [1, 2])
 
     def test_capture_storage_failure_does_not_escape_start_or_finish(self):
         self.write('report.txt', 'before')

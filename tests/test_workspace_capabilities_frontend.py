@@ -39,6 +39,26 @@ context.flush = () => new Promise(resolve => setImmediate(resolve));
 context.flatText = function flatText(node) {
   return [node.textContent || '', ...(node.children || []).map(flatText)].join(' ');
 };
+const descriptionObservers=[];
+context.descriptionObservers=descriptionObservers;
+context.ResizeObserver=class {
+  constructor(callback){this.callback=callback;this.targets=new Set();descriptionObservers.push(this);}
+  observe(node){this.targets.add(node);}
+  disconnect(){this.targets.clear();}
+};
+context.getComputedStyle=()=>({lineHeight:'21px'});
+context.requestAnimationFrame=callback=>setImmediate(callback);
+context.cancelAnimationFrame=clearImmediate;
+context.measureDescriptions=async(width=320)=>{
+  for(const observer of descriptionObservers){
+    const entries=[...observer.targets].map(target=>{
+      target.scrollHeight=target.textContent.length>100?168:21;
+      return {target,contentRect:{width}};
+    });
+    observer.callback(entries);
+  }
+  await context.flush();
+};
 vm.runInContext(fs.readFileSync(process.argv[4], 'utf8'), context, {filename:'capabilities.js'});
 const scenario=process.argv[3];
 """
@@ -66,6 +86,48 @@ const modern = (id, options = {}) => ({...fixture(id, options), schemaVersion:2,
 
 @unittest.skipUnless(NODE, "Node.js is required for catalog UI state checks")
 class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
+    def test_description_expansion_survives_refresh_without_leaking_catalog_contexts(self):
+        self.run_case(r"""(async()=>{
+          sessions.push({id:'B',title:'업무 B',workspace:'C:/fixture/B',state:'idle'});
+          const description='사용자가 전체 내용을 읽을 수 있어야 하는 긴 설명 '.repeat(20);
+          const item={name:'report',invocation:'report',candidateId:'candidate-1',description,source:'user',scope:'user'};
+          api=async()=>modern('A',{installed:{state:'discovered',skills:[item]},
+            groups:{skills:{reported:false,items:[]},tools:{reported:false,items:[]}}});
+          WorkspaceCapabilities.open();await flush();await measureDescriptions();
+          const first=$('capabilities-list').querySelector('.capability-description-toggle');
+          assert.ok(first);assert.equal(first.attributes['aria-expanded'],'false');assert.equal(first.hidden,false);
+          first.onclick();
+          await $('capabilities-refresh').onclick();
+          const refreshed=$('capabilities-list').querySelector('.capability-description-toggle');
+          assert.equal(refreshed.attributes['aria-expanded'],'true');
+          assert.equal($('capabilities-list').querySelector('.capability-description').textContent,description);
+          assert.equal($('capabilities-list').querySelector('.capability-details'),null);
+          assert.equal($('capabilities-tools-tab').querySelector('[data-count]').hidden,true);
+          assert.match($('capabilities-tools-tab').attributes['aria-label'],/연결 확인|미제공/);
+          $('capabilities-folder').value='B';$('capabilities-folder').onchange();await flush();
+          assert.equal($('capabilities-list').querySelector('.capability-description-toggle').attributes['aria-expanded'],'false');
+          WorkspaceCapabilities.close();
+          assert.equal(descriptionObservers[0].targets.size,0);
+        })()""")
+
+    def test_cards_show_each_description_command_origin_and_scope_only_once(self):
+        self.run_case(r"""(async()=>{
+          const short={name:'short',invocation:'tool:short',candidateId:'short',description:'짧은 설명',
+            source:'plugin',pluginNamespace:'tool',originLabel:'플러그인 tool',scope:'user',scopeLabel:'공통'};
+          const long={...short,name:'long',invocation:'tool:long',candidateId:'long',description:'아주 긴 설명 '.repeat(50)};
+          api=async()=>modern('A',{installed:{state:'discovered',skills:[short,long]},groups:{skills:{reported:false,items:[]}}});
+          WorkspaceCapabilities.open();await flush();await measureDescriptions();
+          const cards=$('capabilities-list').children[0].children[1].children;
+          const text=flatText(cards[0]);
+          for(const once of ['짧은 설명','/tool:short','플러그인 tool','범위: 공통','설치에서 확인'])assert.equal(text.split(once).length-1,1);
+          assert.equal(cards[0].querySelector('.capability-description-toggle').hidden,true);
+          assert.equal(cards[1].querySelector('.capability-description-toggle').hidden,false);
+          const toggle=cards[1].querySelector('.capability-description-toggle');toggle.onclick();
+          assert.equal(cards[1].querySelector('.capability-description').classList.contains('is-expanded'),true);
+          assert.equal(toggle.textContent,'접기');toggle.onclick();assert.equal(toggle.textContent,'더 보기');
+          WorkspaceCapabilities.close();
+        })()""")
+
     def test_text_events_do_not_recompute_catalog_but_connection_events_do(self):
         self.run_case(r"""(async()=>{
           api=async()=>modern('A');WorkspaceCapabilities.open();await flush();
@@ -404,6 +466,9 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           };
           WorkspaceCapabilities.open();await flush();$('capabilities-tools-tab').onclick();await tick();
           assert.equal(connects,1);assert.match($('capabilities-status').textContent,/연결 한도/);
+          assert.match($('capabilities-overview').textContent,/연결 확인 필요/);
+          assert.equal($('capabilities-warning').hidden,false);
+          assert.match($('capabilities-warning').textContent,/연결 한도.*조회 정보/);
           for(const type of ['mcp','commands','tools']){$('capabilities-'+type+'-tab').onclick();await tick();}
           assert.equal(connects,1);assert.equal(timers.size,0);
           await $('capabilities-connect').onclick();assert.equal(connects,2);
@@ -699,7 +764,7 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.match(flatText(groupsEl[1]),/내부 보조 스킬 · 3/);
           assert.match(flatText(groupsEl[2]),/참고 자료 · 1/);
           assert.equal(groupsEl[1].querySelector('code'),null);assert.equal(groupsEl[2].querySelector('code'),null);
-          assert.match(flatText(groupsEl[1]),/플러그인: codex/);
+          assert.match(flatText(groupsEl[1]),/출처: 플러그인 codex/);
           assert.equal($('capabilities-warning').hidden,true);
           for(const type of ['tools','mcp','commands']) {
             assert.equal($('capabilities-'+type+'-tab').querySelector('[data-count]').textContent,'연결 확인');
@@ -723,8 +788,8 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'3');
           const main=$('capabilities-list').children[0],details=$('capabilities-list').children[1];
           assert.equal(main.children[1].children.length,3);assert.match(flatText(main),/설치 설명/);
-          assert.match(flatText(main),/플러그인: one/);assert.match(flatText(main),/플러그인: two/);
-          assert.match(flatText(main),/설치 정보도 확인됨/);assert.doesNotMatch(flatText(main),/helper/);
+          assert.match(flatText(main),/출처: 플러그인 one/);assert.match(flatText(main),/출처: 플러그인 two/);
+          assert.match(flatText(main),/설치와 연결에서 확인/);assert.doesNotMatch(flatText(main),/helper/);
           assert.equal(details.querySelector('code'),null);assert.equal(details.open,false);
           $('capabilities-search').value='one:report';$('capabilities-search').oninput();
           assert.equal($('capabilities-list').children[0].children[1].children.length,1);
@@ -1055,8 +1120,8 @@ class WorkspaceCapabilitiesFrontendTests(unittest.TestCase):
           assert.equal($('capabilities-skills-tab').querySelector('[data-count]').textContent,'2');
           const groups=$('capabilities-list').children;
           assert.equal(groups[0].children[1].children.length,2);
-          assert.doesNotMatch(flatText(groups[0].children[1].children[0]),/설치 정보도 확인됨/);
-          assert.match(flatText(groups[0].children[1].children[1]),/설치 정보도 확인됨/);
+          assert.doesNotMatch(flatText(groups[0].children[1].children[0]),/설치와 연결에서 확인/);
+          assert.match(flatText(groups[0].children[1].children[1]),/설치와 연결에서 확인/);
           assert.match(flatText(groups[0]),/aaa11111/);assert.match(flatText(groups[0]),/bbb22222/);
           assert.match(flatText(groups[2]),/연결 보고 목록 · 2/);assert.equal(groups[2].open,false);
           assert.match(flatText($('capabilities-summary')),/일반 설치 후보 2개/);

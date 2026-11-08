@@ -559,6 +559,20 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('prompt').value,'작성 중 초안');assert.equal(inline.children[2],remove);
         })()""", ("workflow",))
 
+    def test_detail_queue_buttons_survive_status_refresh_and_removed_row_is_inert(self):
+        self.run_case(r"""(async()=>{
+          $('workflow-dialog').open=true;
+          const state={revision:1,queue:[{id:'held',text:'사용자 요청',state:'queued'}],schedules:[],steer:{supported:true}};
+          let calls=0;api=async()=>{calls++;return state;};await WorkspaceWorkflow.refresh();
+          const row=$('queue-list').children[0],buttons=[...row.children.at(-1).children];
+          active.state='question';WorkspaceWorkflow.render();
+          assert.equal($('queue-list').children[0],row);
+          for(let i=0;i<buttons.length;i++)assert.equal(row.children.at(-1).children[i],buttons[i]);
+          state.revision++;state.queue=[];await WorkspaceWorkflow.refresh();const previous=calls;
+          for(const button of buttons)await button.onclick();
+          assert.equal(calls,previous);assert.equal($('request-editor-dialog').open||false,false);
+        })()""", ("workflow",))
+
     def test_saved_queue_now_uses_saved_id_revision_without_consuming_composer(self):
         self.run_case(r"""(async()=>{
           $('workflow-dialog').open=true;

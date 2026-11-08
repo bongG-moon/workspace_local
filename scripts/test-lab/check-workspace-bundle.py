@@ -19,7 +19,7 @@ expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELI
             "docs/WORKSPACE_0.12.1_COMPATIBILITY.md", "docs/WORKSPACE_0.12.2_INPUT.md", "docs/WORKSPACE_0.12.3_AUTOCOMPLETE.md", "docs/WORKSPACE_0.12.4_CONTROLS.md", "docs/WORKSPACE_STANDALONE_EXE.md",
             "deploy/CompanyWorkspace.Startup.ps1", "deploy/CompanyWorkspace.NormalToken.cs",
             "deploy/CompanyAgent.UserContext.ps1",
-                                                                        "local_app/__init__.py", "local_app/bridge.py", "local_app/server.py", "local_app/demo.py",
+                                                                        "local_app/__init__.py", "local_app/bridge.py", "local_app/work_titles.py", "local_app/server.py", "local_app/demo.py",
             "local_app/claude_inventory.py", "local_app/session_order.py", "local_app/file_diff.py", "local_app/conversation_fork.py", "local_app/history.py", "local_app/artifacts.py", "local_app/capabilities.py", "local_app/skill_inventory.py", "local_app/html_preview.py",             "local_app/Pick-Path.ps1", "local_app/WorkspacePicker.cs", "local_app/Invoke-TerminalClaude.ps1",
             "local_app/startup.py", "local_app/picker_protocol.py", "local_app/windows_paths.py",
             "local_app/windows_process.py", "local_app/windows_job.py", "local_app/owned_process.py", "local_app/picker_channel.py",
@@ -67,6 +67,7 @@ expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py'
 expected.update({'local_app/native_fonts/AXWorkspaceUpdate-Regular.ttf', 'local_app/native_fonts/AXWorkspaceUpdate-SemiBold.ttf',
                  'local_app/native_fonts/OFL.txt', 'local_app/native_fonts/SOURCE.json', 'local_app/native_fonts/README.md'})
 expected.update({'local_app/web/html-preview.js'})
+expected.update({'local_app/web/row-drafts.js','local_app/web/result-explorer.js','local_app/web/result-explorer.css'})
 expected.update({'local_app/web/zoom-feedback.js', 'local_app/web/zoom-feedback.css'})
 expected.update({'local_app/web/input-keys.js', 'local_app/web/chat-shortcuts.js', 'local_app/web/chat-shortcuts.css'})
 expected.update({'local_app/ui_health.py','local_app/web/startup-health.js','local_app/web/startup-health.css'})

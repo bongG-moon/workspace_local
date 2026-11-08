@@ -6,7 +6,7 @@
 
 0.23.1부터 GitHub **Code → Download ZIP**을 그대로 가져와 사내용 배포 파일을 만들 수 있습니다. `.git` 폴더 복원이나 소스 파일 수정은 필요하지 않습니다. 소스 ZIP에는 완성된 EXE·DLL·WebView2 SDK 패키지가 들어 있지 않으며, 실행 파일은 사내 PC에서 만듭니다.
 
-현재 소스 버전은 **0.23.36**입니다. 사내 반입에는 [0.23.36 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.36/workspace-local-0.23.36-source.zip) 또는 GitHub의 최신 Download ZIP을 새 폴더에 풀고, 배포 창 상단의 버전이 0.23.36인지 확인하세요. 기존 사내 주소·프로젝트 ID·게시 토큰을 사용해 다시 게시합니다. 공개 GitHub 게시만으로 사내 GitLab 파일이 갱신되는 것은 아닙니다.
+현재 소스 버전은 **0.23.44**입니다. 사내 반입에는 [0.23.44 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.44/workspace-local-0.23.44-source.zip) 또는 GitHub의 최신 Download ZIP을 새 폴더에 풀고, 배포 창 상단의 버전이 0.23.44인지 확인하세요. 기존 사내 주소·프로젝트 ID·게시 토큰을 사용해 다시 게시합니다. 공개 GitHub 게시만으로 사내 GitLab 파일이 갱신되는 것은 아닙니다.
 
 이번 수정은 같은 0.23.32의 새 빌드입니다. 이미 같은 버전을 사용 중이면 버전 기반 자동 업데이트가 새 버전으로 안내하지 않을 수 있으므로, 사용자는 앱을 트레이에서 **완전 종료**하고 최신 설치 파일로 다시 설치해야 합니다. 기존 사용자 자료는 유지됩니다.
 

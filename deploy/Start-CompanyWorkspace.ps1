@@ -557,9 +557,9 @@ try {
         # confirmation is shown by the detached coordinator immediately at idle.
         if ($NoBrowser -and $health.upgradeProtocol -ne 1) { throw 'WORKSPACE_STARTUP:39' }
     }
+    Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE -ErrorAction SilentlyContinue
     if (-not $Demo -and -not $env:COMPANY_AGENT_CLAUDE) {
-        # Resolve exactly what `claude` means in this user's shell. Do not silently
-        # replace a profile alias/company wrapper with another executable on PATH.
+        # Record what this user's launch shell selected, including profile wrappers.
         # Never reuse stale launcher evidence inherited from another process.
         foreach ($name in @('COMPANY_WORKSPACE_CLAUDE_ENTRY', 'COMPANY_WORKSPACE_CLAUDE_PROFILE',
                             'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH', 'COMPANY_WORKSPACE_SHELL')) {
@@ -587,6 +587,14 @@ try {
                 if ([string]::IsNullOrWhiteSpace($terminalClaude.Source)) { throw 'WORKSPACE_STARTUP:36' }
                 $env:COMPANY_WORKSPACE_CLAUDE_ENTRY = $terminalClaude.Source
                 $env:COMPANY_WORKSPACE_CLAUDE_PROFILE = '0'
+                if ($aliasDepth -eq 0 -and [IO.Path]::GetFileName($terminalClaude.Source) -in @('claude.ps1','claude.cmd')) {
+                    # A stale Explorer PATH can still resolve an older npm shim.
+                    # The server checks its complete contents before trying native.
+                    $nativeClaude = Join-Path $context.userProfile '.local\bin\claude.exe'
+                    if ([IO.File]::Exists($nativeClaude)) {
+                        $env:COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE = $nativeClaude
+                    }
+                }
             } elseif ($terminalClaude.CommandType -eq 'Function') {
                 # Reload the same trusted profiles, without copying their body or secrets.
                 $definitionHasher = [Security.Cryptography.SHA256]::Create()
@@ -604,7 +612,8 @@ try {
             # Claude availability is an AI connection issue, not an app-start gate.
             # A fixed marker prevents the server from silently choosing another shim.
             foreach ($name in @('COMPANY_WORKSPACE_CLAUDE_ENTRY', 'COMPANY_WORKSPACE_CLAUDE_PROFILE',
-                                'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH', 'COMPANY_WORKSPACE_SHELL')) {
+                                'COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH', 'COMPANY_WORKSPACE_SHELL',
+                                'COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE')) {
                 Remove-Item -LiteralPath ('Env:' + $name) -ErrorAction SilentlyContinue
             }
             $env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE = '1'

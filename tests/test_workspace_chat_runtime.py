@@ -49,6 +49,19 @@ class ChatRuntimeTests(unittest.TestCase):
         for flag in ('--bare', '--settings', '--setting-sources', '--dangerously-skip-permissions', '--model'):
             self.assertNotIn(flag, restricted)
 
+    def test_inline_chart_guidance_reaches_work_and_chat_without_requiring_newer_work_cli(self):
+        sid = str(uuid.uuid4())
+        for profile in ('work', CHAT_RUNTIME_PROFILE):
+            for resume in (None, sid):
+                argv = cli_arguments(FAKE, INFO, resume=resume, runtime_profile=profile)
+                self.assertEqual(argv.count('--append-system-prompt'), 1)
+                hint = argv[argv.index('--append-system-prompt') + 1]
+                self.assertIn('ax-chart', hint)
+                if profile == CHAT_RUNTIME_PROFILE:
+                    self.assertIn('only the conversation and explicitly attached content', hint)
+        for help_text in ('', '--append-system-prompt-file <file>'):
+            self.assertNotIn('--append-system-prompt', cli_arguments(FAKE, {'help': help_text}))
+
     def test_missing_feature_or_verbatim_version_fails_before_process_creation(self):
         for flag in CHAT_REQUIRED_FLAGS:
             info = {**INFO, 'help': INFO['help'].replace(flag, '')}

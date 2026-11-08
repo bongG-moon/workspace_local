@@ -14,13 +14,18 @@ KEYS = ('sidebarCollapsed', 'inspectorCollapsed', 'inspectorWidth', 'miniMode')
 
 
 def validated(value):
-    if not isinstance(value, dict) or set(value) != set(KEYS):
+    if not isinstance(value, dict) or set(value) not in (set(KEYS), set(KEYS) | {'inspectorWidthMode'}):
         raise ValueError('화면 배치 설정의 항목을 확인해 주세요.')
     if any(type(value[key]) is not bool for key in ('sidebarCollapsed', 'inspectorCollapsed', 'miniMode')):
         raise ValueError('화면 배치 설정을 다시 선택해 주세요.')
     if type(value['inspectorWidth']) is not int or not 260 <= value['inspectorWidth'] <= 560:
         raise ValueError('자료와 결과 너비는 260~560픽셀이어야 합니다.')
-    return {key: value[key] for key in KEYS}
+    result = {key: value[key] for key in KEYS}
+    if 'inspectorWidthMode' in value:
+        if value['inspectorWidthMode'] not in ('auto', 'manual'):
+            raise ValueError('자료와 결과 너비 설정을 다시 선택해 주세요.')
+        result['inspectorWidthMode'] = value['inspectorWidthMode']
+    return result
 
 
 class LayoutPreferences:

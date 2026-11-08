@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
@@ -9,7 +10,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from local_app.server import LocalApp, Server
-from local_app.bridge import ControlRestoreRequired
+from local_app.bridge import ClaudeSession, ControlRestoreRequired
+from local_app.file_preview import build_preview
 
 
 class Bridge:
@@ -51,11 +53,11 @@ class DispatchRoutesTests(unittest.TestCase):
     def shutdown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join(2)
 
-    def request(self, data=None, *, authorized=True):
+    def request(self, data=None, *, authorized=True, route='/api/dispatch'):
         headers = {'Content-Type': 'application/json'}
         if authorized:
             headers['Authorization'] = 'Bearer ' + self.app.token
-        request = Request(self.server.origin + '/api/dispatch?id=' + self.sid,
+        request = Request(self.server.origin + route + '?id=' + self.sid,
                           data=json.dumps({'id': self.sid, **data}).encode() if data is not None else None,
                           headers=headers)
         try:
@@ -69,6 +71,58 @@ class DispatchRoutesTests(unittest.TestCase):
         code, value = self.request({'action': action, 'text': text, 'attachments': [], 'clientRequestId': text})
         self.assertEqual(200, code, value)
         return value
+
+    def test_stale_send_queue_and_check_return_same_owned_review_receipt(self):
+        source = self.work / 'input.csv'
+        source.write_text('machine,count\nA,4\n', encoding='utf-8')
+        status, original = self.request({'path':str(source), 'version':build_preview(source)['version'], 'rowNumber':1},
+                                        route='/api/table-reference')
+        self.assertEqual(200, status)
+        source.write_text('machine,count\nB,20\nA,8\n', encoding='utf-8')
+        for route, data in [('/api/send', {'text':original['text'],'attachments':[]}),
+                            ('/api/dispatch', {'action':'enqueue','text':original['text'],'attachments':[]}),
+                            ('/api/table-reference', {'action':'check','text':original['text']})]:
+            status, problem = self.request(data, route=route)
+            self.assertEqual(409, status, problem)
+            self.assertEqual('stale_table_reference', problem['code'])
+            self.assertEqual(original['referenceId'], problem['referenceId'])
+            self.assertIs(True, problem['canReview'])
+        self.assertEqual([], self.bridge.sent)
+        status, reviewed = self.request({'action':'review','referenceId':original['referenceId']}, route='/api/table-reference')
+        self.assertEqual(200, status)
+        status, updated = self.request({'action':'replace','referenceId':original['referenceId'],
+                                        'version':reviewed['version'],'rowNumber':2}, route='/api/table-reference')
+        self.assertEqual(200, status)
+        self.assertEqual(original['referenceId'], updated['replaces'])
+        self.assertIn('machine: A | count: 8', updated['text'])
+        self.assertEqual([], self.bridge.sent)
+
+    def test_filtered_table_scope_is_exactly_the_outbound_cli_prompt(self):
+        path = self.work / 'daily.tsv'
+        path.write_text('날짜\t내부 비고\t검사수\n11-01\t노출금지\t11\n11-02\t비공개\t999\n11-03\t내부전용\t33\n', encoding='utf-8')
+        data={'path':str(path),'version':build_preview(path)['version'],'rows':[3,1],'columns':[1,3]}
+        status, value = self.request(data, route='/api/table-reference')
+        self.assertEqual(200,status,value)
+        status, _ = self.request({**data,'rowNumber':1}, route='/api/table-reference')
+        self.assertEqual(400,status)
+        command = [sys.executable, '-X', 'utf8', str(Path(__file__).parent / 'fixtures/workspace_fake_cli.py')]
+        transport = ClaudeSession(command, {'permissionMode':'manual'}, self.work, lambda kind, data: self.app.emit(self.sid,kind,data))
+        self.app.get(self.sid)['bridge'] = transport
+        self.addCleanup(transport.close)
+        prompt = 'TABLE_RANGE_STDIN_TEST\n두 날짜를 비교해 줘\n\n' + value['text']
+        status, result = self.request({'text':prompt,'attachments':[]}, route='/api/send')
+        self.assertEqual(200,status,result)
+        capture = self.work / 'table-range-stdin.json'
+        deadline = time.monotonic() + 10
+        while not capture.exists() and time.monotonic() < deadline:
+            time.sleep(.025)
+        wire = json.loads(capture.read_text(encoding='utf-8'))
+        self.assertEqual('user', wire['type'])
+        received = wire['message']['content']
+        self.assertEqual(prompt,received)
+        self.assertEqual({'열':[[1,'날짜'],[3,'검사수']],'행':[[3,['11-03','33']],[1,['11-01','11']]]},json.loads(received.splitlines()[-1]))
+        for excluded in ['내부 비고','11-02','999','노출금지','비공개','내부전용',str(path)]:
+            self.assertNotIn(excluded,received)
 
     def test_cancel_multiline_request_removes_only_selected_row_and_persists(self):
         self.app.get(self.sid)['state'] = 'running'

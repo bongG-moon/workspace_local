@@ -7,13 +7,13 @@ globalThis.WorkspaceShortcuts = (() => {
   let prefix=null, searchContext=null, matches=[], selected=0, composing=false, searchComposing=false, stopPending=null;
   const key=event=>String(event.key).toLowerCase();
   const id=()=>active?.id||(globalThis.WorkspaceModes?.isChat()?"home:chat":"home");
-  const snapshot=()=>({text:input.value,attachments:[...attachments],selectionStart:input.selectionStart??input.value.length,selectionEnd:input.selectionEnd??input.value.length});
+  const snapshot=()=>({text:globalThis.WorkspaceRowDrafts?.compose?.(input.value) ?? input.value,attachments:[...attachments],selectionStart:input.selectionStart??input.value.length,selectionEnd:input.selectionEnd??input.value.length});
   const history=()=>((active?.messages||[]).filter(row=>row.role==="user"&&typeof row.text==="string").slice(-100));
   const editable=()=>!appClosed&&!input.readOnly&&!sending&&!choiceSubmission&&!globalThis.WorkspaceAttachments?.isUploading();
   const clean=event=>!event.defaultPrevented&&!event.isComposing&&event.keyCode!==229&&!composing;
   const consume=event=>{event.preventDefault();return true;};
   function restore(draft){
-    input.value=draft.text;attachments=[...(draft.attachments||draft.files||[])];
+    input.value=globalThis.WorkspaceRowDrafts?.restore?.(draft.text) ?? draft.text;attachments=[...(draft.attachments||draft.files||[])];
     input.setSelectionRange?.(draft.selectionStart??input.value.length,draft.selectionEnd??input.value.length);renderAttachments();saveDraft();
     globalThis.WorkspaceInputKeys?.reset();globalThis.WorkspaceComposer?.close();input.focus();
   }

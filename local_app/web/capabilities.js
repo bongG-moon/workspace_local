@@ -11,6 +11,7 @@ globalThis.WorkspaceCapabilities = (() => {
   let commonSession = null, commonExplicit = false, preparing = null;
   let autoTimer = null;
   const attempted = new Map();
+  const connectionErrors = new Map();
   function autoPrepare() {
     clearTimeout(autoTimer);
     if (!opened || loading || !data || !runtimeSession() || data.runtime?.state === "live" || boot.demo || appClosed) return;
@@ -39,6 +40,47 @@ globalThis.WorkspaceCapabilities = (() => {
   const serverStates = {connected:"연결됨", pending:"연결 대기", failed:"연결 실패", disabled:"사용 안 함", "needs-auth":"인증 필요"};
   const app = () => document.querySelector(".app");
   const expanded = {internal:false, reference:false, runtime:false, builtin:false};
+  const expandedCards = new Map();
+  const descriptionViews = new Map(), descriptionPending = new Set();
+  let descriptionFrame = null, descriptionSerial = 0;
+  const descriptionObserver = typeof ResizeObserver === "function" ? new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const view = descriptionViews.get(entry.target);
+      if (!view || !entry.contentRect.width || view.width === entry.contentRect.width) continue;
+      view.width = entry.contentRect.width; descriptionPending.add(entry.target);
+    }
+    scheduleDescriptions();
+  }) : null;
+  function scheduleDescriptions() {
+    if (!descriptionPending.size || descriptionFrame !== null) return;
+    descriptionFrame = requestAnimationFrame(() => {
+      descriptionFrame = null;
+      // Batch layout reads before changing controls. Height-only observer events
+      // from expanding a card are ignored; no polling or per-render reflow.
+      const updates = [];
+      for (const paragraph of descriptionPending) {
+        const view = descriptionViews.get(paragraph);
+        if (!view || !paragraph.isConnected) continue;
+        const lineHeight = parseFloat(getComputedStyle(paragraph).lineHeight);
+        if (Number.isFinite(lineHeight)) updates.push([paragraph, view, paragraph.scrollHeight > lineHeight * 3 + 1]);
+      }
+      descriptionPending.clear();
+      for (const [paragraph, view, clipped] of updates) {
+        view.button.hidden = !clipped;
+        view.button.setAttribute("aria-expanded", String(paragraph.classList.contains("is-expanded")));
+      }
+    });
+  }
+  function resetDescriptions() {
+    descriptionObserver?.disconnect(); descriptionViews.clear(); descriptionPending.clear();
+    if (descriptionFrame !== null) cancelAnimationFrame(descriptionFrame);
+    descriptionFrame = null;
+  }
+  document.fonts?.addEventListener?.("loadingdone", () => {
+    if (!opened) return;
+    for (const paragraph of descriptionViews.keys()) descriptionPending.add(paragraph);
+    scheduleDescriptions();
+  });
   const invocationKey = row => (row.invocation || "").trim().replace(/^\/+/, "");
   const runtimeSession = () => scope === "common" ? commonSession : selectedSession;
   const beforeConnection = () => data ? ["awaiting-runtime", "no-session", "installed-only"].includes(data.status) : !runtimeSession();
@@ -104,7 +146,7 @@ globalThis.WorkspaceCapabilities = (() => {
       const placeholder = el("option", rows.length ? "연결 목록의 기준 업무를 선택하세요" : "등록된 업무가 없어요");
       placeholder.value = ""; placeholder.disabled = true; select.replaceChildren(placeholder);
       for (const item of rows) {
-        const option = el("option", `${item.title || "업무"} — ${item.workspace}`);
+        const option = el("option", `${item.title || "업무"} — ${basename(item.workspace)}`);
         option.value = item.id; option.title = item.workspace; select.append(option);
       }
     }
@@ -134,7 +176,7 @@ globalThis.WorkspaceCapabilities = (() => {
     contextLine();
     const selected=runtimeSession();
     $("capabilities-connect").disabled=!!preparing||!selected||appClosed||!!globalThis.WorkspaceConnectionRestart?.isCurrent();
-    $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "다시 확인";
+    $("capabilities-connect").textContent=preparing ? "연결 목록 확인 중…" : "연결 다시 확인";
     const attention = active && ["approval", "question"].includes(active.state)
       ? " 현재 업무가 답변을 기다리고 있어요. ‘업무로 돌아가기’에서 확인하세요." : "";
     $("capabilities-status").textContent = loading || preparing
@@ -142,6 +184,17 @@ globalThis.WorkspaceCapabilities = (() => {
       : (data?.notice || (scope === "folder" ? selectedFolder ? "선택한 업무 폴더의 기능 목록을 확인합니다." : emptyFolderNotice() : "공통 설치 스킬과 선택한 업무 연결의 보고 목록을 구분해 확인합니다.")) + attention;
     if (!loading && !preparing && kind === "skills" && data?.runtime?.state !== "live" && selected) {
       $("capabilities-status").textContent += " 설치 스킬은 파일에서 바로 확인하고, 선택한 업무의 실행 기능·MCP·빠른 요청도 자동으로 확인합니다.";
+    }
+    const overview = $("capabilities-overview");
+    overview.textContent = loading || preparing ? "목록 확인 중…"
+      : connectionErrors.has(contextKey()) ? kind === "skills" && installedAvailable()
+        ? "설치 목록 확인됨 · 연결 확인 필요" : "연결 확인 필요"
+      : kind === "skills" && installedAvailable() ? installedPartial() ? "설치 목록 일부 확인" : "설치 목록 확인됨"
+      : data?.runtime?.state === "live" ? "현재 연결에서 확인"
+      : group().reported ? "마지막 연결 정보"
+      : !selected ? "기준 업무를 선택하세요." : "연결 목록 확인 필요";
+    if (!loading && !preparing && connectionErrors.has(contextKey())) {
+      $("capabilities-status").textContent = connectionErrors.get(contextKey());
     }
   }
   function skillInventory() {
@@ -211,7 +264,10 @@ globalThis.WorkspaceCapabilities = (() => {
       tab.tabIndex = type === kind ? 0 : -1;
       const count = tab.querySelector("[data-count]");
       const label = countLabel(type, inventory);
-      if (count) count.textContent = label;
+      if (count) {
+        count.textContent = label;
+        count.hidden = !/^\d+$/.test(label);
+      }
       tab.setAttribute("aria-label", `${names[type]} · ${label}${/^\d+$/.test(label) ? "개" : ""}`);
     }
     $("capabilities-panel").setAttribute("aria-labelledby", `capabilities-${kind}-tab`);
@@ -243,22 +299,47 @@ globalThis.WorkspaceCapabilities = (() => {
       header.append(el("h4", row.displayName || row.name, "capability-name"));
       const live = data?.runtime?.state === "live";
       const fromRuntime = origin === "runtime" || row._runtime;
-      let badge = fromRuntime ? live ? "연결에서 확인" : "마지막 연결 정보" : "설치에서 확인";
+      let badge = fromRuntime ? row._installed ? live ? "설치와 연결에서 확인" : "설치와 이전 연결에서 확인"
+        : live ? "연결에서 확인" : "마지막 연결 정보" : "설치에서 확인";
       if (data?.status === "demo") badge = "체험용 가상 항목";
       header.append(el("span", badge, "capability-badge"));
       card.append(header);
-      card.append(el("p", row.description || "제공된 설명이 없어요.", "capability-description"));
+      const paragraph = el("p", row.description || "제공된 설명이 없어요.", "capability-description");
+      card.append(paragraph);
+      if (descriptionObserver && row.description) {
+        const key = [contextKey(), kind, category, origin,
+          row.candidateId || [row.name, row.invocation, row.source, row.scope].join("|")].join("\n");
+        paragraph.id = `capability-description-${++descriptionSerial}`;
+        paragraph.classList.add("is-collapsible");
+        if (expandedCards.has(key)) paragraph.classList.add("is-expanded");
+        const toggle = el("button", expandedCards.has(key) ? "접기" : "더 보기", "capability-description-toggle");
+        toggle.type = "button"; toggle.hidden = true;
+        toggle.setAttribute("aria-controls", paragraph.id);
+        toggle.setAttribute("aria-expanded", String(expandedCards.has(key)));
+        toggle.setAttribute("aria-label", `${row.displayName || row.name} 설명 ${expandedCards.has(key) ? "접기" : "더 보기"}`);
+        toggle.onclick = () => {
+          const show = !paragraph.classList.contains("is-expanded");
+          paragraph.classList.toggle("is-expanded", show);
+          if (show) {
+            expandedCards.set(key, true);
+            if (expandedCards.size > 128) expandedCards.delete(expandedCards.keys().next().value);
+          } else expandedCards.delete(key);
+          toggle.textContent = show ? "접기" : "더 보기";
+          toggle.setAttribute("aria-expanded", String(show));
+          toggle.setAttribute("aria-label", `${row.displayName || row.name} 설명 ${show ? "접기" : "더 보기"}`);
+        };
+        card.append(toggle); descriptionViews.set(paragraph, {button:toggle, width:null});
+      }
+      if (row.invocation && row.userInvocable !== false && !["internal", "reference"].includes(row.category)) {
+        card.append(el("code", "/" + invocationKey(row), "capability-invocation"));
+      }
       const metadata = el("div", null, "capability-metadata");
       if (row.displayName && row.displayName !== row.name) metadata.append(el("code", row.name));
-      if (row.invocation && row.userInvocable !== false && !["internal", "reference"].includes(row.category)) {
-        metadata.append(el("code", "/" + invocationKey(row)));
-      }
       const namespace = row.pluginNamespace || invocationKey(row).split(":").slice(0, -1).join(":");
-      if (namespace) metadata.append(el("span", `플러그인: ${namespace}`));
-      if (row.source) metadata.append(el("span", `출처: ${sources[row.source] || row.source}`));
-      if (row.scope) metadata.append(el("span", `범위: ${scopeNames[row.scope] || row.scope}`));
-      if (row.originLabel) metadata.append(el("span", row.originLabel));
-      if (row.scopeLabel) metadata.append(el("span", row.scopeLabel));
+      const originLabel = row.originLabel || (namespace ? `플러그인 ${namespace}` : sources[row.source] || row.source);
+      const scopeLabel = row.scopeLabel || scopeNames[row.scope] || row.scope;
+      if (originLabel) metadata.append(el("span", `출처: ${originLabel}`));
+      if (scopeLabel) metadata.append(el("span", `범위: ${scopeLabel}`));
       if (row._duplicateOrigin && row.candidateId) metadata.append(el("span", `설치 항목 구분: ${row.candidateId.split(":").pop().slice(0, 8)}`));
       if (kind === "tools") {
         const labels = {builtin:"Claude 기본 실행 기능", harness:"외부 제공 실행 기능", mcp:"MCP에서 제공하는 실행 기능", unknown:"종류 미확인"};
@@ -274,7 +355,6 @@ globalThis.WorkspaceCapabilities = (() => {
       }
       if (kind === "mcp") metadata.append(el("span", `${live ? "연결 상태" : "마지막 상태"}: ${serverStates[row.status] || row.status || "미제공"}`));
       if (row.explicitOnly && !collapsed) metadata.append(el("span", "직접 요청하는 스킬"));
-      if (row._installed && row._runtime) metadata.append(el("span", "설치 정보도 확인됨"));
       if (metadata.children.length) card.append(metadata);
       cards.append(card);
     }
@@ -282,6 +362,7 @@ globalThis.WorkspaceCapabilities = (() => {
     $("capabilities-list").append(section);
   }
   function render() {
+    resetDescriptions();
     const inventory = skillInventory();
     tabState(inventory); statusLine();
     $("capabilities-kind-description").textContent = descriptions[kind];
@@ -318,9 +399,11 @@ globalThis.WorkspaceCapabilities = (() => {
         : "확인한 설치 목록에 일반 스킬이 없어요."
       : current.reported ? `CLI가 보고한 ${names[kind]} 목록이 비어 있어요.`
       : data?.schemaVersion === 2 && data?.status === "installed-only" ? "이 범위의 업무 연결 보고가 없어요. 설치 정보와 실제 연결 목록은 별도로 확인합니다."
-      : beforeConnection() ? `선택한 업무의 Claude 연결을 자동으로 확인합니다. 연결에 실패하면 ‘다시 확인’으로 재시도할 수 있어요.`
+      : beforeConnection() ? `선택한 업무의 Claude 연결을 자동으로 확인합니다. 연결에 실패하면 ‘조회 정보’에서 ‘연결 다시 확인’을 눌러 주세요.`
       : `현재 Claude 연결에서 ${names[kind]} 목록을 전달받지 못했어요. 항목이 없다는 뜻은 아닙니다.`;
     const notes = [...(data?.warnings || [])];
+    const connectionError = connectionErrors.get(contextKey());
+    if (connectionError) notes.push(`연결 목록을 확인하지 못했어요. ${connectionError} ‘조회 정보’에서 ‘연결 다시 확인’을 눌러 주세요.`);
     if (kind === "skills" && data?.installed?.diagnostics?.summary && !["ready", "metadata_read"].includes(data.installed.diagnostics.code)) notes.push(data.installed.diagnostics.summary);
     if (current.limited) notes.push("목록이 길어 일부 항목만 표시합니다.");
     if (kind === "skills" && data?.installed?.limited) notes.push("설치 정보는 확인 범위 내의 일부 항목입니다.");
@@ -366,6 +449,7 @@ globalThis.WorkspaceCapabilities = (() => {
     } else {
       summary.append(el("span", "숫자는 선택한 업무의 Claude 연결이 보고한 항목 수예요. ‘CLI 미제공’은 0개라는 뜻이 아닙니다. 실행 기능 목록은 첫 실제 요청 후 제공될 수 있어요.", "capability-count-note"));
     }
+    for (const paragraph of descriptionViews.keys()) descriptionObserver.observe(paragraph);
   }
   // Selection changes share one debounce; stale fetches are detached immediately.
   // Disk discovery is bounded by the server and tab changes reuse this single payload.
@@ -397,11 +481,14 @@ globalThis.WorkspaceCapabilities = (() => {
         else if (commonSession) query += `&id=${encodeURIComponent(commonSession.id)}`;
         const response = await api("/api/capabilities" + query, undefined, request.controller.signal);
         if (!opened || request.ticket !== generation || contextKey() !== key) return;
-        data = response; loading = false; render(); autoPrepare();
+        data = response;
+        if (data?.runtime?.state === "live") connectionErrors.delete(key);
+        loading = false; render(); autoPrepare();
       } catch (err) {
         if (err.name === "AbortError" || request.ticket !== generation || !opened) return;
         data = null; loading = false; render();
         $("capabilities-status").textContent = "목록을 불러오지 못했어요. 새로고침으로 다시 확인해 주세요.";
+        $("capabilities-overview").textContent = "목록을 불러오지 못했어요.";
         $("capabilities-warning").textContent = err.message;
         $("capabilities-warning").hidden = false;
       } finally {
@@ -435,6 +522,7 @@ globalThis.WorkspaceCapabilities = (() => {
     clearTimeout(autoTimer);
     if (!opened) return;
     opened = false; generation++; loading = false; refreshPending = null;
+    resetDescriptions();
     foldersCacheKey = ""; foldersCache = [];
     clearTimeout(selectionTimer); selectionTimer = null;
     if (controller) controller.abort();
@@ -448,6 +536,7 @@ globalThis.WorkspaceCapabilities = (() => {
   async function prepareCatalog({automatic=false} = {}) {
     if(preparing||!runtimeSession()||appClosed||globalThis.WorkspaceConnectionRestart?.isCurrent())return;
     const context={key:contextKey(),id:runtimeSession().id};
+    connectionErrors.delete(context.key);
     attempted.set(context.id, Date.now());
     while (attempted.size > 16) attempted.delete(attempted.keys().next().value);
     preparing=context;statusLine();globalThis.WorkspaceConnectionRestart?.refreshControls();
@@ -471,8 +560,13 @@ globalThis.WorkspaceCapabilities = (() => {
       if(active?.id===context.id){active.trusted=true;active.connection=response.connection;renderConnection(response.connection);}
       await refresh({force:true});
       if(current()&&!automatic)toast("연결 목록을 확인했어요. 실행 기능 목록은 CLI가 첫 실제 요청에서 제공하는 경우 이후에 표시됩니다.");
-    }catch(err){if(current()){$("capabilities-status").textContent=err.message;if(!automatic)toast(err.message);context.error=err.message;}}
-    finally{if(preparing===context){preparing=null;if(opened){statusLine();if(context.error&&current())$("capabilities-status").textContent=context.error;if(!current())autoPrepare();}globalThis.WorkspaceConnectionRestart?.refreshControls();}}
+    }catch(err){if(current()){
+      context.error=String(err.message || "연결 확인에 실패했어요.").slice(0,500);
+      connectionErrors.set(context.key,context.error);
+      if(connectionErrors.size>16)connectionErrors.delete(connectionErrors.keys().next().value);
+      $("capabilities-status").textContent=context.error;if(!automatic)toast(context.error);
+    }}
+    finally{if(preparing===context){preparing=null;if(opened){if(context.error&&current())render();else statusLine();if(!current())autoPrepare();}globalThis.WorkspaceConnectionRestart?.refreshControls();}}
   }
   function contextChanged(reload = false) {
     if (!opened) return;
