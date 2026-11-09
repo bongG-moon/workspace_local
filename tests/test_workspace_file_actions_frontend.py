@@ -127,6 +127,50 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
           assert.equal(previewData.name,'b.html');assert.ok($('preview-content').querySelector('iframe'));
         })()""")
 
+    def test_reselecting_html_tab_preserves_rendered_document_and_clears_on_close(self):
+        self.run_case(r"""(async()=>{
+          let reads=0;
+          api=async()=>{reads++;return {kind:'html',name:'large.html',html:'<h1>본문</h1>',text:'<h1>본문</h1>'};};
+          await preview('C:/fixture/A/large.html');
+          const content=$('preview-content'),screen=content.querySelector('iframe');
+          screen.scrollTop=123;content.scrollTop=456;
+          for(let i=0;i<5;i++)$('preview-screen').onclick();
+          assert.equal(content.querySelector('iframe'),screen);
+          assert.equal(screen.scrollTop,123);assert.equal(content.scrollTop,456);
+          assert.equal(screen.attributes.sandbox,'');
+          $('preview-code').onclick();
+          const code=content.querySelector('pre');content.scrollTop=42;
+          for(let i=0;i<5;i++)$('preview-code').onclick();
+          assert.equal(content.querySelector('pre'),code);assert.equal(content.scrollTop,42);
+          $('preview-screen').onclick();const next=content.querySelector('iframe');
+          assert.notEqual(next,screen);assert.equal(next.attributes.sandbox,'');
+          assert.equal(reads,1);
+          closePreview();assert.equal(previewData,null);assert.equal(htmlPreviewRender,null);
+          assert.equal(content.children.length,0);
+          await preview('C:/fixture/A/large.html');
+          assert.notEqual(content.querySelector('iframe'),next);assert.equal(reads,2);
+        })()""")
+
+    def test_html_script_notice_and_static_screen_remain_distinct_render_modes(self):
+        self.run_case(r"""(async()=>{
+          api=async()=>({kind:'html',name:'dynamic.html',html:'<main></main>',text:'<script>draw()</script>',scriptOnly:true});
+          await preview('C:/fixture/A/dynamic.html');
+          const content=$('preview-content'),notice=content.querySelector('.preview-static-notice');
+          assert.ok(notice);$('preview-screen').onclick();
+          assert.equal(content.querySelector('.preview-static-notice'),notice);
+          notice.querySelector('button').onclick();const staticFrame=content.querySelector('iframe');
+          assert.ok(staticFrame);assert.equal(staticFrame.attributes.sandbox,'');
+          renderHtmlPreview('static');assert.equal(content.querySelector('iframe'),staticFrame);
+          $('preview-screen').onclick();assert.equal(content.querySelector('iframe'),null);
+          assert.ok(content.querySelector('.preview-static-notice'));
+          $('preview-code').onclick();assert.ok(content.querySelector('pre'));
+          $('preview-screen').onclick();assert.ok(content.querySelector('.preview-static-notice'));
+          // A new file is always rendered, even when it uses the same tab.
+          api=async()=>({kind:'html',name:'normal.html',html:'<p>다른 파일</p>',text:'<p>다른 파일</p>'});
+          await preview('C:/fixture/A/normal.html');assert.ok(content.querySelector('iframe'));
+          assert.equal(content.querySelector('.preview-static-notice'),null);
+        })()""")
+
     def test_late_preview_and_close_cannot_replace_current_task_context(self):
         self.run_case(r"""(async()=>{
           const pending=[];api=(path,body)=>new Promise(resolve=>pending.push({path,body,resolve}));

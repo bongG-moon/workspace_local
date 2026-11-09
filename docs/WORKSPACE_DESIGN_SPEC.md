@@ -239,7 +239,7 @@ GUI의 파일 접근 제한은 Claude 자체의 권한·샌드박스를 대체�
 | POST `/api/model` | 모델 이름 또는 기본값 복원 | 지원되는 대기 연결만 변경 |
 | POST `/api/pick` | 파일·폴더 모드 → 원본 경로 목록 | Windows, 한 번에 하나의 선택 창 |
 | GET `/api/files`, `/api/results` | 자료 목록·관찰 결과 | 깊이·확장자·개수·시간 제한 |
-| GET `/api/preview` | 허용된 경로 → 텍스트·이미지·정적 HTML | 1 MiB 초과 또는 Office/PDF는 원래 앱 안내 |
+| GET `/api/preview` | 허용된 경로 → 텍스트·이미지·정적 HTML | HTML 및 CSV/TSV 10 MiB, 기타 텍스트 1 MiB, 이미지 8 MiB의 읽기 한도. Office/PDF는 원래 앱 안내 |
 | POST `/api/open` | 허용된 문서를 연결 앱으로 열기 | Windows, HTML 원본 실행 차단 |
 | GET `/api/capabilities` | 현재 연결과 설치된 기능 정보 | 조회로 AI·도구 실행 없음 |
 | GET `/api/course` | 첫 업무 따라 하기 과정 | 정적 학습 자료 |

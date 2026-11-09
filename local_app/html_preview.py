@@ -7,7 +7,9 @@ resource/network boundary. No source file is modified.
 """
 from html import escape
 from html.parser import HTMLParser
+from io import StringIO
 import re
+import time
 
 ALLOWED = set('html head body title style main header footer section article aside nav address div span p h1 h2 h3 h4 h5 h6 ul ol li dl dt dd table thead tbody tfoot tr th td caption colgroup col figure figcaption img br hr strong em b i small s del ins mark sub sup abbr cite q blockquote pre code kbd samp time a label details summary form fieldset legend input output progress meter textarea button select option optgroup svg desc g path rect circle ellipse line polyline polygon text tspan defs lineargradient radialgradient stop clippath'.split())
 VOID = {'img', 'br', 'hr', 'col', 'input'}
@@ -32,7 +34,10 @@ def _css_escape(value, index):
 
 def _css_identifier(value, index):
     decoded = []
+    large = len(value) >= 128 * 1024
     while index < len(value):
+        if large and index & 16383 == 0:
+            time.sleep(0)
         char = value[index]
         if char == '\\':
             char, index = _css_escape(value, index)
@@ -48,7 +53,10 @@ def _css_identifier(value, index):
 def _css_end(value, index, *, function=False):
     """Skip a resource function or at-rule, honoring strings and nesting."""
     depth, quote = (1 if function else 0), None
+    large = len(value) >= 128 * 1024
     while index < len(value):
+        if large and index & 16383 == 0:
+            time.sleep(0)
         char = value[index]
         if char == '\\':
             _, index = _css_escape(value, index)
@@ -92,12 +100,17 @@ def static_css(value):
     This is deliberately not a complete CSS validator. The independent CSP and
     opaque-origin sandbox also block escaped/future syntax and external loads.
     """
-    parts, index = [], 0
+    parts, index = StringIO(), 0
+    append = parts.write
+    next_yield = 16384 if len(value) >= 128 * 1024 else len(value) + 1
     while index < len(value):
+        if index >= next_yield:
+            time.sleep(0)
+            next_yield = index + 16384
         char = value[index]
         if value.startswith('/*', index):
             end = value.find('*/', index + 2)
-            parts.append(' ')
+            append(' ')
             index = len(value) if end < 0 else end + 2
         elif char in "\"'":
             start, quote = index, char
@@ -110,13 +123,13 @@ def static_css(value):
                     break
                 else:
                     index += 1
-            parts.append(value[start:index])
+            append(value[start:index])
         elif char == '@':
             identifier, end = _css_identifier(value, index + 1)
             if identifier in {'import', 'namespace'}:
                 index = _css_end(value, end)
             else:
-                parts.append(value[index:end])
+                append(value[index:end])
                 index = end
         elif char.isalpha() or char in '_-\\':
             identifier, end = _css_identifier(value, index)
@@ -126,15 +139,15 @@ def static_css(value):
             if identifier in {'url', 'image-set', '-webkit-image-set', 'image', 'src', 'expression'} and value[opening:opening + 1] == '(':
                 closing = _css_end(value, opening + 1, function=True)
                 complete = closing > opening and value[closing - 1:closing] == ')'
-                parts.append(_safe_css_url(value[opening + 1:closing - 1]) if identifier == 'url' and complete else 'none')
+                append(_safe_css_url(value[opening + 1:closing - 1]) if identifier == 'url' and complete else 'none')
                 index = closing
             else:
-                parts.append(value[index:end])
+                append(value[index:end])
                 index = end
         else:
-            parts.append(char)
+            append(char)
             index += 1
-    return ''.join(parts)
+    return parts.getvalue()
 
 
 def _starttag(tag, attrs):
@@ -153,8 +166,21 @@ class StaticPreview(HTMLParser):
         self.report_views = []
         self.layout_nodes = []
         self.styles = []
+        self.events = 0
+        self.deck_body = False
+        self.deck_style = ''
+        self.deck_ids = set()
+        self.deck_page = self.deck_slide = False
+        self.deck_content = []
+
+    def cooperate(self):
+        self.events += 1
+        if self.events % 512 == 0:
+            # Share CPU with message/stop/switch requests during large parses.
+            time.sleep(0)
 
     def handle_starttag(self, tag, attrs):
+        self.cooperate()
         if tag == 'canvas' and not self.dropped:
             self.parts.append('<p>캔버스 그래프는 기본 앱에서 원본을 열어 확인하세요.</p>')
             self.has_static_body = True
@@ -182,6 +208,14 @@ class StaticPreview(HTMLParser):
             self.layout_nodes.append((tag, attributes, classes))
         if tag == 'body':
             self.report_body |= 'data-style' in attributes
+            if attributes.get('data-ppt-deck') == '1' and 'deck-shell' in classes:
+                self.deck_body = True
+                self.deck_style = attributes.get('style') or ''
+        if self.deck_body:
+            if attributes.get('id') in {'deck-workspace', 'deck-stage', 'deck-holder', 'deck-slides'}:
+                self.deck_ids.add(attributes['id'])
+            self.deck_page |= 'ppt-page' in classes
+            self.deck_slide |= 'ppt-slide' in classes
         if tag == 'main':
             self.report_main |= 'report-main' in classes
         if attributes.get('id') in {'additional-designs', 'choice-result'}:
@@ -206,10 +240,13 @@ class StaticPreview(HTMLParser):
             safe.append(('disabled', ''))
         if tag == 'body' and 'data-view' in attributes:
             self.report_views.append((len(self.parts), tag, safe))
+        if self.deck_body and classes & {'ppt-page', 'ppt-slide'} and len(self.deck_content) < 2048:
+            self.deck_content.append((len(self.parts), tag, safe))
         self.parts.append(_starttag(tag, safe))
         self.styling = tag == 'style'
 
     def handle_endtag(self, tag):
+        self.cooperate()
         if self.dropped:
             if tag == self.dropped[-1]:
                 self.dropped.pop()
@@ -224,6 +261,7 @@ class StaticPreview(HTMLParser):
             self.styling = False
 
     def handle_data(self, data):
+        self.cooperate()
         if not self.dropped:
             value = static_css(data) if self.styling else escape(data)
             if self.styling:
@@ -370,6 +408,39 @@ def _fixed_canvas_width(parser):
     return int(maximum + 32) if maximum else 0
 
 
+def _presentation_layout(parser):
+    """Show the known offline deck as responsive pages without running its JS."""
+    if not (parser.deck_body and parser.deck_page and parser.deck_slide and
+            {'deck-workspace', 'deck-stage', 'deck-holder', 'deck-slides'} <= parser.deck_ids):
+        return ''
+    dimensions = {}
+    for match in re.finditer(r'(?:^|;)\s*--deck-([wh])\s*:\s*(\d{1,5}(?:\.\d{1,8})?)px\s*(?:!important\s*)?(?=;|$)',
+                             parser.deck_style, re.I):
+        number = float(match[2])
+        if 100 <= number <= 10000:
+            dimensions[match[1].lower()] = number
+    ratio = (f'{dimensions["w"]:g}/{dimensions["h"]:g}' if {'w', 'h'} <= dimensions.keys()
+             else 'var(--pw,16)/var(--ph,9)')
+    maximum = f'{dimensions["w"]:g}px' if 'w' in dimensions else '1160px'
+    # Only numeric dimensions enter these rules. Source HTML/CSS never becomes
+    # executable, and normal documents do not receive these format-specific fixes.
+    return ('/* ax-static-ppt-deck */'
+            'html,body.deck-shell{height:auto!important;min-height:0!important;overflow:auto!important}'
+            'body.deck-shell #deck-workspace,body.deck-shell #deck-stage,'
+            'body.deck-shell #deck-holder,body.deck-shell #deck-slides{'
+            'position:static!important;display:block!important;inset:auto!important;'
+            'width:100%!important;height:auto!important;min-height:0!important;'
+            'transform:none!important;overflow:visible!important}'
+            f'body.deck-shell #deck-holder{{max-width:{maximum}!important;margin:12px auto!important}}'
+            'body.deck-shell #deck-slides>.ppt-page{position:relative!important;inset:auto!important;'
+            'display:block!important;width:100%!important;height:auto!important;margin:0 0 16px!important;'
+            'overflow:hidden!important;pointer-events:auto!important;container-type:inline-size}'
+            'body.deck-shell #deck-slides>.ppt-page>.ppt-slide{position:relative!important;'
+            f'display:block!important;width:100%!important;height:auto!important;aspect-ratio:{ratio}!important}}'
+            'body.deck-shell #deck-toolbar,body.deck-shell #deck-overview,body.deck-shell #deck-notes,'
+            'body.deck-shell #deck-toast,body.deck-shell #deck-status{display:none!important}')
+
+
 def render_preview(text: str) -> tuple[str, bool]:
     parser = StaticPreview()
     parser.feed(text)
@@ -382,7 +453,13 @@ def render_preview(text: str) -> tuple[str, bool]:
     if parser.picker_ids == {'additional-designs', 'choice-result'}:
         fixes.append('.mini-window{height:380px!important}.mini-window .style-preview{transform:scale(.4)!important;transform-origin:top left}'
                      'details.design-options{display:block}details.design-options>*{content-visibility:visible}')
-    width = _fixed_canvas_width(parser)
+    deck = _presentation_layout(parser)
+    if deck:
+        fixes.append(deck)
+        for index, tag, attrs in parser.deck_content:
+            parser.parts[index] = _starttag(tag, [(key, value) for key, value in attrs
+                                               if key not in {'hidden', 'aria-hidden'}])
+    width = 0 if deck else _fixed_canvas_width(parser)
     fit = f'<meta name="ax-preview-width" content="{width}">' if width else ''
     # The CSP must precede all source content. Sandbox is also applied by the UI.
     html = ('<!doctype html><meta http-equiv="Content-Security-Policy" content="'+escape(CSP, quote=True)+'">'

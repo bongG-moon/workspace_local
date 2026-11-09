@@ -1,5 +1,7 @@
 import os
 import sys
+from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 import unittest
 
@@ -190,6 +192,152 @@ class HtmlWorkspacePreviewTests(unittest.TestCase):
         self.assertNotIn('<script',preview)
         hostile = original.replace('</body>','<script>alert(1)</script><img src="https://evil.invalid/leak"></body>')
         self.assertNotIn('evil.invalid',render(hostile))
+
+
+class HtmlDeckPreviewTests(unittest.TestCase):
+    """Synthetic offline slides; no supplied business document is embedded."""
+
+    @staticmethod
+    def deck(style='--deck-w:960px;--deck-h:540px'):
+        return ('<!doctype html><html><head><style>'
+                '.ppt-page{display:none;position:absolute}.ppt-page.active{display:block}'
+                '#deck-stage{transform:scale(.1)}.ppt-slide{width:960px;height:540px}'
+                '</style></head><body data-ppt-deck="1" class="extra deck-shell" style="' + escape(style, quote=True) + '">'
+                '<nav id="deck-toolbar"><button>가상 메뉴</button></nav>'
+                '<main id="deck-workspace"><div id="deck-stage"><div id="deck-holder"><div id="deck-slides">'
+                '<section id="synthetic-page-one" class="ppt-page active" aria-hidden="false">'
+                '<article id="synthetic-slide-one" class="ppt-slide" style="--pw:960;--ph:540"><h1>가상 첫 장</h1></article></section>'
+                '<section id="synthetic-page-two" class="ppt-page" hidden aria-hidden="true">'
+                '<article id="synthetic-slide-two" class="ppt-slide" hidden aria-hidden="true"><h1>가상 둘째 장</h1></article></section>'
+                '</div></div></div></main>'
+                '<aside id="unrelated-hidden" hidden aria-hidden="true">별도 숨긴 내용</aside>'
+                '<script>document.querySelector("#deck-stage").style.transform="scale(1)"</script>'
+                '</body></html>')
+
+    @staticmethod
+    def attributes(markup):
+        class ParsedAttributes(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.by_id = {}
+            def handle_starttag(self, tag, attrs):
+                values = dict(attrs)
+                if values.get('id'):
+                    self.by_id[values['id']] = values
+        parser = ParsedAttributes()
+        parser.feed(markup)
+        return parser.by_id
+
+    def test_known_deck_shows_all_saved_pages_without_running_scripts(self):
+        preview = render(self.deck())
+        self.assertIn('/* ax-static-ppt-deck */', preview)
+        self.assertIn('container-type:inline-size', preview)
+        self.assertIn('max-width:960px!important', preview)
+        self.assertIn('aspect-ratio:960/540!important', preview)
+        self.assertIn('position:static!important;display:block!important', preview)
+        for title in ('가상 첫 장', '가상 둘째 장'):
+            self.assertIn(title, preview)
+        nodes = self.attributes(preview)
+        for name in ('synthetic-page-one', 'synthetic-page-two', 'synthetic-slide-one', 'synthetic-slide-two'):
+            self.assertNotIn('hidden', nodes[name])
+            self.assertNotIn('aria-hidden', nodes[name])
+        self.assertEqual('ppt-page active', nodes['synthetic-page-one']['class'])
+        self.assertIn('hidden', nodes['unrelated-hidden'])
+        self.assertEqual('true', nodes['unrelated-hidden']['aria-hidden'])
+        self.assertNotIn('<script', preview)
+        self.assertNotIn('document.querySelector', preview)
+
+    def test_every_format_marker_is_required_before_revealing_hidden_content(self):
+        source = self.deck()
+        changes = [
+            ('data-ppt-deck="1"', 'data-ppt-deck="2"'),
+            ('data-ppt-deck="1"', ''),
+            ('extra deck-shell', 'extra deck-shell-other'),
+            ('class="ppt-page', 'class="ordinary-page'),
+            ('class="ppt-slide"', 'class="ordinary-slide"'),
+        ] + [(f'id="{name}"', f'id="other-{name}"') for name in (
+            'deck-workspace', 'deck-stage', 'deck-holder', 'deck-slides')]
+        for old, new in changes:
+            with self.subTest(missing=old):
+                preview = render(source.replace(old, new))
+                self.assertNotIn('/* ax-static-ppt-deck */', preview)
+                self.assertIn('hidden', self.attributes(preview)['synthetic-page-two'])
+
+    def test_duplicate_attributes_cannot_replace_the_first_format_marker(self):
+        for old, new in (
+            ('data-ppt-deck="1"', 'data-ppt-deck="0" data-ppt-deck="1"'),
+            ('class="extra deck-shell"', 'class="ordinary" class="deck-shell"'),
+            ('id="deck-stage"', 'id="ordinary-stage" id="deck-stage"'),
+        ):
+            with self.subTest(first=old):
+                self.assertNotIn('/* ax-static-ppt-deck */', render(self.deck().replace(old, new)))
+
+    def test_markers_inside_comments_scripts_templates_and_quoted_source_do_not_activate(self):
+        fake = self.deck()
+        for extra in ('<!--' + fake + '-->', '<script>' + fake + '</script>',
+                      '<template>' + fake + '</template>', '<pre>' + escape(fake) + '</pre>'):
+            with self.subTest(container=extra[:12]):
+                preview = render('<body><p>일반 문서</p>' + extra + '</body>')
+                self.assertIn('일반 문서', preview)
+                self.assertNotIn('/* ax-static-ppt-deck */', preview)
+
+    def test_only_bounded_literal_dimensions_enter_generated_rules(self):
+        for style, maximum, ratio in (
+            ('--deck-w:100px;--deck-h:10000px', '100px', '100/10000'),
+            ('--deck-w:10000px;--deck-h:100px', '10000px', '10000/100'),
+            ('--DECK-W:960.5PX!important; --deck-h:540.25px !important', '960.5px', '960.5/540.25'),
+        ):
+            with self.subTest(style=style):
+                preview = render(self.deck(style))
+                fix = preview.split('/* ax-static-ppt-deck */')[1]
+                self.assertIn('max-width:' + maximum + '!important', fix)
+                self.assertIn('aspect-ratio:' + ratio + '!important', fix)
+
+    def test_invalid_or_executable_dimension_values_use_safe_numeric_fallbacks(self):
+        invalid = ('0px', '99px', '10001px', '-960px', '1e3px', 'NaNpx',
+                   'Infinitypx', '960%', 'calc(960px)', 'var(--unknown)',
+                   '960px){}body{background:red}', 'url(https://outside.invalid/size)')
+        for value in invalid:
+            with self.subTest(value=value):
+                preview = render(self.deck('--deck-w:' + value + ';--deck-h:540px'))
+                fix = preview.split('/* ax-static-ppt-deck */')[1]
+                self.assertIn('max-width:1160px!important', fix)
+                self.assertIn('aspect-ratio:var(--pw,16)/var(--ph,9)!important', fix)
+                for injected in ('outside.invalid', 'background:red', 'calc(', 'var(--unknown)'):
+                    self.assertNotIn(injected, fix)
+
+    def test_absent_or_partial_dimensions_preserve_slide_ratio_fallback(self):
+        for style, width in (('', '1160px'), ('--deck-w:800px', '800px'), ('--deck-h:600px', '1160px')):
+            with self.subTest(style=style):
+                preview = render(self.deck(style))
+                self.assertIn('max-width:' + width + '!important', preview)
+                self.assertIn('aspect-ratio:var(--pw,16)/var(--ph,9)!important', preview)
+                self.assertEqual('--pw:960;--ph:540', self.attributes(preview)['synthetic-slide-one']['style'])
+
+    def test_deck_uses_responsive_container_instead_of_fixed_canvas_scaling(self):
+        preview = render(self.deck())
+        self.assertNotIn('ax-preview-width', preview)
+        ordinary = render(self.deck().replace('data-ppt-deck="1"', 'data-ppt-deck="0"'))
+        self.assertNotIn('/* ax-static-ppt-deck */', ordinary)
+        self.assertIn('ax-preview-width', ordinary)
+        self.assertIn('hidden', self.attributes(ordinary)['synthetic-page-two'])
+
+    def test_deck_fix_keeps_csp_and_blocks_active_elements_events_and_resources(self):
+        source = self.deck().replace('<body ', '<body onload="window.unsafe=1" ')
+        hostile = ('<meta http-equiv="refresh" content="0;url=https://outside.invalid">'
+                   '<style>@import "https://outside.invalid/theme.css";p{background:url(file:///C:/private.png)}</style>'
+                   '<iframe src="/api/bootstrap"></iframe><object data="/api/bootstrap"></object>'
+                   '<img src="https://outside.invalid/leak" onerror="alert(1)">'
+                   '<a href="javascript:alert(1)">참고</a><button onclick="fetch(\'/api/quit\')">실행</button>')
+        preview = render(source.replace('</body>', hostile + '</body>'))
+        self.assertIn('/* ax-static-ppt-deck */', preview)
+        self.assertIn("default-src &#x27;none&#x27;", preview)
+        self.assertIn("script-src &#x27;none&#x27;", preview)
+        self.assertLess(preview.index('Content-Security-Policy'), preview.index('<html>'))
+        for value in ('<script', '<iframe', '<object', 'onload=', 'onerror=', 'onclick=',
+                      'href=', 'outside.invalid', 'file:', 'private.png', '/api/', 'http-equiv="refresh"'):
+            self.assertNotIn(value, preview)
+        self.assertIn('<button disabled="">실행</button>', preview)
 
 
 if __name__ == '__main__':

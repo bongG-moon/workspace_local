@@ -15,7 +15,7 @@ import zlib
 
 from local_app.artifacts import DOCUMENT_TYPES, snapshot
 from local_app.file_preview import (build_preview, image_dimensions, MAX_CODE_CHARS,
-    MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_TEXT_BYTES, source_preview_allowed)
+    MAX_HTML_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_TABLE_BYTES, MAX_TEXT_BYTES, source_preview_allowed)
 from local_app.server import LocalApp, Server
 
 
@@ -105,11 +105,71 @@ class PreviewParsingTests(unittest.TestCase):
                 self.assertEqual(expected, preview['chartStructure'])
 
     def test_large_csv_binary_or_bad_encoding_never_leaks_partial_table(self):
-        for raw in (b'a' * (MAX_TEXT_BYTES + 1), b'a,b\n\0,1', b'\xff\x00\xfe'):
+        for raw in (b'a' * (MAX_TABLE_BYTES + 1), b'a,b\n\0,1', b'\xff\x00\xfe'):
             with self.subTest(size=len(raw)):
                 result = self.preview('table.csv', raw)
                 self.assertEqual('external', result['kind'])
                 self.assertNotIn('rows', result)
+
+    def test_table_accepts_ten_mib_counts_full_file_and_keeps_display_limits(self):
+        self.assertEqual(10 * 1024 * 1024, MAX_TABLE_BYTES)
+        self.assertEqual(1024 * 1024, MAX_TEXT_BYTES)
+        for suffix, delimiter in (('.csv', b','), ('.TSV', b'\t')):
+            with self.subTest(suffix=suffix):
+                header = b'name' + delimiter + b'value\n'
+                row = b'a' + delimiter + b'b' * 1021 + b'\n'
+                count, remainder = divmod(MAX_TABLE_BYTES - len(header), len(row))
+                raw = header + row * count + b'z' + delimiter + b'c' * (remainder - 3) + b'\n'
+                self.assertEqual(MAX_TABLE_BYTES, len(raw))
+                result = self.preview('exact-table' + suffix, raw)
+                self.assertEqual('table', result['kind'])
+                self.assertEqual((count + 1, 2), (result['rowCount'], result['columnCount']))
+                self.assertEqual(100, len(result['rows']))
+                self.assertTrue(result['rowsTruncated'])
+                self.assertFalse(result['columnsTruncated'])
+                self.assertEqual(['a', 'b' * 1021], result['rows'][0])
+                self.assertTrue(result['version'])
+
+    def test_oversize_table_has_explicit_limit_and_no_partial_data(self):
+        for suffix in ('.csv', '.tsv'):
+            with self.subTest(suffix=suffix):
+                result = self.preview('oversize' + suffix, b'a' * (MAX_TABLE_BYTES + 1))
+                self.assertEqual('external', result['kind'])
+                self.assertIn('10MB', result['message'])
+                self.assertNotIn('rows', result)
+                self.assertNotIn('version', result)
+
+    def test_table_read_stays_finite_even_when_file_grows(self):
+        for suffix, content in (('.csv', b'a,b\n1,2'), ('.tsv', b'a\tb\n1\t2')):
+            stream = io.BytesIO(content)
+            with self.subTest(suffix=suffix), patch.object(Path, 'open', return_value=stream), \
+                    patch.object(stream, 'read', wraps=stream.read) as read:
+                result = build_preview(self.root / ('bounded' + suffix))
+                read.assert_called_once_with(MAX_TABLE_BYTES + 1)
+            self.assertEqual('table', result['kind'])
+
+    def test_csv_preview_decodes_rows_without_a_full_unicode_copy(self):
+        source = 'name,value\n' + 'A,"first\nsecond"\n' * 5000
+        with patch('local_app.file_preview._decode', side_effect=AssertionError('no full text decode')), \
+                patch('local_app.file_preview.io.StringIO', side_effect=AssertionError('no Unicode IO copy')):
+            result = self.preview('streamed.csv', source)
+        self.assertEqual('table', result['kind'])
+        self.assertEqual(5000, result['rowCount'])
+        self.assertEqual(['A', 'first\nsecond'], result['rows'][0])
+        self.assertEqual(100, len(result['rows']))
+
+    def test_table_streaming_preserves_encoding_fallback_and_validates_the_tail(self):
+        prefix = b'name,value\n' + b'A,1\n' * 5000
+        result = self.preview('late-cp949.csv', prefix + '끝,설명\n'.encode('cp949'))
+        self.assertEqual('table', result['kind'])
+        self.assertEqual(5001, result['rowCount'])
+        self.assertEqual(['A', '1'], result['rows'][0])
+        for tail in (b'\xff\xff\n', b'A,\0\n'):
+            with self.subTest(tail=tail):
+                result = self.preview('invalid-tail.csv', prefix + tail)
+                self.assertEqual('external', result['kind'])
+                self.assertNotIn('rows', result)
+                self.assertNotIn('version', result)
 
     def test_code_is_inert_language_labeled_bounded_and_not_executed(self):
         code = 'print("<script>출력</script>")\n'
@@ -197,19 +257,59 @@ class PreviewParsingTests(unittest.TestCase):
         self.assertIn('<h1>마지막 제목</h1>', result['html'])
         self.assertFalse(self.preview('exact.html', 'a' * MAX_CODE_CHARS)['truncated'])
 
-    def test_html_retains_file_byte_and_encoding_limits(self):
-        self.assertEqual('html', self.preview('exact.html', b'a' * MAX_TEXT_BYTES)['kind'])
-        for raw in (b'a' * (MAX_TEXT_BYTES + 1), b'\xff\x00\xfe'):
-            result = self.preview('invalid.html', raw)
-            self.assertEqual('external', result['kind'])
-            self.assertNotIn('html', result)
-            self.assertNotIn('text', result)
+    def test_html_accepts_document_above_text_limit_without_truncating_its_body(self):
+        self.assertEqual(10 * 1024 * 1024, MAX_HTML_BYTES)
+        self.assertEqual(1024 * 1024, MAX_TEXT_BYTES)
+        source = '<!--' + '가' * (MAX_TEXT_BYTES // 3 + 1) + '--><h1>끝까지 표시</h1>'
+        for suffix in ('.html', '.HTM'):
+            with self.subTest(suffix=suffix):
+                result = self.preview('large' + suffix, source)
+                self.assertEqual('html', result['kind'])
+                self.assertIn('<h1>끝까지 표시</h1>', result['html'])
+                self.assertEqual(source[:MAX_CODE_CHARS], result['text'])
+                self.assertTrue(result['truncated'])
+
+    def test_html_retains_ten_mib_byte_and_encoding_limits(self):
+        prefix, tail = b'<!doctype html><body><!--', b'--><h1>FULL_HTML_TAIL</h1></body>'
+        source = prefix + b'x' * (MAX_HTML_BYTES - len(prefix) - len(tail)) + tail
+        result = self.preview('exact.html', source)
+        self.assertEqual('html', result['kind'])
+        self.assertIn('<h1>FULL_HTML_TAIL</h1>', result['html'])
+        self.assertEqual(MAX_CODE_CHARS, len(result['text']))
+        self.assertTrue(result['truncated'])
+        for suffix in ('.html', '.htm'):
+            with self.subTest(suffix=suffix):
+                result = self.preview('oversize' + suffix, b'a' * (MAX_HTML_BYTES + 1))
+                self.assertEqual('external', result['kind'])
+                self.assertIn('10MB', result['message'])
+                self.assertNotIn('html', result)
+                self.assertNotIn('text', result)
+        result = self.preview('invalid.html', b'\xff\x00\xfe')
+        self.assertEqual('external', result['kind'])
+        self.assertNotIn('html', result)
+        self.assertNotIn('text', result)
         for encoding in ('utf-8-sig', 'cp949', 'utf-16'):
             with self.subTest(encoding=encoding):
                 raw = '<h1>문서</h1>'.encode(encoding)
                 result = self.preview('encoded.htm', raw)
                 self.assertEqual(('html', '<h1>문서</h1>'), (result['kind'], result['text']))
                 self.assertEqual(raw, (self.root / 'encoded.htm').read_bytes())
+
+    def test_html_read_is_bounded_even_when_file_grows(self):
+        for suffix in ('.html', '.htm'):
+            stream = io.BytesIO(b'<h1>finite</h1>')
+            with self.subTest(suffix=suffix), patch.object(Path, 'open', return_value=stream), \
+                    patch.object(stream, 'read', wraps=stream.read) as read:
+                result = build_preview(self.root / ('bounded' + suffix))
+                read.assert_called_once_with(MAX_HTML_BYTES + 1)
+            self.assertEqual('html', result['kind'])
+
+    def test_office_and_pdf_preview_requires_default_app_without_reading_the_file(self):
+        for suffix in ('.xls', '.xlsx', '.pptx', '.pdf', '.docx'):
+            with self.subTest(suffix=suffix), patch.object(Path, 'open', side_effect=AssertionError('no preview read')):
+                result = build_preview(self.root / ('document' + suffix))
+            self.assertEqual('external', result['kind'])
+            self.assertIn('원래 앱', result['message'])
 
     def test_discovery_adds_source_but_excludes_hidden_and_secret_paths(self):
         for name in ('result.py', 'table.csv', 'credentials.json', '.config.json'):
@@ -385,6 +485,20 @@ class PreviewRouteTests(unittest.TestCase):
         self.assertIn('<h1>별도 첨부</h1>', result['html'])
         self.assertNotIn('<script', result['html'])
         self.assertEqual(source.encode(), outside.read_bytes())
+
+    def test_html_route_serves_complete_document_above_old_limit_with_source_code_bounded(self):
+        source = '<body><p>' + 'x' * (MAX_TEXT_BYTES + 1) + '</p><h1>FULL_HTML_END</h1></body>'
+        path = self.work / 'large-report.html'
+        path.write_text(source, encoding='utf-8')
+        self.assertEqual(403, self.request(path, token=False)[0])
+        with patch('local_app.external_apps.os.startfile', create=True) as opened:
+            status, result = self.request(path)
+            opened.assert_not_called()
+        self.assertEqual((200, 'html'), (status, result['kind']))
+        self.assertIn('<h1>FULL_HTML_END</h1>', result['html'])
+        self.assertEqual(source[:MAX_CODE_CHARS], result['text'])
+        self.assertTrue(result['truncated'])
+        self.assertEqual(source.encode(), path.read_bytes())
 
     def test_new_source_types_stay_blocked_from_external_execution(self):
         from local_app.external_apps import open_document

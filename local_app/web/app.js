@@ -1304,10 +1304,11 @@ async function refreshResults(reveal=false){
   }catch(e){if(e.name!=="AbortError"&&currentFileRefresh("results",request))toast(e.message);}finally{finishFileRefresh("results",request);}
 }
 let previewRequest = null;
+let htmlPreviewRender = null;
 function clearPreview() {
   previewRequest?.abort(); previewRequest = null;
   globalThis.WorkspaceHtmlPreview?.close();
-  previewGeneration++; previewContext = null; previewPath = null; previewData = null;
+  previewGeneration++; previewContext = null; previewPath = null; previewData = null; htmlPreviewRender = null;
   $("preview-content").replaceChildren(); $("preview-modes").hidden = true;
   $("preview-changes").hidden = true; $("preview-changes").onclick = null;
   if ($("preview-dialog").open) $("preview-dialog").close();
@@ -1341,6 +1342,12 @@ function renderMarkdownPreview(source = true) {
 function renderHtmlPreview(mode="screen"){
   if(!previewContext||!currentFileLocation(previewContext.sessionId,previewContext.generation)||previewData?.kind!=="html")return;
   const data=previewData,code=mode==="code"&&typeof data.text==="string",content=$("preview-content");
+  const displayMode=code?"code":data.scriptOnly&&mode!=="static"?"notice":"screen";
+  // Preserve the active document (and its scroll position) when its current
+  // tab is selected again. Recreating srcdoc reparses the entire HTML file.
+  if(htmlPreviewRender?.data===data&&htmlPreviewRender.mode===displayMode&&
+      htmlPreviewRender.first&&htmlPreviewRender.first===content.firstChild)return;
+  htmlPreviewRender=null;
   globalThis.WorkspaceHtmlPreview?.close();content.replaceChildren();content.scrollTop=0;content.classList.toggle("html-preview-screen",!code);content.classList.toggle("html-preview-code",code);
   $("preview-screen").setAttribute("aria-pressed",String(!code));$("preview-code").setAttribute("aria-pressed",String(code));
   if(code){
@@ -1358,6 +1365,7 @@ function renderHtmlPreview(mode="screen"){
     content.append(el("p",data.message,"composer-note"));
     if(globalThis.WorkspaceHtmlPreview)WorkspaceHtmlPreview.mount(content,frame,data.html);else content.append(frame);
   }
+  htmlPreviewRender={data,mode:displayMode,first:content.firstChild};
 }
 async function openFileAction(action,context=previewContext){
   if(!context||appClosed||pendingSelection||active?.id!==context.sessionId||

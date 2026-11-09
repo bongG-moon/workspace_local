@@ -14,6 +14,7 @@ import io
 from pathlib import Path
 import re
 import struct
+import time
 import zlib
 
 CODE_LANGUAGES = {
@@ -28,6 +29,10 @@ CODE_LANGUAGES = {
     '.rb': 'ruby', '.php': 'php', '.swift': 'swift', '.kt': 'kotlin',
 }
 MAX_TEXT_BYTES = 1024 * 1024
+# HTML needs the complete document for its static layout, independently of the
+# bounded source-code tab. Ordinary text/code reads keep their existing budget.
+MAX_HTML_BYTES = 10 * 1024 * 1024
+MAX_TABLE_BYTES = 10 * 1024 * 1024
 MAX_CODE_CHARS = 100_000
 # Encoded raster size; base64 in the authenticated JSON response is about 11 MiB.
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -183,7 +188,8 @@ def image_dimensions(raw, suffix):
 
 
 def _table(path, text):
-    reader = csv.reader(io.StringIO(text, newline=''), delimiter='\t' if path.suffix.lower() == '.tsv' else ',', strict=True)
+    source = io.StringIO(text, newline='') if isinstance(text, str) else text
+    reader = csv.reader(source, delimiter='\t' if path.suffix.lower() == '.tsv' else ',', strict=True)
     header = next(reader, [])
     headings = [value.strip().casefold() for value in header]
     chart_structure = 'regular'
@@ -203,6 +209,9 @@ def _table(path, text):
         total += 1
         if total <= MAX_TABLE_ROWS:
             rows.append(row[:MAX_TABLE_COLUMNS])
+        if total % 2048 == 0:
+            # A large preview must let other task/API threads make progress.
+            time.sleep(0)
     shown = min(columns, MAX_TABLE_COLUMNS)
     labels = [(header[index] if index < len(header) and header[index] else f'열 {index + 1}')
               for index in range(shown)]
@@ -214,23 +223,54 @@ def _table(path, text):
             'chartStructure': chart_structure}
 
 
+def _table_from_bytes(path, raw):
+    """Decode rows as needed instead of copying the full table into Unicode IO.
+
+    Keep the complete byte receipt and inspect every row, including invalid
+    trailing data, before returning the bounded rows used by the UI.
+    """
+    encodings = ('utf-16',) if raw.startswith((b'\xff\xfe', b'\xfe\xff')) else ('utf-8-sig', 'cp949')
+    if encodings != ('utf-16',) and b'\0' in raw:
+        raise UnicodeError('binary text')
+    for encoding in encodings:
+        try:
+            with io.TextIOWrapper(io.BytesIO(raw), encoding=encoding, errors='strict', newline='') as source:
+                return _table(path, source)
+        except UnicodeError:
+            continue
+    raise UnicodeError('unsupported text encoding')
+
+
 def build_preview(path: Path):
     suffix = path.suffix.lower()
     if suffix in ARCHIVE_TYPES:
         return external(path, 'ZIP 파일은 기본 앱에서 열거나 폴더에서 확인하세요. 앱 안에서는 압축을 풀지 않아요.')
     is_image = suffix in IMAGE_TYPES
+    is_html = suffix in {'.html', '.htm'}
+    is_table = suffix in {'.csv', '.tsv'}
     is_code = suffix in CODE_LANGUAGES
     is_markdown = suffix in {'.md', '.markdown'}
     if not is_image and not is_code and suffix not in {'.md', '.txt', '.csv', '.tsv', '.html', '.htm'}:
         message = ('Office·PDF 원본은 원래 앱에서 열어 확인해 주세요.' if suffix in {'.pdf', '.pptx', '.docx', '.xlsx', '.xls'}
                    else '이 형식은 내용 미리보기를 지원하지 않아요. 입력창으로 끌어 자료로 첨부하거나 폴더에서 확인하세요.')
         return external(path, message)
-    limit = MAX_IMAGE_BYTES if is_image else MAX_TEXT_BYTES
+    if is_image:
+        limit = MAX_IMAGE_BYTES
+    elif is_html:
+        limit = MAX_HTML_BYTES
+    elif is_table:
+        limit = MAX_TABLE_BYTES
+    else:
+        limit = MAX_TEXT_BYTES
     # Read a finite amount even if a file grows after the authorization/stat.
     with path.open('rb') as handle:
         raw = handle.read(limit + 1)
     limited = len(raw) > limit
     if limited and not (is_code or is_markdown):
+        if is_html:
+            return external(path, 'HTML 미리보기는 10MB까지 지원합니다. 더 큰 파일은 기본 앱에서 열어 확인해 주세요.')
+        if is_table:
+            return external(path, 'CSV와 TSV 미리보기는 10MB까지 지원합니다. 더 큰 파일은 기본 앱에서 열어 확인해 주세요.')
         return external(path, '미리보기 크기를 넘는 파일입니다. 원래 앱에서 열어 주세요.')
     if is_image:
         try:
@@ -239,6 +279,15 @@ def build_preview(path: Path):
             return external(path, '이미지 형식이나 크기를 확인할 수 없습니다. 원래 앱에서 열어 주세요.')
         return {'kind': 'image', 'name': path.name, 'width': width, 'height': height,
                 'data': 'data:' + IMAGE_TYPES[suffix] + ';base64,' + base64.b64encode(raw).decode('ascii')}
+    if is_table:
+        try:
+            table = _table_from_bytes(path, raw)
+            table['version'] = hashlib.sha256(raw).hexdigest()
+            return table
+        except UnicodeError:
+            return external(path, '문자 인코딩을 확인하지 못했습니다. 원래 앱이나 메모장에서 확인해 주세요.')
+        except csv.Error:
+            return external(path, '표 형식을 확인하지 못했습니다. 원래 앱에서 열어 주세요.')
     try:
         text = _decode(raw[:limit], partial=limited)
     except UnicodeError:
@@ -249,14 +298,7 @@ def build_preview(path: Path):
     if is_code:
         return {'kind': 'code', 'name': path.name, 'language': CODE_LANGUAGES[suffix],
                 'text': text[:MAX_CODE_CHARS], 'truncated': limited or len(text) > MAX_CODE_CHARS}
-    if suffix in {'.csv', '.tsv'}:
-        try:
-            table = _table(path, text)
-            table['version'] = hashlib.sha256(raw).hexdigest()
-            return table
-        except csv.Error:
-            return external(path, '표 형식을 확인하지 못했습니다. 원래 앱에서 열어 주세요.')
-    if suffix in {'.html', '.htm'}:
+    if is_html:
         from .html_preview import render_preview
         html, script_only = render_preview(text)
         return {'kind': 'html', 'name': path.name, 'html': html, 'scriptOnly': script_only,

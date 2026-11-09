@@ -1,6 +1,7 @@
 """Explicit table excerpts must stay in their owning task and survive a delayed send."""
 from pathlib import Path
 from contextlib import closing
+import io
 import json
 import sqlite3
 import tempfile
@@ -8,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from local_app.drafts import DraftStore, StaleTableReference
-from local_app.file_preview import build_preview
+from local_app.file_preview import MAX_TABLE_BYTES, MAX_TEXT_BYTES, build_preview
 from local_app.server import LocalApp
 from local_app.work_queue import WorkQueue
 
@@ -29,6 +30,99 @@ class TableReferenceTests(unittest.TestCase):
     def quote(self, row=2):
         version = build_preview(self.file)['version']
         return self.app.table_reference(self.a, str(self.file), version, row)['text']
+
+    def sized_table(self, size, suffix='.csv'):
+        separator = b'\t' if suffix == '.tsv' else b','
+        header = b'label' + separator + b'value\nA' + separator + b'42\n'
+        # Many bounded fields keep this a real CSV/TSV, without relying on a
+        # parser's oversized-field tolerance or retaining the complete table.
+        padding_row = b'padding' + separator + b'x' * 4096 + b'\n'
+        count, tail = divmod(size - len(header), len(padding_row))
+        data = header + padding_row * count + (b'z' * (tail - 1) + b'\n' if tail else b'')
+        self.file = self.workspace / ('large' + suffix)
+        self.file.write_bytes(data)
+        self.assertEqual(size, self.file.stat().st_size)
+        return self.file
+
+    def test_large_csv_and_tsv_references_validate_and_reach_send_at_exact_limit(self):
+        for suffix in ('.csv', '.tsv'):
+            for size in (MAX_TEXT_BYTES + 1, MAX_TABLE_BYTES):
+                with self.subTest(suffix=suffix, size=size):
+                    self.sized_table(size, suffix)
+                    preview = build_preview(self.file)
+                    self.assertEqual('table', preview['kind'])
+                    self.assertEqual(100, len(preview['rows']))
+                    self.assertLessEqual(len(preview['columns']), 30)
+                    self.assertTrue(preview['rowsTruncated'])
+                    issued = self.app.table_reference(self.a, str(self.file), preview['version'], rows=[1], columns=[2])
+                    self.assertEqual([[1, ['42']]], json.loads(issued['text'].splitlines()[1])['행'])
+                    self.app.validate_table_sources(self.a, issued['text'])
+                    self.assertEqual({'ok': True}, self.app.review_table_reference(self.a, {
+                        'id': self.a, 'action': 'check', 'text': issued['text']}))
+                    with patch.object(self.app, '_send', return_value={'accepted': True}) as deliver:
+                        self.assertEqual({'accepted': True}, self.app.send(self.a, issued['text'], []))
+                    self.assertEqual((self.a, issued['text'], [], False), deliver.call_args.args)
+                    with self.assertRaises(StaleTableReference):
+                        self.app.validate_table_sources(self.b, issued['text'])
+
+    def test_large_table_change_after_old_limit_blocks_send_and_queue_until_review(self):
+        self.sized_table(2 * MAX_TEXT_BYTES)
+        preview = build_preview(self.file)
+        old = self.app.table_reference(self.a, str(self.file), preview['version'], rows=[1], columns=[2])
+        self.app.dispatch.action(self.a, {'action': 'enqueue', 'text': old['text'], 'attachments': []})
+        # The selected first row stays identical. A same-size change beyond the
+        # old one-MiB boundary must still invalidate the whole-file receipt.
+        with self.file.open('r+b') as source:
+            source.seek(MAX_TEXT_BYTES + 32)
+            source.write(b'Q')
+        self.assertEqual(2 * MAX_TEXT_BYTES, self.file.stat().st_size)
+        with patch.object(self.app, '_send') as deliver:
+            with self.assertRaises(StaleTableReference) as stale:
+                self.app.send(self.a, old['text'], [])
+            deliver.assert_not_called()
+        self.assertTrue(stale.exception.can_review)
+        self.app.dispatch.pump()
+        queued = self.app.dispatch.snapshot(self.a)['queue'][0]
+        self.assertEqual(('needs_review', 'table_source_changed'), (queued['status'], queued['reason']))
+        self.assertEqual([], self.app.get(self.a)['messages'])
+        review = self.review('review', old['referenceId'])
+        self.assertNotEqual(preview['version'], review['version'])
+        new = self.review('replace', old['referenceId'], version=review['version'], rows=[1], columns=[2])
+        self.assertEqual(old['referenceId'], new['replaces'])
+        self.assertNotEqual(old['referenceId'], new['referenceId'])
+        self.assertEqual([[1, ['42']]], json.loads(new['text'].splitlines()[1])['행'])
+        self.app.validate_table_sources(self.a, new['text'])
+
+    def test_table_growth_above_ten_mib_blocks_existing_and_new_receipts(self):
+        self.sized_table(MAX_TABLE_BYTES)
+        version = build_preview(self.file)['version']
+        issued = self.app.table_reference(self.a, str(self.file), version, 1)
+        self.app.validate_table_sources(self.a, issued['text'])
+        with self.file.open('ab') as source:
+            source.write(b'x')
+        self.assertEqual('external', build_preview(self.file)['kind'])
+        with patch.object(self.app, '_send') as deliver:
+            with self.assertRaises(StaleTableReference) as stale:
+                self.app.send(self.a, issued['text'], [])
+            deliver.assert_not_called()
+        self.assertFalse(stale.exception.can_review)
+        with self.assertRaises(StaleTableReference):
+            self.app.table_reference(self.a, str(self.file), version, 1)
+        with self.assertRaises(StaleTableReference):
+            self.review('review', issued['referenceId'])
+        with patch.object(self.app, 'allowed_file', side_effect=AssertionError('unrelated file access')):
+            self.app.validate_table_sources(self.b, '다른 업무는 그대로 사용')
+        self.assertEqual([], self.app.get(self.a)['messages'])
+
+    def test_large_source_validation_is_bounded_and_deduplicated_across_receipts(self):
+        self.sized_table(MAX_TEXT_BYTES + 1)
+        version = build_preview(self.file)['version']
+        first = self.app.table_reference(self.a, str(self.file), version, rows=[1], columns=[2])
+        second = self.app.table_reference(self.a, str(self.file), version, rows=[2], columns=[1])
+        stream = io.BytesIO(self.file.read_bytes())
+        with patch.object(Path, 'open', return_value=stream), patch.object(stream, 'read', wraps=stream.read) as read:
+            self.app.validate_table_sources(self.a, first['text'] + '\n' + second['text'])
+            read.assert_called_once_with(MAX_TABLE_BYTES + 1)
 
     def test_bound_logical_row_and_session_restart(self):
         quote = self.quote()

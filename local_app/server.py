@@ -30,7 +30,7 @@ from .session_order import SessionOrder
 from .session_groups import SessionGroups, GroupRevisionConflict
 from .session_visibility import SessionVisibility
 from .artifacts import Snapshot, available_artifacts, changes, linked, snapshot, list_materials, workspace_write_name
-from .file_preview import MAX_TEXT_BYTES, build_preview, source_preview_allowed
+from .file_preview import MAX_TABLE_BYTES, build_preview, source_preview_allowed
 from .file_diff import FileDiffStore
 from .work_titles import WorkTitles
 from .capabilities import catalog
@@ -3160,8 +3160,8 @@ class LocalApp:
                     if path.suffix.lower() not in {'.csv', '.tsv'}:
                         raise ValueError('Unexpected table type')
                     with path.open('rb') as source:
-                        raw = source.read(MAX_TEXT_BYTES + 1)
-                    checked[value] = hashlib.sha256(raw).hexdigest() if len(raw) <= MAX_TEXT_BYTES else None
+                        raw = source.read(MAX_TABLE_BYTES + 1)
+                    checked[value] = hashlib.sha256(raw).hexdigest() if len(raw) <= MAX_TABLE_BYTES else None
                 except (ValueError, OSError):
                     checked[value] = None
             if expected != checked[value]:
