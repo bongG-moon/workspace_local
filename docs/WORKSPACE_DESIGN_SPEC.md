@@ -89,6 +89,7 @@ Workspace는 CLI의 입출력만 `stream-json`과 제어 메시지로 연결한�
 | 관리 연동 | [companion.py](../local_app/companion.py), [harness_client.py](../local_app/harness_client.py) | 학습 안내, 사용 현황, 등록된 기억·지식·업무 구성 서비스 연결 |
 | 파일 선택 | [Pick-Path.ps1](../local_app/Pick-Path.ps1), [WorkspacePicker.cs](../local_app/WorkspacePicker.cs) | Windows 공통 선택 창, 소유 창, DPI, 정확한 경로 반환 |
 | 미리보기 | [html_preview.py](../local_app/html_preview.py) | 지원 HTML을 외부 연결·스크립트 없는 정적 화면으로 변환 |
+| 웹 미리보기 | [project_preview.py](../local_app/project_preview.py) | 사용자가 선택할 때만 허용된 업무 폴더의 관련 파일을 격리된 실행 화면에 제공 |
 | 웹 화면 | [index.html](../local_app/web/index.html), [app.css](../local_app/web/app.css), [app.js](../local_app/web/app.js) | 업무 홈·대화·자료·결과·확인창과 사용자 입력 |
 | 보조 화면 | [companion.js](../local_app/web/companion.js), [capabilities.js](../local_app/web/capabilities.js) | 관리 화면과 스킬·도구 카탈로그 |
 | 배포·진단 | [New-WorkspaceBundle.ps1](../deploy/New-WorkspaceBundle.ps1), [Check-Workspace.ps1](../Check-Workspace.ps1) | 명시된 파일만 묶기, 읽기 전용 실행 환경·시작 코드 검사 |
@@ -214,7 +215,7 @@ Workspace는 CLI의 입출력만 `stream-json`과 제어 메시지로 연결한�
 
 GUI의 파일 열기는 작업 폴더 또는 사용자가 첨부한 정확한 경로와 지원 확장자로 제한한다. 저장된 폴더의 실제 위치 변경·연결 경로를 확인하며 파일 탐색에서 링크를 따라 무제한으로 내려가지 않는다.
 
-모델 출력은 실행 가능한 HTML로 넣지 않는다. 지원 HTML의 정적 미리보기는 스크립트·외부 연결을 막고, 일반 HTML은 소스로 보여 준다. HTML 원본을 OS 연결 앱으로 실행하는 API도 허용하지 않는다.
+모델 출력은 실행 가능한 HTML로 넣지 않는다. HTML의 기본 화면 미리보기는 스크립트와 외부 연결을 막고, 코드 보기에서는 현재 원문을 보여 준다. 사용자가 웹 보기를 선택하면 기존 신뢰가 유효한 업무 폴더의 CSS, 이미지, 글꼴, JavaScript와 JSON만 capability 경로를 통해 제공한다. 실행 프레임에는 allow-scripts만 부여하고 앱 API와 부모 문서 접근은 허용하지 않는다. 폴더 밖의 직접 첨부는 형제 파일 접근으로 확장하지 않는다. HTML 원본은 명시적인 기본 앱에서 열기로 확인할 수 있다.
 
 GUI의 파일 접근 제한은 Claude 자체의 권한·샌드박스를 대체하지 않는다. 첨부를 고르는 즉시 업로드하지 않지만 실제 요청의 자료 처리는 기존 Claude·회사 모델 연결을 따른다. 로컬 UI가 오프라인 추론을 뜻하지 않는다.
 
@@ -240,7 +241,10 @@ GUI의 파일 접근 제한은 Claude 자체의 권한·샌드박스를 대체�
 | POST `/api/pick` | 파일·폴더 모드 → 원본 경로 목록 | Windows, 한 번에 하나의 선택 창 |
 | GET `/api/files`, `/api/results` | 자료 목록·관찰 결과 | 깊이·확장자·개수·시간 제한 |
 | GET `/api/preview` | 허용된 경로 → 텍스트·이미지·정적 HTML | HTML 및 CSV/TSV 10 MiB, 기타 텍스트 1 MiB, 이미지 8 MiB의 읽기 한도. Office/PDF는 원래 앱 안내 |
-| POST `/api/open` | 허용된 문서를 연결 앱으로 열기 | Windows, HTML 원본 실행 차단 |
+| POST `/api/project-preview/open` | 허용된 업무의 HTML → 웹 미리보기 식별자와 경로 | 기존 폴더 신뢰 재확인, 명시적 선택 시에만 생성 |
+| GET/HEAD/OPTIONS `/project-preview/<cap>/...` | 해당 업무 폴더의 허용된 관련 파일 | capability와 매 요청 권한 확인, 경로별 CSP, 요청과 전송 및 이미지 픽셀 한도. 앱 API 인증은 유지 |
+| POST `/api/project-preview/close` | 해당 업무의 웹 미리보기 해제 | 파일 변환 취소와 접근 권한 회수, 앱 종료 시 전체 해제 |
+| POST `/api/open` | 허용된 문서를 연결 앱으로 열기 | Windows의 기본 연결 앱으로 명시적 열기, 실행 코드 형식은 별도 제한 |
 | GET `/api/capabilities` | 현재 연결과 설치된 기능 정보 | 조회로 AI·도구 실행 없음 |
 | GET `/api/course` | 첫 업무 따라 하기 과정 | 정적 학습 자료 |
 | GET·POST `/api/companion` | 관리 조회·검토·저장 | 신뢰·활성 설치 확인, 실행 중 일부 변경 제한 |

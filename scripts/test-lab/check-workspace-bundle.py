@@ -67,6 +67,7 @@ expected.update({'local_app/upgrade_handoff.py', 'local_app/upgrade_launcher.py'
 expected.update({'local_app/native_fonts/AXWorkspaceUpdate-Regular.ttf', 'local_app/native_fonts/AXWorkspaceUpdate-SemiBold.ttf',
                  'local_app/native_fonts/OFL.txt', 'local_app/native_fonts/SOURCE.json', 'local_app/native_fonts/README.md'})
 expected.update({'local_app/web/html-preview.js'})
+expected.add('local_app/project_preview.py')
 expected.update({'local_app/web/row-drafts.js','local_app/web/result-explorer.js','local_app/web/result-explorer.css'})
 expected.update({'local_app/web/zoom-feedback.js', 'local_app/web/zoom-feedback.css'})
 expected.update({'local_app/web/input-keys.js', 'local_app/web/chat-shortcuts.js', 'local_app/web/chat-shortcuts.css'})

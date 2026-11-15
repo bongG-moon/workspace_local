@@ -53,7 +53,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.44"
+WORKSPACE_VERSION = "0.23.45"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -150,6 +150,8 @@ class LocalApp:
         from .ui_health import UiHealthLog
         self.ui_health = UiHealthLog(state, WORKSPACE_VERSION)
         self.lock = threading.RLock()
+        from .project_preview import ProjectPreviewManager
+        self.project_previews = ProjectPreviewManager()
         self._external_sync_probe_cache = {}
         from .execution_mode import checked_mode
         self.execution_mode = checked_mode(execution_mode)
@@ -3043,6 +3045,52 @@ class LocalApp:
             raise ValueError("이 대화의 작업 폴더 또는 직접 선택한 파일만 열 수 있습니다.")
         return path
 
+    def project_preview_availability(self, sid, path):
+        """Do not extend an attachment grant into access to its sibling files."""
+        with self.lock:
+            item = self.get(sid)
+            self._validate_remembered_trust(item)
+            if item.get('kind', 'work') != 'work':
+                return False, '관련 파일을 함께 보려면 해당 폴더를 업무로 열어 주세요. 현재 화면과 코드는 계속 확인할 수 있어요.'
+            if not item.get('trusted'):
+                return False, '업무 폴더를 확인한 뒤 웹 미리보기를 사용할 수 있어요.'
+            root = workspace_folder(item)
+            if not path.is_relative_to(root):
+                return False, '관련 파일을 함께 보려면 이 HTML이 있는 폴더를 업무로 열어 주세요.'
+            return True, ''
+
+    def open_project_preview(self, sid, value, origin):
+        with self.lock:
+            path = self.allowed_file(sid, value)
+            allowed, reason = self.project_preview_availability(sid, path)
+            if not allowed:
+                raise ValueError(reason)
+            root = workspace_folder(self.get(sid))
+            if path.suffix.lower() not in {'.html', '.htm'}:
+                raise ValueError('웹으로 볼 HTML 파일을 선택해 주세요.')
+
+        def authorize(candidate, expected_root):
+            # Resource requests must not hydrate histories or rediscover files.
+            # Keep this short and never call it while holding the manager lock.
+            with self.lock:
+                item = self.sessions.get(sid)
+                if (self._shutdown_state != 'running' or not item
+                        or item.get('kind', 'work') != 'work'
+                        or item.get('_deleting') or item.get('_removingFromList')
+                        or self.session_visibility.contains(sid)):
+                    return False
+                self._validate_remembered_trust(item)
+                return (item.get('trusted') is True and expected_root == root
+                        and workspace_folder(item) == root and candidate.is_relative_to(root))
+
+        return self.project_previews.create(path, root, origin=origin, owner=sid, authorize=authorize)
+
+    def close_project_preview(self, sid, identifier):
+        if not isinstance(sid, str) or not isinstance(identifier, str):
+            raise ValueError('닫을 미리보기를 확인해 주세요.')
+        self.project_previews.close(identifier, owner=sid)
+        return {'ok': True}
+
     def _trusted_table_owner(self, sid):
         item = self.require_work(sid)
         self._validate_remembered_trust(item)
@@ -3227,6 +3275,7 @@ class LocalApp:
             with self._lifecycle:
                 if self._shutdown_state == 'closed':
                     return True
+            self.project_previews.close_all()
             updates_closed = True
             if hasattr(self, 'app_updates'):
                 updates_closed = self.app_updates.close()
@@ -3366,8 +3415,20 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, AttributeError, ValueError):
             return False
 
+    def do_HEAD(self):
+        if urlsplit(self.path).path.startswith('/project-preview/'):
+            return self.server.app.project_previews.serve(self)
+        self.send_error(501, 'Unsupported method')
+
+    def do_OPTIONS(self):
+        if urlsplit(self.path).path.startswith('/project-preview/'):
+            return self.server.app.project_previews.serve(self)
+        self.send_error(501, 'Unsupported method')
+
     def do_GET(self):
         route = urlsplit(self.path)
+        if route.path.startswith('/project-preview/'):
+            return self.server.app.project_previews.serve(self)
         # An extension's sandbox has an opaque origin. Share only this bundled
         # public font with it, never API responses or arbitrary local files.
         # Reuse the browser cache instead of embedding 7 MB of base64 per view.
@@ -3531,6 +3592,9 @@ class Handler(BaseHTTPRequestHandler):
                 preview = ({'kind': 'external', 'directory': True, 'name': path.name,
                             'message': '폴더 경로를 자료로 전달합니다. 하위 파일을 일괄 복사하거나 읽지 않으며, 이후 처리는 업무의 도구·승인 설정을 따릅니다.'}
                            if path.is_dir() else build_preview(path))
+                if preview['kind'] == 'html':
+                    available, reason = app.project_preview_availability(sid, path)
+                    preview.update(webPreviewAvailable=available, webPreviewReason=reason)
                 if preview['kind'] != 'external' and app.get(sid).get('observation'):
                     app.get(sid)['observation']['previewed'].add(str(path))
                 return self.reply(preview)
@@ -3822,6 +3886,14 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch_post(self, route, data):
         app = self.server.app
         sid = data.get("id")
+        if route == '/api/project-preview/open':
+            if set(data) != {'id', 'path'}:
+                raise ValueError('웹으로 볼 파일을 다시 선택해 주세요.')
+            return self.reply(app.open_project_preview(sid, data['path'], self.server.origin))
+        if route == '/api/project-preview/close':
+            if set(data) != {'id', 'previewId'}:
+                raise ValueError('닫을 미리보기를 확인해 주세요.')
+            return self.reply(app.close_project_preview(sid, data['previewId']))
         if route == '/api/results/confirm':
             if set(data) != {'id', 'runId', 'candidateId', 'action'}:
                 raise ValueError('확인할 변경 파일을 다시 선택해 주세요.')

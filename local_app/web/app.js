@@ -1305,8 +1305,36 @@ async function refreshResults(reveal=false){
 }
 let previewRequest = null;
 let htmlPreviewRender = null;
+let projectPreview = null;
+// Remember the explicit web choice only; never keep document/asset bodies here.
+const htmlProjectChoices = new Map();
+function htmlProjectKey(context) { return context.sessionId + "\n" + context.path; }
+function rememberHtmlProjectChoice(mode) {
+  if (!previewContext) return;
+  const key = htmlProjectKey(previewContext);
+  htmlProjectChoices.delete(key);
+  if (mode === "web") htmlProjectChoices.set(key, true);
+  while (htmlProjectChoices.size > 24) htmlProjectChoices.delete(htmlProjectChoices.keys().next().value);
+}
+function releaseProjectPreview(record = projectPreview) {
+  if (!record) return;
+  if (projectPreview === record) projectPreview = null;
+  record.cancelled = true;
+  if (record.frame) {
+    record.frame.src = "about:blank";
+    record.frame.remove();
+    record.frame = null;
+  }
+  if (record.previewId && !record.released) {
+    record.released = true;
+    // A late open reply still owns a lease even after its UI has disappeared.
+    // Let that reply arrive so it can be closed instead of abandoning its ID.
+    void api("/api/project-preview/close", {id:record.context.sessionId,previewId:record.previewId}).catch(() => {});
+  }
+}
 function clearPreview() {
   previewRequest?.abort(); previewRequest = null;
+  releaseProjectPreview();
   globalThis.WorkspaceHtmlPreview?.close();
   previewGeneration++; previewContext = null; previewPath = null; previewData = null; htmlPreviewRender = null;
   $("preview-content").replaceChildren(); $("preview-modes").hidden = true;
@@ -1339,24 +1367,62 @@ function renderMarkdownPreview(source = true) {
   }
   if (previewData.truncated) content.append(el("p","긴 파일의 앞부분만 표시합니다.","composer-note"));
 }
+async function renderProjectHtmlPreview(content, data, render) {
+  const record = {context:{...previewContext},previewId:null,frame:null,cancelled:false,released:false};
+  projectPreview = record;
+  const current = () => projectPreview === record && !record.cancelled && htmlPreviewRender === render &&
+    currentFileLocation(record.context.sessionId,record.context.generation);
+  const loading = el("p","웹 화면을 불러오고 있어요.","composer-note");
+  loading.setAttribute("role","status");content.append(loading);render.first=loading;
+  try {
+    const result = await api("/api/project-preview/open", {id:record.context.sessionId,path:record.context.path});
+    if (typeof result?.id === "string") record.previewId = result.id;
+    if (!current()) {releaseProjectPreview(record);return;}
+    if (!record.previewId || !/^\/project-preview\/[A-Za-z0-9_-]{20,128}\//.test(String(result.url || "")))
+      throw new Error("웹 미리보기 연결을 확인할 수 없어요.");
+    const frame = el("iframe");record.frame=frame;
+    frame.title=data.name + " 웹 미리보기";frame.className="html-preview html-project-preview";
+    frame.setAttribute("sandbox","allow-scripts");frame.setAttribute("referrerpolicy","no-referrer");
+    frame.setAttribute("allow","camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'");
+    loading.textContent=result.message || "같은 프로젝트의 스타일, 이미지와 동작을 함께 확인합니다.";
+    frame.src=result.url;content.append(frame);
+  } catch (err) {
+    if (!current()) return;
+    releaseProjectPreview(record);
+    const notice=el("div",null,"preview-static-notice");
+    notice.setAttribute("role","status");
+    notice.append(el("strong","웹 화면을 열 수 없어요."),el("p",err.message || "화면 또는 코드에서 파일을 확인하거나 기본 앱에서 열어 주세요."));
+    const screen=el("button","화면으로 보기","text-button"),open=el("button","기본 앱에서 열기","text-button");
+    screen.type=open.type="button";screen.onclick=()=>renderHtmlPreview("screen");
+    open.onclick=()=>openFileAction("open",record.context);notice.append(screen,open);
+    content.replaceChildren(notice);render.first=notice;render.mode="web-error";
+  }
+}
 function renderHtmlPreview(mode="screen"){
   if(!previewContext||!currentFileLocation(previewContext.sessionId,previewContext.generation)||previewData?.kind!=="html")return;
   const data=previewData,code=mode==="code"&&typeof data.text==="string",content=$("preview-content");
-  const displayMode=code?"code":data.scriptOnly&&mode!=="static"?"notice":"screen";
+  const web=mode==="web"&&!boot.demo&&data.webPreviewAvailable!==false;
+  const displayMode=code?"code":web?"web":data.scriptOnly&&mode!=="static"?"notice":"screen";
   // Preserve the active document (and its scroll position) when its current
   // tab is selected again. Recreating srcdoc reparses the entire HTML file.
   if(htmlPreviewRender?.data===data&&htmlPreviewRender.mode===displayMode&&
       htmlPreviewRender.first&&htmlPreviewRender.first===content.firstChild)return;
-  htmlPreviewRender=null;
+  htmlPreviewRender=null;releaseProjectPreview();rememberHtmlProjectChoice(web?"web":"screen");
   globalThis.WorkspaceHtmlPreview?.close();content.replaceChildren();content.scrollTop=0;content.classList.toggle("html-preview-screen",!code);content.classList.toggle("html-preview-code",code);
-  $("preview-screen").setAttribute("aria-pressed",String(!code));$("preview-code").setAttribute("aria-pressed",String(code));
+  $("preview-screen").setAttribute("aria-pressed",String(!code&&!web));$("preview-web").setAttribute("aria-pressed",String(web));$("preview-code").setAttribute("aria-pressed",String(code));
+  if(web){
+    const render={data,mode:displayMode,first:null};htmlPreviewRender=render;
+    void renderProjectHtmlPreview(content,data,render);return;
+  }
   if(code){
     renderSourcePreview(content,data,"html");
     if(data.truncated)content.append(el("p","코드는 앞 100,000자까지 표시합니다. 전체 내용은 메모장에서 열어 확인하세요.","composer-note"));
   }else if(data.scriptOnly && mode!=="static"){
     const notice=el("div",null,"preview-static-notice");
     notice.append(el("strong","미리볼 본문을 찾지 못했어요."),
-      el("p","스크립트가 그리는 보고서는 기본 앱에서 원본을 열어 확인하세요. 코드 탭에서 파일 내용도 확인할 수 있어요."));
+      el("p",data.webPreviewAvailable===false ? (data.webPreviewReason || "이 파일은 기본 앱에서 원본을 열어 확인해 주세요.") :
+        "웹으로 보면 같은 프로젝트의 스타일, 이미지와 동작을 함께 확인할 수 있어요."));
+    if(!boot.demo&&data.webPreviewAvailable!==false){const web=el("button","웹으로 보기","quiet-button");web.type="button";web.onclick=()=>renderHtmlPreview("web");notice.append(web);}
     const show=el("button","정적 화면 확인","text-button");show.type="button";show.onclick=()=>renderHtmlPreview("static");
     notice.append(show);content.append(notice);
   }else{
@@ -1456,6 +1522,9 @@ async function preview(path, {view, opener = document.activeElement, referenceRe
   content.replaceChildren(); content.scrollTop = 0;
   const markdown = isMarkdownPreview(data);
   $("preview-modes").hidden = (!markdown && data.kind !== "html") || typeof data.text !== "string";
+  $("preview-web").hidden = data.kind !== "html" || !!boot.demo;
+  $("preview-web").disabled = data.webPreviewAvailable === false;
+  $("preview-web").title = data.webPreviewAvailable === false ? (data.webPreviewReason || "이 파일은 기본 앱에서 열어 확인해 주세요.") : "같은 프로젝트의 스타일, 이미지와 동작을 함께 보기";
   $("preview-modes").setAttribute("aria-label",markdown ? "Markdown 보기 방식" : "HTML 보기 방식");
   $("preview-screen").textContent = markdown ? "원문" : "화면";
   $("preview-code").textContent = markdown ? "문서" : "코드";
@@ -1463,7 +1532,7 @@ async function preview(path, {view, opener = document.activeElement, referenceRe
     const img = el("img");
     img.onerror = () => { if (current() && previewData === data) previewUnavailable(path); };
     img.src = data.data; img.alt = data.name; content.append(img);
-  } else if (data.kind === "html") renderHtmlPreview();
+  } else if (data.kind === "html") renderHtmlPreview(htmlProjectChoices.has(htmlProjectKey(previewContext))?"web":"screen");
   else if (data.kind === "table" && globalThis.WorkspaceRichContent) {
     let repairStatus;
     if (referenceReview && useExplorer) {
@@ -1682,6 +1751,7 @@ $("refresh-files").onclick=()=>refreshInspector();$("files-tab").onclick=()=>set
 $("close-preview").onclick=closePreview;$("preview-dialog").oncancel=closePreview;$("open-file").onclick=()=>openFileAction("open");$("reveal-file").onclick=()=>openFileAction("reveal");$("open-text-file").onclick=()=>openFileAction("text");
 $("preview-dialog").onclose=()=>{if(!$("preview-dialog").open&&!previewContext?.docked&&previewData)closePreview();};
 $("preview-screen").onclick=()=>isMarkdownPreview(previewData) ? renderMarkdownPreview(true) : renderHtmlPreview("screen");
+$("preview-web").onclick=()=>renderHtmlPreview("web");
 $("preview-code").onclick=()=>isMarkdownPreview(previewData) ? renderMarkdownPreview(false) : renderHtmlPreview("code");
 $("help").onclick=()=>showDialog("help-dialog");$("close-help").onclick=()=>$("help-dialog").close();
 // Read-only reference: search the shipped labels locally, without touching a task.

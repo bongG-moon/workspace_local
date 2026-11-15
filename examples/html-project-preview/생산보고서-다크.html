@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>생산량 검토 보고서 (다크 대시보드)</title>
+<style>
+:root{--bg:#0f1720;--card:#192432;--line:#2b3a4d;--text:#e8eef5;--sub:#93a4b8;--a:#4cc9f0;--b:#f7b267}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 "Malgun Gothic",sans-serif}
+main{max-width:960px;margin:auto;padding:clamp(20px,5vw,56px)}
+.tag{display:inline-block;padding:3px 12px;border-radius:99px;background:#22344a;color:var(--a);font-size:13px}
+h1{font-size:clamp(28px,5vw,44px);margin:14px 0 6px;letter-spacing:-.02em}
+.lead{color:var(--sub);margin:0 0 28px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.card small{color:var(--sub)}
+.card b{display:block;font-size:38px;line-height:1.2;margin:6px 0}
+.card.a b{color:var(--a)}.card.b b{color:var(--b)}
+h2{font-size:20px;margin:36px 0 6px}
+.note{color:var(--sub);margin:0 0 16px}
+.bars{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.row{display:grid;grid-template-columns:80px 1fr 80px;gap:12px;align-items:center;margin:10px 0}
+.row span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.track{background:#101a26;border-radius:6px;height:22px;overflow:hidden}
+.fill{height:100%;border-radius:6px;background:var(--a)}
+.fill.hi{background:var(--b)}
+table{width:100%;border-collapse:collapse;margin-top:16px;background:var(--card);border-radius:14px;overflow:hidden}
+th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--sub);font-weight:600;font-size:14px}
+tr:last-child td{border-bottom:0}
+footer{margin-top:28px;color:var(--sub);font-size:14px}
+</style>
+<style>
+.demo-panel{margin:0 0 34px;padding:20px;border:1px dashed #52657c;border-radius:16px;background:#152230}
+.demo-mode{display:inline-block;border:1px solid #5c6a82;border-radius:99px;padding:4px 10px;color:#c2cddd;font-size:12px}
+.demo-panel h2{margin:12px 0 8px;font-size:23px}.demo-panel p{font-size:13px;color:#aab9ca;line-height:1.7}
+.demo-eyebrow{margin:13px 0 0;font-size:11px;letter-spacing:.1em;color:#93a4b8}.demo-connections{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;font-size:11px;color:#8295ac}
+.demo-connections span{padding:3px 6px;border:1px solid #34465b;border-radius:5px}.demo-controls{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0}
+.demo-controls button{font:12px "Malgun Gothic",sans-serif;padding:8px;border:1px solid #43546c;border-radius:7px;background:#243246;color:#b7c5d6;min-height:36px}
+.demo-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}.demo-stat{padding:12px;border:1px solid #35475e;border-radius:10px}.demo-stat small{display:block;color:#95a6bb;font-size:12px}.demo-stat strong{display:block;font-size:26px;margin-top:5px}.demo-max-detail{font-size:11px;color:#95a6bb}
+.demo-illustration{display:none}.demo-image-fallback{padding:12px;border:1px dashed #43546c;border-radius:9px;text-align:center}.demo-caption{font-size:11px!important}.demo-scope{font-size:12px!important}
+</style>
+<link rel="stylesheet" href="production-web-demo/demo.css">
+<script type="module" src="production-web-demo/demo.js"></script>
+</head>
+<body><main>
+<section id="web-demo" class="demo-panel" aria-label="화면과 웹 차이 확인">
+<span class="demo-mode" id="demo-mode">화면 모드 · 정적 미리보기</span>
+<p class="demo-eyebrow">WEB PREVIEW DEMO</p>
+<h2 id="demo-title">‘웹’ 탭에서 달라지는 부분을 확인해 보세요</h2>
+<p id="demo-description" class="demo-description">화면 탭에서는 HTML 본문만 보여 줍니다. 웹 탭을 누르면 공정 그림과 디자인이 연결되고, 아래 범위 버튼과 그래프가 작동합니다.</p>
+<div class="demo-connections" aria-label="관련 파일 연결 상태"><span id="demo-css-state">CSS 대기</span><span id="demo-image-state">이미지 대기</span><span id="demo-js-state">JS 대기</span><span id="demo-data-state">JSON 대기</span></div>
+<p class="demo-image-fallback">공정 그림은 웹 탭에서 표시됩니다.</p>
+<img class="demo-illustration" src="production-web-demo/process.svg" width="480" height="118" alt="웹에서 연결한 가공, 조립, 검사 공정 그림">
+<div class="demo-controls" role="group" aria-label="검토 범위 선택"><button type="button" data-scope="all" aria-pressed="false" disabled>전체 105건</button><button type="button" data-scope="first" aria-pressed="false" disabled>처음 100건</button><button type="button" data-scope="inspect" aria-pressed="false" disabled>검사 공정</button></div>
+<div class="demo-stats" aria-live="polite"><div class="demo-stat"><small>선택한 데이터</small><strong id="demo-count">—</strong></div><div class="demo-stat"><small>선택 범위의 최대 생산량</small><strong id="demo-max">—</strong><span class="demo-max-detail" id="demo-max-detail">웹 탭에서 계산됩니다</span></div></div>
+<p class="demo-scope" id="demo-scope">선택 범위와 그래프는 웹 탭에서 확인할 수 있습니다.</p>
+<div class="demo-bars" id="demo-bars" aria-label="선택 범위 상위 3개 작업"></div>
+<p class="demo-caption">체험용 가상 데이터인 생산검토.csv 105건의 로컬 사본을 사용합니다. 버튼은 아래 원본 보고서나 CSV 파일을 수정하지 않습니다. 막대 길이의 기준은 2,400개입니다.</p>
+</section>
+<span class="tag">AX Workspace 체험용 가상 생산 데이터</span>
+<h1>생산량 검토 보고서</h1>
+<p class="lead">생산검토.csv 초기 기록 105건 기준. 검토 범위에 따라 최대 생산량이 달라집니다.</p>
+
+<section class="cards" aria-label="범위별 생산량 최대값">
+<div class="card a"><small>처음 100건 중 최대</small><b>1,480개</b>LOT-078 · 검사 공정</div>
+<div class="card b"><small>전체 105건 중 최대</small><b>2,400개</b>LOT-101 · 조립 공정</div>
+</section>
+
+<h2>작업별 생산수량 비교</h2>
+<p class="note">막대 길이는 2,400개를 100%로 둔 상대 크기입니다.</p>
+<div class="bars">
+<div class="row"><span>LOT-005</span><div class="track"><div class="fill" style="width:35.4%"></div></div><span>850개</span></div>
+<div class="row"><span>LOT-078</span><div class="track"><div class="fill" style="width:61.7%"></div></div><span>1,480개</span></div>
+<div class="row"><span>LOT-101</span><div class="track"><div class="fill hi" style="width:100%"></div></div><span>2,400개</span></div>
+</div>
+
+<h2>101번째 작업을 포함하면 최대값이 달라집니다</h2>
+<table><thead><tr><th>작업번호</th><th>원본 데이터 행</th><th>생산수량</th></tr></thead>
+<tbody><tr><td>LOT-005</td><td>5</td><td>850개</td></tr><tr><td>LOT-078</td><td>78</td><td>1,480개</td></tr><tr><td>LOT-101</td><td>101</td><td>2,400개</td></tr></tbody></table>
+
+<footer>데이터 행은 머리글 다음 행부터 1로 셉니다. 보고서에는 집계에 사용한 데이터 행 수를 함께 적으세요.</footer>
+</main></body></html>

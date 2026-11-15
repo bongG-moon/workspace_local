@@ -62,7 +62,7 @@ $files = @(
     'local_app\web\startup-health.js', 'local_app\web\startup-health.css',
     'local_app\web\desktop.js', 'local_app\web\session-import.js', 'local_app\web\rendering.js', 'local_app\web\attachments.js', 'local_app\web\workflow.js', 'local_app\web\productivity.js', 'local_app\web\palette.js', 'local_app\web\layout.js', 'local_app\web\productivity.css', 'local_app\web\review.css',
     'docs\WORKSPACE_0.21.0_RICH_CHAT.md',
-    'local_app\file_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py', 'local_app\progress_log.py',
+    'local_app\file_preview.py', 'local_app\project_preview.py', 'local_app\executions.py', 'local_app\tool_activity.py', 'local_app\progress_log.py',
     'local_app\web\progress-view.js', 'local_app\web\progress-view.css', 'local_app\web\tool-activity.js', 'local_app\web\tool-activity.css',
     'local_app\upgrade_handoff.py', 'local_app\upgrade_launcher.py', 'local_app\update_progress.py',
     'local_app\native_fonts\AXWorkspaceUpdate-Regular.ttf', 'local_app\native_fonts\AXWorkspaceUpdate-SemiBold.ttf',

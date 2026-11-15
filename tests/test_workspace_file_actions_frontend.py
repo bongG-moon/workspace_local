@@ -158,7 +158,7 @@ class WorkspaceFileActionsFrontendTests(unittest.TestCase):
           const content=$('preview-content'),notice=content.querySelector('.preview-static-notice');
           assert.ok(notice);$('preview-screen').onclick();
           assert.equal(content.querySelector('.preview-static-notice'),notice);
-          notice.querySelector('button').onclick();const staticFrame=content.querySelector('iframe');
+          notice.children.find(node=>node.textContent==='정적 화면 확인').onclick();const staticFrame=content.querySelector('iframe');
           assert.ok(staticFrame);assert.equal(staticFrame.attributes.sandbox,'');
           renderHtmlPreview('static');assert.equal(content.querySelector('iframe'),staticFrame);
           $('preview-screen').onclick();assert.equal(content.querySelector('iframe'),null);
