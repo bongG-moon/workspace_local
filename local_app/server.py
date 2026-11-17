@@ -53,7 +53,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.45"
+WORKSPACE_VERSION = "0.23.46"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -222,6 +222,9 @@ class LocalApp:
         from .release_history import HistoryManager
         from .update_source import load_source
         bundle_root = Path(__file__).resolve().parents[1]
+        from .registration import RegistrationManager
+        self.registration = RegistrationManager(state, WORKSPACE_VERSION, application_root=bundle_root,
+                                                demo=demo or self._injected_command)
         update_source = load_source(bundle_root)
         self.app_updates = UpdateManager(state, WORKSPACE_VERSION,
             demo=demo or self._injected_command, installer=self._install_app_update,
@@ -246,6 +249,11 @@ class LocalApp:
         window = self._desktop_window
         result["nativeApplied"] = window.set_appearance(result["theme"]) if window else True
         return result
+
+    def registration_ready(self, *, updated=False):
+        # Readiness and verified update promotion own this one-time event.
+        # Bootstrap, window focus and regular status reads never trigger it.
+        self.registration.startup_ready(updated=updated, installer=_installed_launcher())
 
     def _notify_desktop(self, payload, on_click):
         if self._desktop_window is not None:
@@ -1049,8 +1057,40 @@ class LocalApp:
                     "executionMode": self.execution_mode,
                     "executionModeProtocol": EXECUTION_MODE_PROTOCOL,
                     "appUpdate": self.app_updates.snapshot(),
+                    "appRegistration": self.registration.snapshot(),
                     "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
+
+    def save_draft(self, data):
+        """Finish autosaves for archived work without reopening or running it."""
+        with self.lock:
+            payload = data
+            for key in ('id', 'selectedId'):
+                value = data.get(key)
+                if value in ('home', 'home:chat', 'home:work'):
+                    continue
+                item = self.sessions.get(value) if isinstance(value, str) else None
+                archived_work = (item is not None and item.get('kind', 'work') == 'work'
+                    and self.session_visibility.contains(value)
+                    and not item.get('_deleting') and not item.get('_removingFromList')
+                    and value not in self.chat_spaces.pending)
+                if archived_work:
+                    # Hiding a task keeps its draft. A queued or in-flight save
+                    # must drain, even after the UI has switched to another task.
+                    # Index metadata is sufficient; never hydrate archived bodies.
+                    if key == 'selectedId':
+                        payload = {**data, 'selectedId': 'home:work'}
+                else:
+                    self.get(value)
+            item = self.sessions.get(data.get('id'), {})
+            for name in ('draft', 'stash'):
+                entry = data.get(name)
+                paths = entry.get('attachments', []) if isinstance(entry, dict) else []
+                for path in paths if isinstance(paths, list) else []:
+                    owner = self.attachment_store.owner(path)
+                    if owner and (owner in self.chat_spaces.pending or self.sessions.get(owner, {}).get('kind') == 'chat') and owner != item.get('id'):
+                        raise ValueError('다른 일반 대화의 첨부 사본을 사용할 수 없어요.')
+            return self.drafts.update(payload)
 
     def attachment_references(self):
         """Caller holds app.lock. Do not hydrate old conversation bodies."""
@@ -3281,6 +3321,8 @@ class LocalApp:
                 updates_closed = self.app_updates.close()
             if hasattr(self, 'release_history'):
                 self.release_history.close()
+            if hasattr(self, 'registration'):
+                self.registration.close()
             if hasattr(self, 'dispatch'):
                 self.dispatch.stop()
             issues = []
@@ -3493,6 +3535,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(html, content_type='text/html; charset=utf-8', csp=UI_CSP)
             if route.path == '/api/app-update':
                 return self.reply(app.app_updates.check())
+            if route.path == '/api/app-registration':
+                return self.reply(app.registration.snapshot())
             if route.path == '/api/app-update-history':
                 return self.reply(app.release_history.snapshot())
             if route.path == '/api/execution-mode':
@@ -3643,6 +3687,8 @@ class Handler(BaseHTTPRequestHandler):
                       "/upgrade-handoff.js": ("upgrade-handoff.js", "text/javascript; charset=utf-8"),
                       "/upgrade-handoff.css": ("upgrade-handoff.css", "text/css; charset=utf-8"),
                       "/app-updates.js": ("app-updates.js", "text/javascript; charset=utf-8"),
+                      "/registration.js": ("registration.js", "text/javascript; charset=utf-8"),
+                      "/registration.css": ("registration.css", "text/css; charset=utf-8"),
                       "/release-history.js": ("release-history.js", "text/javascript; charset=utf-8"),
                       "/release-history.css": ("release-history.css", "text/css; charset=utf-8"),
                       "/appearance.js": ("appearance.js", "text/javascript; charset=utf-8"),
@@ -3956,20 +4002,7 @@ class Handler(BaseHTTPRequestHandler):
         if route == '/api/session-groups':
             return self.reply(app.change_session_groups(data))
         if route == '/api/drafts':
-            with app.lock:
-                for key in ('id', 'selectedId'):
-                    value = data.get(key)
-                    if value not in ('home', 'home:chat', 'home:work'):
-                        app.get(value)
-                item = app.sessions.get(data.get('id'), {})
-                for name in ('draft', 'stash'):
-                    entry = data.get(name)
-                    paths = entry.get('attachments', []) if isinstance(entry, dict) else []
-                    for path in paths if isinstance(paths, list) else []:
-                        owner = app.attachment_store.owner(path)
-                        if owner and (owner in app.chat_spaces.pending or app.sessions.get(owner, {}).get('kind') == 'chat') and owner != item.get('id'):
-                            raise ValueError('다른 일반 대화의 첨부 사본을 사용할 수 없어요.')
-                return self.reply(app.drafts.update(data))
+            return self.reply(app.save_draft(data))
         if route == '/api/attachments/cleanup':
             if data:
                 raise ValueError('첨부 정리 요청을 확인해 주세요.')
@@ -4008,8 +4041,13 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'configure' and set(data) == {'action', 'autoCheck'}:
                 return self.reply(app.app_updates.configure(data['autoCheck']))
             if action == 'install' and set(data) == {'action', 'version'}:
+                app.registration.prepare_update(data['version'])
                 return self.reply(app.app_updates.install(data['version']))
             raise ValueError('업데이트 요청을 확인해 주세요.')
+        if route == '/api/app-registration':
+            if set(data) != {'employeeId'}:
+                raise ValueError('등록할 사번만 입력해 주세요.')
+            return self.reply(app.registration.save_employee(data['employeeId']))
         if route == '/api/app-update-history':
             if set(data) != {'action', 'force'} or data['action'] != 'check' or type(data['force']) is not bool:
                 raise ValueError('업데이트 기록 요청을 확인해 주세요.')
@@ -4196,6 +4234,25 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply({"ok": True})
 
 
+def _installed_launcher():
+    """Classify an installer entry without treating portable copies as installs."""
+    entry = os.environ.get('COMPANY_WORKSPACE_RELAUNCH_ICON', '')
+    if not entry:
+        return False
+    try:
+        from .update_install import _safe
+        executable = _safe(Path(entry))
+        if executable.suffix.lower() != '.exe' or not executable.is_file():
+            return False
+        marker = _safe(executable.with_name('AX-Workspace.install-id'))
+        if not marker.is_file() or marker.stat().st_size > 128:
+            return False
+        with marker.open('rb') as stream:
+            return stream.read(128).strip() == b'AX.Workspace.Desktop'
+    except (OSError, ValueError):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", type=Path, default=Path(os.environ.get("LOCALAPPDATA", Path.home())) / "CompanyAgent/local-ui")
@@ -4265,9 +4322,15 @@ def main():
         runtime.write_text(json.dumps({"url": url, "pid": os.getpid(), "port": server.server_port}), encoding="utf-8")
         from .update_install import confirm_running_update
         try:
-            confirm_running_update(app.state, WORKSPACE_VERSION, demo=args.demo)
+            confirmed_update = confirm_running_update(app.state, WORKSPACE_VERSION, demo=args.demo)
         except (ValueError, OSError):
             app.update_warning = '업데이트 실행 위치를 저장하지 못했어요. 다음 실행 때 최신 버전 파일을 사용해 주세요.'
+        else:
+            # Failed collection must never interrupt startup or an update.
+            try:
+                app.registration_ready(updated=confirmed_update)
+            except (ValueError, OSError):
+                pass
         app.dispatch.start()
         app.app_updates.start()
         serving.set()

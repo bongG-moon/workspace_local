@@ -1,5 +1,6 @@
 """Startup release offers respect workflow focus and explicit installation."""
 import json
+from html.parser import HTMLParser
 import re
 import subprocess
 import unittest
@@ -713,7 +714,34 @@ class WorkspaceAppUpdatesFrontendTests(unittest.TestCase):
         self.assertLess(button.start(), settings.start())
         self.assertEqual('<div class="sidebar-footer-actions" role="group" aria-label="앱 메뉴">',
                          page[button.end():settings.start()].strip())
-        self.assertRegex(page[:button.start()], r'<div class="sidebar-footer">\s*$')
+        # A usage card may precede this button. Check its real parent instead
+        # of requiring it to be the footer's very first child.
+        class Structure(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.stack = []
+                self.update_parent = None
+
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if attrs.get('id') == 'app-update-sidebar-badge':
+                    self.update_parent = self.stack[-1] if self.stack else None
+                if tag not in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+                               'link', 'meta', 'param', 'source', 'track', 'wbr', 'use', 'path',
+                               'stop', 'circle', 'rect'}:
+                    self.stack.append((tag, attrs))
+
+            def handle_endtag(self, tag):
+                for index in range(len(self.stack) - 1, -1, -1):
+                    if self.stack[index][0] == tag:
+                        del self.stack[index:]
+                        break
+
+        structure = Structure()
+        structure.feed(page)
+        self.assertIsNotNone(structure.update_parent)
+        self.assertEqual(structure.update_parent[0], 'div')
+        self.assertIn('sidebar-footer', structure.update_parent[1].get('class', '').split())
         self.assertIn('id="app-update-settings-badge"', page)
 
 

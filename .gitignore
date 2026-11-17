@@ -34,6 +34,8 @@ scripts/test-lab/ws38-diagnostic/reportRun/
 workspace-update-source.json
 workspace-llm-usage.json
 llm-usage-test.json
+# Private registration credentials must never enter source or public releases.
+workspace-registration.json
 # Optional upstream sources and generated duplicate manual output.
 company-agent-plugin/scripts/
 company-agent-plugin/resources/manuals/

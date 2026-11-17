@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param([string]$StandaloneExe, [string]$OutputDirectory, [string]$UpdateConfig, [string]$ConfigPython = 'python',
-      [switch]$IncludeInstaller, [string]$NsisCompiler, [string]$UsageConfig)
+      [switch]$IncludeInstaller, [string]$NsisCompiler, [string]$UsageConfig, [string]$RegistrationConfig)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'Workspace.Version.ps1')
@@ -30,7 +30,9 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $stage = Join-Path $repoRoot ('build\workspace-release-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage, $outputRoot -Force | Out-Null
-& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython -UsageConfig $UsageConfig | Out-Null
+$registrationArguments = @{}
+if ($RegistrationConfig) { $registrationArguments['RegistrationConfig'] = $RegistrationConfig }
+& (Join-Path $PSScriptRoot 'New-WorkspaceBundle.ps1') -OutputDirectory (Join-Path $stage 'vbs') -UpdateConfig $UpdateConfig -ConfigPython $ConfigPython -UsageConfig $UsageConfig @registrationArguments | Out-Null
 $vbsSource = @(Get-ChildItem -LiteralPath (Join-Path $stage 'vbs') -Filter '*.zip')
 if ($vbsSource.Count -ne 1) { throw 'Expected one VBS source bundle.' }
 # Use the same independent inventory gate as the internal publisher. Comparing
@@ -40,6 +42,7 @@ if (-not (Test-Path -LiteralPath $bundleChecker -PathType Leaf)) { throw 'Bundle
 $checkArguments = @('-X', 'utf8', $bundleChecker, $vbsSource[0].FullName)
 if ($UpdateConfig) { $checkArguments += @('--update-config', $UpdateConfig) }
 if ($UsageConfig) { $checkArguments += @('--usage-config', $UsageConfig) }
+if ($RegistrationConfig) { $checkArguments += @('--registration-config', $RegistrationConfig) }
 & $ConfigPython @checkArguments
 if ($LASTEXITCODE -ne 0) { throw 'Bundle validation failed. No release files were published.' }
 # Read resources only. Loading this local assembly does not run its entry point.
@@ -141,6 +144,7 @@ $rows = $releaseFiles | ForEach-Object {
 $report = [ordered]@{version=$version; vbsZip=$vbsZip; exeZip=$exeZip; checksums=$checksums;
     legacyVbsZip=$legacyVbsZip; legacyExeZip=$legacyExeZip;
     identicalSourceFiles=$compared; pythonBundled=$false; exeSha256=$exeHash; stage=$stage;
+    privateRegistrationConfigured=[bool]$RegistrationConfig;
     installer=$(if ($IncludeInstaller) { $installerExe } else { $null });
     onlineInstaller=$(if ($IncludeInstaller -and $UpdateConfig) { $onlineInstaller } else { $null })}
 $json = $report | ConvertTo-Json

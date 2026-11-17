@@ -34,8 +34,9 @@ class ReleaseBundleGateTests(unittest.TestCase):
             (ROOT / 'local_app/server.py').read_text(encoding='utf-8'), re.M)[1]
         (deploy / 'Workspace.Version.ps1').write_text(
             "function Sync-WorkspaceVersion { param([string]$RepoRoot, [switch]$Check) return '" + self.version + "' }", encoding='utf-8')
-        (deploy / 'New-WorkspaceBundle.ps1').write_text('''param($OutputDirectory,$UpdateConfig,$ConfigPython,$UsageConfig)
+        (deploy / 'New-WorkspaceBundle.ps1').write_text('''param($OutputDirectory,$UpdateConfig,$ConfigPython,$UsageConfig,$RegistrationConfig)
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+$RegistrationConfig | ConvertTo-Json | Set-Content -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'builder-registration.json')
 Copy-Item -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'payload.zip') -Destination (Join-Path $OutputDirectory 'bundle.zip')
 ''', encoding='utf-8')
         self.checker.write_text('''import json, pathlib, sys
@@ -54,7 +55,7 @@ sys.exit(int((root / 'checker-exit.txt').read_text()))
             capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
         self.assertEqual(0, compiled.returncode, compiled.stdout + compiled.stderr)
 
-    def run_release(self, code, *, configs=False):
+    def run_release(self, code, *, configs=False, registration=False):
         (self.root / 'checker-exit.txt').write_text(str(code), encoding='ascii')
         args = [str(PS), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
             '-File', str(self.root / 'deploy/New-WorkspaceRelease.ps1'), '-StandaloneExe', str(self.exe),
@@ -64,6 +65,9 @@ sys.exit(int((root / 'checker-exit.txt').read_text()))
                 (self.root / name).write_text('{}', encoding='ascii')
             args += ['-UpdateConfig', str(self.root / 'update config.json'),
                      '-UsageConfig', str(self.root / 'usage config.json')]
+        if registration:
+            (self.root / 'registration config.json').write_text('{}', encoding='ascii')
+            args += ['-RegistrationConfig', str(self.root / 'registration config.json')]
         env = dict(os.environ)
         env['PSModulePath'] = str(PS.parent / 'Modules')  # Do not load PowerShell 7 modules in 5.1.
         return subprocess.run(args, capture_output=True, timeout=45, env=env,
@@ -92,6 +96,16 @@ sys.exit(int((root / 'checker-exit.txt').read_text()))
         self.assertNotEqual(0, result.returncode)
         self.assertIn(b'Bundle validation script is missing', result.stderr)
         self.assertEqual([], list((self.root / 'release').iterdir()))
+
+    def test_private_registration_is_forwarded_to_builder_and_independent_checker(self):
+        result = self.run_release(0, registration=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        configured = str(self.root / 'registration config.json')
+        self.assertEqual(configured, json.loads((self.root / 'builder-registration.json').read_text(encoding='utf-8-sig')))
+        args = json.loads((self.root / 'checker-arguments.json').read_text())
+        self.assertEqual(['--registration-config', configured], args[1:])
+        report = json.loads((self.root / f'build/workspace-release-{self.version}.json').read_text())
+        self.assertTrue(report['privateRegistrationConfigured'])
 
 
 if __name__ == '__main__':

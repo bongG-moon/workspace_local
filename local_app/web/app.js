@@ -2054,7 +2054,7 @@ function enterShutdown(state,issues=[]){
   globalThis.WorkspaceCapabilities?.close();
   globalThis.WorkspaceExtensions?.stop();
   globalThis.WorkspaceExtensionImport?.stop();
-  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceReleaseHistory?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
+  globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceRegistration?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceReleaseHistory?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
   if(pollController)pollController.abort();
   for(const id of ["new-chat","choose-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
   renderShutdown();
@@ -2208,8 +2208,12 @@ globalThis.WorkspaceUpgrade?.attach({
 globalThis.WorkspaceProgressView?.attach({api:(path,signal)=>api(path,undefined,signal),
   legacy:(id,runId)=>active?.id===id?(active.toolActivity||[]).filter(row=>!runId||row.runId===runId):[]});
 globalThis.WorkspaceReleaseHistory?.attach({api:(path,data,signal)=>api(path,data,signal),openDialog:id=>showDialog(id)});
+globalThis.WorkspaceRegistration?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),isClosed:()=>appClosed||quitting,
+  canPrompt:()=>!hasTaskOperations()&&!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!pendingConfirmation&&!busyStates.has(active?.state)&&!globalThis.WorkspaceUpgrade?.isLocked(),
+  changed:()=>{globalThis.WorkspaceAppUpdates?.registrationChanged?.();globalThis.WorkspaceAppUpdates?.contextChanged?.();}});
+
 globalThis.WorkspaceAppUpdates?.attach({api:(path,data)=>api(path,data),openDialog:id=>showDialog(id),notify:message=>toast(message),
-  canOfferUpdate:()=>!hasTaskOperations()&&!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
+  canOfferUpdate:()=>!globalThis.WorkspaceRegistration?.hasStartupPrompt()&&!hasTaskOperations()&&!restartingConnections.size&&!appClosed&&!quitting&&!sending&&!choiceSubmission&&!modelChanging&&!permissionChanging&&!effortChanging&&!connectionPreparing&&!connectionRestarting()&&!attachmentPicking&&!pendingConfirmation&&!busyStates.has(active?.state)&&(!active?.choice||answeredChoices.has(`${active.id}:${active.choice.id}`))&&!$("requests").children.length&&!globalThis.WorkspaceAttachments?.isUploading()&&!globalThis.WorkspaceWorkflow?.isSubmitting()});
 let extensionImportLoad;
 async function extensionImporter(){
   if(!extensionImportLoad)extensionImportLoad=new Promise((resolve,reject)=>{
@@ -2291,7 +2295,7 @@ async function init(){try{
     }else {if(!drafts.has("home")&&drafts.has("home:work"))drafts.set("home",drafts.get("home:work"));restoreDraft(homeDraftKey());}
   }
   void loadExtensions(boot.extensions);
-  globalThis.WorkspaceLlmUsage?.start({api});globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
+  globalThis.WorkspaceLlmUsage?.start({api});globalThis.WorkspaceAttention?.start();if(boot.historyWarning)error(boot.historyWarning);if(boot.visibilityWarning)error(boot.visibilityWarning);if(boot.error)error(boot.error);await globalThis.WorkspaceStartupHealth?.bootstrapReady();await globalThis.WorkspaceUpgrade?.bootstrap(boot);globalThis.WorkspaceRegistration?.start(boot.appRegistration);globalThis.WorkspaceAppUpdates?.start(boot.appUpdate,boot.appUpdateWarning);
 }catch(e){globalThis.WorkspaceStartupHealth?.bootstrapFailed();error(e.message);$("send").disabled=true;}}
 document.querySelectorAll('button[value="cancel"]').forEach(b=>b.setAttribute("formnovalidate",""));
 init();

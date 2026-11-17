@@ -14,6 +14,8 @@ globalThis.WorkspaceAppUpdates = (() => {
   let installFailureNotified=false,startupOfferDone=false,offerTimer=null,startupReady=false,lastStartupSequence=0;
   let handoff=null,handoffLocked=false;
   let terminal=null;
+  let registrationPreparing=false;
+  let dialogGeneration=0;
   const previousHandoffs=new Set();
 
   function newer(version,current){
@@ -49,7 +51,7 @@ globalThis.WorkspaceAppUpdates = (() => {
       :date.toLocaleDateString("ko-KR",{year:"numeric",month:"long",day:"numeric"});
   }
   function visible(){return document.hidden!==true&&($("settings-dialog")?.open||$("app-update-dialog")?.open);}
-  function busy(){return pending||snapshot.status==="checking"||transfers.has(snapshot.status);}
+  function busy(){return pending||registrationPreparing||snapshot.status==="checking"||transfers.has(snapshot.status);}
   function offerPending(){return started&&startupReady&&!stopped&&!startupOfferDone&&snapshot.autoCheck&&snapshot.status==="available"&&!!snapshot.release&&!localError;}
   function offerUpdate(){
     if(!offerPending()||document.hidden===true||pending||installSubmitted||installUncertain)return false;
@@ -260,6 +262,14 @@ globalThis.WorkspaceAppUpdates = (() => {
   function check(){return request(installUncertain||terminal&&transfers.has(snapshot.status)?undefined:{action:"check"});}
   async function install(){
     if(busy()||installSubmitted||installUncertain||!snapshot.canInstall||!snapshot.release)return false;
+    const version=snapshot.release.version,dialogWasOpen=$("app-update-dialog").open===true,installDialogGeneration=dialogGeneration;
+    if(globalThis.WorkspaceRegistration){
+      registrationPreparing=true;render();
+      let registered=false;
+      try{registered=await globalThis.WorkspaceRegistration.beforeUpdate();}
+      finally{registrationPreparing=false;if(!stopped)render();}
+      if(!registered||stopped||dialogWasOpen&&(!$("app-update-dialog").open||dialogGeneration!==installDialogGeneration)||snapshot.release?.version!==version)return false;
+    }
     if(terminal?.requestId)previousHandoffs.add(terminal.requestId);
     if(handoff?.requestId)previousHandoffs.add(handoff.requestId);
     if(snapshot.attemptId)previousHandoffs.add(snapshot.attemptId);
@@ -292,6 +302,9 @@ globalThis.WorkspaceAppUpdates = (() => {
     $("app-update-close").onclick=$("app-update-dismiss").onclick=()=>$("app-update-dialog").close();
     $("app-update-dialog").oncancel=event=>{event.preventDefault();$("app-update-dialog").close();};
     $("app-update-dialog").onclose=()=>{
+      // A registration save may still be pending. Reopening the same release
+      // cannot revive the installation intent dismissed with the old dialog.
+      dialogGeneration++;
       $("app-update-sidebar-badge").setAttribute("aria-expanded","false");
       const target=returnFocus?.hidden?$("settings-open"):returnFocus,owner=target?.closest?.("dialog");
       if(!closingForHandoff&&target?.isConnected&&!target.disabled&&(!owner||owner.open))target.focus();
@@ -310,6 +323,7 @@ globalThis.WorkspaceAppUpdates = (() => {
     if(snapshot.autoCheck)void request({action:"startup"});else{startupReady=true;schedule();}
   }
   return {attach:value=>{hooks=value;if(!bound){bind();bound=true;}},start,observe,contextChanged,
+    registrationChanged:render,
     canYieldForHandoff,handoffStarting,handoffChanged,completed,
     settingsOpened:()=>{render();schedule(true);},settingsClosed:()=>schedule(),
     stop:()=>{stopped=true;clearTimeout(timer);clearTimeout(offerTimer);timer=offerTimer=null;

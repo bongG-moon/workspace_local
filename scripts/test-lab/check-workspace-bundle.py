@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("bundle", type=Path)
 parser.add_argument("--update-config", type=Path, help="Expected non-secret GitLab settings injected during packaging")
 parser.add_argument("--usage-config", type=Path, help="Expected non-secret usage MCP address injected during packaging")
+parser.add_argument("--registration-config", type=Path, help="Explicit private registration settings for an internal-only package")
 args = parser.parse_args()
 count = 0
 expected = {"docs/WORKSPACE_0.16.0_PRODUCTIVITY.md", "docs/WORKSPACE_0.17.0_RELIABILITY.md","AX-Workspace.vbs", "Company-Workspace.vbs", "docs/AX_WORKSPACE_STORY.html", "deploy/Start-CompanyWorkspace.ps1", "docs/LOCAL_WORKSPACE.md", "docs/WORKSPACE_USER_GUIDE.html", "docs/WORKSPACE_0.15.0_CLAUDE.md",
@@ -43,6 +44,8 @@ expected.update({'local_app/extensions.py', 'local_app/extension_install.py', 'l
 expected.update({'local_app/build_identity.py', 'local_app/workspace_preferences.py'})
 expected.update({'local_app/extension_tasks.py', 'local_app/llm_usage.py', 'local_app/llm_usage_config.py',
                  'local_app/web/llm-usage.js', 'local_app/web/llm-usage.css', 'docs/LLM_USAGE.md'})
+expected.update({'local_app/registration.py', 'local_app/web/registration.js',
+                 'local_app/web/registration.css', 'docs/APP_REGISTRATION.md'})
 seen = set()
 expected.update({'local_app/customizations.py', 'local_app/web/customizations.js'})
 expected.update({'local_app/session_groups.py', 'local_app/web/session-groups.js'})
@@ -101,6 +104,13 @@ if args.usage_config is not None:
     from local_app.llm_usage_config import encoded, load
     usage_bytes = encoded(load(args.usage_config))
     expected.add('workspace-llm-usage.json')
+registration_bytes = None
+if args.registration_config is not None:
+    sys.path.insert(0, str(root))
+    from local_app.registration import MAX_CONFIG, encoded, from_bytes
+    with args.registration_config.open('rb') as stream:
+        registration_bytes = encoded(from_bytes(stream.read(MAX_CONFIG + 1)))
+    expected.add('workspace-registration.json')
 desktop = json.loads((root/'build/desktop-host/desktop-build.json').read_text())
 lock = json.loads((root/'deploy/WebView2.lock.json').read_text())
 assert desktop['sdkSha256'] == lock['sha256'] and desktop['sdkVersion'] == lock['version']
@@ -124,6 +134,8 @@ with zipfile.ZipFile(args.bundle) as bundle:
             assert configuration_bytes is not None and bundle.read(entry) == configuration_bytes, "Unexpected update settings"
         elif relative == 'workspace-llm-usage.json':
             assert usage_bytes is not None and bundle.read(entry) == usage_bytes, "Unexpected usage settings"
+        elif relative == 'workspace-registration.json':
+            assert registration_bytes is not None and bundle.read(entry) == registration_bytes, "Unexpected registration settings"
         else:
             source = root / 'build/desktop-host' / Path(relative).name if relative in generated else root / relative
             assert source.is_file(), name
@@ -141,5 +153,6 @@ with zipfile.ZipFile(args.bundle) as bundle:
         source_text = bundle.read("Company-Workspace/" + relative).decode("utf-8-sig").replace("\r\n", "\n")
         assert hashlib.sha256(source_text.encode("utf-8")).hexdigest() == expected_hash, (
             "Startup diagnostic is incompatible with the bundled helper: " + relative)
-print(f"Verified {count-len(generated)} source files and {len(generated)} pinned build assets; no runtime state or credentials bundled.")
+scope = 'private registration credentials included; internal distribution only' if registration_bytes is not None else 'no runtime state or credentials bundled'
+print(f"Verified {count-len(generated)} source files and {len(generated)} pinned build assets; {scope}.")
 print("SHA256: " + hashlib.sha256(args.bundle.read_bytes()).hexdigest())

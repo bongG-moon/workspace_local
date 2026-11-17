@@ -1,0 +1,21 @@
+/* Installation-only registration uses the existing AX dialog and theme. */
+.registration-dialog{width:min(448px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:24px;border:1px solid var(--line);border-radius:20px;background:var(--surface-raised);color:var(--ink);box-shadow:0 18px 64px var(--theme-shadow-a43,#30384b2b)}
+.registration-dialog .dialog-head{align-items:center;margin-bottom:22px}
+.registration-brand{display:flex;align-items:center;gap:10px;font-size:14px;font-weight:600}
+.registration-brand .brand-mark{width:32px;height:32px;flex-basis:32px;border-radius:11px}
+.registration-brand .brand-mark .icon{width:21px;height:21px}
+.registration-dialog h2{margin:0 0 10px;font-size:21px;font-weight:650;line-height:1.45;letter-spacing:-.5px}
+.registration-description{margin:0 0 24px;color:var(--muted);font-size:13px;line-height:1.8;word-break:keep-all}
+.registration-field-label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px;font-size:13px;font-weight:550}
+.registration-field-count{color:var(--muted);font-size:12px;font-weight:400;white-space:nowrap}
+.registration-input{width:100%;min-width:0;min-height:44px;border:1px solid var(--line);border-radius:10px;padding:11px 13px;background:var(--theme-surface-raised,var(--surface));color:var(--ink);font:inherit;font-size:15px}
+.registration-input[aria-invalid=true]{border-color:var(--theme-danger,#a74747)}
+.registration-help{margin:9px 0 0;color:var(--muted);font-size:12px;line-height:1.7;word-break:keep-all}
+.registration-error{margin:5px 0 0;min-height:20px;color:var(--theme-danger,#a74747);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.registration-notice{margin:16px 0 0;color:var(--muted);font-size:12px;line-height:1.9;white-space:pre-line;word-break:keep-all}
+.registration-actions{display:flex;justify-content:flex-end;align-items:center;gap:14px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+.registration-dialog .send-button{background:var(--accent);border:1px solid transparent;color:var(--theme-text-on-accent,#fff)}
+.app-update-registration{margin:18px 0 10px;padding-top:18px;border-top:1px solid var(--line)}
+.app-update-registration .registration-notice{margin-top:8px}
+.registration-settings p{margin:0 0 8px}
+@media(max-width:480px){.registration-dialog{padding:20px}.registration-dialog h2{font-size:20px}.registration-input{font-size:16px}}

@@ -70,7 +70,7 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
         (desktop / 'desktop-build.json').write_bytes(data)
         cls.entries['desktop/desktop-build.json'] = data
 
-    def check(self, *, omit=(), replace=None, extra=()):
+    def check(self, *, omit=(), replace=None, extra=(), registration_config=None):
         archive = self.root / 'bundle.zip'
         replacements = replace or {}
         with warnings.catch_warnings():
@@ -81,7 +81,10 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
                         bundle.writestr(PREFIX + relative, replacements.get(relative, content))
                 for relative, content in extra:
                     bundle.writestr(PREFIX + relative, content)
-        result = subprocess.run([sys.executable, '-X', 'utf8', str(self.root / CHECKER), str(archive)],
+        arguments = [sys.executable, '-X', 'utf8', str(self.root / CHECKER), str(archive)]
+        if registration_config is not None:
+            arguments += ['--registration-config', str(registration_config)]
+        result = subprocess.run(arguments,
                                 capture_output=True, text=True, encoding='utf-8', timeout=120)
         return result.returncode, result.stdout + result.stderr
 
@@ -135,11 +138,30 @@ class WorkspaceBundleCheckTests(unittest.TestCase):
 
     def test_extra_or_private_files_are_rejected(self):
         for relative in ('docs/unreviewed.md', '.env', 'local_app/runtime.json', '../outside.txt',
-                         'local_app/_vendor/unknown.py', 'local_app/_vendor/xlrd/.env'):
+                         'local_app/_vendor/unknown.py', 'local_app/_vendor/xlrd/.env',
+                         'workspace-registration.json'):
             with self.subTest(relative=relative):
                 code, output = self.check(extra=((relative, b'fixture'),))
                 self.assertNotEqual(0, code, output)
                 self.assertIn(relative, output)
+
+    def test_private_registration_requires_explicit_matching_configuration(self):
+        from local_app.registration import encoded
+        settings = {'schema': 1, 'baseUrl': 'http://square.example.test', 'key': 'fixture-' * 8}
+        data = encoded(settings)
+        configuration = self.root / 'private-input.json'
+        configuration.write_bytes(data)
+        code, output = self.check(extra=(('workspace-registration.json', data),),
+                                  registration_config=configuration)
+        self.assertEqual(0, code, output)
+        self.assertIn('internal distribution only', output)
+        self.assertNotIn(settings['key'], output)
+        different = encoded({**settings, 'key': 'different-fixture-' * 4})
+        code, output = self.check(extra=(('workspace-registration.json', different),),
+                                  registration_config=configuration)
+        self.assertNotEqual(0, code, output)
+        self.assertIn('Unexpected registration settings', output)
+        self.assertNotIn(settings['key'], output)
 
     def test_stale_source_or_desktop_content_is_rejected(self):
         for relative in ('docs/WORKSPACE_ONLINE_INSTALLER.md', 'local_app/server.py',
