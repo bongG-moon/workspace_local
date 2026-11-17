@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import codecs
 import json
 import os
 from pathlib import Path
@@ -12,9 +13,12 @@ import subprocess
 import sys
 import uuid
 import zipfile
+from urllib.parse import quote, quote_plus
 
 from . import git_sync, source_archive, installer
-from .config import PublisherError, active, atomic_json, checked_version, normalize, runtime_config, safe_path, usage_config
+from .config import (PublisherError, active, atomic_json, checked_version, normalize, runtime_config,
+                     safe_path, usage_config, registration_config, registration_metadata,
+                     checked_registration_metadata)
 from . import publish as publishing
 
 
@@ -26,6 +30,14 @@ class Publisher:
         self.runner = runner or self._run
         self.work_root = self.repo_root / 'build/publisher'
         self.config_path = self.work_root / 'config.json'
+        self._build_secrets = ()
+
+    def _redact(self, value):
+        text = str(value)
+        for secret in self._build_secrets:
+            for encoded in {secret, quote(secret, safe=''), quote_plus(secret)}:
+                text = text.replace(encoded, '[집계 인증키 숨김]')
+        return text
 
     def _info(self, message):
         self.emit({'kind': 'progress', 'message': message})
@@ -168,20 +180,34 @@ class Publisher:
         log_root.mkdir(parents=True, exist_ok=True)
         def clean(raw):
             if isinstance(raw, bytes):
-                raw = raw[:65536]
+                # Keep a bounded lookahead for a key crossing the output limit.
+                # Redact before decoding so fallback encodings cannot turn a
+                # known key into a reversible, unrecognized representation.
+                raw = raw[:65536 + 8192]
+                for secret in self._build_secrets:
+                    for value in {secret, quote(secret, safe=''), quote_plus(secret)}:
+                        for encoding in ('utf-8', 'cp949', 'utf-16-le', 'utf-16-be'):
+                            try:
+                                encoded = value.encode(encoding)
+                            except UnicodeError:
+                                continue
+                            raw = raw.replace(encoded, '[집계 인증키 숨김]'.encode('utf-8'))
                 try:
-                    value = raw.decode('utf-8')
+                    # A truncated UTF-8 suffix is harmless; it must not force a
+                    # fallback decoder over the entire otherwise valid stream.
+                    value = codecs.getincrementaldecoder('utf-8')().decode(raw, final=False)
                 except UnicodeError:
                     value = raw.decode('cp949' if os.name == 'nt' else 'utf-8', errors='replace')
             else:
-                value = str(raw or '')[:65536]
+                value = str(raw or '')[:65536 + 8192]
+            value = self._redact(value)
             for name, secret in os.environ.items():
                 if re.search(r'TOKEN|PASSWORD|SECRET|API_?KEY|CREDENTIAL|AUTH', name, re.I) and len(secret) >= 4:
                     value = value.replace(secret, '[비밀값 숨김]')
             value = re.sub(r'(https?://)[^\s/@]+:[^\s/@]+@', r'\1[계정 숨김]@', value, flags=re.I)
             value = re.sub(r'(https?://[^\s?]+)\?[^\s]+', r'\1?[쿼리 숨김]', value, flags=re.I)
             value = re.sub(r'(?i)(\b(?:[\w-]{0,64}token|password|secret|api[_-]?key|authorization)[\"\s]*[:=]\s*[\"]?)[^\r\n,\"]+', r'\1[비밀값 숨김]', value)
-            return value
+            return value[:65536]
         path = self._owned(log_root / (step + '-' + uuid.uuid4().hex[:12] + '.log'))
         with path.open('x', encoding='utf-8', newline='\n') as stream:
             stream.write(f'단계: {step}\n결과: {status}\n\n표준 출력\n{clean(stdout)}\n\n오류 출력\n{clean(stderr)}\n')
@@ -271,7 +297,23 @@ class Publisher:
         except (ValueError, KeyError, OSError) as exc:
             raise PublisherError('검증된 WebView2 SDK가 없습니다. 배포 창에서 SDK 다운로드 또는 사내 SDK 파일 선택으로 준비해 주세요. 자동 다운로드는 하지 않았습니다.') from exc
 
-    def build(self, config, *, cancel=None):
+    def build(self, config, *, cancel=None, registration_key=''):
+        config = normalize(config)
+        private_registration = registration_config(config, registration_key)
+        previous = self._build_secrets
+        if private_registration is not None:
+            self._build_secrets = (*previous, private_registration['key'])
+        try:
+            return self._build(config, cancel=cancel, private_registration=private_registration)
+        except Exception as error:
+            message = self._redact(error)
+            if message != str(error):
+                raise PublisherError(message) from None
+            raise
+        finally:
+            self._build_secrets = previous
+
+    def _build(self, config, *, cancel=None, private_registration=None):
         active(cancel)
         config = normalize(config)
         info = self.inspect_source(require_clean=True, cancel=cancel)
@@ -295,6 +337,11 @@ class Publisher:
         if usage:
             atomic_json(usage_path, usage)
         usage_args = ['-UsageConfig', str(usage_path)] if usage else []
+        registration_path = stage / 'workspace-registration.json'
+        registration = registration_metadata(private_registration)
+        if private_registration is not None:
+            atomic_json(registration_path, private_registration)
+        registration_args = ['-RegistrationConfig', str(registration_path)] if registration else []
         # Refuse a moving checkout; build output is always tied to one reviewed HEAD.
         latest = self.inspect_source(require_clean=True, cancel=cancel)
         if latest['sourceKind'] != info['sourceKind'] or latest['sourceId'] != info['sourceId']:
@@ -310,14 +357,14 @@ class Publisher:
         self._info('회사 업데이트 주소를 포함한 EXE를 별도 폴더에서 빌드·검증합니다. 취소 요청은 현재 빌드 단계가 끝난 뒤 반영됩니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceStandalone.ps1'), '-UpdateConfig', str(config_path),
                      '-ConfigPython', sys.executable, '-OutputDirectory', str(output),
-                     '-VerificationDirectory', str(stage / 'v'), *usage_args], cwd=source, cancel=cancel)
+                     '-VerificationDirectory', str(stage / 'v'), *usage_args, *registration_args], cwd=source, cancel=cancel)
         active(cancel)
         exe = output / f"AX-Workspace-{info['version']}.exe"
         self._info('최신 버전 설치기, NSIS 설치 프로그램과 기존 앱 업데이트용 ZIP·체크섬을 만듭니다.' if nsis else
                    'EXE와 같은 앱 파일의 VBS ZIP·체크섬을 만들고 서로 비교합니다.')
         self.runner([*prefix, str(source / 'deploy/New-WorkspaceRelease.ps1'), '-UpdateConfig', str(config_path),
                      '-ConfigPython', sys.executable, '-StandaloneExe', str(exe), '-OutputDirectory', str(release),
-                     *usage_args, *(['-IncludeInstaller', '-NsisCompiler', str(nsis)] if nsis else [])],
+                     *usage_args, *registration_args, *(['-IncludeInstaller', '-NsisCompiler', str(nsis)] if nsis else [])],
                     cwd=source, cancel=cancel)
         active(cancel)
         try:
@@ -336,9 +383,11 @@ class Publisher:
             raise PublisherError('EXE 내장 파일과 VBS 공통 파일의 빌드 검증 결과가 일치하지 않습니다. 게시하지 않았습니다.') from exc
         self.runner([sys.executable, str(source / 'scripts/test-lab/check-workspace-bundle.py'),
                      str(release / f"AX-Workspace-{info['version']}-vbs.zip"), '--update-config', str(config_path),
-                     *(['--usage-config', str(usage_path)] if usage else [])],
+                     *(['--usage-config', str(usage_path)] if usage else []),
+                     *(['--registration-config', str(registration_path)] if registration else [])],
                     cwd=source, cancel=cancel, timeout=120)
-        files = publishing.verify_files(release, info['version'], injected, usage)
+        files = publishing.verify_files(release, info['version'], injected, usage,
+                                       **({'expected_registration': registration} if registration else {}))
         if nsis:
             installer.verify_build_report(source, release, info['version'], standalone['sha256'])
             installer.verify_online_build_report(source, release, info['version'], injected)
@@ -357,6 +406,8 @@ class Publisher:
                   'sourceKind': info['sourceKind'], 'sourceId': info['sourceId']}
         if usage:
             result['usageConfig'] = usage
+        if registration:
+            result['registrationConfig'] = registration
         atomic_json(stage / 'build-result.json', result)
         atomic_json(self.work_root / 'last-build.json', result)
         self._info('배포 파일과 기존 앱 업데이트용 호환 파일을 만들고 검증했습니다. 게시 버튼으로 서버에 반영할 수 있습니다.')
@@ -366,7 +417,7 @@ class Publisher:
         try:
             legacy_fields = {'version', 'commit', 'directory', 'sourceRoot', 'files', 'runtimeConfig'}
             if (not isinstance(build_result, dict)
-                    or set(build_result) - {'usageConfig'} not in (legacy_fields, legacy_fields | {'sourceKind', 'sourceId'})
+                    or set(build_result) - {'usageConfig', 'registrationConfig'} not in (legacy_fields, legacy_fields | {'sourceKind', 'sourceId'})
                     or not isinstance(build_result['commit'], str)):
                 raise ValueError()
             source_kind = build_result.get('sourceKind', 'git')
@@ -390,6 +441,8 @@ class Publisher:
                 from local_app.llm_usage_config import normalize as normalize_usage
                 if normalize_usage(build_result['usageConfig']) != build_result['usageConfig']:
                     raise ValueError()
+            if 'registrationConfig' in build_result and checked_registration_metadata(build_result['registrationConfig']) is None:
+                raise ValueError()
             from local_app.update_source import source_from_config
             source = source_from_config(build_result['runtimeConfig'])
             if source.provider != 'gitlab' or source.config != build_result['runtimeConfig']:
@@ -400,14 +453,29 @@ class Publisher:
             raise PublisherError('이전 빌드 기록을 확인하지 못했습니다. 원래 빌드 폴더와 기록을 복원하거나 새 소스 폴더에서 진행해 주세요.') from exc
         return directory
 
-    def _validated_build(self, config, build_result):
+    @staticmethod
+    def _registration_matches(config, build_result, registration_key=''):
+        config = normalize(config)
+        recorded = checked_registration_metadata(build_result.get('registrationConfig'))
+        if not config['registrationEnabled']:
+            return recorded is None
+        if recorded is None or recorded['baseUrl'] != config['registrationBaseUrl']:
+            return False
+        if registration_key:
+            return recorded == registration_metadata(registration_config(config, registration_key))
+        return True
+
+    def _validated_build(self, config, build_result, *, registration_key=''):
         directory = self._validated_build_metadata(build_result)
         try:
             expected_source = runtime_config(config)
             expected_usage = usage_config(config)
-            if build_result['runtimeConfig'] != expected_source or build_result.get('usageConfig') != expected_usage:
+            if (build_result['runtimeConfig'] != expected_source or build_result.get('usageConfig') != expected_usage
+                    or not self._registration_matches(config, build_result, registration_key)):
                 raise ValueError()
-            files = publishing.verify_files(directory, build_result['version'], expected_source, expected_usage)
+            registration = build_result.get('registrationConfig')
+            files = publishing.verify_files(directory, build_result['version'], expected_source, expected_usage,
+                                           **({'expected_registration': registration} if registration else {}))
             if files != build_result['files']:
                 raise ValueError()
             if any(row['name'].endswith('-Setup.exe') for row in files):
@@ -422,7 +490,7 @@ class Publisher:
             raise PublisherError('저장된 배포 파일의 위치·설정·체크섬을 확인하지 못했습니다. 원래 빌드 폴더와 게시 대상 설정을 복원해 주세요. 같은 버전 파일을 새로 만들면 기존 게시 파일과 충돌할 수 있습니다.') from exc
         return build_result
 
-    def load_last_build(self, config, *, cancel=None):
+    def load_last_build(self, config, *, cancel=None, registration_key=''):
         """Recover exact retry bytes even when the source HEAD has moved."""
         active(cancel)
         try:
@@ -434,14 +502,14 @@ class Publisher:
             result = json.loads(saved.read_text(encoding='utf-8'))
         except (OSError, ValueError, TypeError) as exc:
             raise PublisherError('이전 빌드 기록을 읽지 못했습니다. build/publisher의 원래 빌드 폴더와 기록을 복원해 주세요.') from exc
-        recovered = self._validated_build(config, result)
+        recovered = self._validated_build(config, result, registration_key=registration_key)
         active(cancel)
         return recovered
 
-    def publish(self, config, build_result, token, token_kind='auto', *, cancel=None):
+    def publish(self, config, build_result, token, token_kind='auto', *, cancel=None, registration_key=''):
         active(cancel)
         config = normalize(config)
-        self._validated_build(config, build_result)
+        self._validated_build(config, build_result, registration_key=registration_key)
         bundled_history = None
         try:
             notes = self.release_notes()
@@ -454,7 +522,7 @@ class Publisher:
                                   transport=self.transport, emit=self.emit, cancel=cancel,
                                   bundled_history=bundled_history)
 
-    def prepare_deploy(self, config, *, build_result=None, cancel=None):
+    def prepare_deploy(self, config, *, build_result=None, cancel=None, registration_key=''):
         """Reuse verified bytes on retry; build when this version has no artifact."""
         active(cancel)
         config = normalize(config)
@@ -480,15 +548,16 @@ class Publisher:
         except PublisherError:
             if candidate is None:
                 raise
-            return self._require_current_installer(config, self._validated_build(config, candidate))
+            return self._require_current_installer(config, self._validated_build(config, candidate, registration_key=registration_key))
         if (isinstance(candidate, dict) and candidate.get('version') == version
                 and candidate.get('runtimeConfig') == runtime_config(config)
-                and candidate.get('usageConfig') == usage_config(config)):
-            checked = self._validated_build(config, candidate)
+                and candidate.get('usageConfig') == usage_config(config)
+                and self._registration_matches(config, candidate, registration_key)):
+            checked = self._validated_build(config, candidate, registration_key=registration_key)
             self._require_current_installer(config, checked)
             self._info('이전에 만든 배포 파일을 확인했습니다. 같은 파일로 게시를 이어갑니다.')
             return checked
-        return self.build(config, cancel=cancel)
+        return self.build(config, cancel=cancel, **({'registration_key': registration_key} if config['registrationEnabled'] else {}))
 
     @staticmethod
     def _require_current_installer(config, build):

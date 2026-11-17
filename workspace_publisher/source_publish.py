@@ -102,7 +102,7 @@ def _private_path(name):
     if (any(part in {'.aws', '.ssh', '.codex', '.claude', '.credentials'} for part in parts)
             or (basename == '.env' or basename.startswith('.env.')) and basename not in examples
             or Path(basename).suffix in {'.pem', '.pfx', '.p12', '.key', '.kdbx'}
-            or basename in {'workspace-publisher.json', 'publisher-config.json', 'credentials.json', 'secrets.json',
+            or basename in {'workspace-publisher.json', 'publisher-config.json', 'workspace-registration.json', 'credentials.json', 'secrets.json',
                             '.git-credentials', '.netrc', '_netrc', '.pypirc', 'id_rsa', 'id_ed25519'}):
         raise PublisherError('소스 목록에 개인 설정·인증 정보용 파일이 있습니다. 게시용 소스에서 제외해 주세요.')
 

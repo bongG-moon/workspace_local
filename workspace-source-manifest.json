@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "b551d9ababb788aec3863b59f0cee170adb36347f3d1668576d9b90b89c89cce",
-      "size": 48385
+      "sha256": "4811f9105b366ec931409e6e20e93ab871169f3395457ca01378cf623f4dcf11",
+      "size": 48402
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -172,8 +172,8 @@
     },
     {
       "path": "docs/APP_REGISTRATION.md",
-      "sha256": "b196f37fff7fb009e9da6079fae51b7c9341467cb1b29de47e8af6b38e06dc17",
-      "size": 5095
+      "sha256": "a68fe4a0addf10b1cce384741a3d34b90059a7142ce32e4d0a466a5f19ab3587",
+      "size": 6558
     },
     {
       "path": "docs/AX_WORKSPACE_STORY.html",
@@ -842,8 +842,8 @@
     },
     {
       "path": "docs/WORKSPACE_GITLAB_PUBLISHER.md",
-      "sha256": "c6be3a8f8643ef1d5a92704d895d6fdd6aa3f764185dd997b2b0e8bc0821953c",
-      "size": 35874
+      "sha256": "ade27f2a40c997db82239afe7b403918aad4e170d0760870c417e8dd4bd34266",
+      "size": 36048
     },
     {
       "path": "docs/WORKSPACE_IMPLEMENTATION_PLAN_R01_R14_2026-09-29.md",
@@ -3177,8 +3177,8 @@
     },
     {
       "path": "tests/test_workspace_publisher_cli.py",
-      "sha256": "4e914f531b04c49a2f76e81e766c657314732e3c3132de3272b17bbb54d1a031",
-      "size": 8686
+      "sha256": "a37db7df3174363414a0f2ef7c5e03811d4b57c169747792706260c08d9aec87",
+      "size": 8691
     },
     {
       "path": "tests/test_workspace_publisher_core.py",
@@ -3199,6 +3199,21 @@
       "path": "tests/test_workspace_publisher_installer.py",
       "sha256": "c6cd1321be4e4fae0574c06ebc3c8e4834714211ec57ae4477add75e100f74c6",
       "size": 14170
+    },
+    {
+      "path": "tests/test_workspace_publisher_registration.py",
+      "sha256": "48fdbf0479262a142f37022ab2292b3f075b673bd30a62e7f3afc7962fb469c6",
+      "size": 10682
+    },
+    {
+      "path": "tests/test_workspace_publisher_registration_gui.py",
+      "sha256": "1ea16a8ff8f2f30ab129bdd6a0baf7f9fb85367d45e8f9d71a634eb10197be6f",
+      "size": 12683
+    },
+    {
+      "path": "tests/test_workspace_publisher_registration_verify.py",
+      "sha256": "8f1e96588d36144951cf8fadfef5398e95afc080eed105e8bb1a85d35b590324",
+      "size": 5169
     },
     {
       "path": "tests/test_workspace_publisher_release_history.py",
@@ -3692,8 +3707,8 @@
     },
     {
       "path": "workspace_publisher/__main__.py",
-      "sha256": "559b268ef379c382088ccb182bdb9957bf2d5048267ddbc217cdeb49a27c8cc9",
-      "size": 5727
+      "sha256": "97459f3eafb06c0214f50559e5a58a071f36476b8e1a7d3a44c1df41abb9bc23",
+      "size": 8176
     },
     {
       "path": "workspace_publisher/archive.py",
@@ -3702,13 +3717,13 @@
     },
     {
       "path": "workspace_publisher/config.py",
-      "sha256": "7d545665a78fb177537f10f69eb01ec29c529789d17c23e44402f3c60b179d45",
-      "size": 7262
+      "sha256": "2363abb519e4440fedfaf3a565e44906071e0563667b968f7c3b4f754a43024f",
+      "size": 10374
     },
     {
       "path": "workspace_publisher/core.py",
-      "sha256": "ad61af14d2a744998143588006a64b0611054a698f6c2781df20201e65392f9d",
-      "size": 31131
+      "sha256": "206662a63c43d3cdd45aa8c495ade191f84c3765ccad2c6d0df5f67d05dd963c",
+      "size": 35438
     },
     {
       "path": "workspace_publisher/git_sync.py",
@@ -3717,8 +3732,8 @@
     },
     {
       "path": "workspace_publisher/gui.py",
-      "sha256": "b35614b4afddb60635c65e015d5411a294d9c60b876704bb598bc5c95486f84f",
-      "size": 49461
+      "sha256": "f615eb0e7864ba94db552c9adebf244d971986f5a816112a079fef727f27cfc4",
+      "size": 53333
     },
     {
       "path": "workspace_publisher/history_import.py",
@@ -3732,8 +3747,8 @@
     },
     {
       "path": "workspace_publisher/publish.py",
-      "sha256": "61e0c295c1c04b4cbcaeaed5585a5724ecf90486ff00acfec359ffbcc5dd4c05",
-      "size": 22229
+      "sha256": "a1dcbe963c7b2dbfaab5a7f0b3e573c9c546ae3b133493517f6c3523cf1f073b",
+      "size": 23697
     },
     {
       "path": "workspace_publisher/release_history.py",
@@ -3757,8 +3772,8 @@
     },
     {
       "path": "workspace_publisher/source_publish.py",
-      "sha256": "6f99ae5557ab03f5d16eb83318898eb277311674ef08ec830a737978a5c6e5c0",
-      "size": 26148
+      "sha256": "0b53cf8d11dfc2ba82eb330db7dfac1d3fa9890f341d8002d1200685837d42c0",
+      "size": 26179
     }
   ],
   "schema": 1,

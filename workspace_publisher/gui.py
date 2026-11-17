@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import queue
 import threading
 from urllib.parse import quote, quote_plus
 
+from local_app.registration import DEFAULT_BASE_URL
+
 
 CONFIG_KEYS = ("schema", "baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag",
                "title", "notes", "notesVersion", "allowedDownloadOrigins", "tokenKind", "includeSource",
-               "includeInstaller", "nsisCompiler", "llmUsageMcpUrl")
+               "includeInstaller", "nsisCompiler", "llmUsageMcpUrl", "registrationEnabled", "registrationBaseUrl")
 DEFAULT_CONFIG = {"schema": 1, "baseUrl": "", "projectId": "", "remoteName": "intranet",
                   "remoteUrl": "", "releaseTag": "", "title": "", "notes": "",
                   "notesVersion": "", "allowedDownloadOrigins": [], "tokenKind": "auto", "includeSource": True,
-                  "includeInstaller": True, "nsisCompiler": "", "llmUsageMcpUrl": ""}
+                  "includeInstaller": True, "nsisCompiler": "", "llmUsageMcpUrl": "",
+                  "registrationEnabled": False, "registrationBaseUrl": DEFAULT_BASE_URL}
 TOKEN_LABELS = {"auto": "자동 감지", "access": "액세스 토큰 (Personal / Project)",
                 "deploy": "배포 토큰 (Deploy Token)", "job": "CI 작업 토큰 (Job Token)"}
 ACTION_NAMES = {"load": "설정과 소스 확인", "inspect": "소스 확인", "save": "설정 저장",
@@ -63,27 +67,35 @@ def settings_only(value):
     return {key: deepcopy(value.get(key, DEFAULT_CONFIG[key])) for key in CONFIG_KEYS}
 
 
-def build_identity(config):
-    return json.dumps({key: value for key, value in settings_only(config).items()
-                       if key not in {"title", "notes", "notesVersion", "tokenKind", "includeSource", "nsisCompiler"}}, sort_keys=True, ensure_ascii=True)
+def build_identity(config, registration_key=""):
+    value = {key: item for key, item in settings_only(config).items()
+             if key not in {"title", "notes", "notesVersion", "tokenKind", "includeSource", "nsisCompiler"}}
+    if value["registrationEnabled"] and registration_key:
+        value["registrationKeyFingerprint"] = hashlib.sha256(registration_key.encode("utf-8")).hexdigest()
+    return json.dumps(value, sort_keys=True, ensure_ascii=True)
 
 
-def public_text(value, token=""):
+def public_text(value, token="", registration_key=""):
     text = str(value)
-    if token:
-        for secret in {token, quote(token, safe=""), quote_plus(token)}:
-            text = text.replace(secret, "[게시 토큰 숨김]")
+    token = token if isinstance(token, str) else ""
+    registration_key = registration_key if isinstance(registration_key, str) else ""
+    secrets = [(token, "[게시 토큰 숨김]"), (registration_key, "[집계 인증키 숨김]")]
+    for secret, label in sorted(secrets, key=lambda pair: len(pair[0]), reverse=True):
+        if secret:
+            for encoded in sorted({secret, quote(secret, safe=""), quote_plus(secret)}, key=len, reverse=True):
+                text = text.replace(encoded, label)
     return "".join(character for character in text if character in "\n\t" or ord(character) >= 32)[:12000]
 
 
-def public_result(value, token=""):
+def public_result(value, token="", registration_key=""):
     if isinstance(value, str):
-        return public_text(value, token) if token else value
+        return public_text(value, token, registration_key)
     if isinstance(value, dict):
-        return {key: public_result(item, token) for key, item in value.items()
-                if str(key).lower() not in {"token", "password", "authorization", "private-token", "deploy-token", "job-token"}}
+        return {key: public_result(item, token, registration_key) for key, item in value.items()
+                if str(key).lower().replace("_", "").replace("-", "") not in
+                {"token", "password", "authorization", "privatetoken", "deploytoken", "jobtoken", "registrationkey", "key"}}
     if isinstance(value, (list, tuple)):
-        return [public_result(item, token) for item in value]
+        return [public_result(item, token, registration_key) for item in value]
     return value
 
 
@@ -114,7 +126,7 @@ class PublisherJobs:
                 except queue.Empty:
                     pass
 
-    def start(self, action, config=None, *, preview=None, build_result=None, token="", sdk_input=""):
+    def start(self, action, config=None, *, preview=None, build_result=None, token="", sdk_input="", registration_key=""):
         if action not in ACTION_NAMES:
             raise ValueError("실행할 단계를 확인해 주세요.")
         with self._lock:
@@ -126,6 +138,7 @@ class PublisherJobs:
             self.cancel_event = threading.Event()
             cancel = self.cancel_event
         config = settings_only(config or DEFAULT_CONFIG)
+        registration_args = {"registration_key": registration_key} if config["registrationEnabled"] else {}
         preview, build_result = deepcopy(preview), deepcopy(build_result)
 
         def worker():
@@ -136,7 +149,7 @@ class PublisherJobs:
                     return
                 kind = event.get("kind", "info")
                 self._put({"job": serial, "kind": kind if kind in {"progress", "info", "warning", "error"} else "info",
-                           "message": public_text(event.get("message", ""), token)})
+                           "message": public_text(event.get("message", ""), token, registration_key)})
             try:
                 publisher = self.factory(self.repo_root, emit=emit)
                 if action == "load":
@@ -167,7 +180,7 @@ class PublisherJobs:
                         except (ValueError, OSError) as exc:
                             result = {**result, "notesNotice": public_text(exc)}
                 elif action == "restore":
-                    result = {"build": publisher.load_last_build(config, cancel=cancel)}
+                    result = {"build": publisher.load_last_build(config, cancel=cancel, **registration_args)}
                 elif action == "sdk-status":
                     result = sdk_status(self.repo_root)
                 elif action in {"sdk-import", "sdk-download"}:
@@ -192,7 +205,7 @@ class PublisherJobs:
                     elif action == "sync":
                         result = publisher.sync(clean, preview, cancel=cancel)
                     elif action == "build":
-                        result = publisher.build(clean, cancel=cancel)
+                        result = publisher.build(clean, cancel=cancel, **registration_args)
                     elif action == "source-publish":
                         if not token:
                             raise ValueError("게시용 액세스 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
@@ -203,9 +216,9 @@ class PublisherJobs:
                         if not token:
                             raise ValueError("게시용 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
                         if action == "deploy":
-                            ready_build = publisher.prepare_deploy(clean, build_result=build_result, cancel=cancel)
-                            self._put({"job": serial, "kind": "build-ready", "build": public_result(ready_build, token),
-                                       "configIdentity": build_identity(config)})
+                            ready_build = publisher.prepare_deploy(clean, build_result=build_result, cancel=cancel, **registration_args)
+                            self._put({"job": serial, "kind": "build-ready", "build": public_result(ready_build, token, registration_key),
+                                       "configIdentity": build_identity(config, registration_key)})
                         elif not build_result:
                             raise ValueError("먼저 설치 파일을 만들어 주세요.")
                         if clean.get("includeSource", True):
@@ -214,7 +227,7 @@ class PublisherJobs:
                             if not isinstance(source_result, dict) or source_result.get("verified") is not True:
                                 raise ValueError("프로젝트 구성 파일 게시를 확인하지 못했습니다. 배포 파일과 채널은 게시하지 않았습니다.")
                         result = publisher.publish(clean, ready_build or build_result, token,
-                                                   token_kind=clean.get("tokenKind", "auto"), cancel=cancel)
+                                                   token_kind=clean.get("tokenKind", "auto"), cancel=cancel, **registration_args)
                         if not isinstance(result, dict) or result.get("verified") is not True:
                             raise ValueError("게시 파일의 인증 없는 다운로드를 확인하지 못했습니다. 완료로 표시하지 않았습니다.")
                         if action == "deploy":
@@ -224,16 +237,16 @@ class PublisherJobs:
                             result = {**result, "sourcePublication": source_result}
                 # Results use the core's non-secret data contract; no token is
                 # ever put into this queue, configuration, traceback, or log.
-                outcome = {"job": serial, "kind": "done", "action": action, "result": public_result(result, token),
-                           "configIdentity": build_identity(config)}
+                outcome = {"job": serial, "kind": "done", "action": action, "result": public_result(result, token, registration_key),
+                           "configIdentity": build_identity(config, registration_key)}
             except Exception as exc:
                 outcome = {"job": serial, "kind": "failed", "action": action,
-                           "message": public_text(exc, token) or "작업을 마치지 못했습니다. 설정과 로그를 확인해 주세요."}
+                           "message": public_text(exc, token, registration_key) or "작업을 마치지 못했습니다. 설정과 로그를 확인해 주세요."}
                 if source_result and source_result.get("verified") is True:
-                    outcome["sourcePublication"] = public_result(source_result, token)
+                    outcome["sourcePublication"] = public_result(source_result, token, registration_key)
                     outcome["message"] = "프로젝트 소스는 게시됐지만 배포 파일 게시를 마치지 못했습니다. " + outcome["message"]
                 if ready_build is not None:
-                    outcome.update(build=public_result(ready_build, token), configIdentity=build_identity(config))
+                    outcome.update(build=public_result(ready_build, token, registration_key), configIdentity=build_identity(config, registration_key))
             with self._lock:
                 self._busy = False
             self._put(outcome)
@@ -285,8 +298,10 @@ class PublisherWindow:
         self.mutable = []
         self.buttons = []
         self.fields = {key: tk.StringVar(value=DEFAULT_CONFIG[key]) for key in
-                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title", "nsisCompiler", "llmUsageMcpUrl")}
+                       ("baseUrl", "projectId", "remoteName", "remoteUrl", "releaseTag", "title", "nsisCompiler", "llmUsageMcpUrl", "registrationBaseUrl")}
         self.origins, self.token = tk.StringVar(), tk.StringVar()
+        self.registration_key = tk.StringVar()
+        self.registration_enabled = tk.BooleanVar(value=False)
         self.sdk_url = tk.StringVar()
         self.sdk_label = tk.StringVar(value="SDK를 확인하고 있어요.")
         self.token_kind = tk.StringVar(value=TOKEN_LABELS["auto"])
@@ -354,6 +369,17 @@ class PublisherWindow:
         field(basics, 7, "LLM 사용량 MCP 주소 (선택)", self.fields["llmUsageMcpUrl"])
         ttk.Label(basics, text="사용량 서버의 HTTP/HTTPS 주소와 /mcp 경로를 입력하세요. 개인 KEY는 각 사용자의 Claude 설정에서 읽습니다.",
                   style="Note.TLabel", wraplength=730).grid(row=8, column=0, columnspan=2, sticky="w")
+
+        registration_option = ttk.Checkbutton(basics, text="설치 현황 집계 사용", variable=self.registration_enabled)
+        registration_option.grid(row=9, column=0, columnspan=2, sticky="w", pady=(14, 2))
+        self.mutable.append(registration_option)
+        ttk.Label(basics, text="집계 인증키").grid(row=10, column=0, sticky="w", padx=(0, 15), pady=7)
+        self.registration_key_entry = ttk.Entry(basics, textvariable=self.registration_key, show="●")
+        self.registration_key_entry.grid(row=10, column=1, sticky="ew", pady=7)
+        self.mutable.append(self.registration_key_entry)
+        ttk.Label(basics, text="설치 파일을 만들기 전에 웹 서버와 같은 집계 인증키를 입력하세요.\n"
+                  "GitLab 게시용 토큰과 다른 키이며 설정 저장에는 포함하지 않습니다. 주소 변경은 고급 설정에서 할 수 있습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=11, column=0, columnspan=2, sticky="w")
 
         self.sdk_summary = ttk.Label(outer, textvariable=self.sdk_label, style="Note.TLabel", wraplength=790)
         self.sdk_summary.pack(anchor="w", pady=(8, 0))
@@ -431,6 +457,9 @@ class PublisherWindow:
         ttk.Label(advanced, text="NSIS 3가 설치되어 있으면 자동으로 찾습니다. 별도 폴더에 준비했다면 makensis.exe를 선택하세요.\n"
                   "한 번 공유하면 최신 버전을 설치하는 EXE, 버전별 설치 파일, 기존 앱 업데이트 ZIP을 함께 만듭니다.",
                   style="Note.TLabel", wraplength=730).grid(row=9, column=0, columnspan=2, sticky="w")
+        field(advanced, 10, "설치 현황 집계 웹 주소", self.fields["registrationBaseUrl"])
+        ttk.Label(advanced, text="기본 웹 주소를 계속 사용하면 변경할 필요가 없습니다. MongoDB 주소는 입력하지 않습니다.",
+                  style="Note.TLabel", wraplength=730).grid(row=11, column=0, columnspan=2, sticky="w")
 
         ttk.Label(outer, textvariable=self.build_label, style="Note.TLabel", wraplength=790).pack(anchor="w", pady=(12, 10))
         actions = ttk.Frame(outer)
@@ -447,7 +476,8 @@ class PublisherWindow:
         self.log.pack(fill="both", expand=True)
         self.log.tag_config("error", foreground="#9c4144")
         self.log.tag_config("info", foreground="#3d485b")
-        for variable in [*self.fields.values(), self.origins, self.token_kind, self.include_source, self.include_installer]:
+        for variable in [*self.fields.values(), self.origins, self.token_kind, self.include_source, self.include_installer,
+                         self.registration_key, self.registration_enabled]:
             variable.trace_add("write", lambda *_: self.refresh_controls())
         self.fields["title"].trace_add("write", self.mark_notes_edited)
         self.notes.bind("<<Modified>>", self.mark_notes_edited)
@@ -465,7 +495,11 @@ class PublisherWindow:
                 "notesVersion": self.notes_version,
                 "allowedDownloadOrigins": [item.strip() for item in self.origins.get().replace("\n", ",").split(",") if item.strip()],
                 "tokenKind": next((key for key, label in TOKEN_LABELS.items() if label == self.token_kind.get()), "auto"),
-                "includeSource": self.include_source.get(), "includeInstaller": self.include_installer.get()}
+                "includeSource": self.include_source.get(), "includeInstaller": self.include_installer.get(),
+                "registrationEnabled": self.registration_enabled.get()}
+
+    def current_build_identity(self, config=None):
+        return build_identity(config or self.config(), self.registration_key.get())
 
     def select_nsis(self):
         if self.active_action is not None or self.closing:
@@ -539,7 +573,7 @@ class PublisherWindow:
         self.ttk.Button(window, text="닫기", command=window.destroy).pack(anchor="e", padx=16, pady=10)
 
     def append_log(self, message, kind="info"):
-        message = public_text(message, self.token.get())
+        message = public_text(message, self.token.get(), self.registration_key.get())
         self.log.configure(state="normal")
         self.log.insert("end", message + "\n", "error" if kind in {"error", "warning"} else "info")
         if int(self.log.index("end-1c").split(".")[0]) > 500:
@@ -553,12 +587,13 @@ class PublisherWindow:
             button.configure(state="disabled" if busy else "normal")
         for control in self.mutable:
             control.configure(state="disabled" if busy else "readonly" if control is self.token_selector else "normal")
+        self.registration_key_entry.configure(state="normal" if not busy and self.registration_enabled.get() else "disabled")
         if not busy:
             self.sync_button.configure(state="normal" if source_can_sync(self.source) else "disabled")
             self.remote_entry.configure(state="normal" if source_can_sync(self.source) else "disabled")
             self.git_frame.grid() if source_can_sync(self.source) else self.git_frame.grid_remove()
             self.build_button.configure(state="normal" if self.source and self.sdk.get("status") == "ready" else "disabled")
-            valid_build = self.build_result is not None and self.build_config_identity == build_identity(self.config())
+            valid_build = self.build_result is not None and self.build_config_identity == self.current_build_identity()
             self.publish_button.configure(state="normal" if valid_build else "disabled")
             can_deploy = valid_build or bool(self.source and self.sdk.get("status") == "ready")
             self.deploy_button.configure(state="normal" if can_deploy else "disabled")
@@ -605,16 +640,23 @@ class PublisherWindow:
             self.status.set("먼저 SDK 준비에서 파일을 선택하거나 다운로드해 주세요.")
             return
         config = self.config()
+        registration_key = self.registration_key.get() if config["registrationEnabled"] else ""
         token = self.token.get() if action in {"publish", "deploy", "source-publish"} else ""
-        if action == "publish" and (not self.build_result or self.build_config_identity != build_identity(config)):
+        identity = self.current_build_identity(config)
+        candidate = self.build_result if self.build_config_identity == identity else None
+        if action in {"build", "deploy"} and config["registrationEnabled"] and not registration_key and not (action == "deploy" and candidate):
+            self.status.set("설치 현황 집계 인증키를 입력해 주세요. 웹 서버에 설정한 키와 같아야 합니다.")
+            self.registration_key_entry.focus_set()
+            return
+        if action == "publish" and (not self.build_result or self.build_config_identity != identity):
             self.status.set("현재 설정으로 먼저 빌드해 주세요.")
             return
         if action in {"publish", "deploy", "source-publish"} and not token.strip():
             self.status.set("게시용 토큰을 입력해 주세요. 토큰은 저장하지 않습니다.")
             self.token_entry.focus_set()
             return
-        candidate = self.build_result if self.build_config_identity == build_identity(config) else None
-        if self.jobs.start(action, config, preview=preview, build_result=candidate, token=token, sdk_input=sdk_input):
+        if self.jobs.start(action, config, preview=preview, build_result=candidate, token=token,
+                           sdk_input=sdk_input, registration_key=registration_key):
             self.active_action = action
             if action == "restore":
                 self.build_result = None
@@ -663,6 +705,7 @@ class PublisherWindow:
                 self.token_kind.set(TOKEN_LABELS[kind])
                 self.include_source.set(config["includeSource"])
                 self.include_installer.set(config["includeInstaller"])
+                self.registration_enabled.set(config["registrationEnabled"])
                 self._set_notes(config["title"], config["notes"])
                 self.notes_version = config["notesVersion"]
                 self._release(result, apply=not bool(config["notesVersion"] or config["title"] or config["notes"]))
@@ -674,8 +717,8 @@ class PublisherWindow:
                 self._release(result)
             self._source(result.get("source"), result.get("sourceNotice", ""))
             self._sdk(result.get("sdk"))
-            if not self.loaded or build_identity(config) == build_identity(self.config()):
-                self._restore_build(result, build_identity(self.config()))
+            if not self.loaded or build_identity(config) == self.current_build_identity():
+                self._restore_build(result, self.current_build_identity())
             self.loaded = True
             return
         elif action == "restore":
@@ -818,6 +861,7 @@ class PublisherWindow:
 
     def destroy(self):
         self.token.set("")
+        self.registration_key.set("")
         self.closed = True
         self.root.destroy()
 

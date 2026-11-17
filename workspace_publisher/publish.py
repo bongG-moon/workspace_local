@@ -159,7 +159,7 @@ def _file(path):
     return raw
 
 
-def verify_files(directory, version, expected_source, expected_usage=None):
+def verify_files(directory, version, expected_source, expected_usage=None, expected_registration=None):
     """Recheck exact filenames, checksums, VBS contents and EXE ZIP before PUT."""
     version = checked_version(version)
     directory = safe_path(Path(directory))
@@ -214,6 +214,17 @@ def verify_files(directory, version, expected_source, expected_usage=None):
             elif (usage_entry is None or usage_entry.file_size > MAX_CONFIG
                   or from_bytes(archive.read(usage_entry)) != normalize(expected_usage)):
                 raise ValueError()
+            from local_app.registration import CONFIG_NAME as REGISTRATION_NAME, MAX_CONFIG as REGISTRATION_LIMIT
+            from local_app.registration import from_bytes as registration_from_bytes
+            from .config import checked_registration_metadata, registration_metadata
+            registration_entry = by_name.get('Company-Workspace/' + REGISTRATION_NAME)
+            registration = checked_registration_metadata(expected_registration)
+            if registration is None:
+                if registration_entry is not None:
+                    raise ValueError()
+            elif (registration_entry is None or registration_entry.file_size > REGISTRATION_LIMIT
+                  or registration_metadata(registration_from_bytes(archive.read(registration_entry))) != registration):
+                raise ValueError()
         from local_app.managed_launcher import unpack_archive
         executable = unpack_archive(content[names[2]], version)
         for brand in ('Company-Workspace', 'AX-Workspace') if len(names) >= 5 else ('Company-Workspace',):
@@ -257,7 +268,14 @@ def publish(config, result, token, *, token_kind='auto', transport=None, emit=la
     source = runtime_config(config)
     token_kind = resolve_token_kind(token, token_kind)
     version = checked_version(result.get('version'))
-    files = verify_files(Path(result['directory']), version, source, usage_config(config))
+    from .config import checked_registration_metadata, normalize
+    settings = normalize(config)
+    registration = checked_registration_metadata(result.get('registrationConfig'))
+    if ((registration is not None) != settings['registrationEnabled']
+            or registration is not None and registration['baseUrl'] != settings['registrationBaseUrl']):
+        raise PublisherError('설치 현황 집계 설정과 배포 파일이 다릅니다. 같은 설정으로 다시 빌드해 주세요.')
+    verification = {'expected_registration': registration} if registration is not None else {}
+    files = verify_files(Path(result['directory']), version, source, usage_config(config), **verification)
     expected = [{key: row[key] for key in ('name', 'size', 'sha256')} for row in result.get('files', [])]
     if expected != [{key: row[key] for key in ('name', 'size', 'sha256')} for row in files]:
         raise PublisherError('빌드 이후 배포 파일이 바뀌었습니다. 다시 빌드한 결과를 게시해 주세요.')

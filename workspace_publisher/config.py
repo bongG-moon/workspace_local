@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import stat
 from urllib.parse import unquote, urlsplit, urlunsplit
 import uuid
+
+from local_app.registration import DEFAULT_BASE_URL as DEFAULT_REGISTRATION_URL
 
 
 class PublisherError(ValueError):
@@ -17,7 +20,8 @@ class PublisherError(ValueError):
 DEFAULTS = {'schema': 1, 'baseUrl': '', 'projectId': '', 'remoteName': 'intranet',
             'remoteUrl': '', 'releaseTag': '', 'title': '', 'notes': '',
             'allowedDownloadOrigins': [], 'tokenKind': 'auto', 'notesVersion': '', 'includeSource': True,
-            'includeInstaller': True, 'nsisCompiler': '', 'llmUsageMcpUrl': ''}
+            'includeInstaller': True, 'nsisCompiler': '', 'llmUsageMcpUrl': '',
+            'registrationEnabled': False, 'registrationBaseUrl': DEFAULT_REGISTRATION_URL}
 VERSION = re.compile(r'(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\.(?:0|[1-9][0-9]{0,5})\Z')
 
 
@@ -74,9 +78,11 @@ def normalize(config, *, require_target=True):
         raise PublisherError('소스·구성 파일 게시 여부는 켜기 또는 끄기로 선택해 주세요.')
     if type(value['includeInstaller']) is not bool:
         raise PublisherError('NSIS 설치 파일 생성 여부는 켜기 또는 끄기로 선택해 주세요.')
+    if type(value['registrationEnabled']) is not bool:
+        raise PublisherError('설치 현황 집계 사용 여부를 다시 선택해 주세요.')
     for key, limit in [('baseUrl', 2048), ('projectId', 20), ('remoteName', 80), ('remoteUrl', 2048),
                        ('releaseTag', 120), ('title', 300), ('notes', 32768), ('tokenKind', 20), ('notesVersion', 20),
-                       ('nsisCompiler', 4096), ('llmUsageMcpUrl', 2048)]:
+                       ('nsisCompiler', 4096), ('llmUsageMcpUrl', 2048), ('registrationBaseUrl', 2048)]:
         if not isinstance(value[key], str) or len(value[key].encode('utf-8')) > limit or '\x00' in value[key]:
             raise PublisherError('게시 설정에 너무 길거나 올바르지 않은 값이 있습니다.')
     for key in ('baseUrl', 'projectId', 'remoteName', 'remoteUrl', 'releaseTag', 'title', 'notesVersion', 'nsisCompiler'):
@@ -98,12 +104,64 @@ def normalize(config, *, require_target=True):
             raise PublisherError(str(exc)) from None
     else:
         value['llmUsageMcpUrl'] = ''
+    from local_app.registration import normalize as normalize_registration
+    try:
+        # Only the address is public preference data. No credential is accepted
+        # by this settings contract or persisted in config.json.
+        value['registrationBaseUrl'] = normalize_registration({
+            'schema': 1, 'baseUrl': value['registrationBaseUrl'].strip(), 'key': 'x' * 32})['baseUrl']
+    except ValueError:
+        raise PublisherError('집계 웹 주소는 HTTP 또는 HTTPS 기본 주소로 입력해 주세요.') from None
     return value
 
 
 def usage_config(config):
     value = normalize(config)
     return {'schema': 1, 'mcpUrl': value['llmUsageMcpUrl']} if value['llmUsageMcpUrl'] else None
+
+
+def registration_config(config, registration_key):
+    """Build-only secret input; callers must never merge it into preferences."""
+    value = normalize(config)
+    if not value['registrationEnabled']:
+        return None
+    from local_app.registration import normalize as normalize_registration
+    try:
+        return normalize_registration({'schema': 1, 'baseUrl': value['registrationBaseUrl'],
+                                       'key': registration_key})
+    except (ValueError, TypeError):
+        raise PublisherError('설치 현황 집계 인증키를 입력해 주세요. 웹 서버와 같은 32~256자 키가 필요합니다.') from None
+
+
+def registration_metadata(private_config):
+    if private_config is None:
+        return None
+    from local_app.registration import normalize as normalize_registration
+    try:
+        value = normalize_registration(private_config)
+    except (ValueError, TypeError):
+        raise PublisherError('집계 빌드 설정을 확인하지 못했습니다.') from None
+    return {'schema': 1, 'baseUrl': value['baseUrl'],
+            'keyFingerprint': hashlib.sha256(value['key'].encode('utf-8')).hexdigest()}
+
+
+def checked_registration_metadata(value):
+    """Validate a credential-free build descriptor, including legacy absence."""
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {'schema', 'baseUrl', 'keyFingerprint'}
+            or type(value.get('schema')) is not int or value['schema'] != 1
+            or not isinstance(value.get('keyFingerprint'), str)
+            or not re.fullmatch(r'[a-f0-9]{64}', value['keyFingerprint'])):
+        raise PublisherError('집계 빌드 확인 정보를 읽지 못했습니다.')
+    from local_app.registration import normalize as normalize_registration
+    try:
+        address = normalize_registration({'schema': 1, 'baseUrl': value['baseUrl'], 'key': 'x' * 32})['baseUrl']
+    except (ValueError, TypeError):
+        raise PublisherError('집계 빌드 확인 정보를 읽지 못했습니다.') from None
+    if address != value['baseUrl']:
+        raise PublisherError('집계 빌드 확인 정보를 읽지 못했습니다.')
+    return dict(value)
 
 
 def runtime_config(config):

@@ -3,13 +3,29 @@ import argparse
 import getpass
 import json
 from pathlib import Path
+import warnings
 
 from .core import Publisher
 from .config import PublisherError, normalize
+from .gui import public_result, public_text
+
+
+class PrivateArgumentParser(argparse.ArgumentParser):
+    def error(self, _message):
+        self.exit(2, '명령과 인수를 확인해 주세요. --help로 사용법을 볼 수 있습니다. 인증키와 토큰은 숨김 입력으로 받습니다.\n')
+
+
+def hidden_input(prompt):
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', getpass.GetPassWarning)
+            return getpass.getpass(prompt)
+    except (getpass.GetPassWarning, EOFError):
+        raise PublisherError('숨김 입력을 사용할 수 있는 터미널에서 다시 실행해 주세요. 인증키와 토큰은 명령행 인수로 받지 않습니다.') from None
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='AX Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
+    parser = PrivateArgumentParser(description='AX Workspace 사내 GitLab 게시 도구 · Download ZIP에서도 빌드와 게시 가능')
     parser.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('action', choices=('status', 'configure', 'check', 'preview-sync', 'sync', 'build', 'publish', 'deploy', 'source-publish', 'notes',
                                           'sdk-status', 'sdk-import', 'sdk-download'))
@@ -22,7 +38,8 @@ def main(argv=None):
         parser.error('--file은 sdk-import에서만 사용합니다.')
     if args.url is not None and args.action != 'sdk-download':
         parser.error('--url은 sdk-download에서만 사용합니다.')
-    publisher = Publisher(args.repo, emit=lambda event: print(event['message']))
+    private = {'token': '', 'registration_key': ''}
+    publisher = Publisher(args.repo, emit=lambda event: print(public_text(event['message'], **private)))
     try:
         if args.action.startswith('sdk-'):
             from .sdk import inspect_sdk, import_sdk, download_sdk
@@ -48,6 +65,15 @@ def main(argv=None):
             config['projectId'] = input(f"숫자 Project ID [{config['projectId']}]: ").strip() or config['projectId']
             config['llmUsageMcpUrl'] = input(f"LLM 사용량 MCP 주소 (선택) [{config['llmUsageMcpUrl']}]: ").strip() or config['llmUsageMcpUrl']
             config = normalize(config)
+            enabled = input('설치 현황 집계 사용? [' + ('Y/n' if config['registrationEnabled'] else 'y/N') + ']: ').strip().lower()
+            if enabled not in ('', 'y', 'yes', 'n', 'no'):
+                raise PublisherError('설치 현황 집계 사용 여부는 y 또는 n으로 입력해 주세요.')
+            if enabled:
+                config['registrationEnabled'] = enabled in ('y', 'yes')
+            if config['registrationEnabled']:
+                config['registrationBaseUrl'] = input(f"설치 현황 집계 웹 주소 [{config['registrationBaseUrl']}]: ").strip() or config['registrationBaseUrl']
+                print('집계 인증키는 build 또는 deploy 실행 시 숨김 입력으로 받습니다. 설정 파일에는 저장하지 않습니다.')
+            config = normalize(config)
             print('변경 내용은 소스의 배포 기록에서 자동으로 채웠습니다. 편집은 배포 창에서 할 수 있습니다.')
             result = publisher.save_config(config)
         elif args.action == 'notes':
@@ -64,17 +90,25 @@ def main(argv=None):
                     return 1
                 result = publisher.sync(config, result)
         elif args.action == 'build':
-            result = publisher.build(config)
+            registration_args = {}
+            if config.get('registrationEnabled'):
+                private['registration_key'] = hidden_input('집계 인증키(웹 서버와 동일, 저장하지 않음): ')
+                registration_args['registration_key'] = private['registration_key']
+            result = publisher.build(config, **registration_args)
         else:
-            token = getpass.getpass('게시용 토큰(저장하지 않음): ')
+            token = private['token'] = hidden_input('게시용 토큰(저장하지 않음): ')
             try:
                 if not token.strip():
                     raise PublisherError('게시용 토큰을 입력해 주세요.')
                 if args.action == 'source-publish':
                     result = publisher.publish_source(config, token, token_kind=config['tokenKind'])
-                    print(json.dumps(result, ensure_ascii=False, indent=2))
+                    print(json.dumps(public_result(result, **private), ensure_ascii=False, indent=2))
                     return 0
-                result = (publisher.prepare_deploy(config) if args.action == 'deploy'
+                registration_args = {}
+                if args.action == 'deploy' and config.get('registrationEnabled'):
+                    private['registration_key'] = hidden_input('집계 인증키(웹 서버와 동일, 저장하지 않음): ')
+                    registration_args['registration_key'] = private['registration_key']
+                result = (publisher.prepare_deploy(config, **registration_args) if args.action == 'deploy'
                           else publisher.load_last_build(config))
                 if result is None:
                     raise PublisherError('먼저 build 명령으로 배포 파일을 만들어 주세요.')
@@ -83,16 +117,18 @@ def main(argv=None):
                     source_result = publisher.publish_source(config, token, token_kind=config['tokenKind'], build_result=result)
                     if not isinstance(source_result, dict) or source_result.get('verified') is not True:
                         raise PublisherError('프로젝트 구성 파일 게시를 확인하지 못했습니다. 업데이트 채널은 게시하지 않았습니다.')
-                result = publisher.publish(config, result, token, token_kind=config['tokenKind'])
+                result = publisher.publish(config, result, token, token_kind=config['tokenKind'], **registration_args)
                 if source_result:
                     result = {**result, 'sourcePublication': source_result}
             finally:
                 token = ''
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(public_result(result, **private), ensure_ascii=False, indent=2))
         return 0
     except PublisherError as exc:
-        print(str(exc))
+        print(public_text(exc, **private))
         return 1
+    finally:
+        private.clear()
 
 
 if __name__ == '__main__':

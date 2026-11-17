@@ -14,7 +14,7 @@
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/workspace-local-0.23.46-source.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/workspace-local-0.23.46-publisher-update-source.zip)**
 
 [화면과 웹 차이 확인 예시](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-Web-Preview-Example.zip) · [예시 사용방법](examples/html-project-preview/README.ko.md)
 
