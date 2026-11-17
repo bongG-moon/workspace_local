@@ -29,6 +29,12 @@ class ReleaseBundleGateTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'scripts/create-workspace-archive.py', self.root / 'scripts/create-workspace-archive.py')
         shutil.copytree(ROOT / 'workspace_publisher', self.root / 'workspace_publisher',
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        # The copied publisher config shares registration defaults with the app.
+        # Copy that real, stdlib-only import closure into this isolated fixture.
+        (self.root / 'local_app').mkdir()
+        for name in ('__init__.py', 'registration.py', 'history.py',
+                     'executions.py', 'tool_activity.py'):
+            shutil.copyfile(ROOT / 'local_app' / name, self.root / 'local_app' / name)
         shutil.copyfile(ROOT / 'deploy/New-WorkspaceRelease.ps1', deploy / 'New-WorkspaceRelease.ps1')
         self.version = re.search(r'^WORKSPACE_VERSION = "([0-9.]+)"',
             (ROOT / 'local_app/server.py').read_text(encoding='utf-8'), re.M)[1]

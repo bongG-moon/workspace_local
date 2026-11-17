@@ -20,7 +20,7 @@ globalThis.WorkspaceRegistration = (() => {
   function validate(prefix,showEmpty=false){
     const input=$(prefix+"-input"),size=Array.from(trim(input?.value||"")).length;
     const message=size>8?"앞뒤 공백을 제외하고 8자 이내로 입력해 주세요.":showEmpty&&!size?"사번을 입력해 주세요.":"";
-    $(prefix+"-count").textContent=`${size} / 8자`;
+    $(prefix+"-count").textContent=`현재 ${size}자`;
     $(prefix+"-error").textContent=message;
     input.setAttribute("aria-invalid",String(!!message));
     if(prefix==="registration")$("registration-save").disabled=saving||!valid(input);

@@ -2,23 +2,23 @@
 
 // One debounced writer, no interval or worker. Only changed task rows cross HTTP.
 globalThis.WorkspaceDraftPersistence=(()=>{
-  const dirty=new Set(),touched=new Set(),revisions=new Map(),saved=new Map(),forgotten=new Set();
-  let map,hooks,ready=false,restoring=false,timer=null,deadline=null,flight=null,lastError="",savedSelected="home";
+  const dirty=new Set(),touched=new Set(),revisions=new Map(),saved=new Map(),forgotten=new Set(),archived=new Set(),epochs=new Map();
+  let map,hooks,ready=false,restoring=false,timer=null,deadline=null,flight=null,lastError="",errorOwner=null,savedSelected="home";
   const clone=value=>value?{text:value.text||"",attachments:[...(value.attachments||[])]}:null;
-  function message(value){
+  function message(value,owner=null){
     const node=document.getElementById("draft-save-status");
     if(node){node.textContent=value;node.hidden=!value;}
     if(value&&value!==lastError)hooks?.notify?.(value);
-    lastError=value;
+    lastError=value;errorOwner=value?owner:null;
   }
   function schedule(){
     if(!ready||!dirty.size)return;
     clearTimeout(timer);timer=setTimeout(()=>{void flush(false).catch(()=>{});},800);
     if(!deadline)deadline=setTimeout(()=>{void flush(false).catch(()=>{});},5000);
   }
-  function changed(id){if(restoring||forgotten.has(id))return;touched.add(id);dirty.add(id);schedule();}
+  function changed(id){if(restoring||forgotten.has(id)||archived.has(id))return;touched.add(id);dirty.add(id);schedule();}
   class DraftMap extends Map{
-    set(id,value){if(forgotten.has(id))return this;super.set(id,clone(value));changed(id);return this;}
+    set(id,value){if(forgotten.has(id)||archived.has(id)&&!restoring)return this;super.set(id,clone(value));changed(id);return this;}
     delete(id){const existed=super.delete(id);changed(id);return existed;}
     clear(){for(const id of this.keys())this.delete(id);}
   }
@@ -28,17 +28,26 @@ globalThis.WorkspaceDraftPersistence=(()=>{
   }
   async function drain(){
     for(const id of [...dirty]){
-      if(forgotten.has(id))continue;
+      if(forgotten.has(id)||archived.has(id))continue;
       const value=body(id),signature=JSON.stringify(value);
       dirty.delete(id);
       if(saved.get(id)===signature&&savedSelected===(hooks.selected()||"home"))continue;
+      const epoch=epochs.get(id)||0;
       try{
         const selected=hooks.selected()||"home";
         const result=await hooks.api("/api/drafts",{id,revision:revisions.get(id)||0,...value,selectedId:selected});
         if(forgotten.has(id))continue;
+        if(result.skipped===true&&result.reason==="archived_work"){
+          if(!archived.has(id)&&epoch===(epochs.get(id)||0))archive(id);
+          continue;
+        }
         if(!Number.isInteger(result.revision))throw Error("초안 저장을 확인하지 못했어요. 입력은 화면에 유지됩니다.");
-        revisions.set(id,result.revision);saved.set(id,signature);savedSelected=selected;message("");
-      }catch(error){if(forgotten.has(id))continue;dirty.add(id);message(error.message||"초안을 저장하지 못했어요. 입력은 화면에 유지됩니다.");throw error;}
+        // A write may commit immediately before archive. Keep its confirmed
+        // revision so a later restore can save again, without reviving its map.
+        if(result.revision>=(revisions.get(id)||0)){revisions.set(id,result.revision);saved.set(id,signature);savedSelected=selected;}
+        if(archived.has(id)||epoch!==(epochs.get(id)||0))continue;
+        message("");
+      }catch(error){if(forgotten.has(id)||archived.has(id)||epoch!==(epochs.get(id)||0))continue;dirty.add(id);message(error.message||"초안을 저장하지 못했어요. 입력은 화면에 유지됩니다.",id);throw error;}
     }
   }
   async function flush(settle=true){
@@ -54,10 +63,11 @@ globalThis.WorkspaceDraftPersistence=(()=>{
       const result=await hooks.api("/api/drafts");
       if(!Array.isArray(result.entries))throw Error("저장된 초안을 확인하지 못했어요.");
       restoring=true;savedSelected=result.selectedId||"home";
+      for(const id of Array.isArray(result.archivedIds)?result.archivedIds:[])if(!touched.has(id))archive(id);
       const stashes=[];
       for(const row of result.entries){
         revisions.set(row.id,row.revision);saved.set(row.id,JSON.stringify({draft:row.draft,stash:row.stash}));
-        if(touched.has(row.id))continue;
+        if(touched.has(row.id)||archived.has(row.id))continue;
         // Keep empty entries: they cancel stale recovery snapshots.
         map.set(row.id,row.draft||{text:"",attachments:[]});
         if(row.stash)stashes.push({id:row.id,...row.stash});
@@ -73,13 +83,27 @@ globalThis.WorkspaceDraftPersistence=(()=>{
     globalThis.addEventListener?.("pagehide",()=>{void flush().catch(()=>{});});
   }
   function allowStashRestore(id){
+    if(archived.has(id))return false;
     if(restoring||!ready||!saved.has(id))return true;
     if(!JSON.parse(saved.get(id)).stash)return false;
     // A locally cleared stash wins even before its debounced write completes.
     return !touched.has(id)||hooks.stashes().some(row=>row.id===id);
   }
-  const keepForRecovery=(id,draft)=>!!draft?.text||!!draft?.attachments?.length||dirty.has(id)||!ready;
+  const keepForRecovery=(id,draft)=>!archived.has(id)&&!forgotten.has(id)&&(!!draft?.text||!!draft?.attachments?.length||dirty.has(id)||!ready);
+  function archive(id){
+    archived.add(id);epochs.set(id,(epochs.get(id)||0)+1);dirty.delete(id);touched.delete(id);
+    if(map)Map.prototype.delete.call(map,id);
+    if(errorOwner===id)message("");
+    if(!dirty.size){clearTimeout(timer);clearTimeout(deadline);timer=deadline=null;}
+  }
+  function resume(id){if(archived.delete(id)){
+    epochs.set(id,(epochs.get(id)||0)+1);
+    const previous=saved.has(id)?JSON.parse(saved.get(id)):null;
+    if(previous?.draft)Map.prototype.set.call(map,id,clone(previous.draft));
+    if(previous?.stash)hooks.restoreStashes([{id,...previous.stash}]);
+    changed(id);
+  }}
   function forget(id){forgotten.add(id);dirty.delete(id);touched.delete(id);revisions.delete(id);saved.delete(id);map.delete(id);}
-  return {createMap:()=>map=new DraftMap(),attach,load,flush,changed,forget,allowStashRestore,keepForRecovery,
+  return {createMap:()=>map=new DraftMap(),attach,load,flush,changed,forget,archive,resume,isArchived:id=>archived.has(id),allowStashRestore,keepForRecovery,
     hasPending:()=>dirty.size>0||!!flight,isReady:()=>ready};
 })();

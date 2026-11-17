@@ -90,7 +90,7 @@ class RegistrationFrontendTests(unittest.TestCase):
           const calls=[];api=async(path,data)=>{calls.push({path,data});return {enabled:true,employeeRegistered:true,needsEmployee:false};};
           $('registration-input').value='😀'.repeat(9);$('registration-input').listeners.input[0]();
           assert.equal($('registration-save').disabled,true);
-          assert.equal($('registration-count').textContent,'9 / 8자');
+          assert.equal($('registration-count').textContent,'현재 9자');
           $('registration-input').value='\u0085  😀😀😀😀😀😀😀😀 \u001c';$('registration-input').listeners.input[0]();
           assert.equal($('registration-save').disabled,false);
           await $('registration-form').listeners.submit[0]({preventDefault(){}});

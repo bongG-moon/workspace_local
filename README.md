@@ -1,4 +1,4 @@
-# AX Workspace 0.23.46
+# AX Workspace 0.23.47
 
 **내 업무와 AI가 만나는 공간**
 
@@ -10,13 +10,13 @@
 
 화면은 중앙 뉴트럴과 기존 좌우 패널 색상을 조합한 A2 구성입니다. 사이드바의 글자·아이콘·행 간격을 줄여 목록을 간결하게 표시하며 라이트·다크 모드를 함께 지원합니다.
 
-**현재 소스와 배포 버전은 0.23.46입니다.** 사내 집계 설정이 포함된 배포본은 사번을 처음 한 번만 입력받고 이후 업데이트에서는 다시 묻지 않습니다. 업무를 보관한 뒤 다른 대화에서도 보관 안내가 반복되던 초안 저장 문제를 수정했습니다. [변경 내용](docs/RELEASE_NOTES_0.23.46.md) / [사내 집계 배포 설정](docs/APP_REGISTRATION.md) / [사용량 연결 안내](docs/LLM_USAGE.md)
+**현재 소스와 배포 버전은 0.23.47입니다.** 보관한 업무의 초안은 저장 대기열에서 제외해 종료와 업데이트를 막지 않도록 했습니다. 현재 업무와 일반 대화의 초안은 계속 보존합니다. 사번 입력 안내를 `7~8자`로 정리했으며, 사내 배포 PY의 집계 인증키 입력도 포함합니다. [변경 내용](docs/RELEASE_NOTES_0.23.47.md) / [사내 집계 배포 설정](docs/APP_REGISTRATION.md) / [사용량 연결 안내](docs/LLM_USAGE.md)
 
 **[설치 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/latest/download/AX-Workspace-Setup.exe)** · [설치 안내](docs/WORKSPACE_NSIS_INSTALLER.md)
 
-**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/workspace-local-0.23.46-publisher-update-source.zip)**
+**[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.47/AX-Workspace-0.23.47-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.47/AX-Workspace-0.23.47-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.47/workspace-local-0.23.47-source.zip)**
 
-[화면과 웹 차이 확인 예시](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.46/AX-Workspace-0.23.46-Web-Preview-Example.zip) · [예시 사용방법](examples/html-project-preview/README.ko.md)
+[화면과 웹 차이 확인 예시](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.47/AX-Workspace-0.23.47-Web-Preview-Example.zip) · [예시 사용방법](examples/html-project-preview/README.ko.md)
 
 **2026-11-02 배포 소스 보완:** XLS 판독기 파일이 `bundle-check`에서 거부되는 문제를 수정했습니다. 이 오류가 발생한 배포 담당자는 위 소스 ZIP을 다시 내려받아 새 폴더에서 빌드해 주세요. 이 검사 수정도 0.23.43 배포본에 포함됩니다. [검사 수정 내용](docs/VALIDATION_BUNDLE_CHECK_2026-11-02.md)
 
@@ -26,13 +26,13 @@
 
 | 배포 파일 | 실행 방법 | 필요한 환경 |
 | --- | --- | --- |
-| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.46-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
-| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.46.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| NSIS 설치 파일 (권장) | `AX-Workspace-0.23.47-Setup.exe` 실행 후 시작 메뉴의 **AX Workspace** 열기 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
+| EXE ZIP | 압축을 풀고 `AX-Workspace-0.23.47.exe` 더블클릭 | Windows 10/11 x64, Windows PowerShell, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 | VBS ZIP | 전체 압축을 풀고 `AX-Workspace.vbs` 더블클릭 | Windows, Windows PowerShell, Windows Script Host, 기존 Python 3.11 이상, WebView2 Runtime, .NET 4.6.2 이상 |
 
 앱 전용 로그인은 없습니다. AI 기능은 같은 Windows 사용자의 **최신 Claude Code 설치와 인증**을 사용합니다. 모든 배포 방식은 Python·Claude Code 등 실행 조건을 자동으로 설치하거나 내려받지 않습니다. 설치 파일과 실행기는 서명되지 않았으며 회사의 EXE·VBS·PowerShell 실행 정책을 따릅니다.
 
-**NSIS 설치 파일을 권장합니다.** GitHub 0.23.46 Release의 `AX-Workspace-0.23.46-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.46.exe`, `Company-Workspace-0.23.46.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP의 사용 방식은 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
+**NSIS 설치 파일을 권장합니다.** GitHub 0.23.47 Release의 `AX-Workspace-0.23.47-Setup.exe`와 직접 EXE 다운로드(`AX-Workspace-0.23.47.exe`, `Company-Workspace-0.23.47.exe`)는 같은 설치 프로그램입니다. 기존 EXE 링크로 새로 받아도 설치 화면이 열립니다. 이미 내려받은 예전 EXE는 바뀌지 않으므로 설치형으로 전환하려면 설치 파일을 한 번 다시 받아 실행하세요. 기존 업데이트용 EXE·VBS ZIP의 사용 방식은 유지합니다. 설치 파일은 현재 사용자의 `%LOCALAPPDATA%\Programs\AX Workspace`에 실행기를 두고 시작 메뉴와 선택한 바탕화면 바로가기를 만듭니다. 이후에는 같은 바로가기로 실행할 수 있습니다.
 
 설치·제거 전에는 트레이에서 **완전 종료**하세요. Windows **설정 → 앱**에서 제거해도 기존 업무·대화·설정, Claude 환경과 실제 업무 파일은 유지됩니다. 설치만으로 자동 시작이나 Windows 서비스가 추가되지는 않습니다.
 

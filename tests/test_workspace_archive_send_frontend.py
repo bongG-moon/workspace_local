@@ -62,6 +62,8 @@ class ArchiveSendFrontendTests(unittest.TestCase):
             archived_id = app.create(str(Path(temporary) / 'work'), True)['id']
             selected_id = (app.create(kind='chat') if kind == 'chat'
                            else app.create(str(Path(temporary) / 'other'), True))['id']
+            app.save_draft({'id': archived_id, 'revision': 0, 'selectedId': selected_id,
+                'draft': {'text': '기존에 저장된 업무 초안', 'attachments': []}, 'stash': None})
             server = Server(app)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -94,10 +96,10 @@ class ArchiveSendFrontendTests(unittest.TestCase):
                   WorkspaceDraftPersistence.attach({api:(...args)=>api(...args),notify:text=>notices.push(text),
                     selected:()=>active?.id||homeDraftKey(),stashes:()=>[],restoreStashes(){}});
                   await WorkspaceDraftPersistence.load();
-                  $('prompt').value='복원할 보관 업무 초안';
+                  $('prompt').value='보관 후 저장하지 않을 초안';
                   const removing=remove(ARCHIVED_ID).onclick();$('action-confirm').onclick();
                   assert.equal(await removing,true);
-                  // Flush a row dirtied by showHome after the task was hidden.
+                  // Archiving drops this row before showHome can autosave it.
                   await WorkspaceDraftPersistence.flush();
                   assert.equal(WorkspaceDraftPersistence.hasPending(),false);
                   await selectSession(target.id);
@@ -107,12 +109,12 @@ class ArchiveSendFrontendTests(unittest.TestCase):
                     assert.equal(WorkspaceDraftPersistence.hasPending(),false);
                   }
                   assert.deepEqual(sends,[target.id,target.id,target.id]);
-                  assert.equal(posts.filter(id=>id===ARCHIVED_ID).length,1);
+                  assert.equal(posts.filter(id=>id===ARCHIVED_ID).length,0);
                   assert.equal(notices.some(text=>text.includes('보관한 업무')),false);
-                  assert.equal(drafts.get(ARCHIVED_ID).text,'복원할 보관 업무 초안');
+                  assert.equal(drafts.has(ARCHIVED_ID),false);
                   const persisted=await backendApi('/api/drafts');
                   const archived=persisted.entries.find(row=>row.id===ARCHIVED_ID);
-                  assert.equal(archived.draft.text,'복원할 보관 업무 초안');
+                  assert.equal(archived.draft.text,'기존에 저장된 업무 초안');
                 })()
                 """.replace('ARCHIVED_ID', json.dumps(archived_id)).replace('KIND', json.dumps(kind))
                 environment = dict(os.environ, ARCHIVE_TEST_ORIGIN=server.origin, ARCHIVE_TEST_TOKEN=app.token)
@@ -127,10 +129,10 @@ class ArchiveSendFrontendTests(unittest.TestCase):
                 server.server_close()
                 thread.join(3)
 
-    def test_archived_draft_flushes_before_and_after_other_work_sends(self):
+    def test_archived_draft_is_skipped_before_and_after_other_work_sends(self):
         self.run_persisted_case('work')
 
-    def test_archived_draft_flushes_before_and_after_general_chat_sends(self):
+    def test_archived_draft_is_skipped_before_and_after_general_chat_sends(self):
         self.run_persisted_case('chat')
 
 

@@ -67,6 +67,7 @@ class TrayShutdownIntegrationTests(unittest.TestCase):
         self.exit_callbacks = []
         self.confirmations = []
         self.confirmation_shown = True
+        self.desktop_window_open = False
         self.children = []
         self.releases = []
         self.grace = patch('local_app.bridge.CLI_EOF_GRACE', 10)
@@ -105,6 +106,13 @@ class TrayShutdownIntegrationTests(unittest.TestCase):
         # endpoint. WorkspaceTray itself owns callback dispatch and failures.
         self.exit_callbacks.append(threading.current_thread())
         if not self.serving.wait(35):
+            return False
+        if self.desktop_window_open and self.app._shutdown_state == 'running':
+            identifier = self.app.begin_quit_confirmation()
+            self.confirmations.append(identifier)
+            if self.confirmation_shown:
+                return None
+            self.app.discard_quit_confirmation(identifier)
             return False
         result = self.app.request_quit()
         if result.get('confirmationRequired'):
@@ -216,6 +224,64 @@ class TrayShutdownIntegrationTests(unittest.TestCase):
         self.assertIsNone(process.poll())
         release.write_text('release', encoding='utf-8')
         self.assert_completed(bridge, process)
+
+    def test_archived_error_and_last_draft_do_not_block_desktop_tray_exit(self):
+        archived = self.app.create(str(self.root), True, title='보관할 업무')['id']
+        self.app.hide_session(archived, True)
+        # A stale screen can still read or try to run an archived task. These
+        # failures must not poison operation admission or the final autosave.
+        for route, body in [('/api/session?id=' + archived, None),
+                            ('/api/send', {'id': archived, 'text': 'must stay archived'})]:
+            with self.subTest(route=route):
+                code, result = self.request(route, body)
+                self.assertEqual(400, code)
+                self.assertIn('보관한 업무', result['error'])
+        draft = {'id': archived, 'revision': 0, 'selectedId': archived,
+                 'draft': {'text': '보관 후 저장하지 않을 초안', 'attachments': []},
+                 'stash': None}
+        code, saved = self.request('/api/drafts', draft)
+        self.assertEqual(200, code)
+        self.assertEqual(archived, saved['id'])
+        self.assertTrue(saved['skipped'])
+        self.assertEqual([], self.app.drafts.snapshot()['entries'])
+        self.assertEqual(0, self.app._active_operations)
+        self.assertTrue(self.app.session_visibility.contains(archived))
+
+        bridge, process, entered, release = self.connected_child()
+        self.desktop_window_open = True
+        self.tray._dispatch('exit')
+        self.assertTrue(eventually(lambda: len(self.confirmations) == 1 and not self.tray._pending))
+        self.assertFalse(entered.exists(), 'screen acknowledgement alone must not close an owned child')
+        self.assertEqual('running', self.app.shutdown_status()['shutdownState'])
+        results, failures = [], []
+        def confirm():
+            try:
+                results.append(self.request('/api/quit', {'confirmed': True,
+                                                         'confirmationId': self.confirmations[0]}))
+            except Exception as exc:
+                failures.append(exc)
+        request_thread = threading.Thread(target=confirm, daemon=True)
+        request_thread.start()
+        self.assertTrue(eventually(entered.exists))
+        self.assertEqual('closing', self.app.shutdown_status()['shutdownState'])
+        self.assertTrue(self.tray.available)
+        self.native.update_handled.clear()
+        self.tray.update(running=1, waiting=1)
+        self.assertTrue(self.native.update_handled.wait(2), 'tray message loop must remain responsive')
+        self.assertIs(self.native.update_thread, self.tray._thread)
+        self.assertEqual(200, self.request('/api/bootstrap')[0])
+        self.assertEqual(409, self.request('/api/send', {'id': self.sid, 'text': 'must not replay'})[0])
+        self.assertEqual([], self.app.get(self.sid)['messages'])
+        self.assertEqual([], results, 'quit must wait for its actual child cleanup')
+        release.write_text('release', encoding='utf-8')
+        request_thread.join(3)
+        self.assertFalse(request_thread.is_alive())
+        self.assertEqual([], failures)
+        self.assertEqual(200, results[0][0])
+        self.assertTrue(results[0][1]['closed'])
+        self.assert_completed(bridge, process)
+        self.assertTrue(self.app.session_visibility.contains(archived))
+        self.assertNotIn(archived, [row['id'] for row in self.app.drafts.snapshot()['entries']])
 
     def test_failed_tray_cleanup_keeps_recovery_available_and_retry_reaps_same_child(self):
         bridge, process, entered, release = self.connected_child()

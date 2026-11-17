@@ -498,12 +498,12 @@ async function hideSession(id,returnFocus){
   const needsReturn=()=>{const current=document.activeElement;return !current||current===document.body||!current.isConnected||current.closest?.(".session-row")?.dataset.sessionId===id;};
   const focusNeighbor=()=>{const rows=[...$(container).children].filter(row=>row.dataset.sessionId),row=rows[Math.min(Math.max(0,position),rows.length-1)];const next=row?.querySelector(container==="home-recents"?".recent-card":".session")||$(container==="all-sessions"?"tasks-close":"new-chat");next.focus({preventScroll:true});};
   const chat=sessionKind(item)==="chat";
-  const accepted=await confirmAction(chat?{title:"대화를 삭제할까요?",message:`‘${item.title}’의 앱 기록과 전용 저장공간·첨부 사본을 삭제합니다. 직접 선택한 원본 파일은 남습니다. 진행 중인 답변은 중지합니다. Claude 자체 세션 기록은 별도로 보관될 수 있습니다.`,confirmLabel:"대화 삭제",danger:true,returnFocus}:{title:"업무 목록에서 삭제할까요?",message:`‘${item.title}’을 앱 목록에서만 지웁니다. Claude 대화 기록과 작업 폴더의 파일은 그대로 남아요. 진행 중인 작업이나 남은 이어 할 일·실행 예약이 있으면 먼저 정리해 주세요.`,confirmLabel:"목록에서 삭제",returnFocus});
+  const accepted=await confirmAction(chat?{title:"대화를 삭제할까요?",message:`‘${item.title}’의 앱 기록과 전용 저장공간·첨부 사본을 삭제합니다. 직접 선택한 원본 파일은 남습니다. 진행 중인 답변은 중지합니다. Claude 자체 세션 기록은 별도로 보관될 수 있습니다.`,confirmLabel:"대화 삭제",danger:true,returnFocus}:{title:"업무 목록에서 삭제할까요?",message:`‘${item.title}’을 앱 목록에서만 지웁니다. Claude 대화 기록과 작업 폴더의 파일은 그대로 남아요. 보관한 업무의 초안은 자동 저장하지 않아요. 진행 중인 작업이나 남은 이어 할 일·실행 예약이 있으면 먼저 정리해 주세요.`,confirmLabel:"목록에서 삭제",returnFocus});
   if(!accepted||hidingSessionIds.has(id)||appClosed)return false;
   hidingSessionIds.add(id);renderSessions();
   try{
     if(chat)await globalThis.WorkspaceDraftPersistence?.flush();
-    const result=await api(chat?"/api/session/delete":"/api/session/hide",{id,confirmed:true});hiddenSessionIds.add(id);latestSessionTitles.delete(id);sessions=sessions.filter(row=>row.id!==id);
+    const result=await api(chat?"/api/session/delete":"/api/session/hide",{id,confirmed:true});hiddenSessionIds.add(id);if(!chat)globalThis.WorkspaceDraftPersistence?.archive(id);latestSessionTitles.delete(id);sessions=sessions.filter(row=>row.id!==id);
     if(boot.sessionOrder?.ids)boot.sessionOrder.ids=boot.sessionOrder.ids.filter(value=>value!==id);
     const restore=needsReturn();
     if(active?.id===id){showHome();if(restore){if(container==="all-sessions"&&$("tasks-dialog").open)focusNeighbor();else $("home-button").focus({preventScroll:true});}}
@@ -931,6 +931,7 @@ async function selectSession(id,{keepDraft=false,canActivate=null}={}){
   globalThis.WorkspaceExtensions?.close();
   globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceRequestTiming?.reset();globalThis.WorkspaceToolActivity?.reset();
   globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();
+  globalThis.WorkspaceDraftPersistence?.resume(id);
   streaming.clear();active=item;currentMode=sessionKind(item);syncTaskOperations();modeViews[currentMode].selected=item.id;persistMode();updateModeNavigation();applyStopState(item);globalThis.WorkspaceRichContent?.reset(id);globalThis.WorkspaceExecutionView?.reset(id);globalThis.WorkspaceRequestTiming?.reset(id);globalThis.WorkspaceToolActivity?.reset(id);globalThis.WorkspaceProgressView?.reset(id,item.progress,item.lastRunId);started=null;error("");
   const pendingSend=taskOperations.get(id)?.get("send"),acknowledged=pendingUserMessageIndex(item,pendingSend?.pending,pendingSend);
   if(pendingSend){pendingSend.viewOwner=item;pendingSend.messageIndex=item.messages.length;}
@@ -2129,15 +2130,14 @@ function captureScreenRecovery(){
   // pristine blank input must not erase a saved draft that failed to display.
   if(composerText()||attachments.length)saveDraft();
   const snapshot={...(isGeneralChat()?{mode:"chat"}:{}),sessionId:active?.id||null,drafts:[...drafts].filter(([id,draft])=>globalThis.WorkspaceDraftPersistence?.keepForRecovery(id,draft)!==false).map(([id,draft])=>({id,text:draft.text||"",attachments:[...(draft.attachments||[])]}))};
-  const stashes=globalThis.WorkspaceShortcuts?.exportStashes()||[];if(stashes.length)snapshot.stashes=stashes;
+  const stashes=(globalThis.WorkspaceShortcuts?.exportStashes()||[]).filter(row=>globalThis.WorkspaceDraftPersistence?.isArchived?.(row.id)!==true);if(stashes.length)snapshot.stashes=stashes;
   return snapshot;
 }
 const recoveryDraftOwners=()=>new Set(["home","home:chat","home:work",...sessions.map(row=>row.id)]);
 function captureUpgradeRecovery(){
   const snapshot=captureScreenRecovery();
-  // Hidden/deleted task drafts are already retained by the draft store. Do not
-  // turn them into a new unresolved recovery on every update. The handoff must
-  // still flush that store successfully before it may close the current app.
+  // Archived tasks are outside this update's draft recovery. Other drafts must
+  // still finish saving before the handoff may close the current app.
   if(!globalThis.WorkspaceDraftPersistence?.isReady?.())return snapshot;
   const owners=recoveryDraftOwners();
   snapshot.drafts=snapshot.drafts.filter(row=>owners.has(row.id));

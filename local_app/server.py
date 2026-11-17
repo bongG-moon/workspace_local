@@ -53,7 +53,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.46"
+WORKSPACE_VERSION = "0.23.47"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -1061,10 +1061,26 @@ class LocalApp:
                     "appUpdateWarning": self.update_warning,
                     **self.shutdown_status()}
 
+    def draft_snapshot(self):
+        """Keep saved archives on disk while excluding them from UI autosaves."""
+        with self.lock:
+            result = self.drafts.snapshot()
+            archived = []
+            for row in result['entries']:
+                sid = row['id']
+                item = self.sessions.get(sid)
+                if (item is not None and item.get('kind', 'work') == 'work'
+                        and self.session_visibility.contains(sid)
+                        and not item.get('_deleting') and not item.get('_removingFromList')
+                        and sid not in self.chat_spaces.pending):
+                    archived.append(sid)
+            return {**result, 'archivedIds': archived}
+
     def save_draft(self, data):
-        """Finish autosaves for archived work without reopening or running it."""
+        """Ignore late archived autosaves; only active work needs draft storage."""
         with self.lock:
             payload = data
+            skip_archived = False
             for key in ('id', 'selectedId'):
                 value = data.get(key)
                 if value in ('home', 'home:chat', 'home:work'):
@@ -1075,13 +1091,20 @@ class LocalApp:
                     and not item.get('_deleting') and not item.get('_removingFromList')
                     and value not in self.chat_spaces.pending)
                 if archived_work:
-                    # Hiding a task keeps its draft. A queued or in-flight save
-                    # must drain, even after the UI has switched to another task.
-                    # Index metadata is sufficient; never hydrate archived bodies.
+                    # A queued autosave may arrive after the task was hidden.
+                    # Use index metadata only, without reopening its history.
+                    if key == 'id':
+                        skip_archived = True
                     if key == 'selectedId':
                         payload = {**data, 'selectedId': 'home:work'}
                 else:
                     self.get(value)
+            if skip_archived:
+                # Do not touch draft contents, attachments or the database:
+                # archived work must not hold up a request, exit or update.
+                # Existing drafts remain available after explicit restoration.
+                return {'id': data['id'], 'revision': 0,
+                        'skipped': True, 'reason': 'archived_work'}
             item = self.sessions.get(data.get('id'), {})
             for name in ('draft', 'stash'):
                 entry = data.get(name)
@@ -3508,7 +3531,7 @@ class Handler(BaseHTTPRequestHandler):
             if route.path == '/api/llm-usage':
                 return self.reply(app.llm_usage.snapshot())
             if route.path == '/api/drafts':
-                return self.reply(app.drafts.snapshot())
+                return self.reply(app.draft_snapshot())
             if route.path == '/api/session-groups':
                 return self.reply(app.session_groups.snapshot())
             if route.path == '/api/attachments/storage':

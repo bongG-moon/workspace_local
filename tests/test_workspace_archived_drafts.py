@@ -1,4 +1,4 @@
-"""Archived work keeps its draft without blocking other conversations' saves."""
+"""Archived work skips autosave without blocking active conversations or exit."""
 from copy import deepcopy
 from contextlib import contextmanager
 import json
@@ -68,25 +68,32 @@ class ArchivedDraftTests(unittest.TestCase):
         with response:
             return response.status, json.load(response)
 
-    def test_archived_draft_saves_while_other_work_is_selected(self):
+    def test_archived_draft_is_skipped_while_other_work_is_selected(self):
         body = {**self.row, 'selectedId': self.other}
         original = deepcopy(body)
+        before = self.app.drafts.snapshot()
         result = self.app.save_draft(body)
-        self.assertEqual(self.archived, result['id'])
+        self.assertEqual({'id': self.archived, 'revision': 0,
+                          'skipped': True, 'reason': 'archived_work'}, result)
         self.assertEqual(original, body)
-        self.assertEqual(self.row['draft'], self.saved()['draft'])
-        self.assertEqual(self.row['stash'], self.saved()['stash'])
-        self.assertEqual(self.other, self.app.drafts.snapshot()['selectedId'])
+        self.assertEqual(before, self.app.drafts.snapshot())
         self.assertTrue(self.app.session_visibility.contains(self.archived))
         self.assertEqual(self.original_attachment, self.attachment.read_bytes())
-        self.assertIn(str(self.attachment), self.app.attachment_references())
 
-    def test_archived_selection_falls_back_to_work_home_without_unhiding(self):
-        self.app.save_draft(self.row)
-        self.assertEqual('home:work', self.app.drafts.snapshot()['selectedId'])
+    def test_archived_selection_does_not_write_or_unhide(self):
+        before = self.app.drafts.snapshot()
+        self.assertTrue(self.app.save_draft(self.row)['skipped'])
+        self.assertEqual(before, self.app.drafts.snapshot())
         self.assertTrue(self.app.session_visibility.contains(self.archived))
-        self.assertEqual(self.row['draft'], self.saved()['draft'])
         self.assertEqual(self.archived, self.row['selectedId'])
+
+    def test_archived_noop_ignores_storage_failure_and_does_not_read_or_write_store(self):
+        self.app.drafts.warning = 'storage unavailable'
+        with patch.object(self.app.drafts, 'update', side_effect=OSError('disk full')) as update, \
+                patch.object(self.app.drafts, 'snapshot', side_effect=OSError('unreadable')) as snapshot:
+            self.assertTrue(self.app.save_draft(self.row)['skipped'])
+        update.assert_not_called()
+        snapshot.assert_not_called()
 
     def test_normal_draft_is_not_rejected_for_stale_archived_selection(self):
         self.app.save_draft({**self.row, 'id': self.other})
@@ -139,10 +146,16 @@ class ArchivedDraftTests(unittest.TestCase):
             self.app.chat_spaces.pending.pop(self.chat)
         self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
-    def test_other_chat_attachment_copies_remain_protected(self):
+    def test_archived_skip_never_opens_irrelevant_attachments(self):
+        with patch.object(self.app.attachment_store, 'owner', side_effect=OSError('old attachment unavailable')) as owner:
+            self.assertTrue(self.app.save_draft({**self.row, 'selectedId': self.other})['skipped'])
+        owner.assert_not_called()
+        self.assertEqual([], self.app.drafts.snapshot()['entries'])
+
+    def test_visible_draft_still_protects_other_chat_attachment_copies(self):
         with patch.object(self.app.attachment_store, 'owner', return_value=self.chat):
             with self.assertRaisesRegex(ValueError, '다른 일반 대화'):
-                self.app.save_draft({**self.row, 'selectedId': self.other})
+                self.app.save_draft({**self.row, 'id': self.other, 'selectedId': self.other})
         self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
     def test_draft_save_does_not_hydrate_archived_conversation(self):
@@ -155,20 +168,30 @@ class ArchivedDraftTests(unittest.TestCase):
 
         with patch.object(self.app.history, 'hydrate', side_effect=visible_history_only):
             self.app.save_draft({**self.row, 'selectedId': self.other})
-        self.assertEqual(self.row['draft'], self.saved()['draft'])
+        self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
-    def test_restore_after_restart_keeps_text_stash_and_attachment(self):
+    def test_existing_draft_survives_skipped_save_and_restore_after_restart(self):
+        self.app.restore_session(self.archived)
         self.app.save_draft(self.row)
+        self.app.hide_session(self.archived, True)
+        before = self.app.drafts.snapshot()
+        original_db = self.app.drafts.path.read_bytes()
+        result = self.app.save_draft({**self.row, 'revision': 1,
+            'draft': {'text': '보관 후 늦게 도착한 초안', 'attachments': []}})
+        self.assertTrue(result['skipped'])
+        self.assertEqual(original_db, self.app.drafts.path.read_bytes())
         reopened = LocalApp(self.app.state, demo=True)
         self.addCleanup(reopened.close)
-        before = reopened.drafts.snapshot()['entries']
+        self.assertEqual([self.archived], reopened.draft_snapshot()['archivedIds'])
         self.assertTrue(reopened.restore_session(self.archived)['restored'])
-        self.assertEqual(before, reopened.drafts.snapshot()['entries'])
-        row = next(row for row in before if row['id'] == self.archived)
+        self.assertEqual([], reopened.draft_snapshot()['archivedIds'])
+        self.assertEqual(before, reopened.drafts.snapshot())
+        row = next(row for row in before['entries'] if row['id'] == self.archived)
         self.assertEqual(self.row['draft'], row['draft'])
         self.assertEqual(self.row['stash'], row['stash'])
         self.assertEqual(self.original_attachment, self.attachment.read_bytes())
         self.assertNotIn(self.archived, reopened.session_visibility.hidden)
+        self.assertIn(str(self.attachment), reopened.attachment_references())
 
     def test_saving_archived_draft_does_not_restore_execution_access(self):
         self.app.save_draft(self.row)
@@ -187,7 +210,7 @@ class ArchivedDraftTests(unittest.TestCase):
         self.assertEqual('남은 업무의 요청', self.app.get(self.other)['messages'][-1]['text'])
         self.assertEqual('일반 대화의 요청', next(row['text'] for row in self.app.get(self.chat)['messages']
                                                if row.get('role') == 'user'))
-        self.assertEqual(self.row['draft'], self.saved()['draft'])
+        self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
     def test_http_archived_draft_keeps_capability_and_origin_boundaries(self):
         with self.serving() as server:
@@ -198,15 +221,16 @@ class ArchivedDraftTests(unittest.TestCase):
             code, result = self.request(server, body)
             self.assertEqual(code, 200)
             self.assertEqual(self.archived, result['id'])
-            self.assertEqual(self.other, self.app.drafts.snapshot()['selectedId'])
-            self.assertEqual(self.row['stash'], self.saved()['stash'])
+            self.assertTrue(result['skipped'])
+            self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
     def test_http_stale_archived_selection_is_repaired_without_exposing_archived_session(self):
         with self.serving() as server:
-            code, result = self.request(server, self.row)
+            code, result = self.request(server, {**self.row, 'id': self.other})
             self.assertEqual(code, 200)
-            self.assertEqual(self.archived, result['id'])
+            self.assertEqual(self.other, result['id'])
             self.assertEqual('home:work', self.request(server)[1]['selectedId'])
+            self.assertEqual(self.row['draft'], self.saved(self.other)['draft'])
             code, boot = self.request(server, path='/api/bootstrap')
             self.assertEqual(code, 200)
             self.assertNotIn(self.archived, [row['id'] for row in boot['sessions']])
@@ -224,7 +248,7 @@ class ArchivedDraftTests(unittest.TestCase):
             code, result = self.request(server, {'id': self.chat, 'text': '다른 대화 요청',
                 'attachments': []}, path='/api/send')
             self.assertEqual((code, result), (200, {'ok': True}))
-            self.assertEqual(self.row['draft'], self.saved()['draft'])
+            self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
 
 if __name__ == '__main__':
