@@ -48,6 +48,10 @@ python ai_square_connection_check.py --post-test --report post_result.json
 
 POST 시험 성공은 HTTP 200과 `service=P&T AI SQUARE`, `protocol=ax-registration-v1`, `status=ok`, `authenticated=true`, `dryRun=true`, `persisted=false`가 모두 확인된 경우입니다. 이 모드에서 `mongoPingConfirmed`는 False이며 실제 DB 쓰기 권한과 중복 집계 방지까지 확인했다고 표시하지 않습니다.
 
+1.1.1 이상은 POST 503의 안전한 오류 코드도 구분합니다. `serverErrorCode=registration_unavailable`이면 이 집계 API의 설정 거부가 확인된 것입니다. `serverErrorCode` 없이 `server_error`이면 회사 앞단이나 다른 서비스 응답일 수 있어 설정 문제로 단정하지 않습니다. 오류 전문, DB 주소와 키는 저장하지 않습니다.
+
+재시작 후에도 실패하면 웹 서버에서 [비밀값 없는 설정 점검 파일](https://github.com/bongG-moon/ai_square/blob/main/pt_ai_square/scripts/check_app_registration_config.py)을 받아 실제 설정을 지정해 실행합니다: `python check_app_registration_config.py --config runtime_config.py --json`. 키 원문 없이 활성화 값, 키 길이, 컬렉션 유효성, 환경변수 우선 적용과 정적 배포 상태를 확인합니다. 이 파일은 웹 서버를 시작하거나 DB에 연결하지 않습니다.
+
 더미 모드, 다른 JSON, HTML, 이동 응답, 401/403/407, 404, 서버 오류, 연결·인증서 오류와 시간 초과는 각각 구분합니다. 401/403만으로 회사 앞단과 앱 중 어느 쪽이 막았는지는 단정하지 않습니다. 404도 집계 구현 불가를 뜻하지 않습니다.
 
 ## 웹 수정 여부

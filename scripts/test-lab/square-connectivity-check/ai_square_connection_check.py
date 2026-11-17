@@ -30,7 +30,7 @@ from urllib.request import (
     getproxies,
 )
 
-VERSION = "1.1.0-python"
+VERSION = "1.1.1-python"
 TIMEOUT = 7.0
 MAX_BODY = 65536
 NOTES = [
@@ -168,6 +168,65 @@ def read_body(response, deadline):
     return bytes(raw)
 
 
+def registration_service_unavailable(response, result, deadline):
+    """Recognize only this API's safe error codes, never arbitrary body text."""
+    def unknown():
+        return classify(result, "server_error", "서버가 503 오류를 반환했습니다",
+                        "알려진 집계 API 오류 코드는 확인되지 않았습니다. 회사 앞단 또는 웹 서버의 상태와 실행 경로를 확인해 주세요.")
+
+    content_type = result["contentType"].split(";", 1)[0].strip().lower()
+    if content_type != "application/json" and not content_type.endswith("+json"):
+        return unknown()
+    length = response.headers.get("Content-Length", "")
+    if length.isdigit() and int(length) > MAX_BODY:
+        raise OverflowError()
+    try:
+        raw = read_body(response, deadline)
+    except (TimeoutError, OverflowError):
+        raise
+    except (ValueError, OSError, EOFError):
+        return unknown()
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError()
+            value[key] = item
+        return value
+
+    try:
+        data = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique)
+    except (ValueError, UnicodeError, RecursionError):
+        return unknown()
+    if (not isinstance(data, dict) or data.get("service") != "P&T AI SQUARE"
+            or data.get("protocol") != "ax-registration-v1" or data.get("status") != "error"):
+        return unknown()
+    # Identity is recognized, but neither authentication nor dry-run success is
+    # implied by an error response. Do not copy the remote error/message fields.
+    result["platformConfirmed"] = True
+    code = data.get("errorCode")
+    diagnostics = {
+        "registration_unavailable": (
+            "등록 점검 기능의 서버 설정을 확인해 주세요",
+            "서버의 PTAI_AX_REGISTRATION_ENABLED=True, 전용 키 32~256자, ax_workspace_로 시작하는 컬렉션 이름과 mongodb 모드를 확인해 주세요. 실제 runtime_config.py와 실행기 환경변수의 우선순위도 확인해야 합니다."),
+        "migration_in_progress": (
+            "서버가 데이터 이전 상태를 반환했습니다",
+            "저장 없는 POST 시험에서 예상하지 않은 처리 상태입니다. 실행 중인 웹 코드와 데이터 이전 상태를 확인해 주세요. 이 오류만으로 DB 처리 여부를 확정하지 않습니다."),
+        "database_unavailable": (
+            "서버가 DB 처리 오류를 반환했습니다",
+            "저장 없는 POST 시험에서 예상하지 않은 DB 오류입니다. 실행 중인 서버 코드와 상태를 확인해 주세요. DB 저장 여부를 확정하지 않습니다."),
+        "database_unacknowledged": (
+            "서버가 DB 저장 미확정 상태를 반환했습니다",
+            "서버가 DB 쓰기 확인을 받지 못했다고 응답했습니다. 저장 없는 시험 경로가 맞는지 서버 코드를 확인해야 하며 DB 저장 여부를 확정하지 않습니다."),
+    }
+    if not isinstance(code, str) or code not in diagnostics:
+        return unknown()
+    result["serverErrorCode"] = code
+    title, summary = diagnostics[code]
+    return classify(result, code, title, summary)
+
+
 def interpret(response, result, deadline):
     status = int(response.code)
     result["httpStatus"] = status
@@ -193,8 +252,7 @@ def interpret(response, result, deadline):
         return classify(result, category, title, summary)
     if status >= 500:
         if result.get("mode") == "post_test" and status == 503:
-            return classify(result, "registration_unavailable", "등록 점검 기능을 사용할 수 없습니다",
-                            "서버의 집계 기능 활성화 설정과 인증키 설정, 서버 상태를 확인해 주세요.")
+            return registration_service_unavailable(response, result, deadline)
         return classify(result, "server_error", "서버가 오류를 반환했습니다",
                         "웹 또는 DB 연결 상태를 서버 담당자가 확인해야 합니다. 응답 코드만으로 원인을 단정할 수 없습니다.")
     if status != 200:
@@ -315,14 +373,20 @@ def report_text(result):
              "판정 코드: " + result["category"],
              "소요 시간: %.1f초" % (result["durationMs"] / 1000)]
     lines += ["서버 %s: %s" % (key, value) for key, value in result["health"].items()]
+    if result.get("serverErrorCode"):
+        lines += ["서버 진단 코드: " + result["serverErrorCode"]]
     if result.get("mode") == "post_test":
         lines += ["", "확인 범위: 등록용 인증과 저장 없는 POST / 실제 DB 저장과 중복 방지는 미확인", ""]
     else:
         lines += ["", "확인 범위: 기본 연결만 확인 / 집계 POST와 등록 인증은 미확인", ""]
     lines += ["- " + note for note in result["notes"]]
-    lines += ["", ("웹 반영: 집계 API와 등록용 키를 설정한 서버에서 실행하세요. 이번 시험 자료는 저장하지 않습니다."
-                   if result.get("mode") == "post_test" else
-                   "웹 수정: 기본 연결 점검에는 필요 없습니다. POST 시험에는 집계 API 반영이 필요합니다.")]
+    if result.get("mode") == "post_test":
+        footer = ("서버가 인증과 저장 없는 처리를 확인했습니다."
+                  if result["category"] == "post_test_ok" else
+                  "저장 없는 시험을 요청했습니다. 오류 응답만으로 서버의 처리 여부를 확정하지 않습니다.")
+    else:
+        footer = "웹 수정: 기본 연결 점검에는 필요 없습니다. POST 시험에는 집계 API 반영이 필요합니다."
+    lines += ["", footer]
     return "\n".join(lines)
 
 

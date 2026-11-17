@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextlib import redirect_stderr
 import hashlib
 import hmac
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
@@ -25,12 +26,14 @@ spec.loader.exec_module(probe)
 KEY = "fixture-registration-key-1234567890-abcdef"
 GOOD = {"service": "P&T AI SQUARE", "protocol": "ax-registration-v1", "status": "ok",
         "dryRun": True, "persisted": False, "authenticated": True}
+UNAVAILABLE = {"service": "P&T AI SQUARE", "protocol": "ax-registration-v1", "status": "error",
+               "errorCode": "registration_unavailable", "persisted": False}
 
 
 @contextmanager
-def fixture(body=None, status=200, location=None, content_type="application/json"):
+def fixture(body=None, status=200, location=None, content_type="application/json", content_encoding=None):
     requests = []
-    payload = json.dumps(GOOD if body is None else body).encode()
+    payload = body if isinstance(body, bytes) else json.dumps(GOOD if body is None else body).encode()
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -40,6 +43,8 @@ def fixture(body=None, status=200, location=None, content_type="application/json
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
+            if content_encoding is not None:
+                self.send_header("Content-Encoding", content_encoding)
             if location is not None:
                 self.send_header("Location", location)
             self.send_header("Set-Cookie", "fixture=should-not-be-used")
@@ -127,9 +132,76 @@ class RegistrationProbeTests(unittest.TestCase):
     def test_auth_and_disabled_responses_are_specific(self):
         for status, category in ((401, "registration_auth_failed"), (403, "registration_auth_failed"),
                                  (503, "registration_unavailable")):
-            with self.subTest(status=status), fixture(status=status) as (url, _), patch.object(probe, "proxy_settings", return_value={}):
+            body = UNAVAILABLE if status == 503 else GOOD
+            with self.subTest(status=status), fixture(body=body, status=status) as (url, requests), patch.object(probe, "proxy_settings", return_value={}):
                 result = probe.probe(url, post_test=True, key=KEY)
             self.assertEqual(result["category"], category)
+            self.assertEqual(len(requests), 1)
+            if status == 503:
+                self.assertTrue(result["platformConfirmed"])
+                self.assertEqual(result["serverErrorCode"], "registration_unavailable")
+                self.assertEqual(result["collectionReadiness"], "not_tested")
+
+    def test_503_api_errors_are_allowlisted_and_do_not_claim_success(self):
+        for code in ("registration_unavailable", "migration_in_progress", "database_unavailable", "database_unacknowledged"):
+            with self.subTest(code=code), fixture(body=dict(UNAVAILABLE, errorCode=code), status=503) as (url, requests), patch.object(probe, "proxy_settings", return_value={}):
+                result = probe.probe(url, post_test=True, key=KEY)
+            self.assertEqual(result["category"], code)
+            self.assertEqual(result["serverErrorCode"], code)
+            self.assertTrue(result["platformConfirmed"])
+            self.assertFalse(result["mongoPingConfirmed"])
+            self.assertEqual(result["collectionReadiness"], "not_tested")
+            self.assertNotIn("서버가 인증과 저장 없는 처리를 확인했습니다", probe.report_text(result))
+            self.assertEqual(len(requests), 1)
+
+    def test_upstream_or_ambiguous_503_is_not_called_a_registration_setting_error(self):
+        cases = [GOOD, {}, [], dict(UNAVAILABLE, service="another-service"),
+                 dict(UNAVAILABLE, protocol="other"), dict(UNAVAILABLE, status="ok"),
+                 b'{invalid json', b'\xff', b'{"service":"P&T AI SQUARE","service":"other"}',
+                 {key: value for key, value in UNAVAILABLE.items() if key != "service"}]
+        for body in cases:
+            with self.subTest(body=body), fixture(body=body, status=503) as (url, requests), patch.object(probe, "proxy_settings", return_value={}):
+                result = probe.probe(url, post_test=True, key=KEY)
+            self.assertEqual(result["category"], "server_error")
+            self.assertFalse(result["platformConfirmed"])
+            self.assertNotIn("serverErrorCode", result)
+            self.assertEqual(len(requests), 1)
+        for content_type in ("text/html", "text/plain"):
+            with self.subTest(content_type=content_type), fixture(body=b'<html>login</html>', status=503, content_type=content_type) as (url, requests), patch.object(probe, "proxy_settings", return_value={}):
+                result = probe.probe(url, post_test=True, key=KEY)
+            self.assertEqual(result["category"], "server_error")
+            self.assertFalse(result["platformConfirmed"])
+            self.assertEqual(len(requests), 1)
+
+    def test_503_unknown_codes_and_error_text_are_never_exported(self):
+        # Synthetic secret-shaped values must never escape into a report.
+        secret = KEY + ' ' + 'mongodb' + '://private:password@internal.invalid/db ' + 'a' * 64
+        for code in ("registration_unavailable", secret, ["registration_unavailable"]):
+            body = dict(UNAVAILABLE, errorCode=code, error=secret, message=secret,
+                        debug={"signature": secret, "uri": secret})
+            with self.subTest(known=isinstance(code, str) and code == "registration_unavailable"), fixture(body=body, status=503) as (url, _), patch.object(probe, "proxy_settings", return_value={}):
+                result = probe.probe(url, post_test=True, key=KEY)
+            exported = json.dumps(result, ensure_ascii=False) + probe.report_text(result)
+            self.assertNotIn(KEY, exported)
+            self.assertNotIn("mongodb://", exported)
+            self.assertNotIn('a' * 64, exported)
+            self.assertTrue(result["platformConfirmed"])
+            if code == "registration_unavailable":
+                self.assertEqual(result["serverErrorCode"], code)
+            else:
+                self.assertEqual(result["category"], "server_error")
+                self.assertNotIn("serverErrorCode", result)
+
+    def test_503_body_limits_and_invalid_encodings(self):
+        cases = [(b'x' * (probe.MAX_BODY + 1), None, "response_too_large"),
+                 (gzip.compress(b'x' * (probe.MAX_BODY + 1)), "gzip", "response_too_large"),
+                 (b'not gzip', "gzip", "server_error"),
+                 (b'unsupported', "unsupported", "server_error")]
+        for body, encoding, category in cases:
+            with self.subTest(encoding=encoding, size=len(body)), fixture(body=body, status=503, content_encoding=encoding) as (url, requests), patch.object(probe, "proxy_settings", return_value={}):
+                result = probe.probe(url, post_test=True, key=KEY)
+            self.assertEqual(result["category"], category)
+            self.assertEqual(len(requests), 1)
 
     def test_bad_url_or_key_sends_no_request(self):
         with patch.object(probe, "build_opener", side_effect=AssertionError("network must not be used")):
