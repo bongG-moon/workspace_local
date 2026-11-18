@@ -646,6 +646,10 @@ dialog.path-picker .path-picker-location .quiet-button{
 .material-location>span{flex-basis:100%;padding:0 5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:20px;color:var(--theme-text-muted)}
 .material-list-note{font-size:12px;line-height:20px;color:var(--theme-text-muted);margin:8px 0;word-break:keep-all}
 
+/* Keep folder choices stationary and let a slight drag on their labels activate the radio. */
+#folder-dialog{--dialog-entry-transform:none}
+#folder-dialog .folder-option{user-select:none}
+
 /* Fallback entry motion. No retained compositor hint, layout tween or delayed close.
    Alternate task names restart on navigation without forcing synchronous layout.
    Streaming updates do not touch the navigation marker. */
@@ -655,7 +659,7 @@ dialog.path-picker .path-picker-location .quiet-button{
   :is(#task-view,#welcome)[data-motion-step="b"]:not([hidden]){animation-name:workspace-view-enter-alt}
   #source-panel:not([hidden]),#results-panel:not([hidden]){animation:workspace-view-enter 300ms ease-out}
 }
-@keyframes workspace-dialog-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes workspace-dialog-enter{from{opacity:0;transform:var(--dialog-entry-transform,translateY(6px))}to{opacity:1;transform:translateY(0)}}
 @keyframes workspace-view-enter{from{opacity:0}to{opacity:1}}
 @keyframes workspace-view-enter-alt{from{opacity:0}to{opacity:1}}
 
@@ -663,14 +667,14 @@ dialog.path-picker .path-picker-location .quiet-button{
    No delayed callbacks, cloned dialogs or persistent compositing hints. */
 @supports (transition-behavior:allow-discrete){
  @media(prefers-reduced-motion:no-preference){
-  dialog{opacity:0;transform:translateY(6px) scale(.985);transition:opacity 300ms cubic-bezier(.2,0,0,1),transform 300ms cubic-bezier(.2,0,0,1),display 300ms allow-discrete,overlay 300ms allow-discrete}
+  dialog{opacity:0;transform:var(--dialog-entry-transform,translateY(6px) scale(.985));transition:opacity 300ms cubic-bezier(.2,0,0,1),transform 300ms cubic-bezier(.2,0,0,1),display 300ms allow-discrete,overlay 300ms allow-discrete}
   dialog[open]{animation:none;opacity:1;transform:translateY(0) scale(1)}
   dialog:not([open]){pointer-events:none}
   dialog::backdrop{opacity:0;transition:opacity 300ms ease,display 300ms allow-discrete,overlay 300ms allow-discrete}
   dialog[open]::backdrop{opacity:1}
   dialog:not([open])::backdrop{pointer-events:none}
   @starting-style{
-   dialog[open]{opacity:0;transform:translateY(6px) scale(.985)}
+   dialog[open]{opacity:0;transform:var(--dialog-entry-transform,translateY(6px) scale(.985))}
    dialog[open]::backdrop{opacity:0}
   }
  }

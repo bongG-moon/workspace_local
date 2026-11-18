@@ -191,9 +191,52 @@ async function selectionTiming(browser){
     return {measurement:'Native click capture to synchronous status, conversation commit with enabled controls, and two requestAnimationFrame callbacks. Background running badges and API delay are synthetic; no Claude processes.',results,rapid,pageErrors:f.errors};
   }finally{await f.finish();}
 }
+async function checkFolderModeSelection(page){
+  const positions=await page.locator('#new-chat').evaluate(button=>{
+    button.click();
+    const dialog=document.getElementById('folder-dialog');
+    const card=dialog.querySelector('#folder-mode-existing').closest('label');
+    const animations=dialog.getAnimations();
+    // Sample the opening motion at fixed progress, independent of machine speed.
+    animations.forEach(animation=>animation.pause());
+    const positions=[0,0.5,1].map(progress=>{
+      for(const animation of animations)animation.currentTime=animation.effect.getComputedTiming().endTime*progress;
+      const rect=card.getBoundingClientRect();
+      return {left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom};
+    });
+    animations.forEach(animation=>animation.finish());
+    return positions;
+  });
+  for(const rect of positions.slice(1)){
+    for(const edge of Object.keys(rect))assert.ok(Math.abs(rect[edge]-positions[0][edge])<0.5,'Folder card moved during opening: '+edge);
+  }
+  const existing=page.locator('#folder-mode-existing'),fresh=page.locator('#folder-mode-new');
+  const path=page.locator('#folder-input');
+  for(const tag of ['strong','small']){
+    await fresh.check();
+    const letter=await page.locator('label:has(#folder-mode-existing) '+tag).evaluate(text=>{
+      const range=document.createRange();
+      range.setStart(text.firstChild,1);range.setEnd(text.firstChild,2);
+      const rect=range.getBoundingClientRect();
+      return {start:rect.left+1,end:rect.right-1,y:rect.top+rect.height/2};
+    });
+    await page.mouse.move(letter.start,letter.y);await page.mouse.down();
+    await page.mouse.move(letter.end,letter.y,{steps:2});await page.mouse.up();
+    assert.equal(await existing.isChecked(),true,'Small pointer movement on folder '+tag+' should select the option');
+    assert.equal(await path.isVisible(),true);
+  }
+  await existing.focus();await page.keyboard.press('ArrowLeft');
+  assert.equal(await fresh.isChecked(),true);assert.equal(await path.isVisible(),false);
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await existing.isChecked(),true);
+  await path.fill('C:/fixture/업무');await path.press('Control+a');
+  assert.equal(await path.evaluate(input=>input.value.slice(input.selectionStart,input.selectionEnd)),'C:/fixture/업무');
+  await page.keyboard.press('Escape');
+}
 async function navigationChecks(browser,count){
   const f=await fixture(browser),{page,rows}=f,groups=f.getGroups(),orders=[],creates=[];
   try{
+    await checkFolderModeSelection(page);
     await page.route('**/api/session-groups',async route=>{
       const body=route.request().postDataJSON();
       if(body?.action!=='reorder')return route.fallback();
@@ -233,7 +276,7 @@ async function navigationChecks(browser,count){
       release();await page.waitForFunction(id=>active?.id===id&&!document.getElementById('folder-dialog').open,'create-'+i);
       await page.locator('#home-button').click();
     }
-    return {groupLongPressOrder:orders[0],groupKeyboardOrder:orders[1],createdOnceWithBusyLabel:creates.length,pageErrors:f.errors};
+    return {folderModeSelection:true,groupLongPressOrder:orders[0],groupKeyboardOrder:orders[1],createdOnceWithBusyLabel:creates.length,pageErrors:f.errors};
   }finally{await f.finish();}
 }
 async function main(){
