@@ -80,7 +80,7 @@ class ManualRoutingTests(unittest.TestCase):
                     self.current['summary' if self.in_summary else 'body'] += data
         guide = ErrorGuide()
         guide.feed((ROOT / 'docs/WORKSPACE_USER_GUIDE.html').read_text(encoding='utf-8'))
-        self.assertEqual(10, len(guide.cases))
+        self.assertEqual(11, len(guide.cases))
         for case in guide.cases:
             with self.subTest(case=case['summary']):
                 self.assertIn('가능한 원인:', case['body'])
@@ -89,6 +89,11 @@ class ManualRoutingTests(unittest.TestCase):
         for keyword in ('인증', '60초', '403', 'ede_diagnostic', '요청 처리 중'):
             self.assertIn(keyword, labels)
         guide_by_case = {case['summary']: case['body'] for case in guide.cases}
+        for label in ('모델 변경이 거절되었습니다', '403 team not allowed to access model', '사용할 모델을 다시 선택해 주세요'):
+            with self.subTest(label=label):
+                steps = guide_by_case[label]
+                for action in ('모델 선택', 'Claude 설정 파일 열기', 'settings.json', '저장', 'Claude Code 재시작'):
+                    self.assertIn(action, steps)
         upgrade = guide_by_case['이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다']
         for instruction in ('PowerShell', 'claude --version', '최신 버전으로 업데이트 해줘', '완전히 종료', '담당자'):
             self.assertIn(instruction, upgrade)

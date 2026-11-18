@@ -263,10 +263,31 @@ function error(text,kind=null,code=null){
   stopNoticeOwner=kind==="stop"?active?.id:null;
   globalThis.WorkspaceErrorHelp?.update(text,code,active?.id);
   $("error-message").textContent=text||"";$("error-banner").hidden=!text||appClosed;$("recovery-actions").hidden=!text||appClosed;
+  const modelIssue=["model_permission","model_not_found","model_rejected"].includes(globalThis.WorkspaceErrorHelp?.classify(text,code));
+  const showModelActions=Boolean(text&&active&&modelIssue&&!appClosed&&kind!=="stop");
+  $("recovery-model").hidden=!showModelActions;
+  const settingsFile=$("recovery-settings-file");
+  settingsFile.hidden=!showModelActions||boot.demo===true;
+  settingsFile.dataset.sessionId=settingsFile.hidden?"":active.id;
   $("connection-settings").hidden=kind==="stop";
   const label=kind==="stop"?(cleanupRetryable()?"중지 다시 시도":"Claude Code 재시작"):"연결 다시 확인",button=$("reconnect");
   if(button.lastChild?.nodeType===3)button.lastChild.textContent=label;else button.textContent=label;
 }
+$("recovery-model").onclick=()=>{if(appClosed||$("recovery-model").hidden||!active)return;globalThis.WorkspaceInlineControls?.open("model");};
+$("recovery-settings-file").onclick=async()=>{
+  const button=$("recovery-settings-file"), id=active?.id, selection=selectionGeneration;
+  if(appClosed||boot.demo||pendingSelection||!id||button.hidden||button.disabled||button.dataset.sessionId!==id)return;
+  const stillCurrent=()=>!appClosed&&!pendingSelection&&!button.hidden&&active?.id===id&&selectionGeneration===selection;
+  button.disabled=true;
+  try{
+    await api("/api/open-claude-settings",{id});
+    if(stillCurrent())toast("Claude 사용자 설정 파일을 열었어요. 수정 후 저장하고 이 연결의 Claude Code를 재시작해 주세요.");
+  }catch(err){
+    if(stillCurrent())toast(err.message||"Claude 설정 파일을 열 수 없어요.");
+  }finally{
+    button.disabled=false;
+  }
+};
 $("error-help-open").onclick=()=>{if(appClosed||$("error-banner").hidden)return;globalThis.WorkspaceErrorHelp?.open(()=>showDialog("error-help-dialog"));};
 $("error-help-close").onclick=$("error-help-done").onclick=()=>$("error-help-dialog").close();
 async function api(path,data,signal,capacityRetried=false){
@@ -332,7 +353,18 @@ function setStatus(state,label,runId){
   globalThis.WorkspaceAppUpdates?.contextChanged();
 }
 setInterval(renderElapsed,1000);
-function when(ts){if(!ts)return "";const d=new Date(ts*1000);return d.toDateString()===new Date().toDateString()?d.toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}):d.toLocaleDateString("ko-KR",{month:"short",day:"numeric"});}
+function when(ts,formats={}){
+  if(!ts)return "";
+  const date=new Date(ts*1000);
+  if(!Number.isFinite(date.getTime()))return date.toString();
+  formats.today??=new Date().toDateString();
+  if(date.toDateString()===formats.today){
+    formats.time??=new Intl.DateTimeFormat("ko-KR",{hour:"2-digit",minute:"2-digit"});
+    return formats.time.format(date);
+  }
+  formats.date??=new Intl.DateTimeFormat("ko-KR",{month:"short",day:"numeric"});
+  return formats.date.format(date);
+}
 let sessionDragId=null, sessionOrderSaving=false, sessionPointerDrag=null;
 function orderedSessions(){
   const order=boot.sessionOrder||{},ranks=new Map((order.ids||[]).map((id,index)=>[id,index]));
@@ -516,6 +548,14 @@ async function hideSession(id,returnFocus){
 // Keep identical rows connected through pointerup, click, keyboard focus and polling.
 function reconcileRows(container,rows){
   const retained=new Set(rows),focus=document.activeElement;
+  const press=pressedListButton;
+  if(press?.list===container&&press.mode===currentMode&&container.children.length===rows.length&&
+     [...container.children].every(node=>retained.has(node))){
+    // Rows and controls already have their latest labels and enabled state.
+    // Keep an otherwise identical list in place until this pointer is released.
+    if(rows.some((row,index)=>container.children[index]!==row))press.orderPending=true;
+    return;
+  }
   for(const node of [...container.children])if(!retained.has(node))node.remove();
   rows.forEach((row,index)=>{
     const next=container.children[index];
@@ -529,13 +569,14 @@ function reconcileRows(container,rows){
     }
   });
 }
-function listSessionRow(item,container,existing){
+function listSessionRow(item,container,existing,formats){
   const sidebar=container==="sessions",recent=container==="home-recents",chat=isGeneralChat();
   const activity=recent&&!chat?recentWorkActivity(item):item.updated||item.created;
   const unread=globalThis.WorkspaceResultReceipts?.unread(item)===true,waiting=sidebar?(globalThis.WorkspaceAttention?.countFor(item.id)||0):0;
   const opening=pendingSelection?.id===item.id;
   const fingerprint=JSON.stringify([item.title,item.workspace,item.state,activity,!!item.pinned,item.id===active?.id,opening,unread,waiting,chat,sessionOrderSaving,!!globalThis.WorkspaceSessionGroups?.isSaving(),appClosed,!!boot.sessionOrder?.warning,hidingSessionIds.has(item.id)]);
   if(existing?.sessionFingerprint===fingerprint)return existing;
+  const dateLabel=when(activity,formats);
   const button=existing?.children[1]||el("button");
   button.type="button";button.className=recent?"recent-card":sidebar?"session":"session all-session";
   button.classList.add("session-title-button");
@@ -551,15 +592,15 @@ function listSessionRow(item,container,existing){
     else if(waiting)mark.append(el("span",String(waiting),"session-attention"));
     else if(busyStates.has(item.state)||item.state==="error"||unread){const dot=el("span",null,"session-state-dot");dot.dataset.state=busyStates.has(item.state)||item.state==="error"?item.state:"unread";mark.append(dot);}
     button.replaceChildren(title,mark);
-    button.title=`${item.title}\n${status} · ${when(item.updated||item.created)}${chat?"":"\n"+item.workspace}`;
+    button.title=`${item.title}\n${status} · ${dateLabel}${chat?"":"\n"+item.workspace}`;
   }else if(recent){
-    const meta=el("span",`${chat?"일반 대화":basename(item.workspace)} · ${when(activity)}`,"recent-meta"),state=el("span",status,"recent-status");
+    const meta=el("span",`${chat?"일반 대화":basename(item.workspace)} · ${dateLabel}`,"recent-meta"),state=el("span",status,"recent-status");
     state.dataset.state=item.state||"idle";
     if(chat)button.replaceChildren(el("span",item.pinned?"고정한 대화":"이어서 하기","recent-kicker"),title,meta,state);
     else button.replaceChildren(title,meta,state);
-    button.title=chat?item.title:`${item.title}\n${item.workspace}\n${when(activity)}`;
+    button.title=chat?item.title:`${item.title}\n${item.workspace}\n${dateLabel}`;
   }else{
-    const meta=el("span",null,"session-meta");meta.append(el("span",status),el("time",when(item.updated||item.created)));
+    const meta=el("span",null,"session-meta");meta.append(el("span",status),el("time",dateLabel));
     button.replaceChildren(el("span",item.pinned?(chat?"고정한 대화":"고정한 업무"):(chat?"대화":"업무"),"session-kicker"),title,el("span",chat?"일반 대화":item.workspace,"all-session-path"),meta);
     button.title=chat?item.title:item.workspace;
   }
@@ -582,27 +623,49 @@ function sessionRowsById(container){return new Map([...$(container).children].fi
 // A touch click can be retargeted after its original row disappears.
 // Accept keyboard activation normally and bind pointer activation to the original control.
 let pressedListButton=null;
+function releaseSessionListPress(press){
+  if(!press?.list)return;
+  press.list=null;
+  // Native click follows pointerup, before the next task. Never replay it.
+  if(press.orderPending)setTimeout(()=>{if(!appClosed)renderSessions();},0);
+}
 document.addEventListener("pointerdown",event=>{
   if(event.isPrimary===false||event.button!==0)return;
+  releaseSessionListPress(pressedListButton);
   const button=event.target.closest?.("button");
   pressedListButton=button?.closest("#sessions,#home-recents,#all-sessions,#queue-list,#schedule-list,#inline-queue-list,.path-picker-list,#results-list,#files,.run-results,#requests")
-    ?{button,id:event.pointerId,x:event.clientX,y:event.clientY,pressed:button.getAttribute("aria-pressed"),cancelled:false}:null;
+    ?{button,id:event.pointerId,x:event.clientX,y:event.clientY,pressed:button.getAttribute("aria-pressed"),cancelled:false,
+      list:button.closest("#sessions,#home-recents,#all-sessions"),mode:currentMode}:null;
   if(pressedListButton&&button.classList.contains("path-picker-row"))button.setPointerCapture(event.pointerId);
 },true);
-document.addEventListener("pointercancel",event=>{if(pressedListButton?.id===event.pointerId)pressedListButton.cancelled=true;},true);
+function cancelSessionListPress(){
+  if(pressedListButton){pressedListButton.cancelled=true;releaseSessionListPress(pressedListButton);}
+}
+document.addEventListener("pointercancel",event=>{if(pressedListButton?.id===event.pointerId)cancelSessionListPress();},true);
+globalThis.addEventListener?.("blur",cancelSessionListPress);
+document.addEventListener("pointerover",event=>{
+  const press=pressedListButton;
+  // Chromium can retarget from the title text to its capturing button just
+  // before pointerup, with buttons already zero. That click still belongs here.
+  if(press?.list&&event.buttons===0&&press.id===event.pointerId&&!press.button.contains(event.target))cancelSessionListPress();
+},true);
 document.addEventListener("pointerup",event=>{
   const press=pressedListButton;
+  if(press?.id===event.pointerId)releaseSessionListPress(press);
   if(press?.id===event.pointerId&&Math.hypot(event.clientX-press.x,event.clientY-press.y)>8&&!press.button.contains(document.elementFromPoint(event.clientX,event.clientY)))press.cancelled=true;
 },true);
 document.addEventListener("click",event=>{
   if(!event.detail||!pressedListButton)return;
-  const press=pressedListButton;pressedListButton=null;
+  const press=pressedListButton;pressedListButton=null;releaseSessionListPress(press);
   if(press.cancelled||!press.button.isConnected||event.target.closest?.("button")!==press.button||press.pressed!==press.button.getAttribute("aria-pressed")){
     event.preventDefault();event.stopImmediatePropagation();
   }
 },true);
 function renderSessions(){
-  if(sessionDragId||globalThis.WorkspaceSessionGroups?.isDragging())return;
+  if(sessionDragId||globalThis.WorkspaceSessionGroups?.isDragging()){
+    if(pressedListButton?.list)pressedListButton.orderPending=true;
+    return;
+  }
   sessions=sessions.filter(item=>!hiddenSessionIds.has(item.id));
   for (const item of sessions) reconcileSessionTitle(item);
   if (reconcileSessionTitle(active)) taskHeader();
@@ -610,7 +673,8 @@ function renderSessions(){
   const sidebar=$("sessions"),rows=sessionRowsById("sessions"),sidebarRows=[],recents=sessionRowsById("home-recents"),homeRows=[];
   const focused=document.activeElement,focusedGroup=focused?.closest?.(".task-group-header")||focused?.closest?.(".task-group-overflow");
   if(boot.sessionOrder?.warning)sidebarRows.push(el("p",boot.sessionOrder.warning,"sidebar-empty"));
-  const createSidebarRow=item=>listSessionRow(item,"sessions",rows.get(item.id));
+  const formats={};
+  const createSidebarRow=item=>listSessionRow(item,"sessions",rows.get(item.id),formats);
   const grouped=groups&&!isGeneralChat()?groups.render(items,createSidebarRow,query,{children:sidebarRows,append:node=>sidebarRows.push(node)}):false;
   if(!groups||isGeneralChat())for(const item of items)sidebarRows.push(createSidebarRow(item));
   if(!items.length&&!grouped)sidebarRows.push(el("p",query?(isGeneralChat()?"찾는 대화가 없어요":"찾는 업무가 없어요"):(isGeneralChat()?"시작한 대화가 여기에 모여요":"시작한 업무가 여기에 모여요"),"sidebar-empty"));
@@ -620,7 +684,18 @@ function renderSessions(){
     replacement?.children[[...focusedGroup.children].indexOf(focused)]?.focus({preventScroll:true});
   }
   const homeItems=isGeneralChat()?items:[...items].sort((a,b)=>recentWorkActivity(b)-recentWorkActivity(a)||a.id.localeCompare(b.id));
-  for(const item of homeItems.slice(0,isGeneralChat()?4:6))homeRows.push(listSessionRow(item,"home-recents",recents.get(item.id)));
+  let recentPage=homeItems.slice(0,isGeneralChat()?4:6);
+  const press=pressedListButton;
+  if(press?.list===$("home-recents")&&press.mode===currentMode){
+    // A background completion may push the pressed card out of the first six.
+    // Keep current cards only while all of them are still eligible to open.
+    const eligible=new Map(items.map(item=>[item.id,item]));
+    if(recentPage.length===recents.size&&[...recents.keys()].every(id=>eligible.has(id))&&recentPage.some(item=>!recents.has(item.id))){
+      press.orderPending=true;
+      recentPage=[...recents.keys()].map(id=>eligible.get(id));
+    }
+  }
+  for(const item of recentPage)homeRows.push(listSessionRow(item,"home-recents",recents.get(item.id),formats));
   if(!items.length){
     if(isGeneralChat()){
       const empty=el("div",null,"chat-recents-empty"),copy=el("div");
@@ -634,7 +709,8 @@ function renderSessions(){
 function renderAllSessions(){
   const query=$("task-search").value.trim().toLocaleLowerCase(),items=orderedSessions().filter(s=>sessionKind(s)===currentMode).filter(s=>(s.title+" "+s.workspace).toLocaleLowerCase().includes(query)||globalThis.WorkspaceSessionGroups?.matches(s,query));
   const rows=sessionRowsById("all-sessions");$("tasks-empty").hidden=!!items.length;
-  reconcileRows($("all-sessions"),items.map(item=>listSessionRow(item,"all-sessions",rows.get(item.id))));
+  const formats={};
+  reconcileRows($("all-sessions"),items.map(item=>listSessionRow(item,"all-sessions",rows.get(item.id),formats)));
 }
 // Untrusted model text becomes text nodes only, never HTML or remote content.
 function inlineText(parent,text){const pattern=/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g;let pos=0;for(const match of text.matchAll(pattern)){parent.append(document.createTextNode(text.slice(pos,match.index)));const code=match[0][0]==="`";parent.append(el(code?"code":"strong",match[0].slice(code?1:2,code?-1:-2)));pos=match.index+match[0].length;}parent.append(document.createTextNode(text.slice(pos)));}
@@ -698,12 +774,38 @@ function renderAttachmentReads(article,rows){
   for(const row of rows.slice(0,12)){const entry=el("li");entry.dataset.status=String(row.status||"unknown");entry.append(el("strong",String(row.name||"첨부 자료").slice(0,240)),el("span",String(row.message||"읽기 범위를 확인하지 못했어요.").slice(0,1000)));list.append(entry);}
   article.append(el("p","읽기 범위","attachment-read-heading"),list);
 }
-function renderMessage(message){
+function mountMessage(message){
   globalThis.WorkspaceStream?.finish(message);
   const raw=String(message.text||""),text=raw.slice(0,MESSAGE_TEXT_LIMIT),truncated=!!message.uiTruncated||raw.length>MESSAGE_TEXT_LIMIT;
   const sk=streamKey(message),existing=message.messageId?streaming.get(sk):null;
-  if(existing){renderBoundedMessageText(existing.querySelector(".message-body"),text,message.role);existing.classList.remove("streaming");delete existing.dataset.streamText;delete existing.dataset.streamTruncated;existing.dataset.messageSize=String(text.length);if(message.runId)existing.dataset.runId=message.runId;streaming.delete(sk);messageTruncation(existing,truncated);boundConversation(existing);globalThis.WorkspaceRequestTiming?.sync(message.runId);return existing;}
-  const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);const label=el("div",message.role==="user"?"나":"AX Workspace","message-label");if(message.source==="claude")label.append(el("span","다른 곳에서 이어 쓴 대화","message-external-source"));article.append(label);const body=el("div",null,"message-body");if(message.role!=="user" || !globalThis.WorkspaceRowDrafts?.renderSent?.(body,text))renderBoundedMessageText(body,text,message.role);article.append(body);if(fileText){if(globalThis.WorkspaceRichContent&&!message.pending)WorkspaceRichContent.files(article,message.files,{sessionId:active?.id,workspace:active?.workspace});else article.append(el("div",fileText,"message-files"));}if(message.role==="user")renderAttachmentReads(article,message.attachmentReads);article.dataset.runId=message.runId||"";messageTruncation(article,truncated);$("conversation").append(article);boundConversation(article);if(message.runId)globalThis.WorkspaceRequestTiming?.sync(message.runId);return article;
+  if(existing){renderBoundedMessageText(existing.querySelector(".message-body"),text,message.role);existing.classList.remove("streaming");delete existing.dataset.streamText;delete existing.dataset.streamTruncated;existing.dataset.messageSize=String(text.length);if(message.runId)existing.dataset.runId=message.runId;streaming.delete(sk);messageTruncation(existing,truncated);return existing;}
+  const article=el("article",null,`message ${message.role}`),fileText=Array.isArray(message.files)?message.files.slice(0,12).map(basename).join(" · "):"";article.dataset.messageSize=String(text.length+fileText.length);const label=el("div",message.role==="user"?"나":"AX Workspace","message-label");if(message.source==="claude")label.append(el("span","다른 곳에서 이어 쓴 대화","message-external-source"));article.append(label);const body=el("div",null,"message-body");if(message.role!=="user" || !globalThis.WorkspaceRowDrafts?.renderSent?.(body,text))renderBoundedMessageText(body,text,message.role);article.append(body);if(fileText){if(globalThis.WorkspaceRichContent&&!message.pending)WorkspaceRichContent.files(article,message.files,{sessionId:active?.id,workspace:active?.workspace});else article.append(el("div",fileText,"message-files"));}if(message.role==="user")renderAttachmentReads(article,message.attachmentReads);article.dataset.runId=message.runId||"";messageTruncation(article,truncated);$("conversation").append(article);return article;
+}
+function renderMessage(message){
+  const article=mountMessage(message);
+  boundConversation(article);
+  if(article.dataset.runId)globalThis.WorkspaceRequestTiming?.sync(article.dataset.runId);
+  return article;
+}
+function restoreSavedMessages(messages,acknowledged=-1,pending=null,afterMessage=null){
+  let characters=0,article=null;
+  messages.forEach((message,index)=>{
+    if(index===acknowledged){
+      pending.dataset.recoveredConfirmed="true";pending.dataset.recoveredRunId=message.runId;pending.dataset.runId=message.runId;
+      $("conversation").append(pending);article=pending;
+    }else{
+      // Recovery can interleave live fragments and completed messages. Those
+      // fragments share the live eviction rules and must retain their order.
+      article=afterMessage?renderMessage(message):mountMessage(message);
+    }
+    if(message.requestId)renderedQueuedRequests.add(message.requestId);
+    if(afterMessage){afterMessage(index);return;}
+    // A saved transcript starts with an empty view. Track its size as it is
+    // mounted and only rescan during the loop if eviction becomes necessary.
+    characters+=Number(article.dataset.messageSize||0);
+    if(index>=CONVERSATION_MESSAGE_LIMIT||characters>CONVERSATION_TEXT_LIMIT)boundConversation(article,false);
+  });
+  if(!afterMessage&&article)boundConversation(article);
 }
 function applyDelta(data){
   const sk=streamKey(data);let article=streaming.get(sk);
@@ -936,10 +1038,7 @@ async function selectSession(id,{keepDraft=false,canActivate=null}={}){
   const pendingSend=taskOperations.get(id)?.get("send"),acknowledged=pendingUserMessageIndex(item,pendingSend?.pending,pendingSend);
   if(pendingSend){pendingSend.viewOwner=item;pendingSend.messageIndex=item.messages.length;}
   $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();
-  active.messages.forEach((message,index)=>{
-    if(index===acknowledged){pendingSend.pending.dataset.recoveredConfirmed="true";pendingSend.pending.dataset.recoveredRunId=message.runId;pendingSend.pending.dataset.runId=message.runId;$("conversation").append(pendingSend.pending);}else renderMessage(message);
-    if(message.requestId)renderedQueuedRequests.add(message.requestId);
-  });
+  restoreSavedMessages(active.messages,acknowledged,pendingSend?.pending);
   if(pendingSend?.pending&&acknowledged<0)$("conversation").append(pendingSend.pending);
   globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts,active.observedChanges);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length&&!pendingSend?.pending)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   globalThis.WorkspaceResultReceipts?.viewReady();taskHeader();startSessionSyncProbe();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);globalThis.WorkspaceDesktop?.viewed();pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
@@ -975,10 +1074,7 @@ function restoreEventSnapshot(next,id){
     if(part.interrupted){const key=streamKey(part),node=streaming.get(key);if(node){node.classList.remove("streaming");node.append(el("small",next.state==="stopped"?"중지 전까지 받은 내용":"연결 중단 전까지 받은 내용","message-interrupted"));streaming.delete(key);}}
   }};
   renderPartials(-1);
-  next.messages.forEach((message,index)=>{
-    if(index===acknowledged){pendingUser.dataset.recoveredConfirmed="true";pendingUser.dataset.recoveredRunId=message.runId;pendingUser.dataset.runId=message.runId;conversation.append(pendingUser);}else renderMessage(message);
-    if(message.requestId)renderedQueuedRequests.add(message.requestId);renderPartials(index);
-  });
+  restoreSavedMessages(next.messages,acknowledged,pendingUser,partials.length?renderPartials:null);
   for(const node of pending)if(node!==pendingUser||acknowledged<0)conversation.append(node);
   globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts,active.observedChanges);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);
   // A surviving approval is the same form, including typed answers, scope,
@@ -1003,7 +1099,7 @@ async function poll(id,after,signal){
   while(current()){
     let receiving=true;
     try{
-      const result=await api(`/api/events?id=${encodeURIComponent(id)}&after=${after}`,undefined,signal);
+      const result=await api(`/api/events?id=${encodeURIComponent(id)}&cancelOnDisconnect=1&after=${after}`,undefined,signal);
       receiving=false;failures=0;
       if(!current())return;
       if(result.recovery){
@@ -1292,7 +1388,11 @@ async function refreshResults(reveal=false){
       next.push(detail);
     }
     if(items.some(file=>!["tool","confirmed"].includes(file.attribution)))next.push(reuse("legacy",()=>el("p","이전 버전에서 폴더 전체를 비교한 기록이에요. 같은 폴더의 다른 업무에서 바꾼 파일도 있을 수 있어요.","result-observation")));
-    if(observed.length&&globalThis.WorkspaceExecutionView?.observedCard)next.push(reuse("observed:"+JSON.stringify(observed),()=>WorkspaceExecutionView.observedCard(observed,{sessionId:id,current:()=>currentFileLocation(id,request.generation)&&list.resultView===view})));
+    if(observed.length&&globalThis.WorkspaceExecutionView?.observedCard){
+      const section=WorkspaceExecutionView.observedCard(observed,{sessionId:id,previous:view.nodes.get("observed"),
+        current:()=>currentFileLocation(id,request.generation)&&list.resultView===view});
+      if(section){keep.add("observed");view.nodes.set("observed",section);next.push(section);}
+    }
     if(result.observation?.limited||result.observation?.errors)next.push(reuse("limited",()=>{
       const note=el("div",null,"result-observation"),browse=el("button","자료에서 폴더 확인","text-button");
       browse.type="button";browse.onclick=()=>{if(currentFileLocation(id,request.generation)){setPanel("sources");refreshFiles("");}};
@@ -1639,7 +1739,7 @@ async function submit(){
       }
     }else if(active?.id===sid&&selectionGeneration===ticket&&!appClosed){
       if (globalThis.WorkspaceRowDrafts?.showStale?.(e,sid)) saveDraft();
-      else if(e.code==="connection_replacement_cancelled")toast(e.message);else error(e.message);
+      else if(e.code==="connection_replacement_cancelled")toast(e.message);else error(e.message,null,e.code);
     }
   }finally{endTaskOperation(operation);if(active?.id===sid){setStatus(active.state);renderAttachments();}}
 }
@@ -1757,19 +1857,24 @@ $("preview-code").onclick=()=>isMarkdownPreview(previewData) ? renderMarkdownPre
 $("help").onclick=()=>showDialog("help-dialog");$("close-help").onclick=()=>$("help-dialog").close();
 // Read-only reference: search the shipped labels locally, without touching a task.
 let shortcutsReturnFocus=null;
+let lastShortcutQuery=null;
 function filterShortcutReference(){
   const normalize=value=>String(value||"").normalize("NFKC").toLocaleLowerCase().replace(/[\s+→·_-]+/gu,"");
-  const query=normalize($("shortcuts-search").value);let visible=0,total=0;
+  const query=normalize($("shortcuts-search").value);
+  if(query===lastShortcutQuery)return;
+  let visible=0,total=0;
   for(const group of $("shortcuts-list").querySelectorAll("[data-shortcut-group]")){
     const title=group.querySelector("h3")?.textContent||"";let found=0;
     for(const row of group.querySelectorAll("[data-shortcut-row]")){
-      total++;row.hidden=!!query&&!normalize(title+" "+row.textContent).includes(query);
-      if(!row.hidden){visible++;found++;}
+      const hidden=!!query&&!normalize(title+" "+row.textContent).includes(query);
+      if(row.hidden!==hidden)row.hidden=hidden;
+      total++;if(!hidden){visible++;found++;}
     }
     group.hidden=found===0;
   }
   $("shortcuts-empty").hidden=visible>0;
   $("shortcuts-count").textContent=query?`${total}개 중 ${visible}개 표시`:`${total}개 단축키·명령`;
+  lastShortcutQuery=query;
 }
 function openShortcutReference(){
   if(appClosed)return;
@@ -1837,7 +1942,7 @@ function applyRestartSession(item){
   globalThis.WorkspaceStream?.reset();globalThis.WorkspaceExecutionView?.reset(item.id);globalThis.WorkspaceRequestTiming?.reset(item.id);globalThis.WorkspaceToolActivity?.reset(item.id);
   streaming.clear();active=item;currentMode=sessionKind(item);syncTaskOperations();modeViews[currentMode].selected=item.id;persistMode();updateModeNavigation();applyStopState(item);started=null;choiceView=null;
   $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();
-  for(const message of item.messages||[]){renderMessage(message);if(message.requestId)renderedQueuedRequests.add(message.requestId);}
+  restoreSavedMessages(item.messages||[]);
   globalThis.WorkspaceExecutionView?.restore(item.executions,item.artifacts,item.observedChanges);globalThis.WorkspaceToolActivity?.restore(item.toolActivity,item.runActivity);globalThis.WorkspaceRequestTiming?.restore(item.messages);globalThis.WorkspaceProgressView?.reset(item.id,item.progress,item.lastRunId);
   for(const request of item.requests||[])renderRequest(request);
   if(!item.messages?.length&&!item.toolActivity?.length)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));

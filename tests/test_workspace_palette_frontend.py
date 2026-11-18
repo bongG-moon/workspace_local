@@ -16,7 +16,7 @@ context.installLayout=(width=640,saved=null)=>{
   const request=context.api;context.layoutRequests=[];
   context.api=(path,value,...args)=>{
     if(path!=='/api/layout')return request(path,value,...args);
-    assert.deepEqual(Object.keys(value).sort(),['inspectorCollapsed','inspectorWidth','miniMode','sidebarCollapsed']);
+    assert.deepEqual(Object.keys(value).sort(),['inspectorCollapsed','inspectorWidth','inspectorWidthMode','miniMode','sidebarCollapsed']);
     context.layoutRequests.push(JSON.parse(JSON.stringify(value)));return Promise.resolve(value);
   };
   let nextFrame=1;
@@ -146,6 +146,33 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           assert.equal(calls.length,0);
         })()""")
 
+    def test_shortcut_reopen_reuses_full_list_and_resets_previous_search(self):
+        self.run_case(r"""(()=>{
+          const search=$('shortcuts-search'), count=$('shortcuts-count'), empty=$('shortcuts-empty');
+          const list=$('shortcuts-list'), group=el('section'), first=el('div','Enter'), second=el('div','Escape');
+          group.append(el('h3','입력'),first,second);
+          group.querySelectorAll=()=>[first,second];list.querySelectorAll=()=>[group];empty.hidden=true;
+          let writes=0;
+          for(const [node,property] of [[group,'hidden'],[first,'hidden'],[second,'hidden'],[empty,'hidden'],[count,'textContent']]){
+            let value=node[property];
+            Object.defineProperty(node,property,{get:()=>value,set:next=>{value=next;writes++;}});
+          }
+          const open=$('shortcuts-open'), close=$('shortcuts-close');
+          open.focus();open.onclick();
+          assert.equal(count.textContent,'2개 단축키·명령');close.onclick();
+          const firstOpenWrites=writes;open.onclick();
+          assert.equal(writes,firstOpenWrites);assert.equal(document.activeElement,$('shortcuts-title'));
+          search.value='Enter';search.oninput();
+          assert.equal(first.hidden,false);assert.equal(second.hidden,true);assert.equal(group.hidden,false);
+          assert.equal(count.textContent,'2개 중 1개 표시');
+          search.value='없는 단축키';search.oninput();
+          assert.equal(group.hidden,true);assert.equal(empty.hidden,false);assert.equal(count.textContent,'2개 중 0개 표시');
+          close.onclick();assert.equal(document.activeElement,open);open.onclick();
+          assert.equal(search.value,'');assert.equal(count.textContent,'2개 단축키·명령');
+          assert.equal(empty.hidden,true);assert.equal(group.hidden,false);
+          assert.equal(first.hidden,false);assert.equal(second.hidden,false);assert.equal(calls.length,0);
+        })()""")
+
     def test_disabled_actions_and_stale_task_cannot_execute(self):
         self.run_case(r"""(async()=>{
           let executions=0;globalThis.WorkspaceProductivityActions={openBranch(){executions++;}};
@@ -243,6 +270,7 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
                   assert.deepEqual(attachments,['report.csv']);assert.equal(calls.length,0);
                   await flush();assert.equal(layoutRequests.length,layoutWidth<=1100?1:2);
                   assert.equal(layoutRequests.at(-1).miniMode,false);assert.equal(layoutRequests.at(-1).inspectorWidth,430);
+                  assert.equal(layoutRequests.at(-1).inspectorWidthMode,'manual');
                 })()""")
 
 

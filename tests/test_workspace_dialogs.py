@@ -68,10 +68,11 @@ class WorkspaceDialogTests(unittest.TestCase):
 
     def test_feedback_uses_topmost_open_dialog_then_returns_to_body(self):
         self.run_case(r"""(async()=>{
+          $('toast').scrollIntoView=()=>{throw Error('a notice must not scroll the dialog away from the pressed button');};
           showDialog('folder-dialog');toast('폴더 확인 오류');
           assert.equal($('toast').parent,$('folder-dialog'));
           assert.equal($('toast').classList.contains('in-dialog'),true);
-          assert.equal($('toast').scrolledIntoView,true);
+          assert.equal($('toast').hidden,false);
           const pending=confirmAction({title:'확인',message:'내용'});toast('현재 확인 오류');
           assert.equal($('toast').parent,$('action-dialog'));
           $('action-cancel').onclick();await pending;toast('폴더 다시 확인');
@@ -81,19 +82,19 @@ class WorkspaceDialogTests(unittest.TestCase):
           assert.equal($('toast').classList.contains('in-dialog'),false);
         })()""")
 
-    def test_older_tasks_are_searchable_and_selectable_beyond_four_recents(self):
+    def test_older_tasks_are_searchable_and_selectable_beyond_six_recents(self):
         self.run_case(r"""(async()=>{
-          sessions=Array.from({length:6},(_,i)=>({id:String(i),title:'업무 '+i,
+          sessions=Array.from({length:7},(_,i)=>({id:String(i),title:'업무 '+i,
             workspace:'C:\\fixture\\folder'+i,state:'done',updated:100-i}));
-          renderSessions();assert.equal($('home-recents').children.length,4);
+          renderSessions();assert.equal($('home-recents').children.length,6);
           assert.equal($('tasks-open').hidden,false);$('tasks-open').onclick();
-          assert.equal($('tasks-dialog').open,true);assert.equal($('all-sessions').children.length,6);
-          $('task-search').value='folder5';$('task-search').oninput();
+          assert.equal($('tasks-dialog').open,true);assert.equal($('all-sessions').children.length,7);
+          $('task-search').value='folder6';$('task-search').oninput();
           assert.equal($('all-sessions').children.length,1);
-          assert.equal($('all-sessions').children[0].querySelector('.session-title').textContent,'업무 5');
+          assert.equal($('all-sessions').children[0].querySelector('.session-title').textContent,'업무 6');
           let selected;selectSession=async id=>{selected=id;return true;};
           await $('all-sessions').children[0].querySelector('.all-session').onclick();
-          assert.equal(selected,'5');assert.equal($('tasks-dialog').open,false);
+          assert.equal(selected,'6');assert.equal($('tasks-dialog').open,false);
         })()""")
 
     def test_stale_task_selection_cannot_close_list_before_latest_selection_fails(self):

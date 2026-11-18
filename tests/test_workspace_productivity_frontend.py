@@ -367,6 +367,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           flushTimers();await settle();assert.equal(timers.size,1);
           flushTimers();await reading;
           assert.equal(calls,5);assert.deepEqual(received,[1,2,3]);
+          assert.ok(reads.every(path=>new URLSearchParams(path.split('?')[1]).get('cancelOnDisconnect')==='1'));
           assert.ok(reads[1].endsWith('after=2')&&reads[2].endsWith('after=2')&&reads[3].endsWith('after=2'));
           assert.equal($('error-message').textContent,'');
         })()""")

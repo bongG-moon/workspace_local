@@ -118,6 +118,24 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
           reads[2].resolve({...active,id:'B'});assert.equal(await home,false);assert.equal(active,null);
         })()""")
 
+    def test_opening_a_saved_conversation_checks_total_size_once_within_limits(self):
+        self.run_case(r"""(async()=>{
+          const row={id:'B',title:'B',state:'done',kind:'work',trusted:true,workspace:'C:/B',requests:[]};
+          sessions=[row];const messages=Array.from({length:150},(_,i)=>({role:'assistant',text:'답변 '+i,requestId:'queued-'+i}));
+          api=async()=>({...row,messages});poll=refreshInspector=()=>{};
+          const bound=boundConversation;let scans=0;
+          boundConversation=(...args)=>{scans++;return bound(...args);};
+          assert.equal(await selectSession(row.id),true);
+          assert.equal(scans,1);assert.equal($('conversation').children.length,150);
+          assert.equal(active.messages.length,150);assert.equal(renderedQueuedRequests.size,150);
+          const large=Array.from({length:151},(_,i)=>({role:'assistant',text:i+':'+ 'x'.repeat(i>143?100000:10)}));
+          api=async()=>({...row,messages:large});await selectSession(row.id);
+          const shown=$('conversation').children.filter(node=>node.classList.contains('message'));
+          assert.ok(shown.length<=150);assert.ok(shown.reduce((sum,node)=>sum+Number(node.dataset.messageSize),0)<=500000);
+          assert.ok($('conversation').querySelector('.conversation-limit'));
+          assert.ok(active.messages.at(-1).text.startsWith('150:'));assert.ok(active.messages.at(-1).uiTruncated);
+        })()""")
+
     def test_create_busy_feedback_and_cancellation_do_not_open_an_old_form(self):
         self.run_case(r"""(async()=>{
           boot={managedWorkspaceRoot:'C:/managed'};chooseFolder();$('trust').checked=true;

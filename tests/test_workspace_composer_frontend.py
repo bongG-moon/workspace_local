@@ -452,7 +452,8 @@ class WorkspaceComposerFrontendTests(unittest.TestCase):
           api=async(path)=>{paths.push(path);return path==='/api/trust'?{}:path==='/api/connect'?{connection:{reported:{commands:true}}}:{items:[]};};
           await $('composer-connect').onclick();assert.equal($('folder-dialog').open,true);assert.equal(paths.length,0);
           assert.equal($('folder-form').dataset.afterTrust,'commands');$('trust').checked=true;
-          await $('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          const button=$('confirm-folder');button.value='ok';
+          await $('folder-form').onsubmit({submitter:button,preventDefault(){}});
           assert.equal(sends,0);assert.equal($('prompt').value,'/rep');assert.ok(paths.includes('/api/connect'));
         })()""")
 

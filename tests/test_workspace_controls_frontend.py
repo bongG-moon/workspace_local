@@ -154,7 +154,7 @@ class WorkspaceControlsFrontendTests(unittest.TestCase):
           chooseFolder(true);$('folder-form').dataset.afterTrust='controls';$('trust').checked=true;
           const calls=[];let resumed=0;api=async(path,body)=>{calls.push(path);return {ok:true};};
           globalThis.WorkspaceInlineControls={render(){},resumeAfterTrust:async()=>{resumed++;}};
-          await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.join(','),'/api/trust');assert.equal(resumed,1);assert.equal(active.trusted,true);
           assert.equal($('prompt').value,'보존할 초안');assert.equal(attachments[0],'report.csv');
         })()""")
@@ -303,7 +303,7 @@ class WorkspaceControlsFrontendTests(unittest.TestCase):
           active.choice=choice();active.trusted=false;renderWorkspaceChoice();let calls=[];
           api=async(path,body)=>{calls.push({path,body});return {ok:true};};$('prompt').value='보존할 초안';
           await choiceView.buttons[0].onclick();assert.equal(calls.length,0);assert.equal($('folder-form').dataset.afterTrust,'choice');
-          $('trust').checked=true;await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          $('trust').checked=true;await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.length,1);assert.equal(calls[0].path,'/api/trust');assert.equal($('prompt').value,'보존할 초안');
           api=async(path,body)=>{calls.push({path,body});throw new Error('전송 확인 실패');};
           await choiceView.buttons[0].onclick();assert.equal(calls.length,2);assert.equal(choiceView.buttons[0].disabled,false);

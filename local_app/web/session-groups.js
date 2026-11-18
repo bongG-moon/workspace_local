@@ -192,8 +192,8 @@ globalThis.WorkspaceSessionGroups = (() => {
     if(drag.frame===null)drag.frame=requestAnimationFrame(()=>scrollDrag(drag));
   }
   function header(group,members,query){
-    const expanded=!!query||!group.collapsed,unread=members.some(item=>globalThis.WorkspaceResultReceipts?.unread(item)===true);
-    const row=el("div",null,"task-group-header"+(members.some(item=>item.id===active?.id)?" has-active":""));
+    const expanded=!!query||!group.collapsed;
+    const row=el("div",null,"task-group-header");
     row.dataset.groupId=group.id;
     const handle=el("button",null,"task-group-arrow"),chevron=el("span",null,"task-group-chevron");
     handle.type="button";handle.draggable=false;handle.disabled=locked();handle.title=`${query?"검색 해제":expanded?"폴더 접기":"폴더 펼치기"} · ${orderHint()}`;
@@ -215,12 +215,21 @@ globalThis.WorkspaceSessionGroups = (() => {
     };
     row.append(handle);
     const toggle=el("button",null,"task-group-toggle");toggle.type="button";toggle.disabled=locked();
-    toggle.setAttribute("aria-label",`${group.name} · 업무 ${members.length}개${unread?" · 새 결과 있음":""}${query?" · 검색 해제":expanded?" · 접기":" · 펼치기"}`);
-    toggle.title=(query?"검색 중에는 폴더를 펼쳐 보여요. 누르면 검색을 해제합니다.":expanded?"폴더 접기":"폴더 펼치기")+(unread?" · 확인하지 않은 완료 결과가 있어요.":"");
     toggle.setAttribute("aria-expanded",String(expanded));
     const folder=el("span",null,"task-folder-icon");folder.setAttribute("aria-hidden","true");
     toggle.append(folder,el("span",group.name,"task-group-name"),el("span",String(members.length),"task-group-count"));
-    if(unread){const mark=el("span",null,"session-state-dot task-group-unread");mark.dataset.state="unread";mark.setAttribute("aria-hidden","true");toggle.append(mark);}
+    let markedUnread,marker;
+    row.updateIndicators=(activeMember,unread)=>{
+      row.classList.toggle("has-active",activeMember);
+      if(markedUnread===unread)return;
+      markedUnread=unread;
+      toggle.title=(query?"검색 중에는 폴더를 펼쳐 보여요. 누르면 검색을 해제합니다.":expanded?"폴더 접기":"폴더 펼치기")+(unread?" · 확인하지 않은 완료 결과가 있어요.":"");
+      toggle.setAttribute("aria-label",`${group.name} · 업무 ${members.length}개${unread?" · 새 결과 있음":""}${query?" · 검색 해제":expanded?" · 접기":" · 펼치기"}`);
+      if(unread){
+        marker=el("span",null,"session-state-dot task-group-unread");marker.dataset.state="unread";
+        marker.setAttribute("aria-hidden","true");toggle.append(marker);
+      }else{marker?.remove();marker=null;}
+    };
     toggle.onclick=async()=>{
       if(locked())return;
       // Search reveals matches without overwriting the saved collapse preference.
@@ -278,7 +287,9 @@ globalThis.WorkspaceSessionGroups = (() => {
     for(const group of state.groups){
       const members=buckets.get(group.id);
       if(query&&!members.length&&!group.name.toLocaleLowerCase().includes(query))continue;
-      container.append(part("header:"+group.id,[group.name,group.collapsed,query,locked(),members.length,members.some(item=>item.id===active?.id),members.some(item=>globalThis.WorkspaceResultReceipts?.unread(item)===true)],()=>header(group,members,query)));
+      const groupHeader=part("header:"+group.id,[group.name,group.collapsed,query,locked(),members.length],()=>header(group,members,query));
+      groupHeader.updateIndicators(members.some(item=>item.id===active?.id),members.some(item=>globalThis.WorkspaceResultReceipts?.unread(item)===true));
+      container.append(groupHeader);
       if(group.collapsed&&!query)continue;
       const visible=query||expandedPreviews.has(group.id)?members:members.slice(0,previewLimit);
       for(const item of visible){const row=createRow(item);row.classList.add("grouped-session");row.dataset.groupId=group.id;container.append(row);}

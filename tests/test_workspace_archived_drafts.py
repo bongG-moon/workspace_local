@@ -170,6 +170,24 @@ class ArchivedDraftTests(unittest.TestCase):
             self.app.save_draft({**self.row, 'selectedId': self.other})
         self.assertEqual([], self.app.drafts.snapshot()['entries'])
 
+    def test_switching_between_evicted_work_sessions_saves_draft_without_reading_either_body(self):
+        self.app.restore_session(self.archived)
+        source, selected = self.app.sessions[self.archived], self.app.sessions[self.other]
+        self.app.history.compact(source)
+        self.app.history.compact(selected)
+        access = self.app._history_access.copy()
+        body = {**self.row, 'selectedId': self.other}
+        result = self.app.save_draft(body)
+        saved = self.app.drafts.snapshot()
+        self.assertEqual(self.other, saved['selectedId'])
+        self.assertEqual(self.row['draft'], self.saved(self.archived)['draft'])
+        self.assertEqual(self.row['stash'], self.saved(self.archived)['stash'])
+        with patch.dict(selected, {'_deleting': True}), self.assertRaisesRegex(ValueError, '삭제 중'):
+            self.app.save_draft({**body, 'revision': result['revision'], 'draft': None})
+        self.assertEqual(saved, self.app.drafts.snapshot())
+        self.assertTrue(source.get('_historyUnloaded') and selected.get('_historyUnloaded'))
+        self.assertEqual(access, self.app._history_access)
+
     def test_existing_draft_survives_skipped_save_and_restore_after_restart(self):
         self.app.restore_session(self.archived)
         self.app.save_draft(self.row)

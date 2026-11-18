@@ -72,6 +72,33 @@ class BridgeTests(unittest.TestCase):
             self.assertNotIn("test-only-oauth", json.dumps(context))
             self.bridge.process = None
 
+    def test_editor_target_is_bound_to_launch_environment_and_child_directory(self):
+        self.bridge.command = [str(Path(self.temp.name) / 'claude.exe')]
+        work = self.bridge.cwd
+        with patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': '회사 프로필', 'CLAUDE_CODE_USE_COWORK_PLUGINS': ''}), \
+                patch('local_app.bridge.subprocess.Popen'), patch('local_app.bridge.threading.Thread'), \
+                patch('local_app.bridge.WindowsJob'), patch.object(self.bridge, '_write'):
+            self.bridge.start()
+            os.environ['CLAUDE_CONFIG_DIR'] = str(work / 'another profile')
+            self.assertEqual(work.resolve() / '회사 프로필' / 'settings.json', self.bridge.user_settings_path())
+            self.bridge.process = None
+
+    def test_user_settings_target_requires_a_known_launch_and_respects_profile_location(self):
+        from local_app.bridge import _launched_user_settings
+        home = Path(self.temp.name).resolve()
+        native = [str(home / 'claude.exe')]
+        env = {'USERPROFILE': str(home), 'HOME': str(home if os.name != 'nt' else home / 'unused')}
+        with patch.object(Path, 'resolve', side_effect=AssertionError('profile accessed during CLI startup')):
+            self.assertEqual(home / '.claude' / 'settings.json', _launched_user_settings(native, env, home))
+        self.assertIsNone(_launched_user_settings(native, dict(env, CLAUDE_CODE_USE_COWORK_PLUGINS='1'), home))
+        self.assertIsNone(_launched_user_settings(['powershell', '-Entry', 'claude', '-LoadProfiles'], env, home))
+        shim = home / 'claude.cmd'
+        shim.write_bytes((ROOT / 'tests/fixtures/npm_claude_shims/native.cmd.txt').read_bytes())
+        command = ['powershell', '-Entry', str(shim)]
+        self.assertEqual(home / '.claude' / 'settings.json', _launched_user_settings(command, env, home))
+        shim.write_text('custom corporate wrapper', encoding='ascii')
+        self.assertIsNone(_launched_user_settings(command, env, home))
+
     def test_auth_error_uses_shared_login_and_retires_only_failed_child(self):
         self.bridge.busy = True
         self.bridge.session_id = str(uuid.uuid4())

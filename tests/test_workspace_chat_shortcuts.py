@@ -12,7 +12,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),asse
 const root=process.argv[2],scenario=process.argv[3];
 const setup=`
 const assert=globalThis.testAssert;
-let now=10000,active={id:'A',state:'idle',trusted:true,messages:[]},selectionGeneration=1;
+let now=10000,active={id:'A',state:'idle',trusted:true,messages:[]},selectionGeneration=1,pendingSelection=null;
 let sessions=[{id:'A'},{id:'B'}];
 // The extracted submit path runs in work mode, as these CLI shortcut cases do.
 let currentMode='work';const isGeneralChat=()=>currentMode==='chat';
@@ -95,6 +95,16 @@ vm.runInContext(read('chat-shortcuts.js'),ctx);
 const app=read('app.js');start=app.indexOf('$("composer").onsubmit=');end=app.indexOf('$("folder-form").onsubmit=',start);
 assert.ok(start>=0&&end>start,'Cannot locate shipped composer event routing');
 vm.runInContext(app.slice(start,end),ctx);
+// Both types of submission use the application's draft accessors. A send
+// can finish after navigation, so keep its real per-task operation tracking.
+for(const [from,to] of [
+  ['const taskOperations =','const hasTaskOperations ='],
+  ['function composerText(){','function styleQuotedDraft(){']
+]){
+  const first=app.indexOf(from),last=app.indexOf(to,first);
+  assert.ok(first>=0&&last>first,'Cannot locate shipped helper: '+from);
+  vm.runInContext(app.slice(first,last),ctx);
+}
 const sendStart=app.indexOf('async function submit(){');
 assert.ok(sendStart>=0&&sendStart<start,'Cannot locate shipped submission function');
 vm.runInContext(app.slice(sendStart,start).replace('async function submit(){','async function submitActual(){'),ctx);

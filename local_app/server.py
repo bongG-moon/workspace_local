@@ -13,6 +13,8 @@ import re
 import unicodedata
 from pathlib import Path
 import secrets
+import select
+import socket
 import subprocess
 import threading
 import time
@@ -53,7 +55,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.47"
+WORKSPACE_VERSION = "0.23.48"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -663,17 +665,22 @@ class LocalApp:
                     if (migrated or sid is None or item['id'] == sid) and not item.get('_historyUnloaded'):
                         item['_historySaved'] = True
 
+    def _session_entry_locked(self, sid, *, internal=False):
+        """Validate access without loading the conversation or changing its LRU position."""
+        if sid not in self.sessions:
+            raise ValueError("대화를 찾을 수 없습니다.")
+        item = self.sessions[sid]
+        if not internal and (item.get('_deleting') or sid in self.chat_spaces.pending):
+            raise ValueError('삭제 중인 대화입니다. 전용 파일 정리가 끝날 때까지 기다려 주세요.')
+        if not internal and item.get('_removingFromList'):
+            raise ValueError('업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.')
+        if not internal and self.session_visibility.contains(sid):
+            raise ValueError('보관한 업무입니다. 설정의 보관한 업무에서 목록으로 복원할 수 있어요.')
+        return item
+
     def get(self, sid, *, _internal=False):
         with self.lock:
-            if sid not in self.sessions:
-                raise ValueError("대화를 찾을 수 없습니다.")
-            item = self.sessions[sid]
-            if not _internal and (item.get('_deleting') or sid in self.chat_spaces.pending):
-                raise ValueError('삭제 중인 대화입니다. 전용 파일 정리가 끝날 때까지 기다려 주세요.')
-            if not _internal and item.get('_removingFromList'):
-                raise ValueError('업무 목록을 정리하고 있습니다. 잠시 기다려 주세요.')
-            if not _internal and self.session_visibility.contains(sid):
-                raise ValueError('보관한 업무입니다. 설정의 보관한 업무에서 목록으로 복원할 수 있어요.')
+            item = self._session_entry_locked(sid, internal=_internal)
             self.history.hydrate(item)
             self._history_access[sid] = time.monotonic()
             # Active CLI work is never evicted. Dormant UI mirrors use an LRU of
@@ -694,6 +701,26 @@ class LocalApp:
                 self.history.compact(old)
                 loaded.remove(old)
             return item
+
+    def poll_events(self, sid, after, *, timeout=20, wait_for_disconnect=None):
+        deadline = time.monotonic() + timeout
+        while True:
+            with self.lock:
+                # The cursor and buffered events survive history eviction.
+                item = self._session_entry_locked(sid)
+                if needs_recovery(item, after):
+                    return {"events": [], "state": item["state"], "seq": item["seq"],
+                            "recovery": snapshot_recovery(item, self.public(item), after)}
+                remaining = deadline - time.monotonic()
+                if item["seq"] != after or remaining <= 0:
+                    events = [row for row in item["events"] if row["seq"] > after]
+                    return {"events": deepcopy(events), "state": item["state"], "seq": item["seq"]}
+            # Preserve the delivery cadence and release the lock while this view waits.
+            interval = min(.15, remaining)
+            if wait_for_disconnect is None:
+                time.sleep(interval)
+            elif wait_for_disconnect(interval):
+                return None
 
     def public(self, item):
         with self.lock:
@@ -1098,7 +1125,7 @@ class LocalApp:
                     if key == 'selectedId':
                         payload = {**data, 'selectedId': 'home:work'}
                 else:
-                    self.get(value)
+                    self._session_entry_locked(value)
             if skip_archived:
                 # Do not touch draft contents, attachments or the database:
                 # archived work must not hold up a request, exit or update.
@@ -2008,6 +2035,56 @@ class LocalApp:
             session = self.public(item)
             return {**result, 'session': session, 'connection': session['connection'],
                     'workflowPaused': workflow_paused or self.dispatch.queue.snapshot(sid).get('paused') is True}
+
+    def open_claude_settings(self, sid):
+        """Open the user settings from this CLI launch. The UI supplies no path."""
+        from .external_apps import windows_program
+
+        def current_bridge():
+            self._require_running()
+            item = self.get(sid)
+            bridge = item.get('bridge')
+            if (self.demo or not item.get('trusted') or item.get('_idleReleasing')
+                    or item.get('_restarting') or not bridge or bridge.closed
+                    or bridge.stopping or not bridge.process or bridge.process.poll() is not None):
+                raise ValueError('현재 대화의 Claude 연결을 확인한 뒤 설정 파일을 열어 주세요.')
+            return bridge
+
+        if not isinstance(sid, str):
+            raise ValueError('설정 파일을 열 대화를 선택해 주세요.')
+        with self.lock:
+            bridge = current_bridge()
+        try:
+            path = bridge.user_settings_path()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError('현재 Claude 실행 환경의 사용자 설정 파일 위치를 확인할 수 없어요.') from exc
+        if (not isinstance(path, Path) or not path.is_absolute()
+                or path.name != 'settings.json' or '..' in path.parts):
+            raise ValueError('현재 Claude 실행 환경의 사용자 설정 파일 위치를 확인할 수 없어요.')
+        try:
+            workspace_path(path)
+            if not path.is_file():
+                raise FileNotFoundError
+            if path.resolve(strict=True) != path:
+                raise ValueError
+        except FileNotFoundError as exc:
+            raise ValueError('현재 Claude 사용자 설정 폴더에 settings.json 파일이 없습니다.') from exc
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise ValueError('Claude 설정 파일의 실제 위치와 접근 권한을 확인해 주세요.') from exc
+
+        if os.name != 'nt':
+            raise ValueError('Claude 설정 파일 열기는 Windows에서 지원합니다.')
+        try:
+            editor = windows_program('notepad.exe')
+            # Filesystem checks can take time on redirected user profiles.
+            # Recheck the initiating connection before handing off to Notepad.
+            with self.lock:
+                if current_bridge() is not bridge:
+                    raise ValueError('Claude 연결이 바뀌었습니다. 현재 대화에서 다시 열어 주세요.')
+            subprocess.Popen([editor, str(path)], cwd=str(Path(editor).parent), creationflags=HIDDEN)
+        except OSError as exc:
+            raise ValueError('메모장을 열지 못했어요. Windows에서 메모장을 실행할 수 있는지 확인해 주세요.') from exc
+        return {'ok': True}
 
     def set_model(self, sid, model):
         if model is not None and (not isinstance(model, str) or not model.strip() or len(model) > 160 or any(ord(c) < 32 for c in model)):
@@ -3437,6 +3514,23 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # URLs, auth tokens and file paths must never enter access logs.
 
+    def _wait_for_event_disconnect(self, interval):
+        # The browser opts in: aborting its fetch closes the request socket.
+        # Other HTTP clients may half-close their write side and still expect a reply.
+        try:
+            readable, _, _ = select.select([self.connection], [], [], interval)
+            if not readable:
+                return False
+            if not self.connection.recv(1, socket.MSG_PEEK):
+                return True
+        except ConnectionError:
+            return True
+        except (OSError, ValueError):
+            pass
+        # If probing is unavailable or more bytes are queued, keep the normal cadence.
+        time.sleep(interval)
+        return False
+
     def reply(self, data, status=200, content_type="application/json; charset=utf-8", *, location=None, csp=None):
         body = data if isinstance(data, bytes) else json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -3578,24 +3672,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(app.dispatch.snapshot(sid))
             if route.path == "/api/events":
                 after = int(query.get("after", ["0"])[0])
-                deadline = time.monotonic() + 20
-                while True:
-                    with app.lock:
-                        item = app.get(sid)
-                        if needs_recovery(item, after):
-                            response = {"events": [], "state": item["state"], "seq": item["seq"],
-                                        "recovery": snapshot_recovery(item, app.public(item), after)}
-                            break
-                        events = [row for row in item["events"] if row["seq"] > after]
-                        if events or time.monotonic() >= deadline:
-                            # Full bounded messages on recovery only, otherwise deltas.
-                            # Connection events share nested state with the live
-                            # session. Freeze the bounded event snapshot before
-                            # a slow client writes it outside the app lock.
-                            response = {"events": deepcopy(events), "state": item["state"], "seq": item["seq"]}
-                            break
-                    time.sleep(.15)
-                return self.reply(response)
+                wait = self._wait_for_event_disconnect if query.get('cancelOnDisconnect') == ['1'] else None
+                response = app.poll_events(sid, after, wait_for_disconnect=wait)
+                if response is not None:
+                    self.reply(response)
+                return
             if route.path == "/api/session":
                 return self.reply(app.public(app.get(sid)))
             if route.path == '/api/progress':
@@ -4205,6 +4286,10 @@ class Handler(BaseHTTPRequestHandler):
             if 'model' not in data:
                 raise ValueError('사용할 모델 또는 기본 모델 복원을 선택해 주세요.')
             return self.reply(app.set_model(sid, data['model']))
+        if route == '/api/open-claude-settings':
+            if set(data) != {'id'}:
+                raise ValueError('현재 대화에서 Claude 설정 파일을 다시 열어 주세요.')
+            return self.reply(app.open_claude_settings(sid))
         if route == '/api/effort':
             if 'effort' not in data:
                 raise ValueError('추론 수준 또는 기존 설정 복원을 선택해 주세요.')

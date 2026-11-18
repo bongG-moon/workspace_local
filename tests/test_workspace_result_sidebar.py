@@ -88,8 +88,10 @@ class WorkspaceResultSidebarTests(unittest.TestCase):
           assert.equal(group.querySelector('.task-group-toggle').getAttribute('aria-expanded'),'false');
           assert.match(group.querySelector('.task-group-toggle').getAttribute('aria-label'),/새 결과 있음/);
           assert.equal(sidebar('A'),undefined);assert.equal(boot.sessionGroups.revision,1);
+          const toggle=group.querySelector('.task-group-toggle'),menu=group.querySelector('.task-group-menu');
           sessions[0].resultReceipt.seenRevision=2;renderSessions();
           group=$('sessions').children.find(row=>row.dataset.groupId==='folder');
+          assert.equal(group.querySelector('.task-group-toggle'),toggle);assert.equal(group.querySelector('.task-group-menu'),menu);
           assert.equal(group.querySelector('.task-group-unread'),null);
           assert.equal(group.querySelector('.task-group-count').textContent,'2');
         """)

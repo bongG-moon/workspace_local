@@ -655,6 +655,7 @@ dialog.path-picker .path-picker-location .quiet-button{
    Streaming updates do not touch the navigation marker. */
 @media(prefers-reduced-motion:no-preference){
   dialog[open]{animation:workspace-dialog-enter 300ms cubic-bezier(.2,.8,.2,1)}
+  :is(#help-dialog,#shortcuts-dialog)[open]{animation-duration:150ms}
   #welcome:not([hidden]),#capabilities-view:not([hidden]),#task-view:not([hidden]){animation:workspace-view-enter 300ms ease-out}
   :is(#task-view,#welcome)[data-motion-step="b"]:not([hidden]){animation-name:workspace-view-enter-alt}
   #source-panel:not([hidden]),#results-panel:not([hidden]){animation:workspace-view-enter 300ms ease-out}
@@ -672,6 +673,7 @@ dialog.path-picker .path-picker-location .quiet-button{
   dialog:not([open]){pointer-events:none}
   dialog::backdrop{opacity:0;transition:opacity 300ms ease,display 300ms allow-discrete,overlay 300ms allow-discrete}
   dialog[open]::backdrop{opacity:1}
+  :is(#help-dialog,#shortcuts-dialog)[open],:is(#help-dialog,#shortcuts-dialog)[open]::backdrop{transition-duration:150ms}
   dialog:not([open])::backdrop{pointer-events:none}
   @starting-style{
    dialog[open]{opacity:0;transform:var(--dialog-entry-transform,translateY(6px) scale(.985))}
@@ -748,4 +750,5 @@ button>.action-link-icon{margin-inline-start:0}
 .error-help-dialog li+li{margin-top:4px}
 .error-help-note{font-size:12px;line-height:1.7;color:var(--theme-text-muted,#707890)}
 .error-help-contact{margin:12px 0 0;font-size:12px;line-height:1.65;color:var(--theme-text-secondary,#535b73);overflow-wrap:anywhere}
-@media(max-width:650px){.error-help-dialog{padding:20px}.error-help-dialog h2{font-size:18px}.recovery-actions{flex-wrap:wrap}}
+.recovery-actions{flex-wrap:wrap}
+@media(max-width:650px){.error-help-dialog{padding:20px}.error-help-dialog h2{font-size:18px}}

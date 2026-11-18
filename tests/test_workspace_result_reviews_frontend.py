@@ -99,6 +99,25 @@ class ResultReviewsFrontendTests(unittest.TestCase):
           assert.equal(gallery.querySelector('.observed-changes'),null);
         })()""")
 
+    def test_other_candidate_changes_keep_sidebar_buttons_and_expanded_rows(self):
+        self.run_case(r"""(async()=>{
+          let rows=Array.from({length:8},(_,i)=>({...candidate,id:'c-'+i}));
+          const opened=[];globalThis.WorkspaceProductivityActions={openChanges:value=>opened.push(value.candidateId)};
+          api=async()=>snapshot([],rows);
+          await refreshResults();
+          const section=$('results-list').querySelector('.observed-changes');
+          const detail=section.querySelector('details');detail.open=true;detail.ontoggle();
+          const compare=id=>button(walk(section).find(node=>node.dataset.candidateId===id),'변경 내용 보기');
+          const first=compare('c-0'),inDetail=compare('c-6'),last=compare('c-7');
+          rows=rows.slice(0,7);
+          await refreshResults();
+          assert.equal($('results-list').querySelector('.observed-changes'),section);
+          assert.equal(section.querySelector('details'),detail);assert.equal(detail.open,true);
+          assert.equal(compare('c-0'),first);assert.equal(compare('c-6'),inDetail);
+          first.onclick();inDetail.onclick();last.onclick();
+          assert.deepEqual(opened,['c-0','c-6']);
+        })()""")
+
     def test_late_decision_cannot_refresh_another_task_or_change_draft(self):
         self.run_case(r"""(async()=>{
           let answer;const calls=[];api=(path,body)=>{calls.push(path);return body?new Promise(resolve=>answer=resolve):Promise.resolve(snapshot([],[candidate]));};
@@ -108,6 +127,30 @@ class ResultReviewsFrontendTests(unittest.TestCase):
           answer(snapshot());await pending;
           assert.equal(calls.length,2);assert.equal(active.id,'B');assert.equal($('prompt').value,'B unsent draft');
           await button(section,'이 업무 결과에 추가').onclick();assert.equal(calls.length,2);
+        })()""")
+
+    def test_folding_more_changes_preserves_an_inflight_review_outcome(self):
+        self.run_case(r"""(async()=>{
+          const rows=Array.from({length:6},(_,i)=>({...candidate,id:'c-'+i,path:'C:/task/'+i+'.txt'}));
+          let approved=false,finish;const posts=[],warnings=[];
+          api=async(path,body)=>{
+            if(body){posts.push(body);return new Promise((resolve,reject)=>{finish={resolve,reject};});}
+            return snapshot(approved?[{...rows[5],attribution:'confirmed'}]:[],approved?rows.slice(0,5):rows);
+          };
+          toast=text=>warnings.push(text);
+          await refreshResults();
+          const section=$('results-list').querySelector('.observed-changes'),detail=section.querySelector('details');
+          const toggle=value=>{detail.open=value;detail.ontoggle();};
+          toggle(true);
+          const failed=button(detail,'제외').onclick();toggle(false);
+          finish.reject(Error('저장하지 못했습니다.'));await failed;
+          assert.deepEqual(warnings,['저장하지 못했습니다.']);
+          toggle(true);
+          const accepted=button(detail,'이 업무 결과에 추가').onclick();toggle(false);
+          approved=true;finish.resolve({ok:true});await accepted;
+          assert.deepEqual(posts.map(p=>[p.action,p.candidateId]),[['dismiss','c-5'],['include','c-5']]);
+          assert.equal($('results-list').querySelector('details'),null);
+          assert.deepEqual(active.artifacts.map(f=>f.path),[rows[5].path]);
         })()""")
 
     def test_dismiss_removes_only_own_candidate_gallery(self):

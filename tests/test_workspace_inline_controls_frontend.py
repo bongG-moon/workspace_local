@@ -422,7 +422,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           assert.equal($('composer-controls-panel').hidden,false);assert.notEqual($('folder-dialog').open,true);
           WorkspaceInlineControls.close();active=selected;active.trusted=false;active.connection=null;await submit();
           assert.equal(calls.length,0);assert.equal($('folder-dialog').open,true);assert.equal($('folder-form').dataset.afterTrust,'controls');
-          $('trust').checked=true;await $('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          $('trust').checked=true;await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.join(','),'/api/trust,/api/connect,/api/effort');assert.equal(active.state,'done');
           assert.equal($('prompt').value,'');assert.equal(active.messages.length,0);
         })()""")
@@ -594,7 +594,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           active.trusted=false;active.connection=null;let finish;const calls=[];
           api=(path)=>{calls.push(path);return path==='/api/connect'?new Promise(resolve=>finish=resolve):Promise.resolve({ok:true});};
           $('prompt').focus();await WorkspaceInlineControls.cyclePermission();$('trust').checked=true;
-          const trust=$('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          const trust=$('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           for(let i=0;i<12;i++)await Promise.resolve();assert.equal(typeof finish,'function');
           $('prompt').focus();const escape={key:'Escape',preventDefault(){this.prevented=true;}};$('prompt').onkeydown(escape);
           assert.equal(escape.prevented,true);
@@ -610,7 +610,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
             :path==='/api/permission-mode'?{permissionMode:'auto',permissionModeOverride:'auto'}:{ok:true};};
           $('prompt').focus();await WorkspaceInlineControls.cyclePermission();assert.equal(calls.length,0);
           assert.equal($('folder-dialog').open,true);$('trust').focus();$('trust').checked=true;
-          await $('folder-form').onsubmit({submitter:{value:'ok',disabled:false},preventDefault(){}});
+          await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.join(','),'/api/trust,/api/connect,/api/permission-mode');
           assert.equal(document.activeElement,$('prompt'));assert.equal(active.connection.permissionMode,'auto');
           assert.equal(active.messages.length,0);assert.equal(active.state,'done');assertDraft();
@@ -828,7 +828,7 @@ class WorkspaceInlineControlsFrontendTests(unittest.TestCase):
           api=async(path,body)=>{calls.push({path,body});return path==='/api/connect'?{connection:connection()}:{ok:true};};
           await $('composer-permission').onclick();assert.equal(calls.length,0);assert.equal($('folder-dialog').open,true);
           assert.equal($('folder-form').dataset.afterTrust,'controls');assert.equal($('composer-controls-panel').hidden,true);
-          $('trust').checked=true;await $('folder-form').onsubmit({submitter:{value:'ok'},preventDefault(){}});
+          $('trust').checked=true;await $('folder-form').onsubmit({submitter:Object.assign($('confirm-folder'),{value:'ok'}),preventDefault(){}});
           assert.equal(calls.map(call=>call.path).join(','),'/api/trust,/api/connect');
           assert.equal($('composer-controls-panel').hidden,false);assert.ok(choose('자동 판단'));assertDraft();
         })()""")

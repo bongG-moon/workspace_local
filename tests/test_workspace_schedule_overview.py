@@ -135,6 +135,43 @@ class ScheduleOverviewFrontendTests(unittest.TestCase):
     def run_case(self, script, modules):
         frontend.WorkspaceProductivityFrontendTests.run_case(self, '(async()=>{' + script + '})()', modules)
 
+    def test_poll_updates_keep_the_manage_button_and_removed_schedule_cannot_navigate(self):
+        self.run_case(r"""
+          active=null;
+          let schedules=['A','B'].map(id=>({id,sessionId:'task-'+id,title:id,kind:'daily',
+            time:'09:00',category:'active',statusLabel:'예약 중',nextRunAt:1900000000}));
+          api=async()=>({counts:{total:schedules.length},schedules});
+          await WorkspaceWorkflow.openOverview();
+          const list=$('schedule-overview-list'),row=list.children[0],button=row.querySelector('button');
+          schedules[1]={...schedules[1],statusLabel:'실행 대기'};await WorkspaceWorkflow.refresh();
+          assert.equal(list.children[0],row);assert.equal(row.querySelector('button'),button);
+          schedules[0]={...schedules[0],statusLabel:'실행 중'};await WorkspaceWorkflow.refresh();
+          assert.equal(list.children[0],row);assert.equal(row.querySelector('button'),button);
+          assert.match(flatText(row),/실행 중/);
+          schedules.shift();await WorkspaceWorkflow.refresh();
+          selectSession=async()=>{throw Error('Removed schedule was selected');};
+          await button.onclick();assert.equal($('schedule-overview-message').textContent,'');
+        """, ('workflow',))
+
+    def test_schedule_detail_keeps_controls_for_timing_updates_and_discards_stale_actions(self):
+        self.run_case(r"""
+          active.state='idle';$('workflow-dialog').showModal();
+          let item={id:'s',kind:'daily',text:'요청',time:'09:00',enabled:true,nextRunAt:1900000000};
+          const writes=[];
+          api=async(path,body)=>{if(body)writes.push(body);return {queue:[],schedules:[item]};};
+          await WorkspaceWorkflow.refresh();
+          const list=$('schedule-list'),row=list.children[0],actions=row.querySelector('.workflow-row-actions');
+          const [edit,pause,remove]=actions.children;
+          item={...item,nextRunAt:item.nextRunAt+86400};await WorkspaceWorkflow.refresh();
+          assert.equal(list.children[0],row);
+          [edit,pause,remove].forEach((button,index)=>assert.equal(actions.children[index],button));
+          item={...item,enabled:false};await WorkspaceWorkflow.refresh();
+          assert.equal(actions.children[2],remove);assert.notEqual(actions.children[1],pause);
+          assert.equal(actions.children[1].textContent,'예약 재개');await pause.onclick();
+          item={...item,text:'다른 요청'};await WorkspaceWorkflow.refresh();await remove.onclick();
+          assert.notEqual(list.children[0],row);assert.equal(writes.length,0);
+        """, ('workflow',))
+
     def test_home_overview_filters_pages_and_only_gets_while_open(self):
         self.run_case(r"""
           active=null;let calls=[];

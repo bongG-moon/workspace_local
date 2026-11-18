@@ -205,19 +205,24 @@ globalThis.WorkspaceWorkflow = (() => {
     const rows=(detailsOpen ? schedules : []).map(item => {
       const fingerprint=JSON.stringify([context,item,blocked]),existing=previous.get(item.id);
       if(existing?.scheduleFingerprint===fingerprint)return existing;
-      const row=el("article",null,"workflow-row"),actions=el("div",null,"workflow-row-actions");
-      row.dataset.scheduleId=item.id;row.scheduleFingerprint=fingerprint;
-      row.append(el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request"));
-      row.append(el("small",item.nextRunAt?`다음 실행: ${dateLabel(item.nextRunAt)}`:"다음 실행 없음","workflow-files"));
-      if (item.lastRun?.status && item.lastRun.status!=="paused") row.append(el("small",`최근 예약 처리: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
-      if(item.lastControl)row.append(el("small",`마지막 설정 변경: ${dateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"workflow-files"));
-      else if(item.lastRun?.status==="paused")row.append(el("small","이전 설정 변경: 일시 정지","workflow-files"));
-      if (item.lastError) row.append(el("p",item.lastError,"workflow-warning"));
+      // The clock and run status can change between mouse down and mouse up.
+      // Preserve controls for the same definition only, never across a task switch or edit.
+      const definition=JSON.stringify([context,item.text,item.attachments,item.kind,item.runAt,item.time,item.weekdays,item.dayOfMonth,item.intervalMinutes,item.startTime,item.endTime]);
+      const row=existing?.scheduleDefinition===definition?existing:el("article",null,"workflow-row");
+      const actions=row.querySelector(".workflow-row-actions")||el("div",null,"workflow-row-actions");
+      row.dataset.scheduleId=item.id;row.scheduleFingerprint=fingerprint;row.scheduleDefinition=definition;
+      const content=[el("strong",scheduleLabel(item)),el("span",item.enabled ? "예약 중" : pausedByUser(item) ? "일시 정지" : item.kind==="once"&&!item.nextRunAt ? resultNames[item.lastRun?.status]||"실행 없음" : "일시 정지","workflow-state"),el("p",item.text,"workflow-request")];
+      content.push(el("small",item.nextRunAt?`다음 실행: ${dateLabel(item.nextRunAt)}`:"다음 실행 없음","workflow-files"));
+      if (item.lastRun?.status && item.lastRun.status!=="paused") content.push(el("small",`최근 예약 처리: ${dateLabel(item.lastRun.dueAt || item.lastRun.at || item.lastRun.timestamp)} · ${item.lastRun.message || resultNames[item.lastRun.status] || item.lastRun.status || "결과 미확인"}`,"workflow-files"));
+      if(item.lastControl)content.push(el("small",`마지막 설정 변경: ${dateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"workflow-files"));
+      else if(item.lastRun?.status==="paused")content.push(el("small","이전 설정 변경: 일시 정지","workflow-files"));
+      if (item.lastError) content.push(el("p",item.lastError,"workflow-warning"));
+      const byLabel=new Map([...actions.children].map(button=>[button.textContent,button])),buttons=[];
       for (const [label,fn] of [["수정",()=>openEditor("schedule",item)],[item.enabled ? "일시 정지" : "예약 재개",()=>item.enabled?mutate({action:"schedule_pause",requestId:item.id},context):requestResume({action:"schedule_resume",requestId:item.id},context)],["삭제",()=>mutate({action:"schedule_cancel",requestId:item.id},context)]]) {
-        const button=el("button",label,"text-button");button.type="button";button.disabled=blocked||(label==="예약 재개"&&!item.nextRunAt);
-        button.onclick=()=>{if(current(context)&&$("workflow-dialog").open&&!button.disabled&&row.isConnected)return fn();};actions.append(button);
+        const button=byLabel.get(label)||el("button",label,"text-button");button.type="button";button.disabled=blocked||(label==="예약 재개"&&!item.nextRunAt);
+        button.onclick=()=>{if(current(context)&&$("workflow-dialog").open&&!button.disabled&&scheduleList.contains(button))return fn();};buttons.push(button);
       }
-      row.append(actions);return row;
+      reconcileRows(actions,buttons);reconcileRows(row,[...content,actions]);return row;
     });
     reconcileRows(scheduleList,rows);
     }
@@ -248,23 +253,33 @@ globalThis.WorkspaceWorkflow = (() => {
     $("schedule-overview-summary").textContent=`전체 ${counts.total||0} · 예약·실행 중 ${counts.active||0} · 일시 정지 ${counts.paused||0} · 확인 필요 ${counts.attention||0} · 완료 ${counts.completed||0}`;
     const items=(overview?.schedules||[]).filter(item=>(filter==="all"||item.category===filter)&&(!query||[item.title,item.workspaceLabel,item.requestSummary].join(" ").toLocaleLowerCase().includes(query)));
     const pages=Math.max(1,Math.ceil(items.length/overviewPageSize));overviewPage=Math.min(overviewPage,pages-1);
-    const list=$("schedule-overview-list");list.replaceChildren();
+    const list=$("schedule-overview-list"),previous=new Map([...list.children].map(row=>[row.dataset.scheduleId,row]));
     $("schedule-overview-empty").hidden=items.length>0;
     $("schedule-overview-empty").textContent=overview?counts.total?"조건에 맞는 예약이 없어요.":"등록한 예약이 없어요. 업무를 선택하고 ‘실행 예약’으로 추가할 수 있습니다.":"예약을 불러오고 있어요.";
-    for(const item of items.slice(overviewPage*overviewPageSize,(overviewPage+1)*overviewPageSize)) {
-      const row=el("article",null,"schedule-overview-row"),heading=el("div",null,"schedule-overview-row-heading"),status=el("span",item.statusLabel,"schedule-overview-state");
+    const rows=items.slice(overviewPage*overviewPageSize,(overviewPage+1)*overviewPageSize).map(item=>{
+      const existing=previous.get(item.id);
+      const row=existing && existing.dataset.sessionId===item.sessionId ? existing : el("article",null,"schedule-overview-row");
+      row.dataset.scheduleId=item.id;row.dataset.sessionId=item.sessionId;
+      const button=row.querySelector("button")||el("button","예약 관리","secondary-button schedule-overview-manage");
+      button.type="button";button.disabled=overviewNavigating||appClosed;
+      const fingerprint=JSON.stringify(item);
+      if(fingerprint===row.overviewFingerprint)return row;
+      row.overviewFingerprint=fingerprint;
+      const content=[],heading=el("div",null,"schedule-overview-row-heading"),status=el("span",item.statusLabel,"schedule-overview-state");
       status.dataset.category=item.category;
-      heading.append(el("strong",item.title),status);row.append(heading);
-      if(item.workspaceLabel)row.append(el("span",item.workspaceLabel,"schedule-overview-folder"));
-      row.append(el("p",item.requestSummary,"schedule-overview-request"));
+      heading.append(el("strong",item.title),status);content.push(heading);
+      if(item.workspaceLabel)content.push(el("span",item.workspaceLabel,"schedule-overview-folder"));
+      content.push(el("p",item.requestSummary,"schedule-overview-request"));
       const timing=el("div",null,"schedule-overview-timing");
-      timing.append(el("span",item.kind==="once"?"한 번":scheduleLabel(item)),el("span",item.nextRunAt?`${item.pausedByUser?"예약 시각":"다음"} ${overviewDateLabel(item.nextRunAt)}`:"다음 실행 없음"));row.append(timing);
-      if(item.waitReason)row.append(el("p",item.waitReason,"schedule-overview-reason"));
-      if(item.lastRun?.status && item.lastRun.status!=="paused")row.append(el("small",`최근 예약 처리: ${overviewDateLabel(item.lastRun.dueAt)} · ${resultNames[item.lastRun.status]||"결과 확인 필요"}`,"schedule-overview-last"));
-      if(item.lastControl)row.append(el("small",`설정 변경: ${overviewDateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"schedule-overview-last"));
-      const button=el("button","예약 관리","secondary-button schedule-overview-manage");button.type="button";button.disabled=overviewNavigating||appClosed;
-      button.setAttribute("aria-label",`${item.title} 예약 관리`);button.onclick=()=>manageOverviewSchedule(item);row.append(button);list.append(row);
-    }
+      timing.append(el("span",item.kind==="once"?"한 번":scheduleLabel(item)),el("span",item.nextRunAt?`${item.pausedByUser?"예약 시각":"다음"} ${overviewDateLabel(item.nextRunAt)}`:"다음 실행 없음"));content.push(timing);
+      if(item.waitReason)content.push(el("p",item.waitReason,"schedule-overview-reason"));
+      if(item.lastRun?.status && item.lastRun.status!=="paused")content.push(el("small",`최근 예약 처리: ${overviewDateLabel(item.lastRun.dueAt)} · ${resultNames[item.lastRun.status]||"결과 확인 필요"}`,"schedule-overview-last"));
+      if(item.lastControl)content.push(el("small",`설정 변경: ${overviewDateLabel(item.lastControl.at)} · ${item.lastControl.action==="resumed"?"예약 재개":"일시 정지"}`,"schedule-overview-last"));
+      button.setAttribute("aria-label",`${item.title} 예약 관리`);
+      button.onclick=()=>{if(!button.disabled&&list.contains(button))return manageOverviewSchedule(item);};
+      reconcileRows(row,[...content,button]);return row;
+    });
+    reconcileRows(list,rows);
     $("schedule-overview-prev").disabled=overviewPage===0;$("schedule-overview-next").disabled=overviewPage>=pages-1;
     $("schedule-overview-page").textContent=`${overviewPage+1} / ${pages} · ${items.length}개`;
   }

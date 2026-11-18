@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 import uuid
 from collections import OrderedDict, deque
 
@@ -136,6 +137,37 @@ def _remember_evidence(mapping, key, value=True):
 
 def _text_fingerprint(text):
     return hashlib.sha256(text.encode('utf-8', errors='replace')).digest()
+
+
+def model_error_code(*diagnostics):
+    """Classify explicit provider diagnostics, never normal assistant prose.
+
+    Some gateways use the CLI's authentication_failed category for model ACL
+    failures. Bounded text matching distinguishes those without retaining or
+    displaying provider payloads, which may contain credentials.
+    """
+    text = ' '.join(value[:8192] for value in diagnostics[:8] if isinstance(value, str)).casefold()
+    if re.search(r'(?:not allowed|not permitted|not authorized|not authorised)\s+(?:to\s+)?'
+                 r'(?:(?:access|use|request|call)\s+)?(?:(?:the|this|requested|selected)\s+)?models?\b|'
+                 r'(?:no |do not have |don\x27t have )(?:access|permission)\s+(?:to|for)\s+'
+                 r'(?:(?:access|use)\s+)?(?:(?:the|this|requested|selected)\s+)?models?\b|'
+                 r'(?:access|permission) denied[: ]+(?:to |for )?(?:the )?model\b|'
+                 r'\bmodel\s*:?(?:\s+[^\s:]{1,120})?[: ]+(?:access denied|permission denied|'
+                 r'(?:is )?not (?:allowed|permitted|authorized|authorised))', text):
+        return 'model_permission'
+    if re.search(r'\b(?:unknown|unsupported|invalid) model\b|\bmodel\s*:?(?:\s+[^\s:]{1,120})?\s+'
+                 r'(?:was |is )?(?:not found|does not exist|doesn\x27t exist|is not supported|not supported)|'
+                 r'\bmodel_not_found\b', text):
+        return 'model_not_found'
+    return None
+
+
+def model_error_message(code):
+    if code == 'model_permission':
+        return ('선택한 모델을 현재 인증 정보로 사용할 권한이 없습니다. 입력창 아래 모델에서 '
+                '회사에서 허용한 모델을 선택한 뒤 다시 보내 주세요. Claude 로그인 오류와는 다를 수 있습니다.')
+    return ('선택한 모델을 현재 연결에서 찾거나 사용할 수 없습니다. 입력창 아래 모델에서 '
+            '사용할 모델을 선택하거나 모델 이름을 확인한 뒤 다시 보내 주세요.')
 
 
 class BridgeError(ValueError):
@@ -268,6 +300,34 @@ def probe_discovered_cli(command: list[str]) -> tuple[list[str], dict]:
     return command, probe_cli(command)
 
 
+def _launched_user_settings(command, env, cwd):
+    """Capture the user file for an ordinary Claude launch, without reading it.
+
+    A custom shell command can change CLAUDE_CONFIG_DIR or --setting-sources
+    after launch. Its get_settings response does not identify the actual file.
+    """
+    native = len(command) == 1 and Path(command[0]).name.lower() in {'claude.exe', 'claude'}
+    if not native:
+        if command[-2:-1] != ['-Entry'] or not _npm_claude_shim_digest(Path(command[-1])):
+            return None
+    if env.get('CLAUDE_CODE_USE_COWORK_PLUGINS'):
+        return None  # This mode can use a different user file.
+    try:
+        # Claude normalizes the directory name to NFC. A relative override
+        # is relative to the CLI working directory, not to the app server.
+        location = env.get('CLAUDE_CONFIG_DIR')
+        if location is None:
+            home = env.get('USERPROFILE') if os.name == 'nt' else env.get('HOME')
+            location = str((Path(home) if home else Path.home()) / '.claude')
+        root = Path(unicodedata.normalize('NFC', location))
+        if root.drive and not root.is_absolute():
+            return None  # Per-drive relative paths depend on shell state.
+        # Do not contact a redirected profile or network share during startup.
+        return Path(os.path.abspath(cwd / root)) / 'settings.json'
+    except (ValueError, OSError, RuntimeError):
+        return None  # Optional editor access must not prevent a CLI launch.
+
+
 def cli_arguments(command: list[str], info: dict, resume: str | None = None, *, allow_bypass_permissions=False,
                   fork_session=False, new_session_id=None, runtime_profile='work') -> list[str]:
     _validate_runtime_profile(runtime_profile, info, allow_bypass_permissions)
@@ -337,6 +397,7 @@ class ClaudeSession:
         self.session_id = self._fork_target if fork_session else resume
         self.resume_id = None if fork_session else resume
         self.process = None
+        self._user_settings_file = None
         self._process_job = None
         self.lock = threading.RLock()
         self.ready = threading.Event()
@@ -362,6 +423,7 @@ class ClaudeSession:
         self.seen_text = OrderedDict()
         self.model = ""
         self.turn_model = None
+        self._turn_model_error = None
         self.original_model = None
         self.model_override = None
         self.effort = None
@@ -406,6 +468,13 @@ class ClaudeSession:
     def cleanup_complete(self):
         """True only after this owned child's cleanup has completed successfully."""
         return self.closed and self._close_done.is_set() and self._close_error is None
+
+    def user_settings_path(self):
+        """The captured path stays private to the server-side editor action."""
+        path = self._user_settings_file
+        if path is None:
+            return None
+        return path.parent.resolve() / path.name
 
     @property
     def stop_state(self):
@@ -476,9 +545,12 @@ class ClaudeSession:
             if self.closed or response is None:
                 self._runtime_settings_error = 'connection_closed'
                 return False
-            if response.get('subtype') != 'success' and self._auth_error(str(response.get('error', ''))):
-                self._runtime_settings_error = 'authentication_failed'
-                return False
+            if response.get('subtype') != 'success':
+                error = str(response.get('error', ''))
+                model_error = model_error_code(error)
+                if model_error or self._auth_error(error):
+                    self._runtime_settings_error = model_error or 'authentication_failed'
+                    return False
             detail = response.get('response') if isinstance(response, dict) and response.get('subtype') == 'success' else None
             applied = detail.get('applied') if isinstance(detail, dict) else None
             if not isinstance(applied, dict):
@@ -509,10 +581,18 @@ class ClaudeSession:
     def _raise_runtime_settings_error(self):
         code = getattr(self, '_runtime_settings_error', None)
         if code:
+            # A control ACK may have changed the model before this readback
+            # failed. Retire that unconfirmed connection rather than letting
+            # the app and child retain different selections.
             self.close()
+            if code in {'model_permission', 'model_not_found'}:
+                raise BridgeError(code, model_error_message(code), '모델 선택')
             raise BridgeError(code, '현재 CLI 설정 응답을 확인하지 못했습니다. 연결과 인증 상태를 확인한 뒤 다시 시도해 주세요.', '연결과 인증 상태 확인')
 
     def _raise_control_auth_error(self, error):
+        model_error = model_error_code(error)
+        if model_error:
+            raise BridgeError(model_error, model_error_message(model_error), '모델 선택')
         if self._auth_error(error):
             self.close()
             raise BridgeError('authentication_failed', '현재 CLI 인증을 확인하지 못했습니다. 기존 Claude 실행 환경의 인증 상태를 확인해 주세요.', '기존 Claude 인증 상태 확인')
@@ -935,6 +1015,7 @@ class ClaudeSession:
                     'CLI와 하위 프로그램의 종료를 확인할 수 있는 연결을 준비하지 못했습니다.',
                     '앱 다시 연결 또는 기존 터미널 사용') from exc
             try:
+                self._user_settings_file = _launched_user_settings(self.command, env, self.cwd)
                 self.process = subprocess.Popen(cli_arguments(self.command, self.info, self._fork_source or self.session_id,
                     allow_bypass_permissions=self.allow_bypass_permissions,
                     fork_session=self._fork_source is not None, new_session_id=self._fork_target,
@@ -1030,6 +1111,7 @@ class ClaudeSession:
             self._turn_epoch += 1
             turn_epoch = self._turn_epoch
             self.turn_model = None
+            self._turn_model_error = None
             self._turn_submitted = False
             self._turn_activity_seen = False
             self._begin_tool_activity_turn()
@@ -1577,12 +1659,43 @@ class ClaudeSession:
                     self.emit('permission_mode_changed', state)
                 if active and data.get('status') == 'compacting':
                     self.emit("status", {"state": "running", "label": "대화 내용을 정리하고 있어요"})
+            elif subtype == 'model_fallback' and not data.get('parent_tool_use_id') and not data.get('isReplay'):
+                from .work_titles import valid_model
+                original, selected, trigger = data.get('original_model'), data.get('fallback_model'), data.get('trigger')
+                if (self.busy and self._turn_submitted is True and not self.stopping
+                        and data.get('session_id') in (None, self.session_id)
+                        and valid_model(original) and valid_model(selected)
+                        and trigger in {'permission_denied', 'model_not_found', 'overloaded',
+                                        'server_error', 'last_resort', 'model_blocked'}):
+                    # Native fallback is scoped to this turn. Preserve the
+                    # user's selected/default model for the next request.
+                    self.turn_model = selected
+                    self._turn_model_error = None
+                    self.emit('notice', {'code': 'model_fallback', 'actualModel': selected,
+                        'originalModel': original, 'trigger': trigger,
+                        'message': f'Claude Code가 이번 요청을 {selected} 모델로 전환해 계속 처리하고 있어요.'})
         elif kind == "stream_event":
             self._handle_stream(data)
         elif kind == 'tool_progress':
             self._tool_activity_capture().progress(data)
         elif kind == "assistant":
-            if data.get("error") == "authentication_failed":
+            message = data.get('message')
+            blocks = message.get('content', []) if isinstance(message, dict) else []
+            if data.get('error') and data.get('isReplay'):
+                return
+            if data.get('error') and not data.get('parent_tool_use_id') and not data.get('isReplay'):
+                diagnostics = [block.get('text') for block in blocks[:8]
+                               if isinstance(block, dict) and block.get('type') == 'text'] if isinstance(blocks, list) else []
+                model_error = model_error_code(str(data.get('error', '')), *diagnostics)
+                if model_error:
+                    # The CLI may still perform its own native fallback. Keep
+                    # the turn reserved until its terminal result; never replay
+                    # the prompt, close its child or expose the raw diagnostic.
+                    if (self.busy and self._turn_submitted is True
+                            and data.get('session_id') in (None, self.session_id)):
+                        self._turn_model_error = model_error
+                    return
+            if data.get("error") == "authentication_failed" and not data.get('parent_tool_use_id') and not data.get('isReplay'):
                 self._authentication_failed()
                 return
             if not data.get('parent_tool_use_id'):
@@ -1684,7 +1797,20 @@ class ClaudeSession:
             self.session_id = data.get("session_id") or self.session_id
             text = data.get("result", "")
             error_text = "; ".join(map(str, data.get("errors", []))) or text
-            if data.get("is_error") and (self._auth_error(error_text)
+            expected_stop = data.get('is_error') and self._is_expected_stop_result(data, previous_session)
+            model_error = model_error_code(error_text, text) if data.get('is_error') else None
+            # A native retry can fail for a different reason. A new concrete
+            # credential diagnostic supersedes an earlier model ACL failure;
+            # the coarse authentication_failed label alone does not.
+            credential_text = ' '.join(value[:8192] for value in (error_text, text)
+                if isinstance(value, str)).casefold() if data.get('is_error') else ''
+            credential_error = any(phrase in credential_text for phrase in
+                ('failed to authenticate', 'oauth session expired', 'not logged in',
+                 'invalid authentication credentials', 'invalid api key', 'invalid x-api-key'))
+            if data.get('is_error') and not model_error and not credential_error and not expected_stop:
+                model_error = self._turn_model_error
+            self._turn_model_error = None
+            if data.get("is_error") and not model_error and (credential_error or self._auth_error(error_text)
                                         or isinstance(text, str) and self._auth_error(text)):
                 if stop_attempt is not None:
                     stop_attempt['terminal_error'] = True
@@ -1703,10 +1829,17 @@ class ClaudeSession:
                     self.tasks.clear()
                 for rid in pending:
                     self.emit('request_closed', {'id': rid})
+                if model_error:
+                    self.resume_id = self.session_id
+                    self.emit('error', {'code': model_error, 'nextAction': '모델 선택',
+                        'message': model_error_message(model_error), 'resumeSessionId': self.resume_id,
+                        'terminalDiagnostic': self._terminal_diagnostic(data, stop_attempt)})
+                    self._record_stop_terminal(stop_attempt, error=True)
+                    return
                 diagnostic = '[ede_diagnostic]' in error_text
                 if diagnostic and self.session_id:
                     self.resume_id = self.session_id
-                if self._is_expected_stop_result(data, previous_session):
+                if expected_stop:
                     # Keep last_result for diagnosis without an error banner,
                     # failed notification or completed-result event. Report
                     # stopped only after both the interrupt ACK and this

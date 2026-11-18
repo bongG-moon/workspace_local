@@ -52,14 +52,15 @@ globalThis.WorkspaceExecutionView = (() => {
         sessionId:owner,runId,path:items.length===1?file.path:undefined,opener}));
     if (actions.children.length) card.append(actions);
   }
-  function observedCard(changes, {sessionId:owner=sessionId, current:valid=()=>current(), onConfirmed=()=>refreshResults()} = {}) {
+  function observedCard(changes, {sessionId:owner=sessionId, current:valid=()=>current(), onConfirmed=()=>refreshResults(), previous} = {}) {
     for(const [key,groups] of reviewButtons)if(!pendingReviews.has(key)&&!groups.some(group=>group.some(button=>button.isConnected)))reviewButtons.delete(key);
     const rows=(changes||[]).filter(file=>file.attribution==="observed"&&file.id&&file.runId);
     if(!rows.length)return null;
+    if(previous){previous.updateCandidates(rows);return previous;}
     const section=el("section",null,"observed-changes");
-    section.append(el("h3","명령 실행 중 확인된 폴더 변경"),
-      el("p","다른 업무나 외부에서 바꾼 파일이 포함될 수 있어요. 확인한 파일만 이 업무 결과에 추가하세요.","observed-changes-note"));
-    function addRow(file,parent){
+    const title=el("h3","명령 실행 중 확인된 폴더 변경");
+    const note=el("p","다른 업무나 외부에서 바꾼 파일이 포함될 수 있어요. 확인한 파일만 이 업무 결과에 추가하세요.","observed-changes-note");
+    function buildRow(file){
       const row=el("div",null,"observed-change"),heading=el("div",null,"observed-change-heading"),
         kind={created:"새 파일",modified:"수정",deleted:"삭제"}[file.change]||"변경",
         name=el("strong",file.name||file.path,"observed-change-name");
@@ -67,7 +68,7 @@ globalThis.WorkspaceExecutionView = (() => {
       name.title=file.path;row.dataset.candidateId=file.id;heading.append(name,badge);row.append(heading);
       if(file.conflict)row.append(el("p","같은 폴더에서 다른 업무도 실행됐어요.","observed-change-conflict"));
       const actions=el("div",null,"observed-change-actions"),buttons=[],key=`${owner}:${file.runId}:${file.id}`;
-      const activeRow=()=>valid()&&section.isConnected;
+      const activeRow=()=>valid()&&section.isConnected&&row.isConnected;
       const add=(label,action)=>{const button=el("button",label,"text-button");button.type="button";button.disabled=pendingReviews.has(key);button.onclick=action;actions.append(button);buttons.push(button);return button;};
       const compare=add("변경 내용 보기",()=>{
         if(!activeRow()||pendingReviews.has(key))return;
@@ -80,21 +81,39 @@ globalThis.WorkspaceExecutionView = (() => {
         update(true);
         try{
           const result=await api("/api/results/confirm",{id:owner,runId:file.runId,candidateId:file.id,action});
-          if(activeRow())await onConfirmed(result);
-        }catch(err){if(activeRow())toast(err.message);}
+          // Folding the list may unmount this row while its decision is pending.
+          // Its outcome still belongs to the view that submitted it.
+          if(valid())await onConfirmed(result);
+        }catch(err){if(valid())toast(err.message);}
         finally{pendingReviews.delete(key);update(false);}
       }
       add("이 업무 결과에 추가",()=>decide("include"));add("제외",()=>decide("dismiss"));
       const groups=(reviewButtons.get(key)||[]).filter(group=>group.some(button=>button.isConnected));groups.push(buttons);reviewButtons.set(key,groups);
-      row.append(actions);parent.append(row);
+      row.append(actions);return row;
     }
-    for(const file of rows.slice(0,5))addRow(file,section);
-    if(rows.length>5){
-      const more=el("details",null,"run-results-more"),content=el("div"),summary=el("summary",`나머지 변경 ${rows.length-5}개 보기`);
-      let populated=false;more.append(summary,content);
-      more.ontoggle=()=>{if(more.open&&!populated){populated=true;for(const file of rows.slice(5))addRow(file,content);}};
-      section.append(more);
-    }
+    let rendered=new Map(), currentFiles=[], more;
+    section.updateCandidates=files=>{
+      const next=new Map();
+      const rowFor=file=>{
+        const key=JSON.stringify([file.runId,file.id,file.path,file.name,file.change,!!file.conflict]);
+        const row=rendered.get(key)||buildRow(file);
+        next.set(key,row);return row;
+      };
+      const children=[title,note,...files.slice(0,5).map(rowFor)];
+      currentFiles=files;
+      if(files.length>5){
+        if(!more){
+          more=el("details",null,"run-results-more");more.append(el("summary"),el("div"));
+          more.ontoggle=()=>section.updateCandidates(currentFiles);
+        }
+        const label=`나머지 변경 ${files.length-5}개 보기`;
+        if(more.children[0].textContent!==label)more.children[0].textContent=label;
+        reconcileRows(more.children[1],more.open?files.slice(5).map(rowFor):[]);
+        children.push(more);
+      }else if(more){more.ontoggle=null;more=null;}
+      reconcileRows(section,children);rendered=next;
+    };
+    section.updateCandidates(rows);
     return section;
   }
   function appendResultFiles(parent, files, options){

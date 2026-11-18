@@ -477,6 +477,30 @@ class WorkspaceLayoutFrontendTests(unittest.TestCase):
           assert.equal(api.snapshot().inspectorOverlay,true);
         """)
 
+    def test_dismiss_overlays_skips_idle_layout_and_preserves_focus_and_drag_behaviour(self):
+        self.run_case(r"""
+          for(const width of [640,1440]){
+            const {api,get,context,writes,pointer}=boot({width});
+            const sidebar=get('sidebar-panel'), handle=get('inspector-resizer');
+            let measurements=0;
+            const measure=sidebar.getBoundingClientRect.bind(sidebar);
+            sidebar.getBoundingClientRect=()=>{measurements++;return measure();};
+            get('prompt').focus();
+            assert.equal(api.dismissOverlays(),false);assert.equal(measurements,0);
+            assert.equal(context.document.activeElement,get('prompt'));
+            if(width===640){
+              api.toggleSidebar();assert.equal(api.dismissOverlays(),true);
+              assert.equal(get('main').inert,false);assert.equal(context.document.activeElement,get('sidebar-toggle'));
+              api.openInspector();assert.equal(api.dismissOverlays(),true);
+              assert.equal(context.document.activeElement,get('materials-button'));
+            }else{
+              pointer('pointerdown');assert.equal(handle.hasPointerCapture(1),true);
+              assert.equal(api.dismissOverlays(),false);assert.equal(handle.hasPointerCapture(1),false);
+            }
+            assert.equal(writes.length,0);
+          }
+        """)
+
     def test_inspector_width_validates_saved_values_without_discarding_old_preferences(self):
         self.run_case(r"""
           for(const [raw,expected] of [['420',420],['421.6',422],['0',260],['900',560],['1e400',292],

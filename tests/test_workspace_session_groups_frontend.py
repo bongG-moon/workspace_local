@@ -600,7 +600,9 @@ class SessionGroupsFrontendTests(unittest.TestCase):
               assert.equal(item.querySelector('.session-group-move'),null);
               assert.ok(item.querySelector('.session-pin'));assert.ok(item.querySelector('.session-remove'));
               const title=item.querySelector(id==='home-recents'?'.recent-card':'.session');
-              assert.equal(typeof title.onpointerdown,'function');assert.equal(typeof title.onclick,'function');
+              assert.equal(typeof title.onclick,'function');
+              if(id==='home-recents')assert.equal(item.querySelector('.session-drag').hidden,true);
+              else assert.equal(typeof title.onpointerdown,'function');
             }
           }
         })()""")

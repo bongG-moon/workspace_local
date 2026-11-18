@@ -3,9 +3,17 @@ from pathlib import Path
 import subprocess
 import unittest
 
-from tests.test_workspace_frontend_state import HARNESS, NODE
+from tests.test_workspace_frontend_state import HARNESS as BASE_HARNESS, NODE
 
 ROOT = Path(__file__).resolve().parents[1]
+HARNESS = BASE_HARNESS.replace("vm.createContext(context);", r"""
+const documentListeners=new Map();
+context.document.addEventListener=(name,callback)=>{
+  if(!documentListeners.has(name))documentListeners.set(name,[]);
+  documentListeners.get(name).push(callback);
+};
+context.fireDocument=(name,event)=>{for(const fn of documentListeners.get(name)||[])fn(event);};
+vm.createContext(context);""")
 SETUP = r"""
 sessions=['A','B','C'].map((id,index)=>({id,title:'업무 '+id,workspace:'C:/'+id,pinned:false,created:index+1,updated:index+1,state:'idle'}));
 boot={};active=null;let notices=[];toast=message=>notices.push(message);
@@ -55,6 +63,59 @@ class SessionOrderFrontendTests(unittest.TestCase):
           sessions[1].pinned=true;renderSessions();assert.equal(ids(),'B,D,A,C');
           assert.equal(pin('B').attributes['aria-pressed'],'true');assert.ok(pin('B').querySelector('.session-pin-icon'));
           assert.match(handle('A').attributes['aria-label'],/Alt/);
+        })()""")
+
+    def test_pressed_recent_stays_in_place_until_release_but_removal_is_immediate(self):
+        self.run_case(r"""(()=>{
+          sessions=Array.from({length:7},(_,i)=>({id:String(i),title:'업무 '+i,created:100-i}));
+          renderSessions();const list=$('home-recents'),ids=()=>list.children.map(row=>row.dataset.sessionId).join(',');
+          const target=row('5','home-recents').children[1],timer=[];
+          globalThis.setTimeout=fn=>{timer.push(fn);return timer.length;};
+          const press=pressedListButton={button:target,list,mode:'work'};
+          sessions[6].lastActivityAt=300;renderSessions();
+          assert.equal(ids(),'0,1,2,3,4,5');assert.equal(row('5','home-recents').children[1],target);
+          sessions[0].lastActivityAt=400;renderSessions();
+          assert.equal(timer.length,0);releaseSessionListPress(press);assert.equal(timer.length,1);
+          timer.shift()();assert.equal(ids(),'0,6,1,2,3,4');
+          const removed=row('1','home-recents');
+          pressedListButton={button:removed.children[1],list,mode:'work'};
+          sessions=sessions.filter(item=>item.id!=='1');renderSessions();
+          assert.equal(removed.isConnected,false);assert.equal(ids(),'0,6,2,3,4,5');
+          currentMode='chat';renderSessions();assert.equal(list.children.some(n=>n.dataset.sessionId),false);
+        })()""")
+
+    def test_batched_time_labels_match_korean_dates_and_keep_invalid_timestamps_safe(self):
+        self.run_case(r"""(()=>{
+          const formats={},now=new Date(),past=new Date(2020,0,3,16);
+          const clockText=now.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'});
+          assert.equal(when(+now/1000,formats),clockText);
+          const dateText=past.toLocaleDateString('ko-KR',{month:'short',day:'numeric'});
+          assert.equal(when(+past/1000,formats),dateText);
+          const dateFormatter=formats.date;
+          assert.equal(when(+past/1000,formats),dateText);assert.equal(formats.date,dateFormatter);
+          assert.equal(when(0,formats),'');assert.equal(when('malformed',formats),new Date(NaN).toString());
+        })()""")
+
+    def test_title_capture_retarget_before_pointerup_keeps_the_native_click(self):
+        self.run_case(r"""(async()=>{
+          const title=row('A').querySelector('.session'),text=title.querySelector('.session-title');
+          const closest=title.closest.bind(title);
+          title.closest=selector=>selector.includes('#sessions')?$('sessions'):closest(selector);
+          const selected=[];selectSession=async id=>{selected.push(id);return true;};
+          const down=event(80,250,{target:text,pointerType:'mouse'});
+          fireDocument('pointerdown',down);title.onpointerdown(down);
+          assert.equal(pressedListButton.list,$('sessions'));assert.ok(title.hasPointerCapture(down.pointerId));
+          // Browser capture can send this boundary event from the child label
+          // to its parent button before the native pointerup and click.
+          fireDocument('pointerover',event(80,250,{target:title,relatedTarget:text,buttons:0}));
+          assert.equal(pressedListButton.cancelled,false);
+          const up=event(80,250,{target:title,buttons:0});fireDocument('pointerup',up);title.onpointerup(up);
+          const click=event(80,250,{target:title,detail:1,stopImmediatePropagation(){throw Error('title click was dropped');}});
+          fireDocument('click',click);await title.onclick(click);
+          assert.deepEqual(selected,['A']);
+          fireDocument('pointerdown',down);
+          fireDocument('pointerover',event(80,250,{target:document.body,buttons:0}));
+          assert.equal(pressedListButton.cancelled,true);
         })()""")
 
     def test_drag_preserves_source_during_poll_and_uses_before_after_without_selecting_task(self):

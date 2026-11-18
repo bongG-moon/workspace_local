@@ -1,14 +1,18 @@
 """Slow readers recover the authoritative display without replaying a prompt."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from http.client import HTTPConnection
 import json
 from pathlib import Path
+import socket
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from local_app.event_recovery import (display_streams, needs_recovery, reset_display,
+from local_app.event_recovery import (EVENT_LIMIT, display_streams, needs_recovery, reset_display,
                                       snapshot_recovery, track_display_event, trim_events)
 from local_app.server import Handler, LocalApp, Server
 
@@ -110,10 +114,13 @@ class EventRecoveryHTTPTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(2)
 
-    def events(self, after):
-        with urlopen(Request(self.server.origin + f'/api/events?id={self.sid}&after={after}',
+    def fetch(self, path):
+        with urlopen(Request(self.server.origin + path,
                              headers={'Authorization': 'Bearer ' + self.app.token}), timeout=5) as response:
             return json.loads(response.read())
+
+    def events(self, after, sid=None):
+        return self.fetch(f'/api/events?id={sid or self.sid}&after={after}')
 
     def overflow(self):
         self.app.emit(self.sid, 'assistant', {'messageId': 'first', 'text': 'completed answer'})
@@ -145,6 +152,129 @@ class EventRecoveryHTTPTests(unittest.TestCase):
         self.assertNotIn('recovery', payload)
         self.assertEqual(1, len(payload['events']))
         self.assertEqual([], self.item['messages'])
+
+    def test_evicted_history_is_reopened_for_a_gap_only(self):
+        self.app.emit(self.sid, 'assistant', {'text': 'first answer'})
+        for index in range(EVENT_LIMIT):
+            self.app.emit(self.sid, 'notice', {'message': str(index)})
+        cursor = self.item['seq']
+        self.app.emit(self.sid, 'assistant_delta', {'text': 'next answer'})
+        for _ in range(8):
+            other = self.app.create(str(self.root), True)
+            self.app.get(other['id'])
+        self.assertTrue(self.item.get('_historyUnloaded'))
+        access = self.app._history_access.copy()
+
+        heartbeat = self.app.poll_events(self.sid, self.item['seq'], timeout=0)
+        self.assertEqual({'events': [], 'seq': self.item['seq'], 'state': self.item['state']}, heartbeat)
+        response = self.events(cursor)
+        self.assertEqual([('assistant_delta', 'next answer')],
+                         [(e['type'], e['data']['text']) for e in response['events']])
+        self.assertEqual(self.item['seq'], response['seq'])
+        self.assertTrue(self.item.get('_historyUnloaded'))
+        self.assertEqual(access, self.app._history_access)
+
+        snapshot = self.events(0)['recovery']
+        self.assertEqual('event_gap', snapshot['reason'])
+        self.assertEqual(['first answer'], [row['text'] for row in snapshot['session']['messages']])
+
+    def test_old_cursor_recovers_durable_body_from_cold_index_after_restart(self):
+        self.app.emit(self.sid, 'assistant', {'text': 'before restart'})
+        cursor = self.item['seq']
+        self.app.close()
+        self.app = LocalApp(self.root / 'state', demo=True)
+        self.addCleanup(self.app.close)
+        self.server.app = self.app
+        self.assertTrue(self.app.sessions[self.sid]['_historyIndexOnly'])
+
+        response = self.events(cursor)
+        self.assertEqual(0, response['seq'])
+        self.assertEqual('cursor_reset', response['recovery']['reason'])
+        self.assertEqual(['before restart'],
+                         [m['text'] for m in response['recovery']['session']['messages']])
+
+    def test_poll_rechecks_visibility_while_waiting_without_reopening_history(self):
+        self.app.history.compact(self.item)
+        entered = threading.Event()
+        original = self.app.session_visibility.contains
+
+        def visible(sid):
+            hidden = original(sid)
+            if sid == self.sid:
+                entered.set()
+            return hidden
+
+        with patch.object(self.app.session_visibility, 'contains', side_effect=visible), ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(self.events, self.item['seq'])
+            self.assertTrue(entered.wait(2))
+            with self.app.lock:
+                self.app.session_visibility.set_hidden(self.sid, True)
+            with self.assertRaises(HTTPError) as caught:
+                waiting.result(3)
+            with caught.exception as error:
+                self.assertEqual(400, error.code)
+                self.assertIn('보관', json.loads(error.read())['error'])
+        self.assertTrue(self.item.get('_historyUnloaded'))
+
+    def test_pending_removal_or_deleted_session_rejects_even_a_buffered_event(self):
+        self.app.emit(self.sid, 'notice', {'message': 'saved'})
+        for flag in ('_removingFromList', '_deleting'):
+            with self.subTest(flag=flag), patch.dict(self.item, {flag: True}):
+                with self.assertRaises(HTTPError) as caught:
+                    self.events(0)
+                with caught.exception as error:
+                    self.assertEqual(400, error.code)
+        chat = self.app.create(kind='chat')['id']
+        self.app.delete_chat(chat, confirmed=True)
+        with self.assertRaises(HTTPError) as caught:
+            self.events(0, chat)
+        with caught.exception as error:
+            self.assertEqual(400, error.code)
+
+    def test_leaving_one_view_keeps_the_other_view_and_background_work_running(self):
+        other = self.app.create(str(self.root), True)['id']
+        self.app.emit(self.sid, 'status', {'state': 'running', 'label': 'working'})
+        cursor = self.item['seq']
+        uri = f'/api/events?id={self.sid}&after={cursor}'
+        headers = {'Authorization': 'Bearer ' + self.app.token}
+        started, finished = threading.Event(), threading.Event()
+        handle_get = Handler.do_GET
+
+        def observe_handler(handler):
+            if handler.headers.get('User-Agent') != 'departing test view':
+                return handle_get(handler)
+            started.set()
+            try:
+                return handle_get(handler)
+            finally:
+                finished.set()
+
+        def connect():
+            return closing(HTTPConnection(*self.server.server_address, timeout=4))
+
+        with patch.object(Handler, 'do_GET', observe_handler), connect() as legacy, connect() as remaining:
+            # Older HTTP readers can finish writing their request and still expect an event.
+            legacy.request('GET', uri, headers=headers)
+            legacy.sock.shutdown(socket.SHUT_WR)
+            remaining.request('GET', uri + '&cancelOnDisconnect=1', headers=headers)
+            with connect() as departed:
+                departed.request('GET', uri + '&cancelOnDisconnect=1', headers={**headers, 'User-Agent': 'departing test view'})
+                self.assertTrue(started.wait(2))
+            self.assertTrue(finished.wait(3), 'the disconnected view kept its idle event handler')
+            self.assertEqual(other, self.fetch(f'/api/session?id={other}')['id'])
+            self.app.emit(other, 'assistant', {'text': 'separate answer'})
+            self.app.emit(self.sid, 'assistant', {'text': 'completed in background'})
+            with legacy.getresponse() as response, remaining.getresponse() as second_response:
+                self.assertEqual((200, 200), (response.status, second_response.status))
+                first, second = json.load(response), json.load(second_response)
+        self.assertEqual(first, second)
+        self.assertEqual(['completed in background'], [e['data']['text'] for e in first['events']])
+        self.app.emit(self.sid, 'result', {})
+        self.assertEqual(['result'], [e['type'] for e in self.events(first['seq'])['events']])
+        resumed = self.fetch(f'/api/session?id={self.sid}')
+        self.assertEqual('done', resumed['state'])
+        self.assertEqual(['completed in background'], [m['text'] for m in resumed['messages']])
+        self.assertEqual(['separate answer'], [e['data']['text'] for e in self.events(0, other)['events']])
 
     def test_actual_coalesced_activity_does_not_trigger_false_gap(self):
         self.item.update(state='running', lastRunId='one')

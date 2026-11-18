@@ -293,6 +293,7 @@ globalThis.WorkspaceLayout = (() => {
     return false;
   }
   function dismissOverlays({focus=true} = {}) {
+    if (!sidebarOpen && !inspectorOpen && !resizeDrag) return false;
     const state = snapshot(), target = state.inspectorOverlay ? inspectorButton : state.sidebarOverlay ? sidebarButton : null;
     sidebarOpen = false; inspectorOpen = false;
     render();
