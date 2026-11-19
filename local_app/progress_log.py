@@ -358,7 +358,7 @@ class ProgressCapture:
         if not self.closed and isinstance(message, str):
             self._row('transport-error:' + self._digest(message), 'error', 'CLI 연결 오류', message)
 
-    def handle(self, data):
+    def handle(self, data, *, startup_profile=False):
         if self.closed or not isinstance(data, dict):
             return
         parent = data.get('parent_tool_use_id')
@@ -369,8 +369,10 @@ class ProgressCapture:
             return
         if kind == 'assistant' and data.get('error'):
             # Authentication errors can carry credentials/provider response data.
-            self._row('assistant-error:' + str(data.get('uuid') or 'reported'), 'error', 'CLI 오류',
-                      'Claude가 응답 오류를 보고했습니다. 대화 화면의 오류 안내를 확인해 주세요.', parent=parent)
+            text = 'Claude가 응답 오류를 보고했습니다. 대화 화면의 오류 안내를 확인해 주세요.'
+            if startup_profile:
+                text += '\n실행기 시작 시 관찰한 오류  profile_parse / launcher_profile'
+            self._row('assistant-error:' + str(data.get('uuid') or 'reported'), 'error', 'CLI 오류', text, parent=parent)
             return
         frame = _identifier(data.get('uuid'))
         if frame:
@@ -456,6 +458,8 @@ class ProgressCapture:
                 errors = data.get('errors')
                 if isinstance(errors, list):
                     text = '\n'.join(x for x in errors if isinstance(x, str)) or text
+                if startup_profile:
+                    text = '실행기 시작 시 관찰한 오류  profile_parse / launcher_profile\n' + text
             elif self._digest(text) in self.root_texts:
                 text = ''
             duration = data.get('duration_ms')

@@ -10,7 +10,7 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from local_app.bridge import probe_discovered_cli, resolve_cli
+from local_app.bridge import launch_marker_error, probe_discovered_cli, resolve_cli
 from tests.test_workspace_startup import HELPER, LAUNCHER, ps_quote
 
 
@@ -19,7 +19,7 @@ SHIM_FIXTURES = Path(__file__).parent / 'fixtures' / 'npm_claude_shims'
 
 @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell launcher')
 class LauncherResolutionTests(unittest.TestCase):
-    def launch(self, resolution, *, explicit=False, native=False, npm=False, unicode_python=False, windowless=False):
+    def launch(self, resolution, *, explicit=False, native=False, npm=False, unicode_python=False, windowless=False, startup_failure=False):
         with tempfile.TemporaryDirectory(prefix='workspace-resolution-한글 & ') as raw:
             root = Path(raw)
             deploy = root / 'deploy'
@@ -28,6 +28,17 @@ class LauncherResolutionTests(unittest.TestCase):
             result_file = root / 'selected.json'
             launcher = deploy / LAUNCHER.name
             launcher.write_bytes(LAUNCHER.read_bytes())
+            if startup_failure:
+                profile = root / 'synthetic.ps1'
+                profile.write_bytes(b'# private profile error\nif (')
+                # Mimic an automatic profile error already in this fresh host's
+                # error collection before the actual -File launcher's first action.
+                prelude = 'try { . ' + ps_quote(profile) + ' } catch {}\n'
+                launcher.write_text(launcher.read_text(encoding='utf-8-sig').replace(
+                    "$ErrorActionPreference = 'Stop'", prelude + "$ErrorActionPreference = 'Stop'", 1), encoding='utf-8-sig')
+                helper = root / 'local_app' / 'ClaudeLaunchDiagnostic.ps1'
+                helper.parent.mkdir()
+                helper.write_bytes((LAUNCHER.parents[1] / 'local_app' / helper.name).read_bytes())
             native_executable = root / '.local' / 'bin' / 'claude.exe'
             if native:
                 native_executable.parent.mkdir(parents=True)
@@ -73,6 +84,7 @@ function Start-Process {
     param($FilePath,$ArgumentList,$WorkingDirectory,$WindowStyle,[switch]$PassThru)
     $captured = @{
         unavailable=$env:COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE;
+        startupDiagnostic=$env:COMPANY_WORKSPACE_CLAUDE_STARTUP_DIAGNOSTIC;
         entry=$env:COMPANY_WORKSPACE_CLAUDE_ENTRY;
         profile=$env:COMPANY_WORKSPACE_CLAUDE_PROFILE;
         definitionHash=$env:COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH;
@@ -122,8 +134,10 @@ function Start-Process {
                        COMPANY_WORKSPACE_CLAUDE_ENTRY='stale-entry', COMPANY_WORKSPACE_CLAUDE_PROFILE='1',
                        COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH='stale-hash', COMPANY_WORKSPACE_SHELL='stale-shell',
                        CLAUDE_CONFIG_DIR='fixture-config-preserved', ANTHROPIC_MODEL='fixture-model-preserved')
+            invoke = (['-File', str(launcher), '-NoBrowser', '-PythonCommand', python_command, '-StateRoot', str(state)]
+                      if startup_failure else ['-Command', script])
             completed = subprocess.run(['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive',
-                                        '-ExecutionPolicy', 'Bypass', '-Command', script],
+                                        '-ExecutionPolicy', 'Bypass', *invoke],
                                        env=env, capture_output=True, encoding='utf-8', errors='replace', timeout=20,
                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(0, completed.returncode, completed.stderr)
@@ -142,6 +156,14 @@ function Start-Process {
                 self.assertTrue(value['pythonExists'])
                 self.assertEqual(949, value['codePage'])
             return value
+
+    def test_failed_startup_profile_is_observed_without_blocking_a_working_cli(self):
+        result = self.launch("return [pscustomobject]@{CommandType='ExternalScript';Source='fixture-wrapper.ps1'}", startup_failure=True)
+        self.assertFalse(result['unavailable'])
+        error = launch_marker_error(result['startupDiagnostic'])
+        self.assertEqual('launcher_profile', error.diagnostic['stage'])
+        self.assertEqual('profile_parse', error.diagnostic['category'])
+        self.assertNotIn('encodingHint', error.diagnostic)
 
     def test_missing_claude_still_requests_app_and_blocks_silent_cli_fallback(self):
         value = self.launch("throw 'private profile error'")

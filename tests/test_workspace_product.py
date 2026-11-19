@@ -324,7 +324,7 @@ class ProductTests(unittest.TestCase):
         self.app.error = 'old failure'
         with patch('local_app.server.resolve_cli') as resolve, patch('local_app.server.probe_cli', return_value={'version': 'fresh'}) as probe:
             result = self.app.reconnect(self.sid)
-        probe.assert_called_once_with(['fixture-cli'])
+        probe.assert_called_once_with(['fixture-cli'], cancel_event=self.app.customizations.cancel)
         resolve.assert_not_called()
         bridge.send.assert_called_once()
         bridge.interrupt.assert_not_called()
@@ -396,6 +396,13 @@ class ProductTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 request('/api/session/update', {'id': self.sid, 'pinned': True}, False)
             self.assertEqual(403, error.exception.code)
+            self.assertEqual('default', request('/api/claude-shell')['choice'])
+            with self.assertRaises(HTTPError) as shell_error:
+                request('/api/claude-shell', {'choice': 'default'}, False)
+            self.assertEqual(403, shell_error.exception.code)
+            with patch('local_app.server.probe_cli', return_value={'version': 'checked'}) as checked:
+                self.assertTrue(request('/api/claude-shell', {'choice': 'default', 'checkOnly': True})['ok'])
+                checked.assert_called_once()
             created = request('/api/create', {'managed': True, 'trusted': True, 'title': '주간 보고'})
             self.assertEqual('주간 보고', created['title'])
             self.assertTrue(request('/api/session/update', {'id': created['id'], 'pinned': True})['pinned'])

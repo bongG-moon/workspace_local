@@ -19,6 +19,44 @@ class WorkspaceErrorHelpTests(unittest.TestCase):
         result=subprocess.run([NODE,'-',str(ROOT/'local_app/web/app.js'),scenario,str(HELP)],input=HARNESS_WITH_HELP,text=True,encoding='utf-8',capture_output=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr or result.stdout)
 
+    def test_shell_controls_are_on_demand_and_copy_only_known_fields(self):
+        self.run_case(r'''(async()=>{
+          const calls=[],notices=[];
+          const controls={context:()=>({version:'0.23.48',build:'a'.repeat(64),root:'C:/private/updates/versions/0.23.48'}),
+            toast:text=>notices.push(text),openSettings(){},applied:async()=>calls.push('applied'),
+            api:async(path,body)=>{
+              calls.push(body||'read');
+              if(!body)return {choice:'default',available:{default:true,windows:true,pwsh:true}};
+              if(body.choice==='windows'){const e=Error('점검 실패');e.diagnostic={category:'profile_parse',stage:'profile_restore',shellVersion:'5.1',errorLine:12,
+                encodingHint:'utf8_without_bom',profile:'PRIVATE-PATH',token:'PRIVATE-TOKEN'};throw e;}
+              return {choice:body.choice,diagnostic:{stage:'help',shellVersion:'7.4',commandType:'Application'}};
+            }};
+          globalThis.WorkspaceErrorHelp.bindShell(controls);
+          const panel=$('claude-shell-panel'),select=$('claude-shell-choice'),check=$('claude-shell-check'),apply=$('claude-shell-apply');
+          select.options=[{value:'default'},{value:'windows'},{value:'pwsh'}];
+          assert.deepEqual(calls,[]);panel.open=true;await panel.ontoggle();
+          assert.deepEqual(calls,['read']);assert.equal(apply.disabled,true);
+          select.value='windows';select.onchange();await apply.onclick();assert.equal(apply.disabled,false);
+          const report=$('claude-shell-diagnostic').textContent;
+          assert.match(report,/profile_parse/);assert.match(report,/12행/);assert.match(report,/UTF-8/);
+          assert.match(report,/업데이트 버전 폴더/);assert.doesNotMatch(report,/PRIVATE|private/);
+          select.value='pwsh';select.onchange();await check.onclick();assert.equal(apply.disabled,false);
+          await apply.onclick();assert.equal(apply.disabled,true);
+          assert.deepEqual(calls,['read',{choice:'windows',checkOnly:false},{choice:'pwsh',checkOnly:true},{choice:'pwsh',checkOnly:false},'applied']);
+          error('연결 실패',null,'launch_cli_version',{category:'cli_version',stage:'version',startupProfile:{category:'profile_parse',
+            stage:'launcher_profile',errorLine:42,path:'PRIVATE-PATH'}});
+          $('error-help-open').onclick();
+          assert.equal($('error-launch-details').hidden,false);assert.match($('error-launch-summary').textContent,/42행/);
+          assert.doesNotMatch($('error-launch-summary').textContent,/PRIVATE|private/);
+          error('로그인 만료',null,'authentication_failed');$('error-help-open').onclick();
+          assert.equal($('error-launch-details').hidden,true);assert.equal($('error-launch-summary').textContent,'');
+          error('로그인 만료',null,'authentication_failed',{startupProfile:{category:'profile_parse',
+            stage:'launcher_profile',errorLine:15,source:'PRIVATE'}});
+          $('error-help-open').onclick();assert.match($('error-help-title').textContent,/인증/);
+          assert.equal($('error-launch-details').hidden,false);assert.match($('error-launch-summary').textContent,/15행/);
+          assert.doesNotMatch($('error-launch-summary').textContent,/PRIVATE/);
+        })()''')
+
     def test_classification_covers_known_messages_and_unknown_errors(self):
         self.run_case(r'''(()=>{const h=globalThis.WorkspaceErrorHelp;
           const cases=[['Claude Code를 찾지 못했습니다.',null,'not_found'],['이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다.',null,'unsupported'],['기존 Claude Code의 인증을 확인하지 못했습니다.',null,'auth'],['CLI 준비 응답이 60초 동안 없습니다.',null,'timeout'],['CLI 연결이 종료되었습니다.',null,'closed'],['모델 변경이 거절되었습니다.',null,'model_rejected'],['모델 변경 응답을 확인하지 못해 업무 연결을 종료했습니다.',null,'model_timeout'],['API Error 403: team not allowed to access model: secret', 'task_failed','model_permission'],['Claude가 도구 처리 뒤 최종 답변을 완료하지 못했어요. (진단: ede_diagnostic)',null,'diagnostic'],['다른 파일 읽기 오류', 'task_failed','generic']];

@@ -51,6 +51,8 @@ class LayoutPreferencesTests(unittest.TestCase):
                 invalid.extend({**LAYOUT, key: value} for value in (None, 0, 1, 'true', [], {}))
             invalid.extend({**LAYOUT, 'inspectorWidth': value} for value in
                            (True, False, 259, 561, 440.0, '440', None, float('nan'), float('inf')))
+            invalid.extend({**LAYOUT, 'promptHeight': value} for value in
+                           (True, 39, 561, 100.5, '100', None))
             for value in invalid:
                 with self.subTest(value=value), self.assertRaises(ValueError):
                     layout.configure(value)
@@ -58,6 +60,10 @@ class LayoutPreferencesTests(unittest.TestCase):
                 self.assertFalse(layout.path.exists())
             for width in (260, 560):
                 self.assertEqual(width, layout.configure({**LAYOUT, 'inspectorWidth': width})['inspectorWidth'])
+            for height in (40, 560):
+                value = {**LAYOUT, 'promptHeight': height}
+                self.assertEqual(value, layout.configure(value))
+                self.assertEqual(value, LayoutPreferences(directory).snapshot())
 
     def test_corrupt_oversized_or_unknown_fields_fall_back_without_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:

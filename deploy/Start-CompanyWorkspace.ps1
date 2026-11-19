@@ -6,6 +6,21 @@ param([string]$PythonCommand = 'auto', [switch]$Demo, [switch]$NoBrowser, [strin
       [ValidateSet('auto','normal','administrator')][string]$ExecutionMode = 'auto',
       [ValidatePattern('^[a-f0-9]{32}$')][string]$ExecutionRequestId)
 $ErrorActionPreference = 'Stop'
+# The installed host has already loaded its profiles before -File starts.
+# Consider only this fresh host, never an interactive shell's prior error history.
+$startupProfileError = $null
+if ($global:Error.Count) {
+    $hostArgs = [Environment]::GetCommandLineArgs()
+    $fileIndex = [Array]::IndexOf($hostArgs, '-File')
+    if ($fileIndex -ge 0 -and $hostArgs[$fileIndex + 1] -eq $PSCommandPath) {
+        for ($i = 0; $i -lt [Math]::Min(8, $global:Error.Count); $i++) {
+            if ($global:Error[$i].Exception -is [Management.Automation.ParseException]) {
+                $startupProfileError = $global:Error[$i]
+                break
+            }
+        }
+    }
+}
 $workspaceMutex = $null
 $workspaceLockHeld = $false
 $workspaceRoleMismatch = $false
@@ -461,7 +476,7 @@ try {
     if ($ExecutionMode -ne 'auto' -and $ExecutionMode -ne $actualExecutionMode) { throw 'WORKSPACE_STARTUP:33' }
     $ExecutionMode = $actualExecutionMode
     # Forward before acquiring the startup mutex: the child owns that lock.
-    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.48' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
+    if (Invoke-WorkspaceManagedUpdate -State $appStateRoot -CurrentVersion '0.23.49' -Python $PythonCommand -IsDemo ([bool]$Demo) -Headless ([bool]$NoBrowser) -Mode $ExecutionMode -ModeRequestId $ExecutionRequestId -Package $ExtensionPackage) { return }
     $mutexName = 'Local\CompanyWorkspace-' + $context.sid
     if ($Demo) { $mutexName += '-demo' }
     $workspaceMutex = New-Object Threading.Mutex($false, $mutexName)
@@ -533,7 +548,7 @@ try {
         # A same/newer live version owns the window regardless of ZIP location.
         # Never downgrade a running app just because an older EXE was opened.
         $runningVersion = $null
-        $targetVersion = [version]'0.23.48'
+        $targetVersion = [version]'0.23.49'
         if (-not [version]::TryParse([string]$health.workspaceVersion, [ref]$runningVersion)) { throw 'WORKSPACE_STARTUP:39' }
         $validExecutionPolicy = $health.executionModeProtocol -is [int] -or $health.executionModeProtocol -is [long]
         $executionPolicyUpgrade = $runningVersion -eq $targetVersion -and (-not $validExecutionPolicy -or $health.executionModeProtocol -lt 3)
@@ -556,6 +571,15 @@ try {
         # Older releases cannot preserve unsent input. Their single transition
         # confirmation is shown by the detached coordinator immediately at idle.
         if ($NoBrowser -and $health.upgradeProtocol -ne 1) { throw 'WORKSPACE_STARTUP:39' }
+    }
+    [Environment]::SetEnvironmentVariable('COMPANY_WORKSPACE_CLAUDE_STARTUP_DIAGNOSTIC', $null, 'Process')
+    $env:COMPANY_WORKSPACE_CLAUDE_SHELL_VERSION = '{0}.{1}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor
+    if ($startupProfileError -and -not $Demo) {
+        try {
+            . (Join-Path $appRoot 'local_app\ClaudeLaunchDiagnostic.ps1')
+            $env:COMPANY_WORKSPACE_CLAUDE_STARTUP_DIAGNOSTIC = Get-WorkspaceClaudeFailureMarker -Failure $startupProfileError -Category profile_load -Stage launcher_profile -LoadProfiles $true
+        } catch {} # Evidence must never prevent a working CLI or app from starting.
+        $startupProfileError = $null
     }
     Remove-Item -LiteralPath Env:COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE -ErrorAction SilentlyContinue
     if (-not $Demo -and -not $env:COMPANY_AGENT_CLAUDE) {

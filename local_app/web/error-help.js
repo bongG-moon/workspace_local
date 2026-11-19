@@ -2,6 +2,46 @@
 // Fixed guidance only. Never copy raw CLI/server errors or credentials into the dialog.
 globalThis.WorkspaceErrorHelp = (() => {
   const editModelSettings = '기본 모델을 바꾸려면 이 창을 닫고 오류 아래의 ‘Claude 설정 파일 열기’를 누르세요. 메모장에서 현재 연결의 사용자 설정 파일(settings.json)을 수정하고 저장한 뒤, 앱 상단의 ‘Claude Code 재시작’을 누르세요.';
+  const launchReasons = {
+    profile_parse:'PowerShell이 시작 설정 파일의 문법을 읽지 못했어요.',
+    profile_load:'PowerShell이 시작 설정 파일을 불러오다가 멈췄어요.',
+    command_not_found:'이 실행 환경에서 Claude 명령을 찾지 못했어요.',
+    config_root:'Claude 설정 폴더의 전체 경로를 확인해 주세요.',
+    function_changed:'다시 불러온 Claude 함수가 처음 확인한 함수와 달라요.',
+    cli_start:'Claude 실행 파일을 시작하지 못했어요.',
+    cli_version:'Claude 실행 버전을 확인하지 못했어요.',
+    cli_options:'Claude가 앱에 필요한 실행 옵션을 제공하는지 확인하지 못했어요.',
+    cli_initialize:'Claude의 첫 연결 응답을 확인하지 못했어요.',
+    cli_protocol:'Claude의 연결 응답 형식을 읽지 못했어요.'
+  };
+  const stages = {launcher_profile:'실행기 프로필',profile_restore:'프로필 불러오기',command_resolution:'명령 찾기',
+    function_restore:'함수 확인',process_start:'프로세스 시작',version:'버전 확인',help:'실행 옵션 확인',
+    initialize:'첫 연결 응답',protocol:'응답 형식 확인'};
+  let shellControls;
+  function diagnosticSummary(d, nested=false) {
+    if(!d || typeof d!=='object')return '';
+    const lines=[], ctx=shellControls?.context()||{};
+    if(!nested&&/^\d+\.\d+\.\d+$/.test(ctx.version))lines.push('AX Workspace '+ctx.version);
+    if(!nested&&/^[a-f0-9]{64}$/i.test(ctx.build))lines.push('빌드 '+ctx.build.slice(0,12));
+    if(!nested&&ctx.root){
+      const parts=String(ctx.root).toLowerCase().replaceAll('\\','/').split('/');
+      const updated=parts.some((part,i)=>part==='updates'&&parts[i+1]==='versions');
+      lines.push('실행 위치  '+(updated?'업데이트 버전 폴더':parts.includes('workspace-runtime')?'설치 실행 폴더':'별도 실행 폴더'));
+    }
+    if(Object.hasOwn(launchReasons,d.category))lines.push('진단  '+d.category);
+    if(Object.hasOwn(stages,d.stage))lines.push('단계  '+stages[d.stage]+' ('+d.stage+')');
+    if(/^\d{1,2}\.\d{1,3}(?:\.\d{1,6}){0,2}$/.test(d.shellVersion))lines.push('PowerShell '+d.shellVersion);
+    if(['Function','Application','ExternalScript','Alias','Unknown'].includes(d.commandType))lines.push('명령 유형  '+d.commandType);
+    if(['exe','cmd','bat','ps1','function'].includes(d.entryKind))lines.push('실행 항목  '+d.entryKind);
+    if(d.exceptionType==='ParseException')lines.push('예외 유형  ParseException');
+    if(typeof d.loadProfiles==='boolean')lines.push('호출 시 프로필 로드  '+(d.loadProfiles?'예':'아니요'));
+    if(Number.isInteger(d.errorLine)&&d.errorLine>0)lines.push('오류 위치  '+d.errorLine+'행');
+    if(d.encodingHint==='utf8_without_bom')lines.push('인코딩  같은 파일을 UTF-8로 해석했을 때 문법 검사를 통과했어요.');
+    if(!nested&&d.startupProfile?.stage==='launcher_profile'&&Object.hasOwn(launchReasons,d.startupProfile.category)){
+      lines.push('','실행기 시작 시 관찰',diagnosticSummary(d.startupProfile,true));
+    }
+    return lines.join('\n');
+  }
   const entries = {
     not_found: ['Claude Code를 찾지 못했어요', '앱이 현재 실행 환경에서 Claude 명령을 찾지 못했어요.', ['Claude Code가 설치되지 않았거나 앱의 실행 경로에서 보이지 않을 수 있어요.', '터미널과 앱의 실행 계정이나 환경이 다를 수 있어요.'], ['Windows 시작 메뉴에서 PowerShell을 열고 claude --version을 입력해 실행되는지 확인하세요.', '명령을 찾지 못하면 회사의 Claude Code 설치 안내를 따르거나 담당자에게 문의하세요.', '터미널에서는 되는데 앱에서만 안 되면 앱의 설정에서 완전히 종료한 뒤 같은 Windows 계정으로 다시 열어 보세요.']],
     unsupported: ['Claude 연결 기능을 확인해 주세요', '현재 Claude Code가 앱에 필요한 연결 옵션을 제공하지 않았어요.', ['Claude Code 버전이 오래됐거나 다른 실행 파일을 사용 중일 수 있어요.'], ['Windows 시작 메뉴에서 PowerShell을 열고 claude --version을 입력해 버전을 확인하세요.', '회사에 정해진 업데이트 방법이 있으면 그 안내를 따르세요. 그렇지 않으면 터미널에서 claude를 실행하고 Claude에게 ‘최신 버전으로 업데이트해 줘’라고 요청하세요. 실행 전 제안된 변경을 확인하세요.', 'Claude가 실행되지 않거나 업데이트가 제한되면 회사 담당자에게 업데이트 방법을 문의하세요.', '업데이트가 완료됐는지 확인한 뒤 앱의 설정에서 완전히 종료하고 다시 열어 연결해 보세요.']],
@@ -17,6 +57,7 @@ globalThis.WorkspaceErrorHelp = (() => {
   };
   function classify(message, code) {
     const s=String(message||'').toLowerCase(), c=String(code||'').toLowerCase();
+    if(c.startsWith('launch_')&&Object.hasOwn(launchReasons,c.slice(7)))return 'launch';
     if (c==='model_permission' || /\b(?:team|key|token|user)[^\n]{0,200}\bnot allowed[^\n]{0,100}\bmodel\b/.test(s) || /\b(?:no|not have|does not have|do not have)[^\n]{0,40}\b(?:access|permission)[^\n]{0,80}\bmodel\b/.test(s)) return 'model_permission';
     if (c==='model_not_found') return 'model_not_found';
     if (c==='cli_turn_incomplete'||s.includes('ede_diagnostic')) return 'diagnostic';
@@ -31,15 +72,36 @@ globalThis.WorkspaceErrorHelp = (() => {
   }
   let current=null;
   const node=id=>document.getElementById(id);
-  function update(message, code, owner){
-    const next=message?{kind:classify(message,code),owner:owner||null}:null;
+  function update(message, code, owner, diagnostic){
+    const category=diagnostic?.category||String(code||'').replace(/^launch_/,'');
+    const launch=Object.hasOwn(launchReasons,category);
+    const guide=launch?classify(message):null;
+    const startup=diagnostic?.startupProfile;
+    const observed=startup?.stage==='launcher_profile'&&['profile_parse','profile_load'].includes(startup.category);
+    const next=message?{kind:launch?'launch':classify(message,code),guide,owner:owner||null,
+      diagnostic:launch?{...diagnostic,category}:observed?{startupProfile:startup}:null}:null;
     const dialog=node('error-help-dialog');
-    if(dialog?.open && (!next || !current || next.kind!==current.kind || next.owner!==current.owner))dialog.close();
+    if(dialog?.open && (!next || !current || next.kind!==current.kind || next.owner!==current.owner || diagnosticSummary(next.diagnostic)!==diagnosticSummary(current.diagnostic)))dialog.close();
     current=next;
   }
   function open(show){
     if(!current)return;
-    const [title,summary,causes,actions,note]=entries[current.kind], dialog=node('error-help-dialog');
+    const d=current.diagnostic;
+    const launchCauses={profile_parse:'파일의 문법이나 PowerShell이 문자를 읽는 방식에 따라 시작 설정을 불러오지 못할 수 있어요.',
+      config_root:'업무 폴더가 달라져도 같은 설정을 쓰려면 PowerShell의 CLAUDE_CONFIG_DIR에 전체 경로를 지정해 주세요.',
+      profile_load:'시작 설정에서 참조하는 파일이나 명령이 이 환경에서 제공되는지 확인하세요.',
+      function_changed:'터미널을 열 때마다 다른 함수가 만들어지거나 서로 다른 프로필을 사용했을 수 있어요.',
+      command_not_found:'앱과 평소 터미널이 서로 다른 시작 설정이나 실행 경로를 쓸 수 있어요.'};
+    const related=d&&(d.category==='cli_options'&&current.guide==='unsupported'?'unsupported':
+      d.category==='command_not_found'?'not_found':d.category==='cli_initialize'&&current.guide==='timeout'?'timeout':null);
+    const launchHelp=current.kind==='launch'&&[related?entries[related][0]:'Claude 실행 환경을 확인해 주세요',launchReasons[d.category],
+      [d.encodingHint==='utf8_without_bom'?'이 파일은 UTF-8로 읽었을 때 문법 검사를 통과했어요. 평소 사용하는 PowerShell에서 점검해 보세요.':launchCauses[d.category]||'사용 중인 Claude 실행 버전과 연결에 필요한 옵션을 확인해 주세요.'],
+      ['아래의 실행 환경 확인을 열고, 터미널에서 Claude가 정상 작동하는 PowerShell을 선택해 점검하세요.',
+       ...(related?entries[related][3]:[]),
+       '도움이 필요하면 진단 요약을 복사해 담당자에게 전달하세요.']];
+    const [title,summary,causes,actions,note]=launchHelp||entries[current.kind], dialog=node('error-help-dialog');
+    node('error-launch-details').hidden=!d;
+    node('error-launch-summary').textContent=diagnosticSummary(d);
     node('error-help-title').textContent=title;node('error-help-summary').textContent=summary;
     const visibleActions = node('recovery-settings-file')?.hidden === false
       ? actions : actions.filter(step => step !== editModelSettings);
@@ -49,5 +111,65 @@ globalThis.WorkspaceErrorHelp = (() => {
     const footer=node('error-help-note');footer.textContent=note||'안내를 확인한 뒤 필요한 작업을 직접 선택해 주세요.';
     if(!dialog.open){show();node('error-help-close').focus({preventScroll:true});}
   }
-  return {classify,update,open};
+  function bindShell(controls){
+    shellControls=controls;
+    const panel=node('claude-shell-panel'), select=node('claude-shell-choice'), status=node('claude-shell-status');
+    const check=node('claude-shell-check'), apply=node('claude-shell-apply'), copy=node('claude-shell-copy');
+    const report=node('claude-shell-diagnostic');
+    let saved=null, busy=false;
+    const lock=()=>{
+      select.disabled=busy||!saved;
+      check.disabled=select.disabled;
+      apply.disabled=select.disabled||select.value===saved;
+    };
+    function showReport(d){
+      report.textContent=diagnosticSummary(d);
+      copy.hidden=report.hidden=!report.textContent;
+    }
+    async function copyReport(value){
+      if(!value)return;
+      try{await navigator.clipboard.writeText(value);controls.toast('진단 요약을 복사했어요.');}
+      catch{controls.toast('복사할 수 없어요. 표시된 진단 내용을 선택해 복사하세요.');}
+    }
+    panel.ontoggle=async()=>{
+      if(!panel.open||busy)return;
+      if(controls.context().demo){status.textContent='실행 환경 점검은 실제 앱 연결에서 사용할 수 있어요.';return;}
+      busy=true;lock();showReport(null);status.textContent='설정을 불러오고 있어요.';
+      try{
+        const config=await controls.api('/api/claude-shell');
+        for(const option of select.options)option.disabled=config.available?.[option.value]===false;
+        saved=config.choice;select.value=saved;
+        status.textContent='선택한 환경에서 Claude 실행과 연결에 필요한 옵션을 확인할 수 있어요.';
+      }catch{saved=null;status.textContent='설정을 불러올 수 없어요. 이 항목을 닫았다 다시 열어 주세요.';}
+      finally{busy=false;lock();}
+    };
+    async function probe(checkOnly){
+      if(busy||!saved||!checkOnly&&select.value===saved)return;
+      busy=true;lock();showReport(null);status.textContent='선택한 PowerShell에서 Claude 실행을 확인하고 있어요…';
+      try{
+        const result=await controls.api('/api/claude-shell',{choice:select.value,checkOnly});
+        showReport(result.diagnostic);
+        if(checkOnly){
+          status.textContent='Claude 실행과 연결에 필요한 옵션을 확인했어요. 로그인과 모델 권한은 실제 요청에서 확인돼요.';
+        }else{
+          saved=result.choice;select.value=saved;
+          status.textContent='저장했어요. 다음에 새로 연결할 때부터 이 환경을 사용해요. 진행 중인 업무는 계속됩니다.';
+          try{await controls.applied();}catch{status.textContent+=' 앱을 다시 열면 저장한 설정이 표시돼요.';}
+        }
+        if(result.chatSupported===false)status.textContent+=' 이 버전에서는 일반 대화에 필요한 기능을 확인하지 못했어요.';
+      }catch(err){
+        status.textContent=err.message||launchReasons[err.diagnostic?.category]||'실행 환경을 확인할 수 없어요.';
+        showReport(err.diagnostic);
+      }finally{busy=false;lock();}
+    }
+    select.onchange=()=>{showReport(null);status.textContent=select.value===saved?'현재 사용 중인 설정이에요.':'점검 후 적용을 누르면 이후 새 연결에 사용해요.';lock();};
+    check.onclick=()=>probe(true);apply.onclick=()=>probe(false);
+    copy.onclick=()=>copyReport(report.textContent);
+    node('error-launch-copy').onclick=()=>copyReport(node('error-launch-summary').textContent);
+    node('error-launch-open').onclick=()=>{
+      node('error-help-dialog').close();if(!node('settings-dialog').open)controls.openSettings();
+      panel.open=true;panel.querySelector('summary').focus();
+    };
+  }
+  return {classify,update,open,bindShell};
 })();

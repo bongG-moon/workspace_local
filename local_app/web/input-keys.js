@@ -7,11 +7,12 @@ globalThis.WorkspaceInputKeys = (() => {
   const graphemes = typeof Intl?.Segmenter === "function" ? new Intl.Segmenter(undefined, {granularity:"grapheme"}) : null;
   const words = typeof Intl?.Segmenter === "function" ? new Intl.Segmenter(undefined, {granularity:"word"}) : null;
   let hooks = null, input = null, contextId, composing = false, changing = false;
-  let browsing = null, killed = [], yank = null, measure = null;
+  let browsing = null, pendingUp = null, killed = [], yank = null, measure = null;
   function copyDraft(value) {
     return {text:String(value?.text || ""), attachments:Array.isArray(value?.attachments) ? [...value.attachments] : []};
   }
-  function reset() { browsing = null; yank = null; }
+  function cancelUp() { pendingUp = null; if (browsing) browsing.continuous = false; }
+  function reset() { browsing = null; yank = null; cancelUp(); }
   function context() {
     const value = hooks?.context?.() || {};
     if (value.id !== contextId) { contextId = value.id; reset(); killed = []; }
@@ -25,12 +26,16 @@ globalThis.WorkspaceInputKeys = (() => {
       input.removeEventListener?.("input", edited);
       input.removeEventListener?.("compositionstart", startComposition);
       input.removeEventListener?.("compositionend", endComposition);
+      input.removeEventListener?.("blur", cancelUp);
+      input.removeEventListener?.("pointerdown", cancelUp);
     }
     hooks = options; input = options?.input || null; contextId = undefined;
     composing = false; reset(); killed = [];
     input?.addEventListener?.("input", edited);
     input?.addEventListener?.("compositionstart", startComposition);
     input?.addEventListener?.("compositionend", endComposition);
+    input?.addEventListener?.("blur", cancelUp);
+    input?.addEventListener?.("pointerdown", cancelUp);
   }
   function caret(start, end = start) { input.setSelectionRange(start, end); }
   function boundaries(text) {
@@ -71,6 +76,32 @@ globalThis.WorkspaceInputKeys = (() => {
     // Compare values, not array identities, before replacing a recalled draft.
     try { return JSON.stringify(copyDraft(hooks?.capture?.() || {text:input.value})); }
     catch (_) { return null; }
+  }
+  function firstVisualLine(text, position) {
+    if (!position) return true;
+    const first = text.slice(0, lineEnd(text, 0));
+    if (position > first.length) return false;
+    if (unwrapped(first)) return true;
+    if (!document.createRange || !document.body || document.fonts?.status === "loading") return false;
+    // Only a second deliberate Up needs this check. Use the browser's actual
+    // line breaking (including Korean and tabs) when the first row wraps.
+    const style = getComputedStyle(input);
+    if (style.writingMode !== "horizontal-tb") return false;
+    const width = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    if (!(width > 0)) return false;
+    const mirror = document.createElement("div");
+    mirror.style.cssText = "position:fixed;inset:0 auto auto 0;visibility:hidden;pointer-events:none;contain:strict;height:1px;padding:0;border:0";
+    mirror.style.width = width + "px";
+    for (const key of ["font", "lineHeight", "letterSpacing", "wordSpacing", "whiteSpace", "overflowWrap", "wordBreak", "lineBreak", "tabSize", "direction", "textIndent", "textTransform"]) mirror.style[key] = style[key];
+    mirror.textContent = first;
+    document.body.append(mirror);
+    try {
+      const range = document.createRange(), node = mirror.firstChild;
+      range.setStart(node, 0); range.setEnd(node, 1);
+      const top = range.getBoundingClientRect().top, offset = Math.min(position, first.length - 1);
+      range.setStart(node, offset); range.setEnd(node, offset + 1);
+      return Math.abs(range.getBoundingClientRect().top - top) < (parseFloat(style.lineHeight) || 2) / 2;
+    } finally { mirror.remove(); }
   }
   function wordRanges(text) {
     const ranges = [];
@@ -122,15 +153,15 @@ globalThis.WorkspaceInputKeys = (() => {
       return input.value === expected;
     } finally { changing = false; }
   }
-  function history(direction) {
+  function history(direction, originalCaret = input.selectionStart) {
     const current = context();
-    if (browsing && (browsing.observed === null || draftFingerprint() !== browsing.observed)) reset();
     if (!browsing) {
       if (direction > 0) return false;
-      const rows = (Array.isArray(current.history) ? current.history : []).filter(row => typeof row?.text === "string" && (row.text || row.files?.length)).slice(-HISTORY_LIMIT);
+      const source = current.history;
+      const rows = (Array.isArray(source) ? source : []).filter(row => typeof row?.text === "string" && (row.text || row.files?.length)).slice(-HISTORY_LIMIT);
       if (!rows.length) return false;
       browsing = {rows, index:rows.length, draft:copyDraft(hooks?.capture?.() || {text:input.value}),
-        start:input.selectionStart, end:input.selectionEnd};
+        start:originalCaret, end:originalCaret};
     }
     const state = browsing;
     const index = Math.max(0, Math.min(state.rows.length, state.index + direction));
@@ -145,6 +176,7 @@ globalThis.WorkspaceInputKeys = (() => {
       // Retain this navigation transaction after that synchronous shared hook.
       browsing = state;
       state.index = index;
+      state.continuous = true;
       state.observed = draftFingerprint();
       if (atDraft) caret(state.start, state.end);
       else caret(direction < 0 ? 0 : draft.text.length);
@@ -165,6 +197,8 @@ globalThis.WorkspaceInputKeys = (() => {
     return true;
   }
   function keydown(event) {
+    const plainUp = event.key === "ArrowUp" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+    if (!plainUp || event.repeat || event.defaultPrevented || event.isComposing || event.keyCode === 229) cancelUp();
     if (!input || event.defaultPrevented || event.isComposing || event.keyCode === 229 || composing || input.readOnly || input.disabled
         || (event.target && event.target !== input) || event.metaKey || (event.ctrlKey && event.altKey)) return false;
     context();
@@ -178,14 +212,25 @@ globalThis.WorkspaceInputKeys = (() => {
       reset(); changing = true;
       try { document.execCommand?.("undo"); hooks?.edited?.(); } finally { changing = false; }
     });
-    if (!control && !alt && start === end && ["arrowup", "arrowdown"].includes(key)) {
-      const up = key === "arrowup";
-      const absoluteEdge = up ? start === 0 : end === text.length;
-      const logicalEdge = up ? lineStart(text, start) === 0 : lineEnd(text, end) === text.length;
-      if (absoluteEdge || (logicalEdge && unwrapped(text))) {
-        if (!history(up ? -1 : 1)) return false;
+    if (browsing && (plainUp || key === "arrowdown" || (control && ["p", "n"].includes(key))) &&
+        (browsing.observed === null || draftFingerprint() !== browsing.observed)) reset();
+    if (plainUp && !event.repeat) {
+      const previous = pendingUp; pendingUp = null;
+      if (start !== end || lineStart(text, start) !== 0) return false;
+      const now = event.timeStamp ?? Date.now();
+      if (browsing?.continuous ? firstVisualLine(text, start) :
+          previous && previous.text === text && now - previous.at <= 1500 &&
+          (start === 0 || start === previous.position) && firstVisualLine(text, previous.position)) {
+        if (!history(-1, previous?.position ?? start)) return false;
         event.preventDefault(); return true;
       }
+      pendingUp = {text, position:start, at:now};
+      return false; // The first press always belongs to normal caret navigation.
+    }
+    if (browsing && !control && !alt && start === end && key === "arrowdown" &&
+        (end === text.length || (lineEnd(text, end) === text.length && unwrapped(text)))) {
+      if (!history(1)) return false;
+      event.preventDefault(); return true;
     }
     if (control && ["p", "n"].includes(key)) {
       if (start !== end) return false;
@@ -227,5 +272,5 @@ globalThis.WorkspaceInputKeys = (() => {
     if (!["shift", "control", "alt"].includes(key)) yank = null;
     return false;
   }
-  return {attach, keydown, reset};
+  return {attach, keydown, reset, cancelUp};
 })();

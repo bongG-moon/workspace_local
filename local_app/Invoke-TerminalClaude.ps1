@@ -1,6 +1,10 @@
 # Deliberately NOT an advanced script: PowerShell common-parameter binding would
 # consume Claude's --verbose instead of forwarding it to the existing command.
 $ErrorActionPreference = 'Stop'
+$failureCategory = 'cli_start'
+$failureStage = 'process_start'
+$commandType = 'Unknown'
+$LoadProfiles = $false
 try {
     if ($args.Count -lt 2 -or $args[0] -ne '-Entry') { throw 'Missing terminal command' }
     $Entry = [string]$args[1]
@@ -9,6 +13,9 @@ try {
     $CliArguments = @($args | Select-Object -Skip $argumentOffset)
     $workspaceDirectory = Get-Location
     if ($LoadProfiles) {
+        $commandType = 'Function'
+        $failureCategory = 'profile_load'
+        $failureStage = 'profile_restore'
         # Match the launching PowerShell host, without putting profile banners
         # into the CLI JSON channel. Never load a profile from a different user.
         $profilePaths = @($PROFILE.AllUsersAllHosts, $PROFILE.AllUsersCurrentHost,
@@ -17,8 +24,16 @@ try {
             if (Test-Path -LiteralPath $profilePath) { . $profilePath *> $null }
         }
         Set-Location -LiteralPath $workspaceDirectory
+        $failureCategory = 'command_not_found'
+        $failureStage = 'command_resolution'
         $resolvedClaude = Get-Command $Entry -ErrorAction Stop | Select-Object -First 1
-        while ($resolvedClaude.CommandType -eq 'Alias') { $resolvedClaude = $resolvedClaude.ResolvedCommand }
+        $aliasDepth = 0
+        while ($resolvedClaude -and $resolvedClaude.CommandType -eq 'Alias') {
+            if (++$aliasDepth -gt 16) { throw 'Terminal alias resolution failed' }
+            $resolvedClaude = $resolvedClaude.ResolvedCommand
+        }
+        $failureCategory = 'function_changed'
+        $failureStage = 'function_restore'
         if ($resolvedClaude.CommandType -ne 'Function') { throw 'Terminal function was not restored' }
         $definitionHasher = [Security.Cryptography.SHA256]::Create()
         try {
@@ -27,6 +42,10 @@ try {
             if ($definitionHash -ne $env:COMPANY_WORKSPACE_CLAUDE_DEFINITION_HASH) { throw 'Terminal function has changed' }
         } finally { $definitionHasher.Dispose() }
     }
+    elseif ([IO.Path]::GetExtension($Entry) -eq '.ps1') { $commandType = 'ExternalScript' }
+    else { $commandType = 'Application' }
+    $failureCategory = 'cli_start'
+    $failureStage = 'process_start'
     [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
     $OutputEncoding = [Console]::OutputEncoding
@@ -37,8 +56,11 @@ try {
     if (-not $?) { exit 1 }
     exit $LASTEXITCODE
 } catch {
-    # The underlying error may contain profile secrets. Leave details in the
-    # user's original CLI; do not persist or print them in the local web app.
-    [Console]::Error.WriteLine('The existing terminal Claude command could not start. No settings were changed.')
-    exit 1
+    $failure = $_
+    try {
+        . (Join-Path $PSScriptRoot 'ClaudeLaunchDiagnostic.ps1')
+        $marker = Get-WorkspaceClaudeFailureMarker -Failure $failure -Category $failureCategory -Stage $failureStage -CommandType $commandType -LoadProfiles $LoadProfiles
+        [Console]::Error.WriteLine($marker)
+    } catch {}
+    exit 78
 }

@@ -295,7 +295,7 @@ class WorkspaceChatShortcutTests(unittest.TestCase):
     def test_editor_history_retains_navigation_across_shared_restore_hooks(self):
         self.run_case(r"""
           active.messages=[{role:'user',text:'첫 요청',files:['C:/first.png']},{role:'user',text:'둘째 요청',files:['C:/second.csv']}];
-          set('내 초안',0);attachments=['C:/draft.xlsx'];press('ArrowUp');assert.equal(input.value,'둘째 요청');
+          set('내 초안',0);attachments=['C:/draft.xlsx'];press('ArrowUp');assert.equal(input.value,'내 초안');press('ArrowUp');assert.equal(input.value,'둘째 요청');
           press('ArrowUp');assert.equal(input.value,'첫 요청');input.setSelectionRange(input.value.length);press('ArrowDown');
           assert.equal(input.value,'둘째 요청');press('ArrowDown');assert.equal(input.value,'내 초안');
           assert.deepEqual(attachments,['C:/draft.xlsx']);assert.equal(input.selectionStart,0);assert.equal(submitted,0);

@@ -29,6 +29,7 @@ function press(key,options={}){const event={key,target:input,defaultPrevented:fa
  preventDefault(){this.defaultPrevented=true;},...options};const handled=editor.keydown(event);return {handled,prevented:event.defaultPrevented};}
 function ctrl(key,options={}){return press(key,{ctrlKey:true,...options});}
 function alt(key,options={}){return press(key,{altKey:true,...options});}
+function enterHistory(){const draft=input.value;assert.equal(press('ArrowUp').handled,false);assert.equal(input.value,draft);return press('ArrowUp');}
 const scenario=process.argv[3];
 try{eval(scenario);}catch(error){console.error(error.stack||error);process.exitCode=1;}
 """
@@ -47,7 +48,7 @@ class WorkspaceInputKeysTests(unittest.TestCase):
         self.run_case(r"""
           task.history=[{text:'첫 요청',files:['C:/first.png']},{text:'둘째 요청',files:['C:/second.csv']}];
           set('보내지 않은 초안',0);attachments=['C:/draft.docx'];
-          assert.equal(press('ArrowUp').handled,true);assert.equal(input.value,'둘째 요청');
+          assert.equal(enterHistory().handled,true);assert.equal(input.value,'둘째 요청');
           assert.deepEqual([...attachments],['C:/second.csv']);assert.notEqual(attachments,task.history[1].files);
           assert.equal(press('ArrowUp').handled,true);assert.equal(input.value,'첫 요청');
           input.setSelectionRange(input.value.length,input.value.length);
@@ -59,11 +60,11 @@ class WorkspaceInputKeysTests(unittest.TestCase):
 
     def test_history_is_scoped_and_an_edited_recalled_prompt_becomes_the_new_draft(self):
         self.run_case(r"""
-          task.history=[{text:'업무 A 요청',files:[]}];set('A 초안',0);press('ArrowUp');
-          set('수정한 요청',0);attachments=['C:/new.pdf'];press('ArrowUp');
+          task.history=[{text:'업무 A 요청',files:[]}];set('A 초안',0);enterHistory();
+          set('수정한 요청',0);attachments=['C:/new.pdf'];enterHistory();
           input.setSelectionRange(input.value.length,input.value.length);press('ArrowDown');
           assert.equal(input.value,'수정한 요청');assert.deepEqual([...attachments],['C:/new.pdf']);
-          task={id:'B',history:[{text:'업무 B 요청',files:[]}]};set('B 초안',0);press('ArrowUp');
+          task={id:'B',history:[{text:'업무 B 요청',files:[]}]};set('B 초안',0);enterHistory();
           assert.equal(input.value,'업무 B 요청');input.setSelectionRange(input.value.length,input.value.length);press('ArrowDown');
           assert.equal(input.value,'B 초안');editor.reset();assert.equal(ctrl('n').prevented,true);
         """)
@@ -72,7 +73,7 @@ class WorkspaceInputKeysTests(unittest.TestCase):
         self.run_case(r"""
           const restore=options.restore;options.restore=draft=>{restore(draft);editor.reset();};editor.attach(options);
           task.history=[{text:'older',files:[]},{text:'latest',files:[]}];set('draft',0);attachments=['D:/draft.png'];
-          press('ArrowUp');assert.equal(input.value,'latest');press('ArrowUp');assert.equal(input.value,'older');
+          enterHistory();assert.equal(input.value,'latest');press('ArrowUp');assert.equal(input.value,'older');
           input.setSelectionRange(input.value.length,input.value.length);press('ArrowDown');assert.equal(input.value,'latest');
           press('ArrowDown');assert.equal(input.value,'draft');assert.deepEqual([...attachments],['D:/draft.png']);
         """)
@@ -80,14 +81,14 @@ class WorkspaceInputKeysTests(unittest.TestCase):
     def test_attachment_only_edits_reset_history_without_overwriting_new_files(self):
         self.run_case(r"""
           task.history=[{text:'older',files:['D:/old.png']},{text:'latest',files:['D:/latest.png']}];
-          set('original draft',0);attachments=['D:/original.pdf'];press('ArrowUp');
+          set('original draft',0);attachments=['D:/original.pdf'];enterHistory();
           attachments.push('D:/new.xlsx');input.setSelectionRange(input.value.length,input.value.length);
           assert.equal(press('ArrowDown').handled,false);assert.equal(input.value,'latest');
           assert.deepEqual([...attachments],['D:/latest.png','D:/new.xlsx']);
-          input.setSelectionRange(0,0);press('ArrowUp');assert.equal(input.value,'latest');
+          input.setSelectionRange(0,0);enterHistory();assert.equal(input.value,'latest');
           input.setSelectionRange(input.value.length,input.value.length);press('ArrowDown');
           assert.deepEqual([...attachments],['D:/latest.png','D:/new.xlsx']);
-          input.setSelectionRange(0,0);press('ArrowUp');attachments.splice(0,1);
+          input.setSelectionRange(0,0);enterHistory();attachments.splice(0,1);
           input.setSelectionRange(input.value.length,input.value.length);ctrl('n');
           assert.deepEqual([...attachments],[]);assert.equal(input.value,'latest');
           assert.deepEqual(task.history[1].files,['D:/latest.png']);
@@ -98,9 +99,9 @@ class WorkspaceInputKeysTests(unittest.TestCase):
           ctx.getComputedStyle=()=>({paddingLeft:'10px',paddingRight:'10px',letterSpacing:'normal',wordSpacing:'normal',fontSize:'16px',font:'16px sans-serif'});
           let created=0;document.createElement=()=>{created++;return {getContext:()=>({measureText:value=>({width:[...value].length*10})})};};
           input.clientWidth=400;task.history=[{text:'previous',files:[]}];
-          set('single line');press('ArrowUp');assert.equal(input.value,'previous');
+          set('single line');enterHistory();assert.equal(input.value,'previous');
           input.setSelectionRange(3,3);press('ArrowDown');assert.equal(input.value,'single line');assert.equal(input.selectionStart,11);
-          set('first line\nlast line',4);press('ArrowUp');assert.equal(input.value,'previous');
+          set('first line\nlast line',4);enterHistory();assert.equal(input.value,'previous');
           press('ArrowDown');assert.equal(input.value,'first line\nlast line');assert.equal(input.selectionStart,4);
           input.setSelectionRange(13,13);assert.equal(press('ArrowDown').handled,false);
           input.setSelectionRange(4,4);assert.equal(press('ArrowDown').handled,false);
@@ -120,7 +121,7 @@ class WorkspaceInputKeysTests(unittest.TestCase):
           style.letterSpacing='normal';input.clientWidth=0;assert.equal(press('ArrowUp').handled,false);
           input.clientWidth=400;style.writingMode='vertical-rl';assert.equal(press('ArrowUp').handled,false);
           style.writingMode='horizontal-tb';style.fontSize='unknown';assert.equal(press('ArrowUp').handled,false);
-          input.setSelectionRange(0,0);assert.equal(press('ArrowUp').handled,true);assert.equal(input.value,'previous');
+          input.setSelectionRange(0,0);assert.equal(enterHistory().handled,true);assert.equal(input.value,'previous');
         """)
 
     def test_history_memory_keeps_only_last_100_and_skips_bad_rows(self):
@@ -130,6 +131,31 @@ class WorkspaceInputKeysTests(unittest.TestCase):
           assert.equal(input.value,'40');assert.equal(restores,100);
           for(let i=0;i<100;i++){input.setSelectionRange(input.value.length,input.value.length);press('ArrowDown');}
           assert.equal(input.value,'');
+        """)
+
+    def test_click_inside_recalled_request_returns_up_to_editor_without_losing_original_draft(self):
+        self.run_case(r"""
+          task.history=[{text:'older',files:[]},{text:'recent',files:[]}];set('draft',0);
+          enterHistory();emit('pointerdown');
+          assert.equal(press('ArrowUp').handled,false);assert.equal(input.value,'recent');
+          press('ArrowUp');assert.equal(input.value,'older');
+          input.setSelectionRange(5,5);press('ArrowDown');press('ArrowDown');assert.equal(input.value,'draft');
+        """)
+
+    def test_history_requires_two_separate_presses_in_the_same_draft(self):
+        self.run_case(r"""
+          let reads=0;const row={text:'previous',files:[]};
+          Object.defineProperty(task,'history',{get(){reads++;return [row];}});
+          set('draft',0);press('ArrowUp',{timeStamp:100});
+          press('ArrowUp',{timeStamp:2500});assert.equal(input.value,'draft');
+          press('ArrowUp',{repeat:true});assert.equal(input.value,'draft');
+          for(const interrupt of [()=>press('ArrowLeft'),()=>emit('pointerdown'),()=>emit('blur'),
+                                 ()=>{emit('compositionstart');emit('compositionend');},()=>editor.cancelUp()]){
+            press('ArrowUp',{repeat:true});press('ArrowUp');interrupt();
+            press('ArrowUp');assert.equal(input.value,'draft');
+          }
+          assert.equal(reads,0);editor.cancelUp();
+          enterHistory();assert.equal(input.value,'previous');assert.equal(reads,1);
         """)
 
     def test_plain_arrows_preserve_multiline_navigation_and_selection(self):

@@ -582,6 +582,12 @@ dialog.path-picker .path-picker-location .quiet-button{
 :root[data-focus-navigation="pointer"] .app:not(.inspector-resizing) .inspector-resizer:focus-visible:not(:hover)::before{background:transparent;width:2px}
 :root[data-focus-navigation="pointer"] .inspector-resizer:focus-visible:hover::before{width:2px}
 
+/* Leave the conversation visible while the bottom-anchored editor expands upward. */
+#prompt-resizer{position:absolute;top:-4px;left:50%;transform:translateX(-50%);display:grid;place-items:center;width:72px;height:16px;cursor:ns-resize;touch-action:none;user-select:none;border-radius:6px;z-index:1}
+#prompt-resizer::after{content:"";width:30px;height:3px;border-radius:2px;background:var(--theme-line-accent,#c1c4d5)}
+#prompt-resizer:is(:hover,:focus-visible,:active)::after{background:var(--accent-ink)}
+.composer #prompt{resize:none;max-height:min(42dvh,560px)}
+@media(forced-colors:active){#prompt-resizer::after{background:ButtonText}}
 /* Mini mode changes presentation only; task state and approval UI stay live. */
 .top-actions .mini-mode-toggle{display:inline-grid;place-items:center;flex:none;width:32px;height:32px;min-height:32px;padding:0;border:1px solid var(--theme-line,#dce0ec);border-radius:10px;background:var(--theme-surface,#f2f3fa);color:var(--accent-ink);box-shadow:none}
 .top-actions .mini-mode-toggle>.icon{width:var(--header-icon-size,18px);height:var(--header-icon-size,18px)}

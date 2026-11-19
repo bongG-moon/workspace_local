@@ -23,6 +23,8 @@ globalThis.WorkspaceLayout = (() => {
       preferences.inspectorWidthMode = saved.inspectorWidthMode === "auto" || saved.inspectorWidthMode === "manual"
         ? saved.inspectorWidthMode : preferences.inspectorWidth === defaultInspectorWidth ? "auto" : "manual";
     }
+    if (Number.isInteger(saved.promptHeight) && saved.promptHeight >= 40 && saved.promptHeight <= 560) preferences.promptHeight = saved.promptHeight;
+    else delete preferences.promptHeight;
     return true;
   }
   try {
@@ -232,6 +234,7 @@ globalThis.WorkspaceLayout = (() => {
     }
     backdrop.hidden = !state.sidebarOverlay && !state.inspectorOverlay;
     renderInspectorSize(state);
+    refreshPromptHeight?.();
     if (state.inspectorVisible && focused === inspectorButton) restoreFocus(closeButton);
     return state;
   }
@@ -338,6 +341,77 @@ globalThis.WorkspaceLayout = (() => {
     });
     resizer.addEventListener("keydown", resizeKey);
     resizer.addEventListener("dblclick", resetInspectorWidth);
+  }
+  const refreshPromptHeight = bindPromptResizer();
+  function bindPromptResizer() {
+    const handle = document.getElementById("prompt-resizer"), prompt = document.getElementById("prompt");
+    if (!handle || !prompt) return null;
+    let drag = null, keyboardHeight = null;
+    const limits = () => {
+      const minimum = Math.max(40, Math.ceil(parseFloat(getComputedStyle(prompt).minHeight) || 40));
+      return {minimum, maximum:Math.max(minimum, Math.min(560, Math.floor(window.innerHeight * .42)))};
+    };
+    const clamp = (value, bounds) => Math.max(bounds.minimum, Math.min(bounds.maximum, Math.round(value)));
+    function announce(value, {minimum, maximum}) {
+      handle.setAttribute("aria-valuemin", minimum); handle.setAttribute("aria-valuemax", maximum);
+      handle.setAttribute("aria-valuenow", value); handle.setAttribute("aria-valuetext", value + "픽셀");
+    }
+    function refreshHeight() {
+      if (drag || keyboardHeight !== null) return;
+      const cssHeight = preferences.promptHeight ? preferences.promptHeight + "px" : "";
+      if (prompt.style.height !== cssHeight) prompt.style.height = cssHeight;
+      if (document.activeElement === handle) announce(Math.round(prompt.getBoundingClientRect().height), limits());
+    }
+    function commit(value) {
+      if (value === preferences.promptHeight) return;
+      if (value === undefined) delete preferences.promptHeight;
+      else preferences.promptHeight = value;
+      save();
+    }
+    function endKeys() {
+      if (keyboardHeight !== null) { commit(keyboardHeight); keyboardHeight = null; }
+    }
+    function endDrag(event, completed) {
+      if (!drag || (event && event.pointerId !== drag.id)) return;
+      const finished = drag; drag = null;
+      if (completed) {
+        const value = clamp(finished.height + finished.y - event.clientY, finished);
+        if (value !== finished.height) commit(value);
+      }
+      if (handle.hasPointerCapture(finished.id)) handle.releasePointerCapture(finished.id);
+      refreshHeight();
+    }
+    handle.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || event.isPrimary === false || drag) return;
+      endKeys();
+      try { handle.setPointerCapture(event.pointerId); } catch (_) { return; }
+      drag = {...limits(), id:event.pointerId, y:event.clientY, height:Math.round(prompt.getBoundingClientRect().height)};
+      event.preventDefault();
+    });
+    handle.addEventListener("pointermove", event => {
+      if (!drag || drag.id !== event.pointerId) return;
+      prompt.style.height = clamp(drag.height + drag.y - event.clientY, drag) + "px";
+    });
+    handle.addEventListener("pointerup", event => endDrag(event, true));
+    for (const type of ["pointercancel","lostpointercapture"]) handle.addEventListener(type, event => endDrag(event, false));
+    window.addEventListener("blur", () => { endDrag(null, false); endKeys(); });
+    handle.addEventListener("focus", refreshHeight);
+    handle.addEventListener("blur", endKeys);
+    function resetHeight() { keyboardHeight = null; commit(undefined); refreshHeight(); }
+    handle.addEventListener("dblclick", resetHeight);
+    handle.addEventListener("keydown", event => {
+      if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing || drag) return;
+      const key = event.key;
+      if (!["ArrowUp","ArrowDown","Home","End","Enter"].includes(key)) return;
+      event.preventDefault(); event.stopPropagation();
+      if (key === "Enter") { resetHeight(); return; }
+      const bounds = limits(), step = event.shiftKey ? 48 : 16;
+      const current = keyboardHeight ?? Math.round(prompt.getBoundingClientRect().height);
+      const value = key === "Home" ? bounds.minimum : key === "End" ? bounds.maximum : clamp(current + (key === "ArrowUp" ? step : -step), bounds);
+      keyboardHeight = value; prompt.style.height = value + "px"; announce(value, bounds);
+    });
+    handle.addEventListener("keyup", endKeys);
+    return refreshHeight;
   }
   window.addEventListener("blur", () => finishResize());
   window.addEventListener("resize", () => {

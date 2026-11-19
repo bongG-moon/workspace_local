@@ -13,7 +13,7 @@ TOTAL_TEXT_LIMIT = 500000
 
 def reset_display(item):
     """Use whenever a session receives a fresh seq/events timeline."""
-    for key in ('_eventsDiscardedThrough', '_displayStreams', '_displayError', '_displayStatusLabel'):
+    for key in ('_eventsDiscardedThrough', '_displayStreams', '_displayError', '_displayFailure', '_displayStatusLabel'):
         item.pop(key, None)
     for message in item.get('messages', []):
         message.pop('_eventAnchor', None)
@@ -37,16 +37,23 @@ def track_display_event(item, kind, data):
         item.pop('_displayStreams', None)
     if kind == 'connected':
         item.pop('_displayError', None)
+        item.pop('_displayFailure', None)
     if kind == 'status':
         item['_displayStatusLabel'] = str(data.get('label') or '')[:2000]
         if data.get('state') == 'starting':
             item.pop('_displayError', None)
+            item.pop('_displayFailure', None)
             item.pop('_displayStreams', None)
     elif kind == 'error':
         item['_displayError'] = str(data.get('message') or '')[:10000]
+        if data.get('diagnostic'):
+            item['_displayFailure'] = {'code': data.get('code'), 'diagnostic': data['diagnostic']}
+        else:
+            item.pop('_displayFailure', None)
         item.pop('_displayStatusLabel', None)
     elif kind == 'result':
         item.pop('_displayError', None)
+        item.pop('_displayFailure', None)
         item.pop('_displayStatusLabel', None)
     if kind not in {'assistant', 'assistant_delta'}:
         return

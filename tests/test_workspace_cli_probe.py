@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from local_app.bridge import CHAT_REQUIRED_FLAGS, ClaudeSession, chat_runtime_capability, probe_cli
+from local_app.bridge import CHAT_REQUIRED_FLAGS, ClaudeSession, LaunchDiagnosticError, chat_runtime_capability, probe_cli
 
 
 VERSION = '2.1.316 (Claude Code)'
@@ -76,7 +76,7 @@ class CLIProbeTests(unittest.TestCase):
                 self.assertEqual(run.call_count, failed_flag + 1)
                 self.assertNotIn(VERSION, str(error.exception))
 
-    def test_timeout_from_either_probe_propagates_without_retry(self):
+    def test_timeout_from_either_probe_records_stage_without_retry(self):
         for timed_out_flag in (0, 1):
             timeout = subprocess.TimeoutExpired(['fixture-cli'], 12)
             results = [subprocess.CompletedProcess([], 0, VERSION, ''), timeout]
@@ -84,9 +84,10 @@ class CLIProbeTests(unittest.TestCase):
                 results = [timeout]
             with self.subTest(timed_out_flag=timed_out_flag), \
                     patch('local_app.bridge.run_owned', side_effect=results) as run:
-                with self.assertRaises(subprocess.TimeoutExpired) as error:
+                with self.assertRaises(LaunchDiagnosticError) as error:
                     probe_cli(['fixture-cli'])
-                self.assertIs(error.exception, timeout)
+                self.assertEqual(('version', 'help')[timed_out_flag], error.exception.diagnostic['stage'])
+                self.assertNotIn('fixture-cli', str(error.exception))
                 self.assertEqual(run.call_count, timed_out_flag + 1)
 
 

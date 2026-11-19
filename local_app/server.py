@@ -24,6 +24,7 @@ import webbrowser
 
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, probe_discovered_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
+from .claude_shell import CHOICES as SHELL_CHOICES, ShellPreference, installed_shell, selected_command
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, last_activity_at, normalize_result_receipt, normalize_run_timing, retain_run_timings, safe
 from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
@@ -55,7 +56,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.48"
+WORKSPACE_VERSION = "0.23.49"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -161,6 +162,7 @@ class LocalApp:
         self._lifecycle = threading.Condition()
         self._active_operations = 0
         self._active_observations = 0
+        self._shell_check_running = False
         self._shutdown_state = 'running'
         self._shutdown_issues = []
         self._close_lock = threading.Lock()
@@ -183,6 +185,7 @@ class LocalApp:
         self.file_diffs = FileDiffStore(state / 'file-changes')
         self.progress_logs = ProgressStore(state / 'progress')
         self.error = None
+        self.launch_diagnostic = None
         self.workspace_location_error = None
         self.managed_workspace_root = None
         self.default_workspace = None
@@ -200,14 +203,20 @@ class LocalApp:
         self.reconnect_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
         self._picker_cancel = threading.Event()
+        self.shell_preference = ShellPreference(state)
         self.inventory_client = ClaudeInventory()
-        self.completion_discovery = CompletionDiscovery(self.inventory_client)
         if command is None and not demo:
             try:
-                self.command = resolve_cli()
-                self.command, self.info = probe_discovered_cli(self.command)
+                if self.shell_preference.choice == 'default':
+                    self.command = resolve_cli()
+                    self.command, self.info = probe_discovered_cli(self.command)
+                else:
+                    self.command, self.info, _ = self._probe_shell(self.shell_preference.choice)
+                    self.inventory_client = ClaudeInventory(config=runtime_context(self.command)['configRoot'])
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.error = str(exc)
+                self.launch_diagnostic = getattr(exc, 'diagnostic', None)
+        self.completion_discovery = CompletionDiscovery(self.inventory_client)
         self._load()
         from .customizations import Customizations
         self.customizations = Customizations(self.inventory_client.config, self.command or [], self.info)
@@ -288,19 +297,21 @@ class LocalApp:
         if self._open_window_callback:
             self._open_window_callback()
 
-    def import_sessions(self, session_id=None):
-        if self.demo or not self.command:
+    def import_sessions(self, session_id=None, *, command=None):
+        command = self.command if command is None else command
+        if self.demo or not command:
             raise ValueError('기존 Claude Code 연결을 먼저 확인해 주세요.')
         from .session_import import SessionImporter
-        root = Path(runtime_context(self.command)['configRoot']).resolve()
+        root = Path(runtime_context(command)['configRoot']).resolve()
         reader = SessionImporter(root)
         return reader.load(session_id) if session_id else reader.discover()
 
     def import_session(self, session_id):
         from .session_import import session_uuid
         session_id = session_uuid(session_id)
-        record = self.import_sessions(session_id)
-        config_root = str(Path(runtime_context(self.command)['configRoot']).resolve())
+        command = self.command
+        record = self.import_sessions(session_id, command=command)
+        config_root = str(Path(runtime_context(command)['configRoot']).resolve())
         with self.lock:
             for item in self.sessions.values():
                 if (item.get('sessionId') == record['sessionId'] and item['workspace'] == record['workspace']
@@ -327,7 +338,7 @@ class LocalApp:
             workspace_folder(item)
             item.update(pinned=False, trusted=self.workspace_preferences.approved(item['workspace']), state='idle', seq=0, events=[], requests={},
                         bridge=None, attachments=[], artifacts=[], lastRunId=None, modelOverride=None,
-                        importedConfigRoot=str(Path(runtime_context(self.command)['configRoot']).resolve()))
+                        importedConfigRoot=config_root)
             reset_display(item)
             self.sessions[sid] = item
             try:
@@ -337,9 +348,16 @@ class LocalApp:
                 raise
             return {'ok': True, 'existing': False, 'session': self.public(item), 'warnings': record.get('warnings', [])}
 
-    def _check_import_context(self, item):
+    def _session_command(self, item):
+        bridge = item.get('bridge')
+        if bridge is not None and not bridge.closed and isinstance(getattr(bridge, 'command', None), list):
+            return bridge.command
+        return self.command
+
+    def _check_import_context(self, item, *, reuse=False):
         if item.get('importedConfigRoot'):
-            current = str(Path(runtime_context(self.command)['configRoot']).resolve()) if self.command else ''
+            command = self._session_command(item) if reuse else self.command
+            current = str(Path(runtime_context(command)['configRoot']).resolve()) if command else ''
             if os.path.normcase(current) != os.path.normcase(item['importedConfigRoot']):
                 raise ValueError('이 대화를 가져온 Claude 설정 위치가 현재 연결과 다릅니다. 원래 환경으로 앱을 다시 열어 주세요.')
 
@@ -363,7 +381,8 @@ class LocalApp:
                 raise ValueError('기존 Claude Code 연결을 먼저 확인해 주세요.')
             if self.history.warning:
                 raise ValueError(self.history.warning)
-            self._check_import_context(item)
+            self._check_import_context(item, reuse=True)
+            read_command = self._session_command(item)
             native_id = session_uuid(item.get('sessionId'))
             if item.get('kind') == 'chat':
                 self.chat_spaces.validate(sid, item['workspace'])
@@ -407,7 +426,7 @@ class LocalApp:
                     or any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks',
                         '_control_active', '_control_waiters', '_permission_pending', 'descendant_cleanup_uncertain')))
         try:
-            root = Path(runtime_context(self.command)['configRoot']).resolve()
+            root = Path(runtime_context(read_command)['configRoot']).resolve()
             reader = SessionImporter(root)
             if probe:
                 paths, truncated = reader._paths(time.monotonic() + reader.seconds, native_id)
@@ -990,6 +1009,8 @@ class LocalApp:
         result = {key: item.get(key) for key in ("id", "title", "workspace", "created", "updated", "pinned", "messages", "state", "trusted", "sessionId", "seq", "lastRunId", "modelOverride", "permissionModeOverride", "permissionDefaultNotice", "permissionPreferenceNotice", "choice", "verification", "branch") } | {
             'kind': item.get('kind', 'work'), 'runtimeProfile': item.get('runtimeProfile', 'work'),
             'lastActivityAt': last_activity_at(item),
+            **({'displayError': item['_displayError'], 'displayFailure': item['_displayFailure']}
+               if item.get('_displayError') and item.get('_displayFailure') and item.get('state') == 'error' else {}),
             'resultReceipt': normalize_result_receipt(item.get('resultReceipt')),
             'pendingRunId': item.get('pendingRunId'),
             'runStartedAt': self._run_started_at(item),
@@ -1051,6 +1072,7 @@ class LocalApp:
             order = self.session_order.snapshot()
             order['ids'] = [sid for sid in order['ids'] if not self.session_visibility.contains(sid)]
             return {"application": "company-workspace", "version": self.info.get("version"), "error": self.error, "demo": self.demo,
+                    **({'launchDiagnostic': self.launch_diagnostic} if self.error and self.launch_diagnostic else {}),
                     "workspaceVersion": WORKSPACE_VERSION, "buildIdentity": BUILD_ID, "appRoot": str(Path(__file__).resolve().parents[1]), "historyWarning": self.history.warning or (
                         '일부 진행 기록을 아직 저장하지 못했습니다. 현재 대화는 유지되며 다음 저장 시 다시 확인합니다.'
                         if self._progress_history.failed() else None),
@@ -1890,6 +1912,7 @@ class LocalApp:
                 self._check_session_capacity()
             parent = self.require_work(sid)
             workspace_folder(parent)
+            self._check_import_context(parent)
             root = runtime_context(self.command)['configRoot']
             item = prepare_fork(parent, self.info, root)
             if preview:
@@ -1912,13 +1935,97 @@ class LocalApp:
 
     def _resume_options(self, item):
         if 'branch' not in item:
-            return {'resume': item.get('sessionId'),
-                    **({'require_resume_identity': True} if item.get('importedConfigRoot') or item.get('_requireResumeIdentity') else {})}
+            resume = item.get('sessionId')
+            verify = item.get('importedConfigRoot') or item.get('_requireResumeIdentity') or self.shell_preference.configured
+            return {'resume': resume, **({'require_resume_identity': True} if resume and verify else {})}
         from .conversation_fork import branch_connection
         options = branch_connection(item, self.info, runtime_context(self.command)['configRoot'])
         if item.get('_requireResumeIdentity') and options.get('resume') and not options.get('fork_session'):
             options['require_resume_identity'] = True
         return options
+
+    def _require_cli_ready(self):
+        if self.error:
+            if self.launch_diagnostic and self.launch_diagnostic.get('category'):
+                failure = BridgeError('launch_' + self.launch_diagnostic['category'], self.error, '실행 환경 확인')
+                failure.diagnostic = self.launch_diagnostic
+                raise failure
+            raise ValueError(self.error)
+
+    def shell_snapshot(self):
+        return {'choice': self.shell_preference.choice, 'available': {
+            choice: not self.demo and (choice == 'default' or not self._injected_command and bool(installed_shell(choice)))
+            for choice in SHELL_CHOICES}}
+
+    def _probe_shell(self, choice, *, cancel_event=None):
+        options = {'cancel_event': cancel_event} if cancel_event is not None else {}
+        if choice == 'default':
+            if self._injected_command:
+                command, info = self.command, probe_cli(self.command, **options)
+            else:
+                command, info = probe_discovered_cli(resolve_cli(), **options)
+            diagnostic = {'stage': 'help'}
+            if len(command) == 1:
+                diagnostic.update(commandType='Application', loadProfiles=False)
+            elif '-Entry' in command:
+                profiles = '-LoadProfiles' in command
+                entry = command[command.index('-Entry') + 1]
+                kind = 'Function' if profiles else ('ExternalScript' if Path(entry).suffix.lower() == '.ps1' else 'Application')
+                diagnostic.update(commandType=kind, loadProfiles=profiles)
+            return command, info, diagnostic
+        if self._injected_command:
+            raise ValueError('이 실행 환경에서는 기존 Claude 실행 명령만 사용할 수 있습니다.')
+        command, diagnostic = selected_command(choice, **options)
+        return command, probe_cli(command, **options), diagnostic
+
+    def _apply_shell(self, choice, command, info):
+        root = Path(runtime_context(command)['configRoot']).absolute()
+        with self.customizations.lock, self.lock:
+            self._require_running()
+            self.shell_preference.save(choice)
+            if root != self.inventory_client.config:
+                # Existing reads keep their context. All writers, including
+                # in-flight work, retain one cancellation signal and lock.
+                from .customizations import Customizations
+                inventory = ClaudeInventory(config=root) if choice != 'default' else ClaudeInventory()
+                customizations = Customizations(inventory.config, command, info)
+                customizations.lock, customizations.cancel = self.customizations.lock, self.customizations.cancel
+                self.inventory_client = inventory
+                self.completion_discovery = CompletionDiscovery(inventory)
+                self._external_sync_probe_cache.clear()
+                self.customizations = customizations
+            else:
+                self.customizations.command, self.customizations.info = command, info
+            self.command, self.info, self.error, self.launch_diagnostic = command, info, None, None
+
+    def check_shell(self, data):
+        choice, check_only = data.get('choice'), data.get('checkOnly', False)
+        if set(data) - {'choice', 'checkOnly'} or choice not in SHELL_CHOICES or type(check_only) is not bool:
+            raise ValueError('Claude를 실행할 셸을 목록에서 선택해 주세요.')
+        if self.demo:
+            raise ValueError('화면 체험에서는 실제 실행 환경을 확인할 수 없습니다.')
+        if not self.reconnect_lock.acquire(blocking=False):
+            raise ValueError('이미 연결을 확인하고 있습니다. 잠시 뒤 다시 시도해 주세요.')
+        try:
+            with self.lock, self._lifecycle:
+                self._require_running()
+                self._shell_check_running = True
+            command, info, diagnostic = self._probe_shell(choice, cancel_event=self.customizations.cancel)
+            if not check_only:
+                with self.operation(upgrade_change=True):
+                    self._apply_shell(choice, command, info)
+            message = ('선택한 환경에서 Claude를 실행하고 대화 연결에 필요한 옵션을 확인했습니다.' if check_only else
+                       'Claude 실행 환경을 저장했습니다. 새로 시작하는 연결부터 적용됩니다.')
+            from .bridge import chat_runtime_capability
+            return self.shell_snapshot() | {'ok': True, 'diagnostic': diagnostic, 'message': message,
+                                            'chatSupported': chat_runtime_capability(info)['available']}
+        except CancelledError:
+            raise AppClosing('앱을 종료하여 실행 환경 확인을 마쳤습니다.') from None
+        finally:
+            with self._lifecycle:
+                self._shell_check_running = False
+                self._lifecycle.notify_all()
+            self.reconnect_lock.release()
 
     def reconnect(self, sid=None):
         if sid is not None:
@@ -1929,18 +2036,17 @@ class LocalApp:
             raise ValueError('연결을 확인하고 있습니다. 잠시 후 결과를 확인해 주세요.')
         try:
             # Probe only --version/--help. Never stop an active child or replay a request.
-            if self._injected_command:
-                command, info = self.command, probe_cli(self.command)
-            else:
-                command, info = probe_discovered_cli(resolve_cli())
-            with self.lock:
-                self.command, self.info, self.error = command, info, None
-                self.customizations.command, self.customizations.info = command, info
+            choice = self.shell_preference.choice
+            command, info, _ = self._probe_shell(choice, cancel_event=self.customizations.cancel)
+            self._apply_shell(choice, command, info)
             return self.bootstrap() | {'ok': True, 'message': '실행 프로그램 연결을 확인했습니다. 로그인과 모델 응답은 다음 요청에서 확인합니다.'}
+        except (AppClosing, CancelledError):
+            raise AppClosing('앱을 종료하여 실행 환경 확인을 마쳤습니다.') from None
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             with self.lock:
                 self.error = str(exc)
-            raise ValueError(str(exc)) from exc
+                self.launch_diagnostic = getattr(exc, 'diagnostic', None)
+            raise
         finally:
             self.reconnect_lock.release()
 
@@ -1968,8 +2074,7 @@ class LocalApp:
                     or getattr(old, 'busy', False) is True or bool(getattr(old, 'pending', {})))
             if busy and not stop_running:
                 raise BridgeError('restart_requires_stop', '진행 중인 업무와 확인 요청을 중지하고 Claude 연결을 재시작할까요?', '중지 후 재시작 확인')
-            if self.error:
-                raise ValueError(self.error)
+            self._require_cli_ready()
             if not self.connection_capacity_available(item):
                 raise ValueError(f'연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.')
             pending = self.dispatch.queue.snapshot(sid)
@@ -2173,6 +2278,7 @@ class LocalApp:
                 if not bridge.model_state().get('bypassPermissions', {}).get('available'):
                     raise ValueError('현재 Claude 연결은 Bypass 선택을 지원하지 않습니다.')
                 with self.lock:
+                    self._check_import_context(item)
                     item['bridge'] = None
                 if bridge.close() is not True:
                     with self.lock:
@@ -2240,7 +2346,7 @@ class LocalApp:
             if item.get('_dispatchClaim') != _dispatch_claim:
                 raise ValueError('대기 요청을 전송하고 있습니다. 연결 준비는 잠시 후 다시 시도해 주세요.')
             self._check_stopping(item, allow_stop_admission=_restart_claim is not None)
-            self._check_import_context(item)
+            self._check_import_context(item, reuse=True)
             if not item.get('trusted'):
                 raise ValueError('명령을 불러오기 전에 이 업무 폴더의 설정·후크·MCP 실행에 동의해 주세요.')
             root = workspace_folder(item)
@@ -2249,8 +2355,7 @@ class LocalApp:
                 raise ValueError('현재 업무와 연결 준비가 끝난 뒤 명령을 불러와 주세요.')
             if self.demo:
                 raise ValueError('화면 체험에서는 실제 Claude 명령을 불러오지 않습니다.')
-            if self.error:
-                raise ValueError(self.error)
+            self._require_cli_ready()
             bridge = item.get('bridge')
             if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
                 raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 연결해 주세요.', '이전 연결 중지 상태 확인')
@@ -2938,14 +3043,13 @@ class LocalApp:
             if not current.get('trusted') and trusted is not True:
                 raise ValueError('다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.')
             workspace_folder(current)
-            self._check_import_context(current)
+            self._check_import_context(current, reuse=True)
             if (current['state'] in {'starting', 'running', 'question', 'approval'}
                     or current.get('_modelUpdating') or current.get('_permissionUpdating') or current.get('_connecting')
                     or getattr(old_bridge, '_control_active', False)):
                 raise ValueError('현재 진행 중인 작업을 먼저 마치거나 중지해 주세요.')
             paths = self.validate_session_attachments(current, attachments)
-            if self.error:
-                raise ValueError(self.error)
+            self._require_cli_ready()
             if not self.demo:
                 if old_bridge is not None and old_bridge.closed and getattr(old_bridge, 'cleanup_complete', False) is not True:
                     raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
@@ -2988,7 +3092,7 @@ class LocalApp:
                 raise ValueError("다시 시작하기 전에 작업 폴더의 설정 실행에 동의해 주세요.")
             if restore:
                 workspace_folder(item)
-                self._check_import_context(item)
+                self._check_import_context(item, reuse=True)
             if (item["state"] in {"starting", "running", "question", "approval"}
                     or item.get('_modelUpdating') or item.get('_permissionUpdating') or item.get('_connecting')
                     or getattr(item.get('bridge'), '_control_active', False)):
@@ -2997,8 +3101,7 @@ class LocalApp:
                 self._resume_options(item)  # Recheck even after control-only preparation.
             if restore:
                 paths = self.validate_session_attachments(item, attachments)
-            if self.error:
-                raise ValueError(self.error)
+            self._require_cli_ready()
             start_ticket = None
             run_id = uuid.uuid4().hex
             if not chat:
@@ -3025,6 +3128,7 @@ class LocalApp:
                     if bridge is not None and bridge.closed and getattr(bridge, 'cleanup_complete', False) is not True:
                         raise BridgeError('stop_cleanup_unverified', '이전 업무 연결의 종료를 확인한 뒤 다시 요청해 주세요.', '이전 연결 중지 상태 확인')
                     if bridge is None or bridge.closed:
+                        self._check_import_context(item)
                         if not self.connection_capacity_available(item):
                             raise ValueError(f"연결된 대화가 {MAX_CONNECTIONS}개입니다. 다른 업무의 연결을 종료한 뒤 다시 시도해 주세요.")
                         resume_options = self._resume_options(item)
@@ -3095,7 +3199,10 @@ class LocalApp:
                         send_error = exc
             if send_error is not None:
                 # Error observation also runs outside the request admission lock.
-                self.emit(sid, 'error', {'message': str(send_error), 'code': 'send_failed'}, _origin=(item, run_id))
+                failure = {'message': str(send_error), 'code': getattr(send_error, 'code', 'send_failed')}
+                if getattr(send_error, 'diagnostic', None):
+                    failure['diagnostic'] = send_error.diagnostic
+                self.emit(sid, 'error', failure, _origin=(item, run_id))
                 raise send_error
         finally:
             if start_ticket:
@@ -3450,10 +3557,10 @@ class LocalApp:
                 close_bridges()
             deadline = time.monotonic() + SHUTDOWN_DRAIN_TIMEOUT
             with self._lifecycle:
-                while self._active_operations or self._active_observations:
+                while self._active_operations or self._active_observations or self._shell_check_running:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        issues.append({'code': 'operations_pending' if self._active_operations else 'file_observation_pending'})
+                        issues.append({'code': 'operations_pending' if self._active_operations or self._shell_check_running else 'file_observation_pending'})
                         break
                     self._lifecycle.wait(remaining)
             # A previously admitted operation may publish its bridge while the
@@ -3624,6 +3731,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error':'관리자 앱의 요청은 같은 계정의 관리자 연결에서 처리합니다.'},403)
             if route.path == '/api/llm-usage':
                 return self.reply(app.llm_usage.snapshot())
+            if route.path == '/api/claude-shell':
+                return self.reply(app.shell_snapshot())
             if route.path == '/api/drafts':
                 return self.reply(app.draft_snapshot())
             if route.path == '/api/session-groups':
@@ -3924,6 +4033,10 @@ class Handler(BaseHTTPRequestHandler):
             # even after shutdown has closed admission for normal mutations.
             if route == '/api/ui-health':
                 return self.dispatch_post(route, data)
+            if route == '/api/claude-shell':
+                # Only saving a verified preference is an upgrade mutation.
+                # A cancellable read-only probe can be drained after admission closes.
+                return self.dispatch_post(route, data)
             if route == '/api/upgrade':
                 result = app.upgrade.action(data)
                 if result.get('closed') is True:
@@ -3966,6 +4079,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(payload, exc.status)
             if getattr(exc, 'code', None):
                 payload['code'] = exc.code
+            if isinstance(exc, BridgeError) and getattr(exc, 'diagnostic', None):
+                payload['diagnostic'] = exc.diagnostic
             if getattr(exc, 'next_action', None):
                 payload['nextAction'] = exc.next_action
             if getattr(exc, 'replacement', None):
@@ -4277,8 +4392,9 @@ class Handler(BaseHTTPRequestHandler):
                 item = dict(app.get(sid))
                 if app.demo or not app.command or not item.get('trusted'):
                     raise ValueError('확인한 업무 폴더에서 설정을 변경해 주세요.')
-                app.customizations.command, app.customizations.info = list(app.command), dict(app.info)
-            result = app.customizations.change(str(workspace_folder(item)), data)
+                settings = app.customizations
+                settings.command, settings.info = list(app.command), dict(app.info)
+            result = settings.change(str(workspace_folder(item)), data)
             # Common settings can affect every cached project.
             app.completion_discovery.clear()
             return self.reply(result)
@@ -4286,6 +4402,8 @@ class Handler(BaseHTTPRequestHandler):
             if 'model' not in data:
                 raise ValueError('사용할 모델 또는 기본 모델 복원을 선택해 주세요.')
             return self.reply(app.set_model(sid, data['model']))
+        if route == '/api/claude-shell':
+            return self.reply(app.check_shell(data))
         if route == '/api/open-claude-settings':
             if set(data) != {'id'}:
                 raise ValueError('현재 대화에서 Claude 설정 파일을 다시 열어 주세요.')

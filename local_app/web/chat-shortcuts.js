@@ -149,6 +149,6 @@ globalThis.WorkspaceShortcuts = (() => {
   };
   $("input-history-close").onclick=()=>$("input-history-dialog").close();
   $("input-history-dialog").onclose=()=>{searchContext=null;matches=[];input.focus();};
-  globalThis.WorkspaceInputKeys?.attach({input,context:()=>({id:id(),history:history()}),capture:snapshot,restore,edited});
+  globalThis.WorkspaceInputKeys?.attach({input,context:()=>({id:id(),get history(){return history();}}),capture:snapshot,restore,edited});
   return {keydown,priority,stop,search,afterSend,exportStashes,restoreStashes,hasStashes:()=>stashes.size>0};
 })();

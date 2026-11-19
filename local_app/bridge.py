@@ -22,7 +22,7 @@ from collections import OrderedDict, deque
 
 from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
 from .windows_job import CREATE_SUSPENDED, WindowsJob
-from .owned_process import run_owned
+from .owned_process import CancelledError, run_owned
 
 HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FRAME = 8 * 1024 * 1024
@@ -176,6 +176,112 @@ class BridgeError(ValueError):
         super().__init__(message)
         self.code, self.next_action = code, next_action
 
+    def event(self):
+        details = {'code': self.code, 'message': str(self), 'nextAction': self.next_action}
+        if getattr(self, 'diagnostic', None):
+            details['diagnostic'] = self.diagnostic
+        return details
+
+
+_LAUNCH_MESSAGES = {
+    'config_root': '선택한 셸에서 Claude 설정 폴더의 위치가 업무마다 달라질 수 있습니다. 해당 셸에서 CLAUDE_CONFIG_DIR를 일정한 절대 경로로 설정한 뒤 다시 확인해 주세요.',
+    'profile_parse': 'PowerShell이 시작 설정 파일의 문법을 읽지 못했습니다.',
+    'profile_load': 'PowerShell이 터미널의 시작 설정을 불러오지 못했습니다.',
+    'command_not_found': '기존 터미널의 Claude 실행 명령을 확인하지 못했습니다. 평소 사용하는 터미널에서 Claude 실행을 확인해 주세요. 앱 전용 로그인은 필요하지 않습니다.',
+    'function_changed': '다시 불러온 Claude 실행 함수가 처음 확인한 함수와 일치하지 않습니다.',
+    'cli_start': '기존 터미널의 Claude 실행 명령을 시작하지 못했습니다.',
+    'cli_version': '기존 터미널의 Claude 버전 조회를 완료하지 못했습니다.',
+    'cli_options': '기존 터미널의 Claude 대화 연결 기능을 확인하지 못했습니다. CLI 버전을 확인해 주세요.',
+    'cli_initialize': 'Claude가 대화 연결 준비를 완료하지 못했습니다.',
+    'cli_protocol': 'Claude가 예상한 UTF-8 대화 형식으로 응답하지 않았습니다.',
+}
+_LAUNCH_STAGES = {'launcher_profile', 'profile_restore', 'command_resolution', 'function_restore',
+                  'process_start', 'version', 'help', 'initialize', 'protocol'}
+
+
+class LaunchDiagnosticError(BridgeError):
+    def __init__(self, category, stage, message=None, **evidence):
+        super().__init__('launch_' + category, message or _LAUNCH_MESSAGES[category], 'Claude 실행 환경 확인')
+        self.diagnostic = {'category': category, 'stage': stage, **evidence}
+
+
+def launch_marker_error(stderr):
+    """Decode only fixed public fields. Never retain a line from the user's profile."""
+    if not isinstance(stderr, str):
+        return None
+    for line in stderr[-2048:].splitlines():
+        fields = line.split('|')
+        if len(fields) != 8 or fields[0] != 'AXWS_LAUNCH/1':
+            continue
+        _, category, stage, version, kind, profiles, number, encoding = fields
+        if (category not in _LAUNCH_MESSAGES or stage not in _LAUNCH_STAGES
+                or not re.fullmatch(r'[0-9]{1,2}\.[0-9]{1,2}', version)
+                or kind not in {'Unknown', 'Function', 'ExternalScript', 'Application'}
+                or profiles not in {'0', '1'} or not re.fullmatch(r'[0-9]{1,7}', number)
+                or encoding not in {'none', 'utf8_without_bom'}):
+            continue
+        evidence = {'shellVersion': version, 'commandType': kind, 'loadProfiles': profiles == '1'}
+        if kind == 'Function':
+            evidence['entryKind'] = 'function'
+        if category == 'profile_parse':
+            evidence['exceptionType'] = 'ParseException'
+            if int(number):
+                evidence['errorLine'] = int(number)
+            if version == '5.1' and encoding == 'utf8_without_bom':
+                evidence['encodingHint'] = encoding
+        return LaunchDiagnosticError(category, stage, **evidence)
+    return None
+
+
+def _bundled_wrapper(command):
+    if len(command) < 9 or command[5] != '-File' or command[7] != '-Entry':
+        return False
+    return Path(command[6]) in (Path(__file__).with_name('Invoke-TerminalClaude.ps1'),
+                                Path(__file__).with_name('Invoke-SelectedClaude.ps1'))
+
+
+def _startup_profile_context(command):
+    # An explicitly selected shell has its own independently restored profile.
+    marker = os.environ.get('COMPANY_WORKSPACE_CLAUDE_STARTUP_DIAGNOSTIC')
+    if (not marker or os.environ.get('COMPANY_AGENT_CLAUDE') or
+            command and _bundled_wrapper(command) and Path(command[6]).name == 'Invoke-SelectedClaude.ps1'):
+        return {}
+    observed = launch_marker_error(marker)
+    if observed and observed.diagnostic['stage'] == 'launcher_profile' and observed.diagnostic['category'] == 'profile_parse':
+        return {'startupProfile': observed.diagnostic}
+    return {}
+
+
+def _launch_error(category, stage, command=None, message=None):
+    evidence = {}
+    wrapped = bool(command and _bundled_wrapper(command))
+    selected = wrapped and Path(command[6]).name == 'Invoke-SelectedClaude.ps1'
+    if wrapped:
+        if selected:
+            kind = command[9] if len(command) > 9 else ''
+            if kind in ('Application', 'ExternalScript', 'Function'):
+                evidence.update(commandType=kind, loadProfiles=True)
+        else:
+            profiles = '-LoadProfiles' in command[9:]
+            kind = 'Function' if profiles else ('ExternalScript' if Path(command[8]).suffix.lower() == '.ps1' else 'Application')
+            evidence.update(commandType=kind, loadProfiles=profiles)
+    elif command and len(command) == 1:
+        evidence.update(commandType='Application', loadProfiles=False)
+    if evidence.get('commandType') == 'Function':
+        evidence['entryKind'] = 'function'
+    elif 'commandType' in evidence:
+        suffix = Path(command[8] if wrapped else command[0]).suffix.lower().lstrip('.')
+        if suffix in {'exe', 'cmd', 'bat', 'ps1'}:
+            evidence['entryKind'] = suffix
+    if not selected:
+        version = os.environ.get('COMPANY_WORKSPACE_CLAUDE_SHELL_VERSION', '')
+        if re.fullmatch(r'[0-9]{1,2}\.[0-9]{1,2}', version):
+            evidence['shellVersion'] = version
+    # Startup configuration errors can coexist with a working entry. Preserve
+    # as a separate observation only when that original connection actually fails.
+    evidence.update(_startup_profile_context(command))
+    return LaunchDiagnosticError(category, stage, message, **evidence)
+
 
 class ControlRestoreRequired(BridgeError):
     """Remembered controls need input; the business prompt was never submitted."""
@@ -190,20 +296,18 @@ def resolve_cli(value: str | None = None) -> list[str]:
     """Resolve only the active user's PATH/explicit selection; never scan profiles."""
     explicit = value or os.environ.get("COMPANY_AGENT_CLAUDE")
     if not explicit and os.environ.get('COMPANY_WORKSPACE_CLAUDE_UNAVAILABLE') == '1':
-        raise ValueError('앱은 열렸지만 기존 터미널의 Claude 실행 명령을 확인하지 못했습니다. '
-                         '평소 사용하는 터미널에서 Claude 실행을 확인한 뒤 앱을 완전히 종료하고 다시 열어 주세요. '
-                         '앱 전용 로그인은 필요하지 않습니다.')
+        raise _launch_error('command_not_found', 'command_resolution')
     raw = explicit or os.environ.get("COMPANY_WORKSPACE_CLAUDE_ENTRY") or shutil.which("claude")
     if not raw:
-        raise ValueError("Claude Code를 찾지 못했습니다. 기존 CLI 설치를 먼저 확인해 주세요.")
+        raise _launch_error('command_not_found', 'command_resolution', message="Claude Code를 찾지 못했습니다. 기존 CLI 설치를 먼저 확인해 주세요.")
     from_profile = not explicit and os.environ.get("COMPANY_WORKSPACE_CLAUDE_PROFILE") == "1"
     if from_profile:
         if raw != "claude":
-            raise ValueError("터미널의 Claude 호출 정보를 확인하지 못했습니다.")
+            raise _launch_error('command_not_found', 'command_resolution')
         return terminal_command(raw, load_profiles=True)
     path = Path(raw).expanduser().resolve()
     if not path.is_file():
-        raise ValueError("선택한 Claude Code 실행 파일이 없습니다.")
+        raise _launch_error('command_not_found', 'command_resolution', message="선택한 Claude Code 실행 파일이 없습니다.")
     if path.suffix.lower() in {".cmd", ".bat", ".ps1"}:
         # Honor the selected shim itself: it may set corporate auth/configuration.
         # Skipping it for a sibling npm binary changes what terminal `claude` does.
@@ -214,7 +318,7 @@ def resolve_cli(value: str | None = None) -> list[str]:
 def terminal_command(entry: str, load_profiles=False) -> list[str]:
     shell = os.environ.get("COMPANY_WORKSPACE_SHELL") or shutil.which("powershell.exe")
     if os.name != "nt" or not shell or not Path(shell).is_file():
-        raise ValueError("기존 터미널의 Claude 실행 환경을 연결하지 못했습니다. 별도 로그인은 필요하지 않습니다.")
+        raise _launch_error('cli_start', 'process_start')
     args = [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             str(Path(__file__).with_name("Invoke-TerminalClaude.ps1")), "-Entry", entry]
     if load_profiles:
@@ -222,10 +326,16 @@ def terminal_command(entry: str, load_profiles=False) -> list[str]:
     return args
 
 
+def _selected_shell(command):
+    return len(command) == 12 and command[5:8] == ['-File', str(Path(__file__).with_name('Invoke-SelectedClaude.ps1')), '-Entry']
+
+
 def runtime_context(command: list[str]) -> dict:
     """Only non-secret context. Credentials remain owned/read by Claude Code."""
     entry = command[command.index("-Entry") + 1] if "-Entry" in command else command[0]
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    if _selected_shell(command):
+        root = Path(command[11])
     return {"entry": entry, "configRoot": str(root), "authentication": "shared-with-cli"}
 
 
@@ -239,17 +349,27 @@ def _cli_version(output: str) -> str:
     return next(iter(versions)) + " (Claude Code)" if len(versions) == 1 else ""
 
 
-def probe_cli(command: list[str]) -> dict:
+def probe_cli(command: list[str], *, cancel_event=None) -> dict:
     info = {}
     for flag, key in [("--version", "version"), ("--help", "help")]:
-        result = run_owned(command + [flag], capture_output=True, encoding="utf-8",
-                                errors="replace", timeout=12, creationflags=HIDDEN)
+        category = 'cli_version' if key == 'version' else 'cli_options'
+        try:
+            result = run_owned(command + [flag], capture_output=True, encoding="utf-8",
+                               errors="replace", timeout=12, creationflags=HIDDEN, cancel_event=cancel_event)
+        except subprocess.TimeoutExpired:
+            raise _launch_error(category, key, command, '기존 터미널의 Claude 실행 명령이 제한 시간 안에 응답하지 않았습니다.') from None
+        except OSError:
+            raise _launch_error('cli_start', 'process_start', command) from None
         if result.returncode:
-            raise ValueError("기존 터미널의 Claude 실행 환경을 연결하지 못했습니다. 앱 전용 로그인·재설치 대신 터미널의 실행 경로와 시작 설정을 확인해 주세요.")
+            if result.returncode == 78 and _bundled_wrapper(command):
+                failure = launch_marker_error(result.stderr)
+                if failure:
+                    raise failure
+            raise _launch_error(category, key, command)
         info[key] = _cli_version(result.stdout) if key == "version" else result.stdout.strip()
     required = ["--input-format", "--output-format", "--permission-prompt-tool"]
     if any(flag not in info["help"] for flag in required):
-        raise ValueError("이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다. CLI 버전을 확인해 주세요.")
+        raise _launch_error('cli_options', 'help', command, '이 Claude Code 버전에는 필요한 대화 연결 기능이 없습니다. CLI 버전을 확인해 주세요.')
     return info
 
 
@@ -281,8 +401,9 @@ def _npm_claude_shim_digest(path: Path) -> str | None:
     return digest if digest in accepted else None
 
 
-def probe_discovered_cli(command: list[str]) -> tuple[list[str], dict]:
+def probe_discovered_cli(command: list[str], *, cancel_event=None) -> tuple[list[str], dict]:
     """Probe the verified-user native candidate only for a stock, unaliased npm shim."""
+    options = {'cancel_event': cancel_event} if cancel_event is not None else {}
     native = os.environ.get('COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE')
     if (os.name == 'nt' and native and not os.environ.get('COMPANY_AGENT_CLAUDE')
             and command[-2:-1] == ['-Entry']):
@@ -291,13 +412,15 @@ def probe_discovered_cli(command: list[str]) -> tuple[list[str], dict]:
         if digest:
             try:
                 native_command = resolve_cli(native)
-                return native_command, probe_cli(native_command)
+                return native_command, probe_cli(native_command, **options)
+            except CancelledError:
+                raise
             except (ValueError, OSError, subprocess.SubprocessError):
                 # A missing, blocked or incompatible native install must not hide
                 # the terminal shim. Never execute a changed wrapper on fallback.
                 if _npm_claude_shim_digest(shim) != digest:
                     raise
-    return command, probe_cli(command)
+    return command, probe_cli(command, **options)
 
 
 def _launched_user_settings(command, env, cwd):
@@ -306,6 +429,13 @@ def _launched_user_settings(command, env, cwd):
     A custom shell command can change CLAUDE_CONFIG_DIR or --setting-sources
     after launch. Its get_settings response does not identify the actual file.
     """
+    if _selected_shell(command):
+        # The wrapper verifies this settings mode and root after loading the
+        # selected profile. Only a native CLI or an exact stock shim can use it.
+        if command[10] != 'file':
+            return None
+        env = {'CLAUDE_CONFIG_DIR': command[11]}
+        command = [command[8]] if command[9] == 'Application' and Path(command[8]).suffix.lower() == '.exe' else ['-Entry', command[8]]
     native = len(command) == 1 and Path(command[0]).name.lower() in {'claude.exe', 'claude'}
     if not native:
         if command[-2:-1] != ['-Entry'] or not _npm_claude_shim_digest(Path(command[-1])):
@@ -417,6 +547,7 @@ class ClaudeSession:
         self._turn_activity_seen = False
         self.busy = False
         self.initialization_error = None
+        self._launch_failure = None
         self.stderr = deque(maxlen=30)
         self.initialize_id = "initialize-" + uuid.uuid4().hex
         self.last_result = None
@@ -586,16 +717,16 @@ class ClaudeSession:
             # the app and child retain different selections.
             self.close()
             if code in {'model_permission', 'model_not_found'}:
-                raise BridgeError(code, model_error_message(code), '모델 선택')
-            raise BridgeError(code, '현재 CLI 설정 응답을 확인하지 못했습니다. 연결과 인증 상태를 확인한 뒤 다시 시도해 주세요.', '연결과 인증 상태 확인')
+                raise self._provider_error(code, model_error_message(code), '모델 선택')
+            raise self._provider_error(code, '현재 CLI 설정 응답을 확인하지 못했습니다. 연결과 인증 상태를 확인한 뒤 다시 시도해 주세요.', '연결과 인증 상태 확인')
 
     def _raise_control_auth_error(self, error):
         model_error = model_error_code(error)
         if model_error:
-            raise BridgeError(model_error, model_error_message(model_error), '모델 선택')
+            raise self._provider_error(model_error, model_error_message(model_error), '모델 선택')
         if self._auth_error(error):
             self.close()
-            raise BridgeError('authentication_failed', '현재 CLI 인증을 확인하지 못했습니다. 기존 Claude 실행 환경의 인증 상태를 확인해 주세요.', '기존 Claude 인증 상태 확인')
+            raise self._provider_error('authentication_failed', '현재 CLI 인증을 확인하지 못했습니다. 기존 Claude 실행 환경의 인증 상태를 확인해 주세요.', '기존 Claude 인증 상태 확인')
 
     def can_accept_current_control(self, control):
         if self.closed or not self._initialized:
@@ -927,15 +1058,25 @@ class ClaudeSession:
         return any(value in text for value in ("failed to authenticate", "oauth session expired",
             "authentication_failed", "not logged in", "invalid authentication credentials"))
 
+    def _provider_error(self, code, message, action):
+        error = BridgeError(code, message, action)
+        observation = _startup_profile_context(self.command)
+        if observation:
+            error.diagnostic = observation
+        return error
+
     def _authentication_failed(self):
         # The terminal may refresh the shared credential while this child is
         # alive. Drop only our failed child; the next explicit send reloads it.
         # Never replay a business request, copy credentials or initiate a login.
+        error = self._provider_error('cli_authentication',
+            '기존 Claude Code의 인증을 확인하지 못했습니다. 이 앱은 터미널과 같은 로그인을 사용하며 별도 계정 설정은 없습니다. '
+            '터미널에서 Claude가 정상 응답하는지 확인한 뒤 다시 보내 주세요. 앱은 다음 요청에서 갱신된 인증을 다시 읽습니다.',
+            '연결 상태 확인 후 다시 보내기')
+        if not self._initialized and not self._launch_failure:
+            self._launch_failure = error
         self.close()
-        self.emit("error", {"code": "cli_authentication", "resumeSessionId": self.resume_id,
-            "nextAction": "연결 상태 확인 후 다시 보내기",
-            "message": "기존 Claude Code의 인증을 확인하지 못했습니다. 이 앱은 터미널과 같은 로그인을 사용하며 별도 계정 설정은 없습니다. "
-                       "터미널에서 Claude가 정상 응답하는지 확인한 뒤 다시 보내 주세요. 앱은 다음 요청에서 갱신된 인증을 다시 읽습니다."})
+        self.emit("error", {**error.event(), 'resumeSessionId': self.resume_id})
 
     def _is_expected_stop_result(self, data, previous_session):
         # Only the observed user-interrupt diagnostic is benign. A marker
@@ -1022,6 +1163,9 @@ class ClaudeSession:
                     runtime_profile=self.runtime_profile),
                     cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE, creationflags=HIDDEN | (CREATE_SUSPENDED if self._process_job else 0))
+            except OSError:
+                self.close()
+                raise _launch_error('cli_start', 'process_start', self.command) from None
             except Exception:
                 self.close()
                 raise
@@ -1066,7 +1210,9 @@ class ClaudeSession:
         try:
             self.start()
             if not self.ready.wait(PREPARE_TIMEOUT):
-                raise ValueError("CLI 명령 준비 응답이 60초 동안 없습니다. 시작 후크·MCP 상태를 확인한 뒤 다시 연결해 주세요.")
+                raise _launch_error('cli_initialize', 'initialize', self.command, 'CLI 명령 준비 응답이 60초 동안 없습니다. 시작 후크와 MCP 상태를 확인해 주세요.')
+            if self._launch_failure:
+                raise self._launch_failure
             if self.initialization_error:
                 raise ValueError(self.initialization_error)
             if self.closed or self.stopping or not self.process or self.process.poll() is not None:
@@ -1140,9 +1286,11 @@ class ClaudeSession:
                 self.start()
                 starting = False
             if not self.ready.wait(60):
-                raise ValueError("CLI 준비 응답이 60초 동안 없습니다. 로그인·MCP·시작 후크 상태를 확인해 주세요.")
+                raise _launch_error('cli_initialize', 'initialize', self.command, 'CLI 준비 응답이 60초 동안 없습니다. 시작 후크와 MCP 상태를 확인해 주세요.')
             if self.stopping or self.closed or turn_epoch is not None and turn_epoch != self._turn_epoch:
                 return
+            if self._launch_failure:
+                raise self._launch_failure
             if self.initialization_error:
                 raise ValueError(self.initialization_error)
             # Announce activity before writing: a fast result must not be
@@ -1159,10 +1307,9 @@ class ClaudeSession:
             if turn_epoch is not None and turn_epoch != self._turn_epoch:
                 return  # A cancelled sender cannot retire the following turn.
             if not self.stopping and (not self.closed or starting):
-                self._progress_error(str(exc))
+                self._progress_error(str(exc), exc)
                 self._interrupt_executions()
-                self.emit("error", {"message": str(exc), **(
-                    {'code': exc.code, 'nextAction': exc.next_action} if isinstance(exc, BridgeError) else {})})
+                self.emit("error", exc.event() if isinstance(exc, BridgeError) else {"message": str(exc)})
             self.close()
 
     def _read_stderr(self):
@@ -1193,29 +1340,42 @@ class ClaudeSession:
             self.process.stderr.close()
 
     def _read(self):
+        failure = None
         try:
             while not self.closed:
                 line = self.process.stdout.readline(MAX_FRAME + 1)
                 if not line:
                     break
                 if len(line) > MAX_FRAME:
-                    raise ValueError("CLI 응답 한 건이 화면 처리 한도를 초과했습니다. 읽기 범위를 줄여 주세요.")
+                    raise _launch_error('cli_protocol', 'protocol', self.command, 'CLI 응답 한 건이 화면 처리 한도를 초과했습니다. 읽기 범위를 줄여 주세요.')
                 try:
                     data = json.loads(line.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
-                    raise ValueError("CLI가 예상한 UTF-8 대화 형식으로 응답하지 않았습니다.")
+                    raise _launch_error('cli_protocol', 'protocol', self.command) from None
                 if isinstance(data, dict):
                     self.handle(data)
         except Exception as exc:
-            if not self.closed and not self.stopping:
-                self._progress_error(str(exc))
-                self._interrupt_executions()
-                self.emit("error", {"message": str(exc)})
+            failure = exc if isinstance(exc, BridgeError) else _launch_error('cli_protocol', 'protocol', self.command)
         finally:
             if not self.closed and not self.stopping:
-                self._progress_error('CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요.')
+                if not self._initialized and not self.initialization_error:
+                    if not failure and not self._launch_failure and _bundled_wrapper(self.command):
+                        # Pipes can reach EOF in either order. Only an early
+                        # wrapper exit needs a short wait for its fixed marker.
+                        try:
+                            if self.process.wait(timeout=.15) == 78 and len(self._readers) == 2:
+                                reader = self._readers[1]
+                                if reader.ident is not None:
+                                    reader.join(.15)
+                                failure = launch_marker_error(''.join(self.stderr))
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                    failure = self._launch_failure or failure or _launch_error('cli_initialize', 'initialize', self.command)
+                    self._launch_failure = failure
+                message = str(failure) if failure else 'CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요.'
+                self._progress_error(message, failure)
                 self._interrupt_executions()
-                self.emit("error", {"message": "CLI 연결이 종료되었습니다. 로그인 또는 실행 환경을 확인해 주세요."})
+                self.emit('error', failure.event() if isinstance(failure, BridgeError) else {'message': message})
             self.close()
             self.process.stdout.close()
 
@@ -1317,10 +1477,16 @@ class ClaudeSession:
                     capture.interrupt(closed=True)
             return capture
 
-    def _progress_error(self, message):
+    def _progress_error(self, message, failure=None):
         capture = getattr(self, '_progress_capture_state', None)
         if capture is not None and self.busy:
             try:
+                diagnostic = getattr(failure, 'diagnostic', None) or {}
+                category, stage = diagnostic.get('category'), diagnostic.get('stage')
+                if category in _LAUNCH_MESSAGES and stage in _LAUNCH_STAGES:
+                    message += f'\n진단 {category} / {stage}'
+                if diagnostic.get('startupProfile'):
+                    message += '\n실행기 시작 시 관찰한 오류  profile_parse / launcher_profile'
                 capture.error(message)
             except Exception:
                 pass
@@ -1488,7 +1654,11 @@ class ClaudeSession:
         progress = getattr(self, '_progress_capture_state', None)
         if progress is not None and self.busy and not self.stopping:
             try:
-                progress.handle(data)
+                if not data.get('parent_tool_use_id') and ((kind == 'assistant' and data.get('error'))
+                        or (kind == 'result' and data.get('is_error') is True)):
+                    progress.handle(data, startup_profile=bool(_startup_profile_context(self.command)))
+                else:
+                    progress.handle(data)
             except Exception:
                 pass  # Recording detail must never interrupt the CLI reader.
         live = getattr(self, '_run_activity_state', None)
@@ -1503,7 +1673,15 @@ class ClaudeSession:
                 return
             if response.get("request_id") == self.initialize_id:
                 if response.get("subtype") == "error":
-                    self.initialization_error = "CLI 대화 초기화가 거절되었습니다. 설치 버전을 확인해 주세요."
+                    detail = response.get('error', '')
+                    detail = detail[:8192] if isinstance(detail, str) else ''
+                    model_error = model_error_code(detail)
+                    if model_error:
+                        self._launch_failure = self._provider_error(model_error, model_error_message(model_error), '모델 선택')
+                    elif self._auth_error(detail):
+                        self._launch_failure = self._provider_error('cli_authentication', '기존 Claude Code의 인증을 확인해 주세요.', '기존 Claude 인증 상태 확인')
+                    else:
+                        self._launch_failure = _launch_error('cli_initialize', 'initialize', self.command, 'CLI 대화 초기화가 거절되었습니다. 설치 버전을 확인해 주세요.')
                 else:
                     self._initialized = True
                     detail = response.get("response", {})
@@ -1831,8 +2009,8 @@ class ClaudeSession:
                     self.emit('request_closed', {'id': rid})
                 if model_error:
                     self.resume_id = self.session_id
-                    self.emit('error', {'code': model_error, 'nextAction': '모델 선택',
-                        'message': model_error_message(model_error), 'resumeSessionId': self.resume_id,
+                    failure = self._provider_error(model_error, model_error_message(model_error), '모델 선택')
+                    self.emit('error', {**failure.event(), 'resumeSessionId': self.resume_id,
                         'terminalDiagnostic': self._terminal_diagnostic(data, stop_attempt)})
                     self._record_stop_terminal(stop_attempt, error=True)
                     return

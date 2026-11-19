@@ -80,7 +80,7 @@ class ManualRoutingTests(unittest.TestCase):
                     self.current['summary' if self.in_summary else 'body'] += data
         guide = ErrorGuide()
         guide.feed((ROOT / 'docs/WORKSPACE_USER_GUIDE.html').read_text(encoding='utf-8'))
-        self.assertEqual(11, len(guide.cases))
+        self.assertEqual(12, len(guide.cases))
         for case in guide.cases:
             with self.subTest(case=case['summary']):
                 self.assertIn('가능한 원인:', case['body'])
@@ -89,6 +89,9 @@ class ManualRoutingTests(unittest.TestCase):
         for keyword in ('인증', '60초', '403', 'ede_diagnostic', '요청 처리 중'):
             self.assertIn(keyword, labels)
         guide_by_case = {case['summary']: case['body'] for case in guide.cases}
+        shell = guide_by_case['터미널에서는 되는데 앱에서만 Claude가 열리지 않아요']
+        for action in ('선택한 환경 점검', '점검 후 적용', '진단 요약 복사'):
+            self.assertIn(action, shell)
         for label in ('모델 변경이 거절되었습니다', '403 team not allowed to access model', '사용할 모델을 다시 선택해 주세요'):
             with self.subTest(label=label):
                 steps = guide_by_case[label]

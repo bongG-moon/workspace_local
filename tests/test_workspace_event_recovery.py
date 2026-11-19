@@ -59,14 +59,18 @@ class DisplayRecoveryTests(unittest.TestCase):
         item = self.item()
         self.event(item, 'assistant_delta', {'messageId': 'answer', 'text': 'partial'})
         item['state'] = 'error'
-        self.event(item, 'error', {'message': 'provider failure'})
+        diagnostic = {'category': 'cli_protocol', 'stage': 'protocol'}
+        self.event(item, 'error', {'message': 'provider failure', 'code': 'launch_cli_protocol',
+                                   'diagnostic': diagnostic})
         snapshot = snapshot_recovery(item, {'messages': []}, 0)['session']
         self.assertEqual([], snapshot['messages'])
         self.assertTrue(snapshot['streams'][0]['interrupted'])
         self.assertEqual('provider failure', snapshot['displayError'])
+        self.assertEqual({'diagnostic': diagnostic, 'code': 'launch_cli_protocol'}, item['_displayFailure'])
         self.event(item, 'status', {'state': 'starting', 'label': 'starting next'})
         self.assertEqual([], display_streams(item))
         self.assertNotIn('_displayError', item)
+        self.assertNotIn('_displayFailure', item)
 
     def test_streams_share_existing_display_bounds_and_release_on_disconnect(self):
         item = self.item()

@@ -14,7 +14,7 @@ KEYS = ('sidebarCollapsed', 'inspectorCollapsed', 'inspectorWidth', 'miniMode')
 
 
 def validated(value):
-    if not isinstance(value, dict) or set(value) not in (set(KEYS), set(KEYS) | {'inspectorWidthMode'}):
+    if not isinstance(value, dict) or not set(KEYS) <= value.keys() <= set(KEYS) | {'inspectorWidthMode', 'promptHeight'}:
         raise ValueError('화면 배치 설정의 항목을 확인해 주세요.')
     if any(type(value[key]) is not bool for key in ('sidebarCollapsed', 'inspectorCollapsed', 'miniMode')):
         raise ValueError('화면 배치 설정을 다시 선택해 주세요.')
@@ -25,6 +25,10 @@ def validated(value):
         if value['inspectorWidthMode'] not in ('auto', 'manual'):
             raise ValueError('자료와 결과 너비 설정을 다시 선택해 주세요.')
         result['inspectorWidthMode'] = value['inspectorWidthMode']
+    if 'promptHeight' in value:
+        if type(value['promptHeight']) is not int or not 40 <= value['promptHeight'] <= 560:
+            raise ValueError('입력창 높이는 40~560픽셀 범위에서 선택해 주세요.')
+        result['promptHeight'] = value['promptHeight']
     return result
 
 
