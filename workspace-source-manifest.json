@@ -22,7 +22,7 @@
     },
     {
       "path": "Check-Workspace.ps1",
-      "sha256": "850a00dd27933797b4484878abb5bb44bca6d092f438d1c9700f807bbe46b2bc",
+      "sha256": "8f965b01a81566a91a4aa39f675b2b038183ae1a5b2336822164bd1048c7ec5d",
       "size": 10783
     },
     {
@@ -37,8 +37,8 @@
     },
     {
       "path": "README.md",
-      "sha256": "c8e7371d683ab7afdc113b321be0121b65116ad9d99835289b393b649dd6f214",
-      "size": 48447
+      "sha256": "342a342f2ac8f0995bb1d45fd2c85dbd3502607156375ceac08e6cddab916824",
+      "size": 48604
     },
     {
       "path": "THIRD_PARTY_NOTICES.md",
@@ -77,7 +77,7 @@
     },
     {
       "path": "deploy/CompanyWorkspace.Startup.ps1",
-      "sha256": "c16b0d565acf84be7e6fe65b0f76a3ac7532e7cbb19dd8cf3fc2c5a9aeaaf30b",
+      "sha256": "a2d919979986b181c4426d793e837bd17f6bd24df8043ed31b27fe88df71aae7",
       "size": 31007
     },
     {
@@ -112,7 +112,7 @@
     },
     {
       "path": "deploy/Start-CompanyWorkspace.ps1",
-      "sha256": "fdfc9365509497b30b4e9abe69f7ddbb6285f58e7e697a3a29f5b5b0420fa1b2",
+      "sha256": "83df1bf310f94853004c08fee83c0653c1e19ef09e267fcbcdff08fed3b6692f",
       "size": 50041
     },
     {
@@ -167,8 +167,8 @@
     },
     {
       "path": "deploy/workspace-release-notes.json",
-      "sha256": "e96b7bd3d3c320ad7686f3ae3c30b9c74d3b1b6e82e6864042d47c6abcdecb24",
-      "size": 107759
+      "sha256": "8fab339aa693d59393c8038e406490629333a20058ff3ea4915cfc7df66cc585",
+      "size": 114123
     },
     {
       "path": "docs/APP_REGISTRATION.md",
@@ -337,13 +337,8 @@
     },
     {
       "path": "docs/RELEASE_NOTES_0.23.49.md",
-      "sha256": "e0d4558fdef10748115e86838f9e1dd1732c498568aacad0f32a9583bf14757c",
-      "size": 1643
-    },
-    {
-      "path": "docs/RELEASE_NOTES_0.23.50.md",
-      "sha256": "5b2b363302039cd0f1e6a89520ec873d6e4671bdb7671edb214061afcd759727",
-      "size": 1556
+      "sha256": "3688820de75864f2d358575e5bd530a53f5af8aaff5d92c98582e4d718b0a7d8",
+      "size": 3280
     },
     {
       "path": "docs/SKILL_PRIORITY.md",
@@ -862,7 +857,7 @@
     },
     {
       "path": "docs/WORKSPACE_GITLAB_PUBLISHER.md",
-      "sha256": "e777182197d08f6c9c40c31e5446499820fbd88d894a34c29f7752e0307db202",
+      "sha256": "9899312f4050ec6fea75a1ed7f6ccdd5ed5bf6d6769657514ea8cdf5376d71b6",
       "size": 36008
     },
     {
@@ -1417,7 +1412,7 @@
     },
     {
       "path": "local_app/server.py",
-      "sha256": "f8b4e35b0ced7bbc44a72e718fbd129f7dad407f30512e89403936fbd176ceb2",
+      "sha256": "42a3d6987e03a178ac2fbe6b6f19fb80173d009d3f46de1167b0eb2dd3b0ee2f",
       "size": 287016
     },
     {
@@ -3867,5 +3862,5 @@
     }
   ],
   "schema": 1,
-  "version": "0.23.50"
+  "version": "0.23.49"
 }
