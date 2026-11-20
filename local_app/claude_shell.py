@@ -47,28 +47,34 @@ class ShellPreference:
     def __init__(self, state):
         self.path = state / 'claude-shell.json'
         self.choice = 'default'
+        self.config_dir = self.executable = ''
         self.configured = False
         try:
-            value = read(self.path, 256)
-            if value in CHOICES:
-                self.choice = value
+            value = read(self.path, 512 * 1024)
+            if isinstance(value, str):
+                value = {'choice': value}  # Preferences saved before optional paths.
+            if isinstance(value, dict) and value.get('choice') in CHOICES:
+                self.config_dir, self.executable = _paths(value.get('configDir', ''), value.get('executable', ''))
+                self.choice = value['choice']
                 self.configured = True
         except (OSError, ValueError):
             pass
 
-    def save(self, choice):
+    def save(self, choice, *, config_dir='', executable=''):
         if choice not in CHOICES:
             raise ValueError('Claude를 실행할 셸을 목록에서 선택해 주세요.')
-        if choice != self.choice:
+        config_dir, executable = _paths(config_dir, executable)
+        if (choice, config_dir, executable) != (self.choice, self.config_dir, self.executable):
             path = safe(self.path)
             temporary = safe(path.with_name('.claude-shell-' + uuid.uuid4().hex + '.tmp'))
             try:
-                with temporary.open('x', encoding='ascii') as output:
-                    json.dump(choice, output)
+                value = {'choice': choice, 'configDir': config_dir, 'executable': executable} if config_dir or executable else choice
+                with temporary.open('x', encoding='utf-8') as output:
+                    json.dump(value, output, ensure_ascii=False)
                 os.replace(safe(temporary), safe(path))
             finally:
                 temporary.unlink(missing_ok=True)
-            self.choice = choice
+            self.choice, self.config_dir, self.executable = choice, config_dir, executable
             self.configured = True
 
 
@@ -77,14 +83,63 @@ def _absolute_path(value):
             and all(ord(char) >= 32 and char != '"' for char in value) and Path(value).is_absolute())
 
 
-def selected_command(choice, *, cancel_event=None):
-    from .bridge import HIDDEN, LaunchDiagnosticError, launch_marker_error
+def _path_text(value, label):
+    if not isinstance(value, str):
+        raise ValueError(f'{label}의 전체 경로를 입력해 주세요.')
+    value = value.strip()
+    if not value:
+        return ''
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]  # Windows Explorer's “Copy as path”.
+    path = Path(value)
+    if (not _absolute_path(value) or '..' in path.parts
+            or value.replace('/', '\\').startswith(('\\\\?\\', '\\\\.\\'))
+            or any(':' in part or '?' in part or '*' in part for part in path.parts[1:])):
+        raise ValueError(f'{label}의 전체 경로를 입력해 주세요.')
+    return str(path)
+
+
+def _paths(config_dir, executable):
+    root = _path_text(config_dir, 'Claude 설정 폴더')
+    entry = _path_text(executable, 'Claude 실행 파일')
+    if entry and Path(entry).suffix.lower() not in {'.exe', '.cmd', '.bat', '.ps1'}:
+        raise ValueError('Claude를 실행하는 .exe, .cmd, .bat 또는 .ps1 파일을 선택해 주세요.')
+    return root, entry
+
+
+def checked_paths(config_dir, executable):
+    """Check only the locations the user supplied; never open credentials or walk a folder."""
+    root, entry = _paths(config_dir, executable)
+    if root and not Path(root).is_dir():
+        raise ValueError('Claude 설정 폴더를 찾지 못했어요. settings.json이 들어 있는 폴더의 위치를 확인해 주세요.')
+    if entry and not Path(entry).is_file():
+        raise ValueError('Claude 실행 파일을 찾지 못했어요. 터미널에서 확인한 파일의 위치를 확인해 주세요.')
+    return root, entry
+
+
+def selected_command(choice, *, config_dir='', executable='', cancel_event=None):
+    from .bridge import HIDDEN, LaunchDiagnosticError, bind_config_dir, launch_marker_error, resolve_cli
+    # The bounded child checks the settings folder after restoring its profile.
+    # The settings form already verifies file types before requesting a probe.
+    config_dir, executable = _paths(config_dir, executable)
+    if choice == 'default':
+        command = resolve_cli(executable or None)
+        profiles = '-LoadProfiles' in command
+        entry = command[8] if '-Entry' in command else command[0]
+        kind = 'Function' if profiles else ('ExternalScript' if Path(entry).suffix.lower() == '.ps1' else 'Application')
+        return bind_config_dir(command, config_dir), {'stage': 'help', 'commandType': kind, 'loadProfiles': profiles}
     shell = installed_shell(choice)
     if not shell:
         raise ValueError('선택한 PowerShell 설치를 찾을 수 없습니다. 사용 가능한 셸을 선택해 주세요.')
     prefix = [shell, '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(WRAPPER)]
+    # Only the private wrapper receives these switches. Paths stay out of diagnostics.
+    overrides = []
+    if config_dir:
+        overrides += ['-AxConfigDir', config_dir]
+    if executable:
+        overrides += ['-AxExecutable', executable]
     try:
-        result = run_owned(prefix + ['-Discover'], capture_output=True, encoding='utf-8', errors='strict',
+        result = run_owned(prefix + ['-Discover'] + overrides, capture_output=True, encoding='utf-8', errors='strict',
                            timeout=12, output_limit=192 * 1024, creationflags=HIDDEN, cancel_event=cancel_event)
         if result.returncode == 78:
             error = launch_marker_error(result.stderr)
@@ -108,5 +163,9 @@ def selected_command(choice, *, cancel_event=None):
     if (not (file_command or function) or not _absolute_path(root) or not isinstance(version, str)
             or not re.fullmatch(r'[0-9]{1,4}(?:\.[0-9]{1,6}){1,3}', version)):
         raise LaunchDiagnosticError('cli_start', 'command_resolution')
-    return prefix + ['-Entry', entry, kind, identity, root], {
+    if executable and (not file_command or Path(executable) != Path(entry)):
+        raise LaunchDiagnosticError('command_not_found', 'command_resolution')
+    if config_dir and Path(config_dir) != Path(root):
+        raise LaunchDiagnosticError('config_root', 'command_resolution')
+    return prefix + ['-Entry', entry, kind, identity, root] + overrides, {
         'stage': 'help', 'shellVersion': version, 'commandType': kind, 'loadProfiles': True}

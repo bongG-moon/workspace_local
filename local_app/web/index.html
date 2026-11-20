@@ -312,6 +312,28 @@
   <p>터미널에서만 Claude가 잘 열리면 그 터미널에서 쓰는 PowerShell을 선택해 점검하세요.</p>
   <label for="claude-shell-choice">새 연결에 사용할 PowerShell</label>
   <div class="settings-select"><select id="claude-shell-choice" disabled><option value="default">실행기 기본 환경</option><option value="windows">Windows PowerShell 5.1</option><option value="pwsh">PowerShell 7</option></select></div>
+  <details class="shell-path-comparison" id="claude-shell-paths">
+    <summary id="claude-shell-paths-summary">터미널과 경로 비교</summary>
+    <p>Claude가 잘 열리는 PowerShell에서 <strong>명령 복사 → 붙여넣기 → Enter</strong> 순서로 확인하세요. 결과가 앱과 다르면 해당 경로만 입력한 뒤 <strong>점검 후 적용</strong>을 누르세요.</p>
+    <div class="shell-path-field">
+      <div class="shell-path-heading"><label for="claude-config-dir">Claude 설정 폴더</label><button type="button" class="text-button shell-small-action" id="claude-config-command-copy">폴더 확인 명령 복사</button></div>
+      <p id="claude-config-hint">Claude가 설정을 읽는 폴더예요. 보통 이름이 <code>.claude</code>입니다.</p>
+      <p class="shell-current-path">현재 앱에서 찾은 폴더 <samp id="claude-config-current">확인 중…</samp></p>
+      <div class="input-row"><input id="claude-config-dir" type="text" spellcheck="false" autocomplete="off" aria-describedby="claude-config-hint" placeholder="자동으로 찾기" disabled><button type="button" class="quiet-button" id="claude-config-pick" disabled>폴더 선택</button></div>
+      <button type="button" class="text-button shell-small-action" id="claude-config-clear" aria-label="설정 폴더를 자동으로 되돌리기" hidden>자동으로 되돌리기</button>
+    </div>
+    <div class="shell-path-field">
+      <div class="shell-path-heading"><label for="claude-executable">Claude 실행 파일 <span class="label-optional">선택 사항</span></label><button type="button" class="text-button shell-small-action" id="claude-executable-command-copy">파일 확인 명령 복사</button></div>
+      <p id="claude-executable-hint">결과의 <code>Path</code>가 앱과 다르면 그 파일을 선택하세요. <code>Function</code>이나 <code>Alias</code>가 나오면 여기는 자동으로 두고 위에서 평소 사용하는 PowerShell을 선택하세요.</p>
+      <p class="shell-current-path">현재 앱에서 찾은 명령 <samp id="claude-executable-current">확인 중…</samp></p>
+      <div class="input-row"><input id="claude-executable" type="text" spellcheck="false" autocomplete="off" aria-describedby="claude-executable-hint" placeholder="자동으로 찾기" disabled><button type="button" class="quiet-button" id="claude-executable-pick" disabled>파일 선택</button></div>
+      <button type="button" class="text-button shell-small-action" id="claude-executable-clear" aria-label="실행 파일을 자동으로 되돌리기" hidden>자동으로 되돌리기</button>
+    </div>
+    <details class="shell-path-commands" id="claude-path-commands"><summary>복사할 명령 직접 보기</summary>
+      <p>설정 폴더 확인</p><pre id="claude-config-command">if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join-Path $HOME '.claude' }</pre>
+      <p>실행 파일 확인</p><pre id="claude-executable-command">Get-Command claude | Format-List CommandType, Name, Path</pre>
+    </details>
+  </details>
   <div class="settings-inline"><button type="button" class="quiet-button" id="claude-shell-check" disabled>선택한 환경 점검</button><button type="button" class="quiet-button" id="claude-shell-apply" disabled>점검 후 적용</button></div>
   <p class="settings-control-note" id="claude-shell-status" role="status"></p>
   <pre class="shell-diagnostic" id="claude-shell-diagnostic" hidden></pre>

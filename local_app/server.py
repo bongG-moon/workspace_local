@@ -24,7 +24,7 @@ import webbrowser
 
 from .bridge import BridgeError, ClaudeSession, ControlRestoreRequired, HIDDEN, probe_cli, probe_discovered_cli, resolve_cli, runtime_context
 from .claude_inventory import ClaudeInventory
-from .claude_shell import CHOICES as SHELL_CHOICES, ShellPreference, installed_shell, selected_command
+from .claude_shell import CHOICES as SHELL_CHOICES, ShellPreference, checked_paths, installed_shell, selected_command
 from .history import HistoryStore, MAX_ARTIFACTS, MAX_SESSIONS, MAX_STORED_SESSIONS, last_activity_at, normalize_result_receipt, normalize_run_timing, retain_run_timings, safe
 from .event_recovery import needs_recovery, reset_display, snapshot_recovery, track_display_event, trim_events
 from .workspace_preferences import WorkspacePreferences
@@ -56,7 +56,7 @@ from .chat_attachments import prepare_chat_content, chat_attachment_policy, vali
 ASSETS = Path(__file__).parent / "web"
 SAFE_FILES = REFERENCE_FILE_TYPES
 MAX_BODY = 256 * 1024
-WORKSPACE_VERSION = "0.23.49"
+WORKSPACE_VERSION = "0.23.50"
 from .execution_mode import EXECUTION_MODE_PROTOCOL
 MANUAL_FILENAME = "WORKSPACE_USER_GUIDE.html"
 STORY_FILENAME = "AX_WORKSPACE_STORY.html"
@@ -204,14 +204,16 @@ class LocalApp:
         self.dialog_lock = threading.Lock()
         self._picker_cancel = threading.Event()
         self.shell_preference = ShellPreference(state)
-        self.inventory_client = ClaudeInventory()
+        config_dir = self.shell_preference.config_dir if command is None and not demo else ''
+        self.inventory_client = ClaudeInventory(config=config_dir or None)
         if command is None and not demo:
             try:
-                if self.shell_preference.choice == 'default':
+                paths = self._saved_shell_paths()
+                if self.shell_preference.choice == 'default' and not paths:
                     self.command = resolve_cli()
                     self.command, self.info = probe_discovered_cli(self.command)
                 else:
-                    self.command, self.info, _ = self._probe_shell(self.shell_preference.choice)
+                    self.command, self.info, _ = self._probe_shell(self.shell_preference.choice, **paths)
                     self.inventory_client = ClaudeInventory(config=runtime_context(self.command)['configRoot'])
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.error = str(exc)
@@ -353,6 +355,21 @@ class LocalApp:
         if bridge is not None and not bridge.closed and isinstance(getattr(bridge, 'command', None), list):
             return bridge.command
         return self.command
+
+    def _session_metadata(self, item):
+        bridge = item.get('bridge') if item else None
+        if bridge is not None and not bridge.closed:
+            pinned = getattr(bridge, '_workspace_metadata', None)
+            if isinstance(pinned, tuple):
+                return pinned
+        return self.inventory_client, self.completion_discovery, self.customizations
+
+    def invalidate_completion_settings(self):
+        with self.lock:
+            caches = {self._session_metadata(item)[1] for item in self.sessions.values() if item.get('bridge')}
+            caches.add(self.completion_discovery)
+        for cache in caches:
+            cache.clear()
 
     def _check_import_context(self, item, *, reuse=False):
         if item.get('importedConfigRoot'):
@@ -1953,15 +1970,38 @@ class LocalApp:
             raise ValueError(self.error)
 
     def shell_snapshot(self):
-        return {'choice': self.shell_preference.choice, 'available': {
+        with self.lock:
+            pref = self.shell_preference
+            if self.command:
+                runtime = runtime_context(self.command)
+                current = {'entry': runtime['entry'], 'configRoot': runtime['configRoot']}
+            else:
+                # An unstarted custom shell may resolve different settings from the parent.
+                root = pref.config_dir or (str(self.inventory_client.config) if pref.choice == 'default' else '')
+                current = {'entry': '', 'configRoot': root}
+            settings = {'choice': pref.choice, 'configDir': pref.config_dir, 'executable': pref.executable,
+                        'runtime': current}
+        return settings | {'available': {
             choice: not self.demo and (choice == 'default' or not self._injected_command and bool(installed_shell(choice)))
             for choice in SHELL_CHOICES}}
 
-    def _probe_shell(self, choice, *, cancel_event=None):
+    def _saved_shell_paths(self):
+        paths = {'config_dir': self.shell_preference.config_dir, 'executable': self.shell_preference.executable}
+        return {key: path for key, path in paths.items() if path}
+
+    def _probe_shell(self, choice, *, config_dir='', executable='', cancel_event=None):
         options = {'cancel_event': cancel_event} if cancel_event is not None else {}
         if choice == 'default':
+            if self._injected_command and (config_dir or executable):
+                raise ValueError('이 실행 환경에서는 기존 Claude 실행 명령만 사용할 수 있습니다.')
             if self._injected_command:
                 command, info = self.command, probe_cli(self.command, **options)
+            elif config_dir or executable:
+                command, _ = selected_command(choice, config_dir=config_dir, executable=executable, **options)
+                if executable:
+                    info = probe_cli(command, **options)
+                else:
+                    command, info = probe_discovered_cli(command, **options)
             else:
                 command, info = probe_discovered_cli(resolve_cli(), **options)
             diagnostic = {'stage': 'help'}
@@ -1975,32 +2015,44 @@ class LocalApp:
             return command, info, diagnostic
         if self._injected_command:
             raise ValueError('이 실행 환경에서는 기존 Claude 실행 명령만 사용할 수 있습니다.')
-        command, diagnostic = selected_command(choice, **options)
+        command, diagnostic = selected_command(choice, config_dir=config_dir, executable=executable, **options)
         return command, probe_cli(command, **options), diagnostic
 
-    def _apply_shell(self, choice, command, info):
+    def _apply_shell(self, choice, command, info, *, config_dir='', executable=''):
         root = Path(runtime_context(command)['configRoot']).absolute()
         with self.customizations.lock, self.lock:
             self._require_running()
-            self.shell_preference.save(choice)
-            if root != self.inventory_client.config:
+            replacement = None
+            manual = choice != 'default' or bool(config_dir or executable)
+            inventory = ClaudeInventory(config=root if manual else None)
+            changed = (command != self.command or inventory.config != self.inventory_client.config
+                       or inventory.config_source != self.inventory_client.config_source)
+            if changed:
                 # Existing reads keep their context. All writers, including
                 # in-flight work, retain one cancellation signal and lock.
                 from .customizations import Customizations
-                inventory = ClaudeInventory(config=root) if choice != 'default' else ClaudeInventory()
                 customizations = Customizations(inventory.config, command, info)
                 customizations.lock, customizations.cancel = self.customizations.lock, self.customizations.cancel
-                self.inventory_client = inventory
-                self.completion_discovery = CompletionDiscovery(inventory)
+                replacement = inventory, CompletionDiscovery(inventory), customizations
+            self.shell_preference.save(choice, config_dir=config_dir, executable=executable)
+            if replacement:
+                # Retain the readers/writer for connected tasks only. A released
+                # bridge takes its references with it. Nothing is persisted.
+                for item in self.sessions.values():
+                    bridge = item.get('bridge')
+                    if bridge is not None and not bridge.closed:
+                        bridge._workspace_metadata = self._session_metadata(item)
+                        if bridge.closed:  # close() can finish while the settings lock is held.
+                            bridge._workspace_metadata = None
+                self.inventory_client, self.completion_discovery, self.customizations = replacement
                 self._external_sync_probe_cache.clear()
-                self.customizations = customizations
             else:
                 self.customizations.command, self.customizations.info = command, info
             self.command, self.info, self.error, self.launch_diagnostic = command, info, None, None
 
     def check_shell(self, data):
         choice, check_only = data.get('choice'), data.get('checkOnly', False)
-        if set(data) - {'choice', 'checkOnly'} or choice not in SHELL_CHOICES or type(check_only) is not bool:
+        if set(data) - {'choice', 'checkOnly', 'configDir', 'executable'} or choice not in SHELL_CHOICES or type(check_only) is not bool:
             raise ValueError('Claude를 실행할 셸을 목록에서 선택해 주세요.')
         if self.demo:
             raise ValueError('화면 체험에서는 실제 실행 환경을 확인할 수 없습니다.')
@@ -2010,10 +2062,13 @@ class LocalApp:
             with self.lock, self._lifecycle:
                 self._require_running()
                 self._shell_check_running = True
-            command, info, diagnostic = self._probe_shell(choice, cancel_event=self.customizations.cancel)
+            config_dir, executable = checked_paths(data.get('configDir', self.shell_preference.config_dir),
+                                                   data.get('executable', self.shell_preference.executable))
+            paths = {k: v for k, v in (('config_dir', config_dir), ('executable', executable)) if v}
+            command, info, diagnostic = self._probe_shell(choice, cancel_event=self.customizations.cancel, **paths)
             if not check_only:
                 with self.operation(upgrade_change=True):
-                    self._apply_shell(choice, command, info)
+                    self._apply_shell(choice, command, info, **paths)
             message = ('선택한 환경에서 Claude를 실행하고 대화 연결에 필요한 옵션을 확인했습니다.' if check_only else
                        'Claude 실행 환경을 저장했습니다. 새로 시작하는 연결부터 적용됩니다.')
             from .bridge import chat_runtime_capability
@@ -2037,8 +2092,9 @@ class LocalApp:
         try:
             # Probe only --version/--help. Never stop an active child or replay a request.
             choice = self.shell_preference.choice
-            command, info, _ = self._probe_shell(choice, cancel_event=self.customizations.cancel)
-            self._apply_shell(choice, command, info)
+            paths = self._saved_shell_paths()
+            command, info, _ = self._probe_shell(choice, cancel_event=self.customizations.cancel, **paths)
+            self._apply_shell(choice, command, info, **paths)
             return self.bootstrap() | {'ok': True, 'message': '실행 프로그램 연결을 확인했습니다. 로그인과 모델 응답은 다음 요청에서 확인합니다.'}
         except (AppClosing, CancelledError):
             raise AppClosing('앱을 종료하여 실행 환경 확인을 마쳤습니다.') from None
@@ -3475,7 +3531,7 @@ class LocalApp:
     def pick(self, kind, initial_directory=None):
         if os.name != "nt":
             raise ValueError("이 버전의 파일 선택 창은 Windows에서 지원합니다. 경로를 입력해 주세요.")
-        if kind not in {"folder", "files"}:
+        if kind not in {"folder", "files", "claude-config", "claude-executable"}:
             raise ValueError("올바른 선택 종류가 아닙니다.")
         if initial_directory is not None:
             if not isinstance(initial_directory, str) or not initial_directory or not Path(initial_directory).is_absolute():
@@ -3798,12 +3854,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('실제 Claude 업무에서 스킬·플러그인 설정을 확인할 수 있어요.')
                 with app.lock:
                     item = dict(app.get(sid))
-                return self.reply(app.customizations.snapshot(str(workspace_folder(item)), query.get('scope', ['local'])[0]))
+                    _, _, settings = app._session_metadata(item)
+                return self.reply(settings.snapshot(str(workspace_folder(item)), query.get('scope', ['local'])[0]))
             if route.path == "/api/capabilities":
                 if sid:
                     app.require_work(sid)
                 with app.lock:
-                    selected = app.public(app.get(sid)) if sid else None
+                    task = app.get(sid) if sid else None
+                    selected = app.public(task) if task else None
+                    inventory, _, _ = app._session_metadata(task)
                 # Older clients retain the task-bound view. The explicit scope
                 # is a read-only browsing context, never an execution/trust change.
                 if 'scope' in query:
@@ -3825,10 +3884,10 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('선택한 목록 폴더와 연결 업무의 폴더가 다릅니다.')
                     elif 'workspace' in query:
                         raise ValueError('공통 설치 스킬에는 폴더를 지정하지 않습니다. 업무는 연결 목록의 출처로만 사용됩니다.')
-                    return self.reply(catalog(selected, client=app.inventory_client,
+                    return self.reply(catalog(selected, client=inventory,
                                               demo=app.demo, scope=scope,
                                               workspace=str(folder) if folder else None))
-                return self.reply(catalog(selected, client=app.inventory_client,
+                return self.reply(catalog(selected, client=inventory,
                                           demo=app.demo, validate_workspace=workspace_folder))
             if route.path == "/api/files":
                 return self.reply(app.file_listing(sid, query.get("directory", [""])[0]))
@@ -4372,14 +4431,16 @@ class Handler(BaseHTTPRequestHandler):
                 if data.get('kind') not in {'slash', 'command'}:
                     raise ValueError('파일을 찾을 업무 폴더를 먼저 선택해 주세요.')
                 item = {}
+                discovery = app.completion_discovery
             else:
                 with app.lock:
                     item = dict(app.get(sid))
+                    _, discovery, _ = app._session_metadata(item)
                     item['connection'] = dict(item.get('connection') or {})
                     item['attachments'] = list(item.get('attachments', []))
                 item['workspace'] = str(workspace_folder(item))
             result = complete(item, data, safe_suffixes=REFERENCE_FILE_TYPES,
-                              discovery=None if app.demo else app.completion_discovery)
+                              discovery=None if app.demo else discovery)
             if data.get('kind') in {'slash', 'command'}:
                 result = workspace_commands(result, data.get('query', ''))
             return self.reply(result)
@@ -4392,11 +4453,10 @@ class Handler(BaseHTTPRequestHandler):
                 item = dict(app.get(sid))
                 if app.demo or not app.command or not item.get('trusted'):
                     raise ValueError('확인한 업무 폴더에서 설정을 변경해 주세요.')
-                settings = app.customizations
-                settings.command, settings.info = list(app.command), dict(app.info)
+                _, _, settings = app._session_metadata(item)
             result = settings.change(str(workspace_folder(item)), data)
             # Common settings can affect every cached project.
-            app.completion_discovery.clear()
+            app.invalidate_completion_settings()
             return self.reply(result)
         if route == '/api/model':
             if 'model' not in data:

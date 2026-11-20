@@ -42,7 +42,9 @@ def read_result(path: Path, kind: str) -> dict:
             raise ValueError('파일 선택 창을 열지 못했습니다. 경로를 직접 입력하거나 다시 선택해 주세요.')
         if 'errorCode' in value or (status == 'cancel' and paths):
             raise ValueError(INVALID_RESULT)
-        if status == 'success' and not (1 <= len(paths) <= (1 if kind == 'folder' else MAX_PATHS)):
+        if status == 'success' and not (1 <= len(paths) <= (MAX_PATHS if kind == 'files' else 1)):
+            if kind in {'claude-config', 'claude-executable'}:
+                raise ValueError('Claude에 사용할 경로를 하나만 선택해 주세요.')
             raise ValueError('폴더는 1개, 첨부 파일은 한 번에 12개까지 선택해 주세요.')
         seen = set()
         for selected in paths:
@@ -53,7 +55,7 @@ def read_result(path: Path, kind: str) -> dict:
             if not item.is_absolute() or '..' in item.parts:
                 raise ValueError(INVALID_RESULT)
             resolved = item.resolve(strict=True)
-            if not (resolved.is_dir() if kind == 'folder' else resolved.is_file()):
+            if not (resolved.is_dir() if kind in {'folder', 'claude-config'} else resolved.is_file()):
                 raise ValueError(INVALID_RESULT)
             if resolved in seen:
                 raise ValueError(INVALID_RESULT)

@@ -122,7 +122,7 @@ namespace WorkspacePicker {
                                                                [MarshalAs(UnmanagedType.Interface)] out IShellItem item);
 
         public bool IsFolderPicker { get; private set; }
-        public bool Multiselect { get { return !IsFolderPicker; } }
+        public bool Multiselect { get; private set; }
         public string SelectedPath { get; private set; }
         public string[] FileNames { get; private set; }
         public uint NativeOptions {
@@ -130,10 +130,12 @@ namespace WorkspacePicker {
         }
 
         public NativePathDialog(string kind) {
-            if (kind != "folder" && kind != "files") throw new ArgumentException("Unknown picker kind.", "kind");
+            if (kind != "folder" && kind != "files" && kind != "claude-config" && kind != "claude-executable")
+                throw new ArgumentException("Unknown picker kind.", "kind");
             if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
                 throw new InvalidOperationException("The path picker requires an STA thread.");
-            IsFolderPicker = kind == "folder";
+            IsFolderPicker = kind == "folder" || kind == "claude-config";
+            Multiselect = kind == "files";
             SelectedPath = String.Empty;
             FileNames = new string[0];
             try {
@@ -143,9 +145,17 @@ namespace WorkspacePicker {
                 flags |= ForceFileSystem | PathMustExist | FileMustExist | NoChangeDirectory;
                 if (IsFolderPicker) {
                     flags = (flags | PickFolders) & ~AllowMultiSelect;
-                    dialog.SetTitle("Company Workspace - 업무 폴더 선택");
+                    dialog.SetTitle(kind == "claude-config" ? "AX Workspace - Claude 설정 폴더 선택" : "Company Workspace - 업무 폴더 선택");
                     dialog.SetOkButtonLabel("이 폴더 선택");
                     dialog.SetFileNameLabel("폴더:");
+                } else if (kind == "claude-executable") {
+                    flags &= ~(AllowMultiSelect | PickFolders);
+                    dialog.SetTitle("AX Workspace - Claude 실행 파일 선택");
+                    dialog.SetOkButtonLabel("이 파일 선택");
+                    dialog.SetFileNameLabel("파일 이름:");
+                    FilterSpec[] filters = { new FilterSpec("Claude 실행 파일", "*.exe;*.cmd;*.bat;*.ps1") };
+                    dialog.SetFileTypes((uint)filters.Length, filters);
+                    dialog.SetFileTypeIndex(1);
                 } else {
                     flags = (flags | AllowMultiSelect | FileMustExist) & ~PickFolders;
                     dialog.SetTitle("Company Workspace - 자료 추가");
@@ -164,8 +174,10 @@ namespace WorkspacePicker {
                     dialog.SetFileTypeIndex(1);
                 }
                 dialog.SetOptions(flags);
-                // Separate recent locations for folders and attachments.
-                Guid client = IsFolderPicker
+                // Keep personal Claude settings locations separate from task and attachment history.
+                Guid client = kind == "claude-config" ? new Guid("E42ECACA-D98D-4EA4-ACEE-D74735E10F83")
+                    : kind == "claude-executable" ? new Guid("812A8609-781F-43FD-8919-C681FD752FA7")
+                    : IsFolderPicker
                     ? new Guid("446432A6-181F-4F99-9A88-1DA450942AAA")
                     : new Guid("457833A5-7BD3-409C-A576-ECC14159A83D");
                 dialog.SetClientGuid(ref client);
@@ -195,7 +207,7 @@ namespace WorkspacePicker {
             int result = dialog.Show(owner.Handle);
             if (result == Cancelled) return DialogResult.Cancel;
             Marshal.ThrowExceptionForHR(result);
-            if (IsFolderPicker) {
+            if (!Multiselect) {
                 IShellItem item = null;
                 try { dialog.GetResult(out item); SelectedPath = ReadPath(item); }
                 finally { Release(item); }

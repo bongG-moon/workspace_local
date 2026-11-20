@@ -99,13 +99,13 @@ async function main(){
     assert.equal(await page.locator('#llm-usage-reset-note').isVisible(),naive,raw);
     if(raw==='2026-10-28T18:30:00Z')assert.match(await page.locator('#llm-usage-reset').textContent(),/29/);
    }
-   await page.evaluate(()=>{value={...value,error:'http_error',pollAfterMs:60000,diagnostic:{stage:'initialize',httpStatus:503}};value.usage.resetAt='2026-10-28T00:00:00';});
+   await page.evaluate(()=>{value={...value,error:'http_error',pollAfterMs:120000,diagnostic:{stage:'initialize',httpStatus:503}};value.usage.resetAt='2026-10-28T00:00:00';});
    await page.locator('#llm-usage-refresh').click();
    await assertUsageUnavailable(page);
    assert(await page.locator('#llm-usage-team').isEnabled());
    await page.locator('#llm-usage-details').screenshot({path:path.join(output,theme+'-failed.png')});
    const before=await page.evaluate(()=>calls.length);
-   await page.clock.runFor(59999);
+   await page.clock.runFor(119999);
    assert.equal(await page.evaluate(()=>calls.length),before);
    await page.evaluate(()=>{value={...value,error:null,diagnostic:null,pollAfterMs:300000,usage:{...value.usage,spend:3,remaining:17,percent:15}};});
    await page.clock.runFor(1);
@@ -127,24 +127,30 @@ async function main(){
    assert(await page.locator('#llm-usage-refresh').isEnabled());
    assert.equal(await page.locator('#llm-usage-percent').textContent(),'15%');
    // Authentication failure also hides a formerly high usage/warning balance.
-   await page.evaluate(()=>{value={...value,error:'key_required',pollAfterMs:60000,diagnostic:{stage:'initialize',httpStatus:401},usage:{...value.usage,spend:19,remaining:1,percent:95}};});
+   await page.evaluate(()=>{value={...value,error:'key_required',pollAfterMs:120000,diagnostic:{stage:'initialize',httpStatus:401},usage:{...value.usage,spend:19,remaining:1,percent:95}};});
    await page.locator('#llm-usage-refresh').click();
    await assertUsageUnavailable(page);
    assert.match(await page.locator('#llm-usage-detail-state').textContent(),/LLM Key 확인/);
    await page.evaluate(()=>{value={...value,error:null,diagnostic:null,pollAfterMs:300000};});
    await page.locator('#llm-usage-refresh').click();
    assert.equal(await page.locator('#llm-usage-percent').textContent(),'95%');
-   // A local API failure also polls in one minute, never leaves a stuck retry label.
+   // Local transport failures back off as well, and a later response restores the view.
    await page.evaluate(()=>{window.rejectApi=true;});
    await page.locator('#llm-usage-refresh').click();
    await assertUsageUnavailable(page);
    const beforeLocalFailure=await page.evaluate(()=>calls.length);
-   await page.evaluate(()=>{window.rejectApi=false;});
-   await page.clock.runFor(60000);
+   await page.clock.runFor(119999);
+   assert.equal(await page.evaluate(()=>calls.length),beforeLocalFailure);
+   await page.clock.runFor(1);
    assert.equal(await page.evaluate(()=>calls.length),beforeLocalFailure+1);
+   await page.evaluate(()=>{window.rejectApi=false;});
+   await page.clock.runFor(299999);
+   assert.equal(await page.evaluate(()=>calls.length),beforeLocalFailure+1);
+   await page.clock.runFor(1);
+   assert.equal(await page.evaluate(()=>calls.length),beforeLocalFailure+2);
    assert(!(await page.locator('#llm-usage-updated').textContent()).includes('이전 조회 값'));
    assert.equal(await page.locator('#llm-usage-percent').textContent(),'95%');
-   checks.push(theme+': address and route save, 503 diagnosis, polling edit preservation, small viewport, production editor hidden, 24-hour KST reset across host timezones, failure polling at 60s, no cached balances during failure/retry/API error, fresh values after recovery');
+   checks.push(theme+': address and route save, 503 diagnosis, polling edit preservation, small viewport, production editor hidden, 24-hour KST reset across host timezones, failure polling at 120s and 300s, no cached balances during failure/retry/API error, fresh values after recovery');
    await page.close();
   }
   assert.deepEqual(errors,[]);

@@ -45,7 +45,7 @@ globalThis.WorkspaceErrorHelp = (() => {
   const entries = {
     not_found: ['Claude Code를 찾지 못했어요', '앱이 현재 실행 환경에서 Claude 명령을 찾지 못했어요.', ['Claude Code가 설치되지 않았거나 앱의 실행 경로에서 보이지 않을 수 있어요.', '터미널과 앱의 실행 계정이나 환경이 다를 수 있어요.'], ['Windows 시작 메뉴에서 PowerShell을 열고 claude --version을 입력해 실행되는지 확인하세요.', '명령을 찾지 못하면 회사의 Claude Code 설치 안내를 따르거나 담당자에게 문의하세요.', '터미널에서는 되는데 앱에서만 안 되면 앱의 설정에서 완전히 종료한 뒤 같은 Windows 계정으로 다시 열어 보세요.']],
     unsupported: ['Claude 연결 기능을 확인해 주세요', '현재 Claude Code가 앱에 필요한 연결 옵션을 제공하지 않았어요.', ['Claude Code 버전이 오래됐거나 다른 실행 파일을 사용 중일 수 있어요.'], ['Windows 시작 메뉴에서 PowerShell을 열고 claude --version을 입력해 버전을 확인하세요.', '회사에 정해진 업데이트 방법이 있으면 그 안내를 따르세요. 그렇지 않으면 터미널에서 claude를 실행하고 Claude에게 ‘최신 버전으로 업데이트해 줘’라고 요청하세요. 실행 전 제안된 변경을 확인하세요.', 'Claude가 실행되지 않거나 업데이트가 제한되면 회사 담당자에게 업데이트 방법을 문의하세요.', '업데이트가 완료됐는지 확인한 뒤 앱의 설정에서 완전히 종료하고 다시 열어 연결해 보세요.']],
-    auth: ['Claude 인증을 확인해 주세요', 'Claude Code가 인증 실패를 알려왔어요.', ['인증이 만료됐거나 앱과 터미널의 실행 환경 또는 사용 가능한 모델 설정이 다를 수 있어요.'], ['같은 Windows 계정에서 PowerShell을 열고 claude를 실행해 간단한 질문에 답변이 나오는지 확인하세요.', 'PowerShell에서 cmd /c "claude -p 안녕하세요"도 입력해 답변이 나오는지 확인하세요.', '터미널에서 오류가 나면 모델을 사용할 수 있는지 확인하고, 인증 안내가 나오면 회사의 Claude 로그인 또는 KEY 갱신 안내를 따르세요.', '터미널에서만 정상이면 앱에서 선택한 모델과 Claude 기본 모델을 확인하고 앱을 완전히 종료한 뒤 다시 열어 보세요.', '계속되면 담당자에게 실행 계정과 앱의 실행 위치 및 설정 위치 확인을 요청하세요.'], 'KEY나 토큰 값은 다른 사람에게 전달하지 마세요.'],
+    auth: ['Claude 인증을 확인해 주세요', 'Claude Code가 인증 실패를 알려왔어요.', ['로그인이 만료됐거나, 앱이 평소 쓰는 터미널과 다른 설정 폴더 또는 실행 파일을 사용하고 있을 수 있어요.'], ['같은 Windows 계정에서 평소 쓰는 PowerShell을 열고 claude를 실행해 간단한 질문에 답변이 나오는지 확인하세요.', '터미널에서 답변이 오면 아래의 ‘터미널과 경로 비교’를 여세요. 터미널에서 사용하는 설정 폴더와 실행 파일을 앱이 찾은 위치와 비교할 수 있어요.', '터미널에서도 인증 오류가 나면 회사의 Claude 로그인 또는 인증 갱신 안내를 따르세요.'], '경로를 비교할 때는 폴더나 파일의 위치만 사용해요.'],
     timeout: ['Claude 연결 준비가 오래 걸려요', 'Claude가 준비 응답을 제시간에 보내지 않았어요.', ['로그인 대기, MCP 연결, 시작 후크 또는 네트워크 지연이 원인일 수 있어요.'], ['같은 Windows 계정에서 PowerShell을 열고 claude를 입력해 정상적으로 시작되는지 확인하세요.', '터미널에서도 오래 걸리면 로그인 안내, 네트워크 및 최근 추가한 MCP 연결을 확인하거나 담당자에게 문의하세요.', '문제를 확인한 뒤 앱의 연결 다시 확인을 누르고 다시 요청하세요.']],
     closed: ['Claude 연결이 종료됐어요', 'Claude 연결이 예상보다 일찍 종료됐어요.', ['인증, 네트워크, CLI 실행 환경이나 보안 프로그램 등 여러 원인이 가능해요.'], ['오류가 나기 전의 안내와 발생 시점을 확인하세요.', '대화와 이번 결과에서 이미 수행된 작업 및 파일 변경을 먼저 확인하세요.', '같은 계정에서 PowerShell을 열고 claude가 정상 실행되는지 확인한 뒤 앱의 연결 다시 확인을 누르세요. 계속되면 오류 내용과 시점을 담당자에게 알려 주세요.']],
     model_rejected: ['모델 변경이 거절됐어요', '연결된 Claude가 모델 변경을 받아들이지 않았어요.', ['모델 이름이나 연결 설정이 맞지 않거나 해당 CLI가 변경을 지원하지 않을 수 있어요.'], ['현재 진행 중인 작업이 끝날 때까지 기다리세요.', '입력창 아래의 모델 버튼을 눌러 회사에서 사용할 수 있는 모델을 고르거나 기존 설정 사용을 선택하세요.', editModelSettings, '계속 거절되면 연결 다시 확인을 누른 뒤 회사 모델 설정과 Claude Code 버전을 확인해 주세요.']],
@@ -88,7 +88,7 @@ globalThis.WorkspaceErrorHelp = (() => {
     if(!current)return;
     const d=current.diagnostic;
     const launchCauses={profile_parse:'파일의 문법이나 PowerShell이 문자를 읽는 방식에 따라 시작 설정을 불러오지 못할 수 있어요.',
-      config_root:'업무 폴더가 달라져도 같은 설정을 쓰려면 PowerShell의 CLAUDE_CONFIG_DIR에 전체 경로를 지정해 주세요.',
+      config_root:'설정 폴더가 이동했거나 위치를 찾을 수 없어요. 실행 환경 확인을 열고 ‘터미널과 경로 비교’에서 폴더를 다시 선택하거나 ‘자동으로 되돌리기’를 누른 뒤 적용하세요.',
       profile_load:'시작 설정에서 참조하는 파일이나 명령이 이 환경에서 제공되는지 확인하세요.',
       function_changed:'터미널을 열 때마다 다른 함수가 만들어지거나 서로 다른 프로필을 사용했을 수 있어요.',
       command_not_found:'앱과 평소 터미널이 서로 다른 시작 설정이나 실행 경로를 쓸 수 있어요.'};
@@ -100,7 +100,10 @@ globalThis.WorkspaceErrorHelp = (() => {
        ...(related?entries[related][3]:[]),
        '도움이 필요하면 진단 요약을 복사해 담당자에게 전달하세요.']];
     const [title,summary,causes,actions,note]=launchHelp||entries[current.kind], dialog=node('error-help-dialog');
-    node('error-launch-details').hidden=!d;
+    const comparePaths=current.kind==='auth';
+    node('error-launch-details').hidden=!d&&!comparePaths;
+    node('error-launch-summary').hidden=node('error-launch-copy').hidden=!d;
+    node('error-launch-open').textContent=comparePaths?'터미널과 경로 비교':'실행 환경 확인';
     node('error-launch-summary').textContent=diagnosticSummary(d);
     node('error-help-title').textContent=title;node('error-help-summary').textContent=summary;
     const visibleActions = node('recovery-settings-file')?.hidden === false
@@ -116,12 +119,29 @@ globalThis.WorkspaceErrorHelp = (() => {
     const panel=node('claude-shell-panel'), select=node('claude-shell-choice'), status=node('claude-shell-status');
     const check=node('claude-shell-check'), apply=node('claude-shell-apply'), copy=node('claude-shell-copy');
     const report=node('claude-shell-diagnostic');
-    let saved=null, busy=false;
+    const paths=node('claude-shell-paths');
+    const configDir=node('claude-config-dir'), executable=node('claude-executable');
+    const configPick=node('claude-config-pick'), executablePick=node('claude-executable-pick');
+    const configClear=node('claude-config-clear'), executableClear=node('claude-executable-clear');
+    let saved=null, busy=false, dialogGeneration=0;
+    node('settings-dialog').addEventListener('close',()=>{dialogGeneration++;});
+    const pathValue=input=>input.value.trim().replace(/^"([^"]+)"$/,'$1');
+    function isEdited(){
+      return saved&&(select.value!==saved.choice||pathValue(configDir)!==saved.configDir||pathValue(executable)!==saved.executable);
+    }
     const lock=()=>{
       select.disabled=busy||!saved;
-      check.disabled=select.disabled;
-      apply.disabled=select.disabled||select.value===saved;
+      for(const control of [check,configDir,executable,configPick,executablePick,configClear,executableClear])control.disabled=select.disabled;
+      configClear.hidden=!configDir.value;
+      executableClear.hidden=!executable.value;
+      apply.disabled=select.disabled||!isEdited();
     };
+    function showSaved(config){
+      saved={choice:config.choice,configDir:config.configDir||'',executable:config.executable||''};
+      select.value=saved.choice;configDir.value=saved.configDir;executable.value=saved.executable;
+      node('claude-config-current').textContent=config.runtime?.configRoot||'아직 확인하지 못했어요.';
+      node('claude-executable-current').textContent=config.runtime?.entry||'아직 확인하지 못했어요.';
+    }
     function showReport(d){
       report.textContent=diagnosticSummary(d);
       copy.hidden=report.hidden=!report.textContent;
@@ -138,21 +158,21 @@ globalThis.WorkspaceErrorHelp = (() => {
       try{
         const config=await controls.api('/api/claude-shell');
         for(const option of select.options)option.disabled=config.available?.[option.value]===false;
-        saved=config.choice;select.value=saved;
+        showSaved(config);
         status.textContent='선택한 환경에서 Claude 실행과 연결에 필요한 옵션을 확인할 수 있어요.';
       }catch{saved=null;status.textContent='설정을 불러올 수 없어요. 이 항목을 닫았다 다시 열어 주세요.';}
       finally{busy=false;lock();}
     };
     async function probe(checkOnly){
-      if(busy||!saved||!checkOnly&&select.value===saved)return;
+      if(busy||!saved||!checkOnly&&!isEdited())return;
       busy=true;lock();showReport(null);status.textContent='선택한 PowerShell에서 Claude 실행을 확인하고 있어요…';
       try{
-        const result=await controls.api('/api/claude-shell',{choice:select.value,checkOnly});
+        const result=await controls.api('/api/claude-shell',{choice:select.value,checkOnly,configDir:pathValue(configDir),executable:pathValue(executable)});
         showReport(result.diagnostic);
         if(checkOnly){
           status.textContent='Claude 실행과 연결에 필요한 옵션을 확인했어요. 로그인과 모델 권한은 실제 요청에서 확인돼요.';
         }else{
-          saved=result.choice;select.value=saved;
+          showSaved(result);
           status.textContent='저장했어요. 다음에 새로 연결할 때부터 이 환경을 사용해요. 진행 중인 업무는 계속됩니다.';
           try{await controls.applied();}catch{status.textContent+=' 앱을 다시 열면 저장한 설정이 표시돼요.';}
         }
@@ -162,13 +182,44 @@ globalThis.WorkspaceErrorHelp = (() => {
         showReport(err.diagnostic);
       }finally{busy=false;lock();}
     }
-    select.onchange=()=>{showReport(null);status.textContent=select.value===saved?'현재 사용 중인 설정이에요.':'점검 후 적용을 누르면 이후 새 연결에 사용해요.';lock();};
+    function edited(){
+      showReport(null);
+      status.textContent=isEdited()?'점검 후 적용을 누르면 이후 새 연결에 사용해요.':'현재 사용 중인 설정이에요.';
+      lock();
+    }
+    function bindPathField(input,pick,clear,kind,commandId){
+      input.oninput=edited;
+      clear.onclick=()=>{input.value='';edited();input.focus();};
+      pick.onclick=async()=>{
+        if(busy||!saved)return;
+        const generation=dialogGeneration;
+        busy=true;lock();
+        try{
+          const result=await controls.api('/api/pick',{kind});
+          if(generation!==dialogGeneration||!panel.open||!node('settings-dialog').open||result.status==='cancel')return;
+          if(result.status!=='success'||result.paths?.length!==1)throw Error('경로 하나를 선택해 주세요.');
+          input.value=result.paths[0];edited();
+        }catch(err){if(generation===dialogGeneration)status.textContent=err.message||'선택 창을 열 수 없어요. 경로를 직접 입력해 주세요.';}
+        finally{busy=false;lock();}
+      };
+      node(commandId+'-copy').onclick=async()=>{
+        try{await navigator.clipboard.writeText(node(commandId).textContent);controls.toast('명령을 복사했어요. PowerShell에 붙여넣고 Enter를 누르세요.');}
+        catch{node('claude-path-commands').open=true;node(commandId).scrollIntoView({block:'nearest'});controls.toast('아래 명령을 직접 선택해 복사하세요.');}
+      };
+    }
+    select.onchange=edited;
+    bindPathField(configDir,configPick,configClear,'claude-config','claude-config-command');
+    bindPathField(executable,executablePick,executableClear,'claude-executable','claude-executable-command');
     check.onclick=()=>probe(true);apply.onclick=()=>probe(false);
     copy.onclick=()=>copyReport(report.textContent);
     node('error-launch-copy').onclick=()=>copyReport(node('error-launch-summary').textContent);
     node('error-launch-open').onclick=()=>{
       node('error-help-dialog').close();if(!node('settings-dialog').open)controls.openSettings();
-      panel.open=true;panel.querySelector('summary').focus();
+      panel.open=true;
+      if(current?.kind==='auth'){
+        paths.open=true;node('claude-shell-paths-summary').focus({preventScroll:true});
+        paths.scrollIntoView({block:'start'});
+      }else{panel.querySelector('summary').focus();}
     };
   }
   return {classify,update,open,bindShell};

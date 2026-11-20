@@ -184,7 +184,7 @@ class BridgeError(ValueError):
 
 
 _LAUNCH_MESSAGES = {
-    'config_root': '선택한 셸에서 Claude 설정 폴더의 위치가 업무마다 달라질 수 있습니다. 해당 셸에서 CLAUDE_CONFIG_DIR를 일정한 절대 경로로 설정한 뒤 다시 확인해 주세요.',
+    'config_root': 'Claude 설정 폴더를 확인하지 못했어요. 설정에서 터미널이 사용하는 폴더의 전체 경로를 확인해 주세요.',
     'profile_parse': 'PowerShell이 시작 설정 파일의 문법을 읽지 못했습니다.',
     'profile_load': 'PowerShell이 터미널의 시작 설정을 불러오지 못했습니다.',
     'command_not_found': '기존 터미널의 Claude 실행 명령을 확인하지 못했습니다. 평소 사용하는 터미널에서 Claude 실행을 확인해 주세요. 앱 전용 로그인은 필요하지 않습니다.',
@@ -326,14 +326,30 @@ def terminal_command(entry: str, load_profiles=False) -> list[str]:
     return args
 
 
+def bind_config_dir(command: list[str], config_dir: str | None) -> list[str]:
+    """Bind a manual settings folder to this command, including non-chat CLI calls."""
+    if not config_dir:
+        return command
+    if len(command) == 1:
+        command = terminal_command(command[0])
+    return command + ['-AxConfigDir', config_dir]
+
+
+def _terminal_bound_root(command):
+    if (command[-2:-1] == ['-AxConfigDir'] and _bundled_wrapper(command)
+            and Path(command[6]).name == 'Invoke-TerminalClaude.ps1'):
+        return command[-1]
+    return None
+
+
 def _selected_shell(command):
-    return len(command) == 12 and command[5:8] == ['-File', str(Path(__file__).with_name('Invoke-SelectedClaude.ps1')), '-Entry']
+    return len(command) in (12, 14, 16) and command[5:8] == ['-File', str(Path(__file__).with_name('Invoke-SelectedClaude.ps1')), '-Entry']
 
 
 def runtime_context(command: list[str]) -> dict:
     """Only non-secret context. Credentials remain owned/read by Claude Code."""
     entry = command[command.index("-Entry") + 1] if "-Entry" in command else command[0]
-    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
+    root = Path(_terminal_bound_root(command) or os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").expanduser()
     if _selected_shell(command):
         root = Path(command[11])
     return {"entry": entry, "configRoot": str(root), "authentication": "shared-with-cli"}
@@ -405,13 +421,15 @@ def probe_discovered_cli(command: list[str], *, cancel_event=None) -> tuple[list
     """Probe the verified-user native candidate only for a stock, unaliased npm shim."""
     options = {'cancel_event': cancel_event} if cancel_event is not None else {}
     native = os.environ.get('COMPANY_WORKSPACE_CLAUDE_NATIVE_CANDIDATE')
+    root = _terminal_bound_root(command)
+    base = command[:-2] if root else command
     if (os.name == 'nt' and native and not os.environ.get('COMPANY_AGENT_CLAUDE')
-            and command[-2:-1] == ['-Entry']):
-        shim = Path(command[-1])
+            and base[-2:-1] == ['-Entry']):
+        shim = Path(base[-1])
         digest = _npm_claude_shim_digest(shim)
         if digest:
             try:
-                native_command = resolve_cli(native)
+                native_command = bind_config_dir(resolve_cli(native), root)
                 return native_command, probe_cli(native_command, **options)
             except CancelledError:
                 raise
@@ -429,7 +447,13 @@ def _launched_user_settings(command, env, cwd):
     A custom shell command can change CLAUDE_CONFIG_DIR or --setting-sources
     after launch. Its get_settings response does not identify the actual file.
     """
-    if _selected_shell(command):
+    bound_root = _terminal_bound_root(command)
+    if bound_root:
+        env = {**env, 'CLAUDE_CONFIG_DIR': bound_root}
+        command = command[:-2]
+        if command[-2:-1] == ['-Entry'] and Path(command[-1]).suffix.lower() == '.exe':
+            command = [command[-1]]
+    elif _selected_shell(command):
         # The wrapper verifies this settings mode and root after loading the
         # selected profile. Only a native CLI or an exact stock shim can use it.
         if command[10] != 'file':
@@ -2104,6 +2128,8 @@ class ClaudeSession:
                     owner = False
             else:
                 self.closed, self.busy = True, False
+                # A task can retain a closed bridge after idle retirement.
+                self.__dict__.pop('_workspace_metadata', None)
                 if self._stop_attempt is not None:
                     self._stop_attempt['changed'].set()
                 self.pending.clear()

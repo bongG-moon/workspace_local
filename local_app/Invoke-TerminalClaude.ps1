@@ -10,6 +10,11 @@ try {
     $Entry = [string]$args[1]
     $LoadProfiles = $args.Count -gt 2 -and $args[2] -eq '-LoadProfiles'
     $argumentOffset = if ($LoadProfiles) { 3 } else { 2 }
+    $configOverride = $null
+    if ($args.Count -gt ($argumentOffset + 1) -and $args[$argumentOffset] -ceq '-AxConfigDir') {
+        $configOverride = $args[$argumentOffset + 1]
+        $argumentOffset += 2
+    }
     $CliArguments = @($args | Select-Object -Skip $argumentOffset)
     $workspaceDirectory = Get-Location
     if ($LoadProfiles) {
@@ -44,6 +49,11 @@ try {
     }
     elseif ([IO.Path]::GetExtension($Entry) -eq '.ps1') { $commandType = 'ExternalScript' }
     else { $commandType = 'Application' }
+    if ($configOverride) {
+        $failureCategory = 'config_root'
+        if (-not [IO.Directory]::Exists($configOverride)) { throw 'Configured directory unavailable' }
+        $env:CLAUDE_CONFIG_DIR = $configOverride
+    }
     $failureCategory = 'cli_start'
     $failureStage = 'process_start'
     [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)

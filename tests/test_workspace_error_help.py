@@ -42,19 +42,55 @@ class WorkspaceErrorHelpTests(unittest.TestCase):
           assert.match(report,/업데이트 버전 폴더/);assert.doesNotMatch(report,/PRIVATE|private/);
           select.value='pwsh';select.onchange();await check.onclick();assert.equal(apply.disabled,false);
           await apply.onclick();assert.equal(apply.disabled,true);
-          assert.deepEqual(calls,['read',{choice:'windows',checkOnly:false},{choice:'pwsh',checkOnly:true},{choice:'pwsh',checkOnly:false},'applied']);
+          assert.deepEqual(calls,['read',{choice:'windows',checkOnly:false,configDir:'',executable:''},{choice:'pwsh',checkOnly:true,configDir:'',executable:''},{choice:'pwsh',checkOnly:false,configDir:'',executable:''},'applied']);
           error('연결 실패',null,'launch_cli_version',{category:'cli_version',stage:'version',startupProfile:{category:'profile_parse',
             stage:'launcher_profile',errorLine:42,path:'PRIVATE-PATH'}});
           $('error-help-open').onclick();
           assert.equal($('error-launch-details').hidden,false);assert.match($('error-launch-summary').textContent,/42행/);
           assert.doesNotMatch($('error-launch-summary').textContent,/PRIVATE|private/);
           error('로그인 만료',null,'authentication_failed');$('error-help-open').onclick();
-          assert.equal($('error-launch-details').hidden,true);assert.equal($('error-launch-summary').textContent,'');
+          assert.equal($('error-launch-details').hidden,false);assert.equal($('error-launch-summary').textContent,'');
+          assert.equal($('error-launch-summary').hidden,true);assert.equal($('error-launch-copy').hidden,true);
+          assert.equal($('error-launch-open').textContent,'터미널과 경로 비교');
+          $('error-launch-open').onclick();assert.equal($('claude-shell-paths').open,true);
           error('로그인 만료',null,'authentication_failed',{startupProfile:{category:'profile_parse',
             stage:'launcher_profile',errorLine:15,source:'PRIVATE'}});
           $('error-help-open').onclick();assert.match($('error-help-title').textContent,/인증/);
           assert.equal($('error-launch-details').hidden,false);assert.match($('error-launch-summary').textContent,/15행/);
           assert.doesNotMatch($('error-launch-summary').textContent,/PRIVATE/);
+        })()''')
+
+    def test_paths_can_be_checked_applied_and_restored_individually(self):
+        self.run_case(r'''(async()=>{
+          const saved={choice:'default',configDir:'D:/기존 설정',executable:'',runtime:{entry:'C:/기본/claude.cmd',configRoot:'D:/기존 설정'}};
+          const calls=[];
+          let picked={status:'cancel',paths:[]};
+          WorkspaceErrorHelp.bindShell({
+            context:()=>({}),applied:async()=>{},toast:()=>{},api:async(path,body)=>{
+              calls.push([path,body]);if(path==='/api/pick')return picked;
+              if(!body)return saved;
+              if(body.configDir==='D:/없는 폴더')throw Error('설정 폴더를 확인하세요.');
+              return {...body,runtime:{entry:body.executable,configRoot:body.configDir||'D:/자동'}};
+            }});
+          const panel=$('claude-shell-panel'),sel=$('claude-shell-choice'),folder=$('claude-config-dir');
+          const exe=$('claude-executable'),check=$('claude-shell-check'),apply=$('claude-shell-apply');
+          sel.options=[];panel.open=$('settings-dialog').open=true;await panel.ontoggle();
+          assert.equal(folder.value,saved.configDir);assert.equal($('claude-executable-current').textContent,saved.runtime.entry);
+          assert.equal(apply.disabled,true);
+          await $('claude-config-pick').onclick();assert.equal(folder.value,saved.configDir);
+          assert.deepEqual(calls.at(-1),['/api/pick',{kind:'claude-config'}]);
+          picked={status:'success',paths:['D:/도구/claude.cmd']};await $('claude-executable-pick').onclick();
+          assert.equal(exe.value,picked.paths[0]);assert.deepEqual(calls.at(-1),['/api/pick',{kind:'claude-executable'}]);
+          folder.value='D:/없는 폴더';folder.oninput();await apply.onclick();assert.equal(apply.disabled,false);
+          assert.match($('claude-shell-status').textContent,/설정 폴더/);
+          assert.equal($('claude-config-current').textContent,saved.configDir);
+          folder.value='"D:/변경한 설정"';folder.oninput();await check.onclick();
+          assert.equal(calls.at(-1)[1].configDir,'D:/변경한 설정');assert.equal(calls.at(-1)[1].checkOnly,true);
+          assert.equal($('claude-config-current').textContent,saved.configDir);assert.equal(apply.disabled,false);
+          await apply.onclick();assert.equal(apply.disabled,true);assert.equal($('claude-config-current').textContent,'D:/변경한 설정');
+          $('claude-config-clear').onclick();assert.equal(folder.value,'');assert.equal(exe.value,picked.paths[0]);
+          await apply.onclick();assert.deepEqual(calls.at(-1)[1],{choice:'default',configDir:'',executable:picked.paths[0],checkOnly:false});
+          assert.equal($('claude-config-current').textContent,'D:/자동');assert.equal($('claude-config-clear').hidden,true);
         })()''')
 
     def test_classification_covers_known_messages_and_unknown_errors(self):
@@ -159,11 +195,10 @@ class WorkspaceErrorHelpTests(unittest.TestCase):
           assert.ok(steps.some(s=>s.includes('담당자')&&s.includes('제한')));assert.ok(steps.some(s=>s.includes('완전히 종료')));
           error('기존 Claude Code의 인증을 확인하지 못했습니다.',null,'cli_authentication');$('error-help-open').onclick();
           steps=actionText();assert.ok(steps.some(s=>s.includes('PowerShell')&&s.includes('claude를 실행')&&s.includes('질문')));
-          assert.ok(steps.some(s=>s.includes('cmd /c "claude -p 안녕하세요"')));
-          assert.ok(steps.some(s=>s.includes('오류')&&s.includes('모델')&&s.includes('로그인')&&s.includes('KEY 갱신')));
-          assert.ok(steps.some(s=>s.includes('터미널에서만 정상')&&s.includes('앱에서 선택한 모델')&&s.includes('완전히 종료')));
-          assert.ok(steps.some(s=>s.includes('실행 계정')&&s.includes('설정 위치')));
-          assert.match($('error-help-note').textContent,/KEY|토큰/);
+          assert.ok(steps.every(s=>!s.includes('cmd /c')));
+          assert.ok(steps.some(s=>s.includes('터미널과 경로 비교')&&s.includes('설정 폴더')&&s.includes('실행 파일')));
+          assert.ok(steps.some(s=>s.includes('터미널에서도 인증 오류')&&s.includes('로그인')));
+          assert.match($('error-help-note').textContent,/파일의 위치/);
           error('API error 403 team not allowed to access model',null,'task_failed');$('error-help-open').onclick();
           steps=actionText();assert.ok(steps.some(s=>s.includes('입력창')&&s.includes('모델 버튼')));
           assert.ok(steps.findIndex(s=>s.includes('파일 변경')) < steps.findIndex(s=>s.includes('필요한 내용만 요청')));

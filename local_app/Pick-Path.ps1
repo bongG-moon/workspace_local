@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('folder', 'files')][string]$Kind,
+    [ValidateSet('folder', 'files', 'claude-config', 'claude-executable')][string]$Kind,
     [long]$OwnerHandle = 0,
     [string]$ResultPath,
     [string]$InitialDirectory
@@ -39,7 +39,7 @@ function New-WorkspacePickerOwner([long]$Handle) {
     $label = New-Object Windows.Forms.Label
     $label.Dock = 'Fill'
     $label.TextAlign = 'MiddleCenter'
-    $label.Text = '선택 창에서 업무 폴더나 첨부할 파일을 골라 주세요.'
+    $label.Text = '열린 선택 창에서 사용할 폴더나 파일을 골라 주세요.'
     $window.Controls.Add($label)
     if ($null -ne $external) {
         $bounds = $external.Bounds()
@@ -96,7 +96,7 @@ function Write-WorkspacePickerResult($Result, [string]$Path) {
 }
 
 function Invoke-WorkspacePathPicker {
-    param([ValidateSet('folder', 'files')][string]$Kind, [long]$OwnerHandle = 0,
+    param([ValidateSet('folder', 'files', 'claude-config', 'claude-executable')][string]$Kind, [long]$OwnerHandle = 0,
           [string]$ResultPath, [string]$InitialDirectory)
     Initialize-WorkspacePicker
     $context = $null
@@ -111,7 +111,7 @@ function Invoke-WorkspacePathPicker {
         }
         Show-WorkspacePickerOwner $context
         if ($dialog.ShowDialog($context.Window) -eq 'OK') {
-            if ($Kind -eq 'folder') { $paths = @($dialog.SelectedPath) }
+            if ($Kind -in @('folder', 'claude-config', 'claude-executable')) { $paths = @($dialog.SelectedPath) }
             else { $paths = @($dialog.FileNames) }
             $status = 'success'
         }

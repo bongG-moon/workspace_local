@@ -16,9 +16,7 @@ from . import llm_usage_config
 
 MAX_BODY = 512 * 1024
 REFRESH_SECONDS = 300
-FAILURE_REFRESH_SECONDS = 60
-RETRY_DELAYS = (2, 5)
-MAX_RETRY_WAIT = 15
+FIRST_FAILURE_REFRESH_SECONDS = 120
 
 
 class UsageError(Exception):
@@ -46,12 +44,6 @@ def retry_after_seconds(value):
         return min(86400, max(0, math.ceil(delay)))
     except (ValueError, TypeError, OverflowError):
         return None
-
-
-def is_transient(error):
-    return isinstance(error, UsageError) and (
-        str(error) in ('timeout', 'connection_error') or
-        str(error) == 'http_error' and error.http_status in (502, 503, 504))
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -241,9 +233,8 @@ def query_usage(env=None, home=None, team='', *, timeout=9, opener=None, network
 
 
 class UsageService:
-    def __init__(self, *, demo=False, query=query_usage, clock=time.time, config_path=None, test_settings=None, env=None, sleep=time.sleep):
+    def __init__(self, *, demo=False, query=query_usage, clock=time.time, config_path=None, test_settings=None, env=None):
         self.demo, self.query, self.clock = demo, query, clock
-        self.sleep = sleep
         self.env = os.environ if env is None else env
         self.config_path = config_path or Path(__file__).resolve().parents[1] / llm_usage_config.CONFIG_NAME
         # Only the separately built test edition supplies this path. Production
@@ -252,7 +243,6 @@ class UsageService:
         self.lock = threading.Lock()
         self.result, self.error, self.loading, self.next_query, self.team = None, None, False, 0, ''
         self.diagnostic = None
-        self.retry = None
         self.retry_not_before = 0
         self.last_attempt = -float('inf')
 
@@ -305,7 +295,6 @@ class UsageService:
             if (not self.loading and now >= self.retry_not_before
                     and (now >= self.next_query or refresh and now - self.last_attempt >= 15)):
                 self.loading = True
-                self.retry = None
                 self.last_attempt = now
                 threading.Thread(target=self._refresh, daemon=True, name='llm-usage').start()
             connection = {'editable': self.test_settings is not None}
@@ -316,7 +305,7 @@ class UsageService:
                 except (OSError, ValueError):
                     connection.update(mcpUrl='', source='invalid')
             return {'usage': self.result, 'error': self.error, 'loading': self.loading,
-                    'diagnostic': self.diagnostic, 'connection': connection, 'retry': self.retry,
+                    'diagnostic': self.diagnostic, 'connection': connection, 'retry': None,
                     'pollAfterMs': 1000 if self.loading else max(1000, math.ceil((self.next_query - now) * 1000))}
 
     def _refresh(self):
@@ -330,37 +319,23 @@ class UsageService:
                     network_mode = self.network_mode()
                 except (OSError, ValueError):
                     raise UsageError('not_configured', stage='configuration') from None
-                # Retry this read-only observation on the same route. No task,
-                # tool installation or user request is ever replayed here.
                 query_env = {**self.env, 'LLMOPS_MCP_URL': url}
-                for attempt in range(len(RETRY_DELAYS) + 1):
-                    try:
-                        result = self.query(team=self.team, env=query_env, network_mode=network_mode)
-                        break
-                    except UsageError as exc:
-                        if not is_transient(exc) or attempt == len(RETRY_DELAYS):
-                            raise
-                        delay = max(RETRY_DELAYS[attempt], exc.retry_after or 0)
-                        if delay > MAX_RETRY_WAIT:
-                            raise  # Respect a longer server cooldown without holding the worker.
-                        with self.lock:
-                            self.error, self.diagnostic = str(exc), exc.public()
-                            self.retry = {'attempt': attempt + 1, 'limit': len(RETRY_DELAYS),
-                                          'nextAttemptAt': self.clock() + delay}
-                        self.sleep(delay)  # Outside the lock; snapshots and tasks stay responsive.
+                result = self.query(team=self.team, env=query_env, network_mode=network_mode)
             with self.lock:
-                self.result, self.error = dict(result, updatedAt=self.clock()), None
+                now = self.clock()
+                self.result, self.error = dict(result, updatedAt=now), None
                 self.diagnostic = None
                 self.retry_not_before = 0
+                self.next_query = now + REFRESH_SECONDS
         except Exception as exc:
             # Never expose network responses, credentials or settings paths.
             with self.lock:
+                delay = REFRESH_SECONDS if self.error else FIRST_FAILURE_REFRESH_SECONDS
                 self.error = str(exc) if isinstance(exc, UsageError) else 'unavailable'
                 self.diagnostic = exc.public() if isinstance(exc, UsageError) else {'stage': 'client'}
-                self.retry_not_before = self.clock() + (exc.retry_after or 0) if isinstance(exc, UsageError) else 0
+                now = self.clock()
+                self.retry_not_before = now + (exc.retry_after or 0) if isinstance(exc, UsageError) else 0
+                self.next_query = max(self.retry_not_before, now + delay)
         finally:
             with self.lock:
                 self.loading = False
-                self.retry = None
-                self.next_query = max(self.retry_not_before,
-                    self.clock() + (FAILURE_REFRESH_SECONDS if self.error else REFRESH_SECONDS))

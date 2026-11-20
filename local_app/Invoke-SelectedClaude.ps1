@@ -5,9 +5,19 @@ $failureStage = 'profile_restore'
 $failureCategory = 'profile_load'
 $kind = 'Unknown'
 try {
-    $discover = $args.Count -eq 1 -and $args[0] -ceq '-Discover'
+    $discover = $args.Count -ge 1 -and $args[0] -ceq '-Discover'
     if (-not $discover -and ($args.Count -lt 5 -or $args[0] -cne '-Entry')) { throw 'Invalid invocation' }
     $originalArgs = @($args)
+    $offset = if ($discover) { 1 } else { 5 }
+    $configOverride = $null
+    $entryOverride = $null
+    while ($offset + 1 -lt $originalArgs.Count) {
+        if ($originalArgs[$offset] -ceq '-AxConfigDir') { $configOverride = $originalArgs[$offset + 1] }
+        elseif ($originalArgs[$offset] -ceq '-AxExecutable') { $entryOverride = $originalArgs[$offset + 1] }
+        else { break }
+        $offset += 2
+    }
+    if ($discover -and $offset -ne $originalArgs.Count) { throw 'Invalid discovery arguments' }
     $work = Get-Location
     $explicitEntry = $env:COMPANY_AGENT_CLAUDE
     $previousOut = [Console]::Out
@@ -28,13 +38,18 @@ try {
     }
     $failureStage = 'command_resolution'
     $failureCategory = 'command_not_found'
-    if (-not $explicitEntry) { $explicitEntry = $env:COMPANY_AGENT_CLAUDE }
+    if ($entryOverride) { $explicitEntry = $entryOverride }
+    elseif (-not $explicitEntry) { $explicitEntry = $env:COMPANY_AGENT_CLAUDE }
     if ($explicitEntry) {
         # An explicitly configured launcher must take precedence over a PATH result.
         if (-not [IO.Path]::IsPathRooted($explicitEntry) -or -not [IO.File]::Exists($explicitEntry)) {
             throw 'Explicit command unavailable'
         }
-        $commandInfo = Get-Command -Name ([Management.Automation.WildcardPattern]::Escape($explicitEntry)) -ErrorAction Stop | Select-Object -First 1
+        # PS 7 treats escaped brackets in a full file path as literal backticks.
+        # Both hosts accept the actual path. Require the exact file before running it.
+        $expectedPath = [IO.Path]::GetFullPath($explicitEntry)
+        $commandInfo = Get-Command -Name $expectedPath -ErrorAction Stop |
+            Where-Object { $_.Path -eq $expectedPath } | Select-Object -First 1
     } else {
         $commandInfo = Get-Command claude -ErrorAction Stop | Select-Object -First 1
     }
@@ -57,6 +72,12 @@ try {
         $entry = $commandInfo.Path
         if (-not [IO.Path]::IsPathRooted($entry)) { throw 'Command path unavailable' }
     } else { throw 'Unsupported command' }
+    $failureCategory = 'config_root'
+    if ($configOverride) {
+        if (-not [IO.Directory]::Exists($configOverride)) { throw 'Configured directory unavailable' }
+        # Apply after profile restoration and only in this child process.
+        $env:CLAUDE_CONFIG_DIR = $configOverride
+    }
     $root = $env:CLAUDE_CONFIG_DIR
     if (-not $root) {
         $userDirectory = if ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
@@ -64,7 +85,6 @@ try {
     }
     # The inspector, session imports and every task need the same profile.
     # PS 5.1's IsPathRooted also accepts C:relative and \drive-relative.
-    $failureCategory = 'config_root'
     if ($root -notmatch '^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$))') {
         throw 'Workspace-dependent settings root'
     }
@@ -84,7 +104,7 @@ try {
     if ($originalArgs[1] -ne $entry -or $originalArgs[2] -cne $kind -or $originalArgs[3] -cne $identity) {
         throw 'Command context changed'
     }
-    $cliArgs = @($originalArgs | Select-Object -Skip 5)
+    $cliArgs = @($originalArgs | Select-Object -Skip $offset)
     Set-Location -LiteralPath $work
     $failureStage = 'process_start'
     $failureCategory = 'cli_start'

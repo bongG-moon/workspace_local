@@ -449,6 +449,18 @@ dialog .eyebrow{font-size:9px;font-weight:600;letter-spacing:1.2px;line-height:1
 #settings-dialog .settings-explainer>p{font-size:12px;line-height:1.75;margin:8px 0;color:var(--muted)}
 #settings-dialog .settings-explainer[open]{padding-bottom:2px}
 #settings-dialog .settings-detail{margin-top:8px}
+#settings-dialog .shell-path-comparison{margin:14px 0;padding:0 12px;border:1px solid var(--line);border-radius:var(--control-radius);background:var(--theme-surface)}
+#settings-dialog .shell-path-comparison>summary{cursor:pointer;padding:8px 0;color:var(--accent-ink);font-weight:550}
+#settings-dialog .shell-path-comparison p{font-size:12px;line-height:1.7;margin:4px 0 8px;color:var(--muted);overflow-wrap:anywhere}
+#settings-dialog .shell-path-field{border-top:1px solid var(--line);padding:10px 0}
+#settings-dialog .shell-path-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:3px 8px}
+#settings-dialog .shell-path-heading label{margin:0;color:var(--ink);font-weight:600}
+#settings-dialog .shell-path-comparison .shell-small-action{min-height:28px;height:auto;padding:3px 1px;background:transparent;border-color:transparent;color:var(--accent-ink);font-size:12px}
+#settings-dialog .shell-path-comparison .shell-small-action:hover:not(:disabled){text-decoration:underline}
+#settings-dialog .shell-current-path samp{display:block;color:var(--ink);font-family:inherit;overflow-wrap:anywhere;user-select:text}
+#settings-dialog .shell-path-commands{border-top:1px solid var(--line);padding:6px 0}
+#settings-dialog .shell-path-commands summary{cursor:pointer}
+#settings-dialog .shell-path-commands pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;user-select:text;color:var(--ink);margin:4px 0 10px}
 #settings-dialog .runtime-info{font-family:inherit;line-height:1.7}
 #settings-dialog .advanced-settings{padding:0 4px 14px}
 #settings-dialog .notification-options{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px}

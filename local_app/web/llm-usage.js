@@ -1,6 +1,8 @@
 "use strict";
 globalThis.WorkspaceLlmUsage = (() => {
   let api, timer, pending = false, stopped = false, current, urlEdited = false;
+  let localQueryFailed = false;
+  const normalInterval = 300000, firstFailureInterval = 120000;
   const $ = id => document.getElementById(id);
   function fitPanel(){
     const panel=$('llm-usage-details');if(!panel||panel.hidden)return;
@@ -54,10 +56,10 @@ globalThis.WorkspaceLlmUsage = (() => {
     }
   }
   function scheduleRefresh() {
-    if (stopped) return;
-    const fallback = current?.loading ? 1000 : current?.error ? 60000 : 300000;
+    if (stopped || document.hidden) return;
+    const fallback = current?.error ? firstFailureInterval : normalInterval;
     const delay = current?.loading ? 1000 : Number.isFinite(current?.pollAfterMs) ? current.pollAfterMs : fallback;
-    timer = setTimeout(() => refresh(), Math.max(1000, Math.min(300000, delay)));
+    timer = setTimeout(() => refresh(), Math.max(1000, Math.min(86400000, delay)));
   }
   function render(value) {
     current = value;
@@ -138,8 +140,14 @@ globalThis.WorkspaceLlmUsage = (() => {
   async function refresh(data) {
     if (!api || stopped || pending || document.hidden) return;
     pending = true; clearTimeout(timer);
-    try {render(await api('/api/llm-usage', data));}
-    catch (_) {render({...current, error:'unavailable', loading:false, retry:null, diagnostic:null, pollAfterMs:60000});}
+    try {
+      render(await api('/api/llm-usage', data));
+      localQueryFailed=false;
+    } catch (_) {
+      const delay=localQueryFailed ? normalInterval : firstFailureInterval;
+      localQueryFailed=true;
+      render({...current, error:'unavailable', loading:false, retry:null, diagnostic:null, pollAfterMs:delay});
+    }
     finally {pending=false;scheduleRefresh();}
   }
   function start(hooks) {
