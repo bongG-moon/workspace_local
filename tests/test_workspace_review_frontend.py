@@ -46,6 +46,7 @@ class Element {
 }
 const nodes=new Map();
 const get=id=>{if(!nodes.has(id))nodes.set(id,new Element(id==='changes-run'?'select':id.endsWith('-dialog')?'dialog':'div'));return nodes.get(id);};
+get('context-notice').hidden=true;get('handoff-origin').hidden=true;
 const context={assert,console,encodeURIComponent,Date,Event,
   active:{id:'A',title:'업무 A',workspace:'C:/fixture/A',state:'done',sessionId:'native-session-A'},
   boot:{demo:false},sending:false,appClosed:false,sessions:[],selectedSessions:[],toasts:[],renderCount:0,
@@ -256,30 +257,35 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal($('changes-content').children.length,0);assert.equal($('changes-run').children.length,0);
         })()""")
 
-    def test_branch_preview_and_creation_send_exactly_one_request_without_ai_dispatch(self):
+    def test_direct_branch_click_creates_once_without_preview_or_ai_dispatch(self):
         self.run_case(r"""(async()=>{
+          active.lastRunId='finished';
           const calls=[];let created;
           api=async(path,body)=>{
             calls.push({path,body});
-            if(body===undefined)return {available:true,reason:'ready'};
             return new Promise(resolve=>created=resolve);
           };
-          await WorkspaceProductivityActions.openBranch();
-          const first=$('branch-create').onclick();const duplicate=$('branch-create').onclick();
-          assert.equal(calls.length,2);assert.equal(calls[0].path,'/api/session/branch?id=A');
-          assert.equal(calls[1].path,'/api/session/branch');assert.deepEqual(calls[1].body,{id:'A'});
-          created({ok:true,session:child});await first;await duplicate;
+          $('branch-open').onclick();
+          assert.equal($('branch-dialog').open,true);assert.equal($('branch-create').disabled,false);
+          assert.equal(calls.length,0);
+          const first=$('branch-create').onclick();
+          assert.equal($('branch-create').disabled,true);assert.equal($('handoff-create').disabled,true);
+          await $('branch-create').onclick();await $('handoff-create').onclick();
+          assert.deepEqual(calls,[{path:'/api/session/branch',body:{id:'A'}}]);
+          created({ok:true,session:child});await first;
           assert.equal(sessions.filter(row=>row.id==='child').length,1);
           assert.equal(selectedSessions.length,1);assert.equal(selectedSessions[0],'child');assert.equal(renderCount,1);
           assert.equal(sessions.find(row=>row.id==='child').messages,undefined);
           assert.equal(sessions.find(row=>row.id==='child').artifacts,undefined);
-          assert.ok(calls.every(row=>row.path.startsWith('/api/session/branch')));
         })()""")
 
     def test_created_branch_retained_if_panel_closed_during_request(self):
         self.run_case(r"""(async()=>{
           let created;
-          api=async(path,body)=>body===undefined?{available:true}:new Promise(resolve=>created=resolve);
+          api=async(path,body)=>{
+            assert.equal(path,'/api/session/branch');assert.deepEqual(body,{id:'A'});
+            return new Promise(resolve=>created=resolve);
+          };
           await WorkspaceProductivityActions.openBranch();
           const pending=$('branch-create').onclick();$('branch-close').onclick();
           created({ok:true,session:child});await pending;
@@ -292,7 +298,10 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
     def test_created_branch_retained_without_switching_later_active_task(self):
         self.run_case(r"""(async()=>{
           let created;
-          api=async(path,body)=>body===undefined?{available:true}:new Promise(resolve=>created=resolve);
+          api=async(path,body)=>{
+            assert.equal(path,'/api/session/branch');assert.deepEqual(body,{id:'A'});
+            return new Promise(resolve=>created=resolve);
+          };
           await WorkspaceProductivityActions.openBranch();const pending=$('branch-create').onclick();
           active={...active,id:'B'};WorkspaceProductivityActions.contextChanged();
           created({ok:true,session:child});await pending;
@@ -300,19 +309,132 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(active.id,'B');assert.equal(selectedSessions.length,0);
         })()""")
 
-    def test_stale_branch_preview_and_busy_or_demo_states_never_create(self):
+    def test_created_branch_remains_in_list_if_opening_it_fails(self):
         self.run_case(r"""(async()=>{
-          let reply,calls=0;api=()=>{calls++;return new Promise(resolve=>reply=resolve);};
-          const preview=WorkspaceProductivityActions.openBranch();$('branch-cancel').onclick();
-          reply({available:true});await preview;
-          assert.equal($('branch-dialog').open,false);assert.equal($('branch-create').disabled,true);
+          const calls=[];api=async(path,body)=>{calls.push({path,body});return {session:child};};
+          selectSession=async id=>{assert.equal(id,child.id);throw Error('선택 실패');};
+          $('branch-open').onclick();await $('branch-create').onclick();
+          assert.equal($('branch-dialog').open,false);assert.equal(active.id,'A');
+          assert.equal(sessions.filter(row=>row.id===child.id).length,1);
+          assert.match(toasts.at(-1),/업무 목록에서 열어/);
+          await $('branch-create').onclick();
+          assert.deepEqual(calls,[{path:'/api/session/branch',body:{id:'A'}}]);
+        })()""")
+
+    def test_closed_menu_and_busy_or_demo_states_never_create(self):
+        self.run_case(r"""(async()=>{
+          let calls=0;api=()=>{calls++;};
+          await WorkspaceProductivityActions.openBranch();$('branch-cancel').onclick();
+          await $('branch-create').onclick();assert.equal($('branch-dialog').open,false);
           for(const state of ['running','approval','question','starting']){
             active.state=state;WorkspaceProductivityActions.update();
             assert.equal($('branch-open').disabled,true);await WorkspaceProductivityActions.openBranch();
           }
           active.state='done';boot.demo=true;await WorkspaceProductivityActions.openBranch();
           boot.demo=false;sending=true;await WorkspaceProductivityActions.openBranch();
-          assert.equal(calls,1);
+          assert.equal(calls,0);
+        })()""")
+
+    def test_context_notice_is_claimed_once_only_over_sixty_after_visible_work_completes(self):
+        self.run_case(r"""(async()=>{
+          let claims=0;
+          active.lastRunId='finished';
+          api=async(path,body)=>{
+            assert.equal(path,'/api/session/context-notice');assert.deepEqual(body,{id:'A'});
+            claims++;return {show:true,contextNoticeShown:true};
+          };
+          const update=WorkspaceProductivityActions.update;
+          active.contextUsage={usedTokens:60,windowTokens:100,percent:60};
+          for(let i=0;i<500;i++)update();
+          active.contextUsage={usedTokens:62,windowTokens:100,percent:62};
+          active.kind='chat';update();active.kind='work';
+          active.state='running';update();active.state='done';
+          document.hidden=true;update();document.hidden=false;
+          assert.equal(claims,0);assert.equal($('context-notice').hidden,true);
+          for(let i=0;i<500;i++)update();
+          await flush();assert.equal(claims,1);assert.equal($('context-notice').hidden,false);
+          assert.match($('context-notice-title').textContent,/62%/);
+          $('context-stay').onclick();update();
+          active={...active,lastRunId:'another'};update();
+          assert.equal(claims,1);assert.equal($('context-notice').hidden,true);
+        })()""")
+
+    def test_delayed_notice_is_delivered_only_in_owning_work_and_click_starts_summary_once(self):
+        self.run_case(r"""(async()=>{
+          const source={...active,lastRunId:'finished',contextUsage:{usedTokens:62,windowTokens:100,percent:62}};
+          active=source;const calls=[];let claim,finish;
+          sessionMetadata=item=>({id:item.id,title:item.title,workspace:item.workspace});
+          api=async(path,body)=>{
+            calls.push(path);assert.deepEqual(body,{id:'A'});
+            if(path.endsWith('context-notice'))return new Promise(done=>claim=done);
+            assert.equal(path,'/api/session/continue');return new Promise(done=>finish=done);
+          };
+          WorkspaceProductivityActions.update();active={id:'B',state:'idle'};
+          WorkspaceProductivityActions.contextChanged();claim({show:true,contextNoticeShown:true});await flush();
+          assert.equal($('context-notice').hidden,true);
+          active={...source,contextNoticeShown:true};WorkspaceProductivityActions.update();
+          assert.equal($('context-notice').hidden,false);
+          const pending=$('context-continue').onclick();$('context-continue').onclick();
+          assert.equal($('handoff-create').disabled,true);assert.match($('handoff-status').textContent,/정리/);
+          assert.deepEqual(calls,['/api/session/context-notice','/api/session/continue']);
+          finish({session:child});await pending;assert.deepEqual([...selectedSessions],['child']);
+          assert.equal(sessions[0].messages,undefined);
+        })()""")
+
+    def test_manual_handoff_without_meter_handles_failure_and_navigation(self):
+        self.run_case(r"""(async()=>{
+          active.messages=[{role:'user',text:'request'},{role:'assistant',text:'reply'}];
+          const source=active,calls=[];let finish,retry=false;
+          sessionMetadata=item=>({id:item.id,title:item.title,workspace:item.workspace});
+          api=async(path,body)=>{
+            calls.push(path);assert.equal(path,'/api/session/continue');assert.deepEqual(body,{id:'A'});
+            if(!retry)throw Error('요약을 준비하지 못했어요.');
+            return new Promise(done=>finish=done);
+          };
+          $('branch-open').onclick();assert.equal(calls.length,0);
+          assert.equal($('branch-create').disabled,false);assert.equal($('handoff-create').disabled,false);
+          await $('handoff-create').onclick();assert.equal(active,source);
+          assert.match($('handoff-status').textContent,/준비하지 못/);assert.equal($('handoff-create').disabled,false);
+          retry=true;const pending=$('handoff-create').onclick();
+          assert.equal($('branch-create').disabled,true);await $('branch-create').onclick();
+          active={id:'B',state:'idle'};WorkspaceProductivityActions.contextChanged();
+          finish({session:child});await pending;
+          assert.equal(active.id,'B');assert.equal(selectedSessions.length,0);assert.equal(sessions[0].id,child.id);
+          assert.deepEqual(calls,['/api/session/continue','/api/session/continue']);
+        })()""")
+
+    def test_handoff_intro_shows_safe_summary_on_new_work_and_links_back(self):
+        self.run_case(r"""(async()=>{
+          let renders=0;renderText=(node,text)=>{renders++;node.textContent=text;};
+          sessions=[{id:'A',title:'자료 검토'},{id:'B'}];
+          active={...active,id:'B',sessionId:null,state:'idle',messages:[],handoff:{
+            sourceTaskId:'A',sourceTitle:'자료 검토',summary:'## 진행한 일\n시료 확인\n## 결정 사항\nA 선택\n## 남은 일\n합계 검토'
+          }};
+          WorkspaceProductivityActions.update();WorkspaceProductivityActions.update();
+          assert.equal(renders,1);assert.equal($('handoff-origin').hidden,false);
+          assert.equal($('handoff-origin').open,true);assert.match($('handoff-summary').textContent,/합계 검토/);
+          assert.match($('handoff-source-open').textContent,/자료 검토/);$('handoff-source-open').onclick();
+          assert.equal(selectedSessions[0],'A');
+          WorkspaceProductivityActions.update();assert.equal($('handoff-origin').hidden,true);
+        })()""")
+
+    def test_palette_focuses_direct_branch_button_and_failure_can_be_retried(self):
+        self.run_case(r"""(async()=>{
+          const calls=[];const error='복사할 대화 기록을 찾을 수 없어요.';
+          api=async(path,body)=>{
+            calls.push({path,body});
+            if(calls.length===1)throw Error(error);
+            return {session:child};
+          };
+          await WorkspaceProductivityActions.openBranch();
+          assert.equal(calls.length,0);assert.equal(document.activeElement,$('branch-create'));
+          await $('branch-create').onclick();
+          assert.equal($('branch-status').textContent,error);assert.equal($('branch-dialog').open,true);
+          assert.equal($('branch-create').disabled,false);assert.equal(sessions.length,1);
+          assert.equal(active.id,'A');assert.equal(selectedSessions.length,0);
+          await $('branch-create').onclick();
+          assert.equal(active.id,'child');assert.equal($('branch-dialog').open,false);
+          assert.deepEqual(calls,Array(2).fill({path:'/api/session/branch',body:{id:'A'}}));
         })()""")
 
 

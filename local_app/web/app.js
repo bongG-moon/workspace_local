@@ -1045,7 +1045,7 @@ async function selectSession(id,{keepDraft=false,canActivate=null}={}){
   $("conversation").replaceChildren();$("requests").replaceChildren();renderedQueuedRequests.clear();
   restoreSavedMessages(active.messages,acknowledged,pendingSend?.pending);
   if(pendingSend?.pending&&acknowledged<0)$("conversation").append(pendingSend.pending);
-  globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts,active.observedChanges);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.messages.length&&!active.toolActivity?.length&&!pendingSend?.pending)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
+  globalThis.WorkspaceExecutionView?.restore(active.executions,active.artifacts,active.observedChanges);globalThis.WorkspaceToolActivity?.restore(active.toolActivity,active.runActivity);globalThis.WorkspaceRequestTiming?.restore(active.messages);(active.requests||[]).forEach(renderRequest);$("welcome").hidden=true;$("conversation").hidden=false;if(!active.handoff&&!active.messages.length&&!active.toolActivity?.length&&!pendingSend?.pending)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   globalThis.WorkspaceResultReceipts?.viewReady();taskHeader();startSessionSyncProbe();markViewTransition("task-view");if(!keepDraft)restoreDraft(id);globalThis.WorkspaceDraftPersistence?.changed(id);renderConnection(active.connection);setStatus(active.state);renderSessions();refreshInspector();globalThis.WorkspaceStream?.changed();globalThis.WorkspaceWorkflow?.refresh();revealRequest($("requests").children[0]);globalThis.WorkspaceDesktop?.viewed();pollController=new AbortController();poll(id,active.seq||0,pollController.signal);return true;
 }
 function showHome(clear=false){if(appClosed)return;if(pendingSelection){pendingSelection.controller.abort();setPendingSelection(null);}globalThis.WorkspaceRichContent?.reset();globalThis.WorkspaceExecutionView?.reset();globalThis.WorkspaceRequestTiming?.reset();globalThis.WorkspaceToolActivity?.reset();globalThis.WorkspaceProgressView?.reset();globalThis.WorkspaceCapabilities?.close();globalThis.WorkspaceExtensions?.close();globalThis.WorkspaceComposer?.contextChanged();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceProductivityActions?.contextChanged();globalThis.WorkspaceWorkflow?.contextChanged();closePreview();saveDraft();selectionGeneration++;cancelFileRefreshes();if(pollController)pollController.abort();active=null;startSessionSyncProbe();syncTaskOperations();started=null;streaming.clear();if(clear)drafts.delete(homeDraftKey());restoreDraft(homeDraftKey());globalThis.WorkspaceDraftPersistence?.changed(homeDraftKey());$("welcome").hidden=false;$("conversation").hidden=true;$("requests").replaceChildren();$("files").replaceChildren();$("file-count").textContent="0";$("results-list").replaceChildren();$("result-count").textContent="0";$("empty-results").hidden=false;taskHeader();restoreConnectionError(null);setStatus("idle");renderConnection(null);renderSessions();markViewTransition("welcome");}
@@ -1155,6 +1155,12 @@ async function poll(id,after,signal){
 }
 function handleEvent(event){
   const d=event.data,area=$("work-area"),nearBottom=!globalThis.WorkspaceStream&&area.scrollHeight-area.scrollTop-area.clientHeight<120,sid=active?.id;let newRequest=null;
+  if(event.type==="result") active.contextUsage=d.contextUsage||null;
+  else if(event.type==="connected" || event.type==="model_changed" || event.type==="error" ||
+          (event.type==="status" && ["starting","stopped","error"].includes(d.state))) {
+    active.contextUsage=null;
+    if(event.type==="connected" || event.type==="model_changed") globalThis.WorkspaceProductivityActions?.update();
+  }
   if(Array.isArray(d.observedChanges)){
     active.observedChanges=d.observedChanges;if(Array.isArray(d.artifacts))active.artifacts=d.artifacts;
     globalThis.WorkspaceExecutionView?.syncResults?.(d.lastRunId||d.runId||active.lastRunId,active.artifacts||[],active.observedChanges);
@@ -1962,7 +1968,7 @@ function applyRestartSession(item){
   restoreSavedMessages(item.messages||[]);
   globalThis.WorkspaceExecutionView?.restore(item.executions,item.artifacts,item.observedChanges);globalThis.WorkspaceToolActivity?.restore(item.toolActivity,item.runActivity);globalThis.WorkspaceRequestTiming?.restore(item.messages);globalThis.WorkspaceProgressView?.reset(item.id,item.progress,item.lastRunId);
   for(const request of item.requests||[])renderRequest(request);
-  if(!item.messages?.length&&!item.toolActivity?.length)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
+  if(!item.handoff&&!item.messages?.length&&!item.toolActivity?.length)$("conversation").append(el("p",isGeneralChat()?"대화가 준비됐어요. 질문하거나 자료를 첨부해 주세요.":"업무 공간이 준비됐어요. 자료를 선택하거나 바로 요청해 보세요.","conversation-empty"));
   sessions=sessions.map(row=>row.id===item.id?sessionMetadata(item):row);taskHeader();renderConnection(item.connection);setStatus(item.state);renderSessions();
   globalThis.WorkspaceWorkflow?.refresh();globalThis.WorkspaceStream?.changed();refreshInspector();
   globalThis.WorkspaceResultReceipts?.viewReady();

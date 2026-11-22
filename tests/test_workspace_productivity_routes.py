@@ -1,4 +1,5 @@
 """Integration boundaries for native conversation branches and existing app state."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -105,10 +106,81 @@ class ProductivityRoutesTests(unittest.TestCase):
         with response:
             return response.status, json.load(response)
 
-    def create_branch(self):
-        status, value = self.request(data={})
+    def create_branch(self, sid=None):
+        status, value = self.request(data={}, sid=sid)
         self.assertEqual(200, status, value)
         return value['session']
+
+    def test_branch_numbers_follow_the_source_and_survive_rename_archive_and_restart(self):
+        first = self.create_branch()
+        self.assertEqual('원본 업무 · 분기1', first['title'])
+        self.app.update_session(first['id'], {'title': '직접 지은 이름'})
+        self.app.hide_session(first['id'], confirmed=True)
+        self.assertEqual('원본 업무 · 분기2', self.create_branch()['title'])
+
+        other = self.app.create(str(self.work), True, title='두 번째 원본')['id']
+        native = str(uuid.uuid4())
+        self.write_transcript(native)
+        self.app.get(other).update(sessionId=native, state='done')
+        self.app.save(other)
+        self.assertEqual('두 번째 원본 · 분기1', self.create_branch(other)['title'])
+
+        self.app.update_session(self.parent_id, {'title': '바뀐 원본'})
+        restored = self.make_app()
+        self.addCleanup(restored.close)
+        self.assertEqual('바뀐 원본 · 분기3', restored.fork_session(self.parent_id)['session']['title'])
+        self.assertEqual('직접 지은 이름', restored.archived_sessions()['sessions'][0]['title'])
+
+    def test_legacy_branches_count_towards_next_number_without_rewriting_their_titles(self):
+        legacy_titles = ['원본 업무 · 분기', '원본 업무 · 분기 (2)']
+        legacy_ids = []
+        for title in legacy_titles:
+            sid = self.app.create(str(self.work), True, title=title)['id']
+            row = self.app.get(sid)
+            row.update(titleSource='branch', branch={
+                'sourceTaskId': self.parent_id, 'sourceSessionId': self.native_id,
+                'childSessionId': str(uuid.uuid4()), 'scope': 'latest', 'status': 'pending',
+                'sourceTitle': '원본 업무', 'configRoot': str(self.config),
+                'sourceFingerprint': 'a' * 64, 'createdAt': row['created'],
+            })
+            self.app.save(sid)
+            legacy_ids.append(sid)
+        self.app.hide_session(legacy_ids[0], confirmed=True)
+        other_folder = self.root / 'other workspace'
+        other_folder.mkdir()
+        other_id = self.app.create(str(other_folder), True, title='다른 폴더 업무')['id']
+        # v1 kept ancestry in session bodies only.
+        index_path = self.root / 'state' / 'history-index.json'
+        index = json.loads(index_path.read_text(encoding='utf-8'))
+        index['schemaVersion'] = 1
+        for entry in index['sessions']:
+            entry.pop('branch', None)
+            entry.pop('metadataComplete', None)
+        index_path.write_text(json.dumps(index), encoding='utf-8')
+
+        restored = self.make_app()
+        self.addCleanup(restored.close)
+        self.assertTrue(restored.fork_session(self.parent_id, preview=True)['available'])
+        self.assertTrue(all('branch' not in restored.sessions[sid] for sid in legacy_ids))
+        with patch.object(restored.history, 'hydrate', wraps=restored.history.hydrate) as hydrate:
+            self.assertEqual('원본 업무 · 분기3', restored.fork_session(self.parent_id)['session']['title'])
+            self.assertEqual('원본 업무 · 분기4', restored.fork_session(self.parent_id)['session']['title'])
+            checked = [call.args[0]['id'] for call in hydrate.call_args_list]
+            for sid in legacy_ids:
+                self.assertEqual(1, checked.count(sid))
+            self.assertNotIn(other_id, checked)
+        self.assertEqual(legacy_titles, [restored.sessions[sid]['title'] for sid in legacy_ids])
+        self.assertTrue(all(restored.sessions[sid].get('_historyUnloaded') for sid in legacy_ids))
+
+    def test_concurrent_forks_of_long_title_keep_distinct_readable_suffixes(self):
+        original = '자료' * 50
+        self.app.update_session(self.parent_id, {'title': original})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(self.create_branch) for _ in range(2)]
+        titles = {future.result()['title'] for future in futures}
+        suffixes = (' · 분기1', ' · 분기2')
+        self.assertEqual({original[:100 - len(suffix)] + suffix for suffix in suffixes}, titles)
+        self.assertEqual(original, self.app.get(self.parent_id)['title'])
 
     def test_shared_workspace_diff_list_and_direct_file_links_respect_task(self):
         other = self.app.create(str(self.work), True, title='다른 업무')['id']
@@ -320,6 +392,7 @@ class ProductivityRoutesTests(unittest.TestCase):
             self.app.fork_session(self.parent_id)
         self.assertEqual([self.parent_id], list(self.app.sessions))
         self.assertEqual(self.native_id, self.app.get(self.parent_id)['sessionId'])
+        self.assertEqual('원본 업무 · 분기1', self.create_branch()['title'])
 
     def test_idle_dispatch_pump_does_not_hydrate_dormant_history(self):
         for index in range(12):

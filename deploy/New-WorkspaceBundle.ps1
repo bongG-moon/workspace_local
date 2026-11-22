@@ -15,6 +15,7 @@ New-Item -ItemType Directory -Path (Join-Path $payload 'deploy') -Force | Out-Nu
 New-Item -ItemType Directory -Path (Join-Path $payload 'docs') -Force | Out-Null
 $files = @(
     'local_app\plain_chat.py', 'local_app\chat_attachments.py', 'local_app\legacy_excel.py',
+    'local_app\context_usage.py', 'local_app\task_handoff.py',
     'local_app\_vendor\__init__.py',
     'local_app\_vendor\xlrd\__init__.py', 'local_app\_vendor\xlrd\biffh.py', 'local_app\_vendor\xlrd\book.py', 'local_app\_vendor\xlrd\compdoc.py', 'local_app\_vendor\xlrd\formatting.py', 'local_app\_vendor\xlrd\formula.py', 'local_app\_vendor\xlrd\info.py', 'local_app\_vendor\xlrd\LICENSE', 'local_app\_vendor\xlrd\sheet.py', 'local_app\_vendor\xlrd\SOURCE.json', 'local_app\_vendor\xlrd\timemachine.py', 'local_app\_vendor\xlrd\xldate.py',
      'docs\WORKSPACE_CHAT_MODES.md',

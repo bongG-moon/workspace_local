@@ -203,6 +203,7 @@ class LocalApp:
         self.reconnect_lock = threading.Lock()
         self.dialog_lock = threading.Lock()
         self._picker_cancel = threading.Event()
+        self._handoff_jobs = {}
         self.shell_preference = ShellPreference(state)
         config_dir = self.shell_preference.config_dir if command is None and not demo else ''
         self.inventory_client = ClaudeInventory(config=config_dir or None)
@@ -372,10 +373,11 @@ class LocalApp:
             cache.clear()
 
     def _check_import_context(self, item, *, reuse=False):
-        if item.get('importedConfigRoot'):
+        expected = item.get('importedConfigRoot') or (item.get('handoff') or {}).get('configRoot')
+        if expected:
             command = self._session_command(item) if reuse else self.command
             current = str(Path(runtime_context(command)['configRoot']).resolve()) if command else ''
-            if os.path.normcase(current) != os.path.normcase(item['importedConfigRoot']):
+            if os.path.normcase(current) != os.path.normcase(expected):
                 raise ValueError('이 대화를 가져온 Claude 설정 위치가 현재 연결과 다릅니다. 원래 환경으로 앱을 다시 열어 주세요.')
 
     def import_session_updates(self, sid, *, probe=False):
@@ -587,6 +589,7 @@ class LocalApp:
                 if additions:
                     previous_updated = item['updated']
                     previous_activity = last_activity_at(item)
+                    previous_context = item.pop('contextUsage', None)
                     for index, row in enumerate(original):
                         if id(row) in legacy_resolved:
                             item['messages'][index]['_syncContentHash'] = legacy_resolved[id(row)][0]
@@ -599,6 +602,8 @@ class LocalApp:
                         item['messages'] = original
                         item['updated'] = previous_updated
                         item['lastActivityAt'] = previous_activity
+                        if previous_context is not None:
+                            item['contextUsage'] = previous_context
                         raise
                 # Release the per-task admission reservation before exposing
                 # the result; its returned connection status must not remain
@@ -786,6 +791,28 @@ class LocalApp:
                     raise
                 receipt = updated
             return {'id': sid, 'resultReceipt': dict(receipt)}
+
+    def claim_context_notice(self, sid):
+        """Only one visible client may present this task's context suggestion."""
+        with self.lock:
+            self._require_running()
+            item = self.require_work(sid)
+            usage = item.get('contextUsage') or {}
+            used, limit = usage.get('usedTokens'), usage.get('windowTokens')
+            if (item.get('contextNoticeShown') is True or item.get('state') not in {'idle', 'done'}
+                    or item.get('requests') or item.get('_runTimer') or item.get('pendingRunId')
+                    or type(used) is not int or type(limit) is not int or limit <= 0
+                    or used * 100 <= limit * 60):
+                return {'show': False, 'contextNoticeShown': item.get('contextNoticeShown') is True}
+            if self.history.warning:
+                raise ValueError(self.history.warning)
+            item['contextNoticeShown'] = True
+            try:
+                self.save(sid)
+            except (OSError, ValueError):
+                item.pop('contextNoticeShown', None)
+                raise
+            return {'show': True, 'contextNoticeShown': True}
 
     def require_work(self, sid):
         item = self.get(sid)
@@ -1029,7 +1056,11 @@ class LocalApp:
             **({'displayError': item['_displayError'], 'displayFailure': item['_displayFailure']}
                if item.get('_displayError') and item.get('_displayFailure') and item.get('state') == 'error' else {}),
             'resultReceipt': normalize_result_receipt(item.get('resultReceipt')),
+            'contextUsage': item.get('contextUsage'),
             'pendingRunId': item.get('pendingRunId'),
+            'contextNoticeShown': item.get('contextNoticeShown') is True,
+            **({'handoff': {key: item['handoff'][key] for key in ('sourceTaskId', 'sourceTitle', 'summary')}}
+               if item.get('handoff') else {}),
             'runStartedAt': self._run_started_at(item),
             **self._work_title_metadata(item),
             'permissionDefaultNotice': item.get('permissionDefaultNotice') or '',
@@ -1045,9 +1076,9 @@ class LocalApp:
                             and not item.get('_connecting') and not item.get('_modelUpdating')
                             and (item.get('runActivity') or {}).get('runId') == item.get('lastRunId') else None),
             "requests": list(item.get("requests", {}).values())}
-        if any('_syncContentHash' in row for row in item['messages']):
+        if item.get('handoff') or any('_syncContentHash' in row for row in item['messages']):
             # This digest is private reconciliation metadata, not UI content.
-            result['messages'] = [{key:value for key,value in row.items() if key != '_syncContentHash'}
+            result['messages'] = [{key:value for key,value in row.items() if key not in ('_syncContentHash', '_handoffPromptDigest')}
                                   for row in item['messages']]
         connection = dict(item['connection']) if isinstance(item.get('connection'), dict) else None
         bridge = item.get('bridge')
@@ -1919,7 +1950,7 @@ class LocalApp:
         return self.file_diffs.list(root, run_id, session_id=sid, legacy_runs=legacy_runs, candidate_id=candidate_id)
 
     def fork_session(self, sid, *, preview=False):
-        from .conversation_fork import prepare_fork
+        from .conversation_fork import assign_fork_title, prepare_fork
         with self.lock:
             if self.demo or not self.command:
                 raise ValueError('실제 Claude Code 대화를 연결한 뒤 분기할 수 있어요.')
@@ -1939,7 +1970,8 @@ class LocalApp:
                         trusted=self.workspace_preferences.approved(item['workspace']),
                         attachments=[], artifacts=[], lastRunId=None)
             reset_display(item)
-            item['title'] = self.unique_title(item['title'][:100])
+            self.history.complete_folder_metadata(self.sessions.values(), item['workspace'])
+            assign_fork_title(item, self.sessions.values())
             item.update(titleSource='branch', titleRevision=0)
             item['lastActivityAt'] = item['created']
             self.sessions[item['id']] = item
@@ -1949,6 +1981,100 @@ class LocalApp:
                 self.sessions.pop(item['id'], None)
                 raise
             return {'ok': True, 'session': self.public(item)}
+
+    def _handoff_source(self, sid):
+        self._require_running()
+        if self.demo or not self.command:
+            raise ValueError('실제 Claude Code에서 진행한 업무를 선택해 주세요.')
+        item = self.require_work(sid)
+        self._validate_remembered_trust(item)
+        if not item.get('trusted'):
+            raise ValueError('원래 업무 폴더의 연결을 확인한 뒤 이어가 주세요.')
+        self._check_import_context(item)
+        if self._session_command(item) != self.command:
+            raise ValueError('원래 업무와 현재 Claude 실행 환경이 다릅니다. 같은 환경을 선택해 주세요.')
+        bridge = item.get('bridge')
+        if (item.get('state') not in ('done', 'idle') or item.get('pendingRunId') or item.get('choice')
+                or item.get('requests') or any(item.get(key) for key in ('_connecting', '_restarting',
+                    '_modelUpdating', '_permissionUpdating', '_dispatchClaim', '_observationPending',
+                    '_choiceAnswerClaim', '_idleReleasing', '_stopAdmission'))
+                or bridge and any(getattr(bridge, key, False) for key in ('busy', 'stopping', 'pending', 'tasks', '_control_active'))):
+            raise ValueError('현재 작업과 승인 요청이 끝난 뒤 새 업무로 이어갈 수 있어요.')
+        if not item.get('sessionId') or not any(m['role'] == 'user' for m in item.get('messages', [])):
+            raise ValueError('먼저 Claude와 업무를 진행한 뒤 이어가 주세요.')
+        if self.dispatch.queue.snapshot(sid)['queue']:
+            raise ValueError('원래 업무에 대기 중인 요청이 있어요. 요청이 끝난 뒤 이어가 주세요.')
+        return item
+
+    def continue_work(self, sid):
+        from . import task_handoff
+        from .workspace_preferences import ORDINARY_MODES
+        with self.lock:
+            parent = self._handoff_source(sid)
+            folder_path = workspace_folder(parent)
+            native, last_run = parent['sessionId'], parent.get('lastRunId')
+            command, info = list(self.command), self.info
+            config_root = runtime_context(command)['configRoot']
+            bridge = parent.get('bridge')
+            model = (parent.get('modelOverride') or getattr(bridge, 'turn_model', None)
+                     or getattr(bridge, 'model', None) or (parent.get('connection') or {}).get('model'))
+        stamp = task_handoff.source_stamp(config_root, native, folder_path)
+        child_id = task_handoff.continuation_id(sid, native, last_run, stamp)
+        def still_current():
+            item = self._handoff_source(sid)
+            if (item is not parent or item.get('lastRunId') != last_run or item.get('sessionId') != native
+                    or workspace_folder(item) != folder_path or self.command != command):
+                raise ValueError('원래 업무가 변경되었어요. 최신 내용을 확인한 뒤 다시 이어가 주세요.')
+        with self.lock:
+            still_current()
+            if child_id in self.sessions:
+                child = self.get(child_id)
+                if child.get('handoff', {}).get('sourceTaskId') != sid:
+                    raise ValueError('이어서 진행할 업무를 다시 확인해 주세요.')
+                return {'ok': True, 'session': self.public(child)}
+            self._check_session_capacity()
+            if sid in self._handoff_jobs:
+                raise ValueError('이 업무의 인계문을 정리하고 있어요. 잠시 기다려 주세요.')
+            if len(self._handoff_jobs) >= 2:
+                raise ValueError('다른 업무의 인계문을 정리하고 있어요. 잠시 뒤 이어가 주세요.')
+            cancel = self._handoff_jobs[sid] = threading.Event()
+        try:
+            summary = task_handoff.summarize(command, info, folder_path, native, model, cancel)
+            if task_handoff.source_stamp(config_root, native, folder_path) != stamp:
+                raise ValueError('정리하는 동안 원래 대화가 변경되었어요. 최신 내용으로 다시 이어가 주세요.')
+            with self.lock:
+                still_current()
+                self._check_session_capacity()
+                now = time.time()
+                note = task_handoff.normalize_handoff(dict(sourceTaskId=sid, sourceTitle=parent['title'], summary=summary,
+                                                          configRoot=str(Path(config_root).resolve())))
+                child = dict(id=child_id, kind='work', runtimeProfile='work', workspace=str(folder_path),
+                             title=self.unique_title(parent['title'][:92] + ' (이어서)'), titleSource='manual', titleRevision=0,
+                             created=now, updated=now, lastActivityAt=now, pinned=False, trusted=parent['trusted'],
+                             messages=[], sessionId=None, seq=0, state='idle', events=[], requests={}, bridge=None,
+                             attachments=[], artifacts=[], lastRunId=None, modelOverride=None, handoff=note)
+                # Reuse ordinary selections. Per-task bypass authorization, pending actions and queues never transfer.
+                controls = {**parent.get('_idleRestoreControls', {}), **parent.get('_sessionControls', {})}
+                if controls.get('permissionMode') is not None and controls['permissionMode'] not in ORDINARY_MODES:
+                    controls['permissionMode'] = 'default'
+                if parent.get('_allowBypass'):
+                    controls.setdefault('permissionMode', 'default')
+                child['_sessionControls'] = {k: v for k, v in controls.items() if k in ('model', 'effort', 'permissionMode')}
+                if 'permissionMode' in controls:
+                    self.workspace_preferences.remember_mode(child, controls['permissionMode'])
+                elif parent.get('_inheritPermissionMode'):
+                    child['_inheritPermissionMode'] = True
+                    self.workspace_preferences.remember_mode(child, None, inherit=True)
+                self.sessions[child_id] = child
+                try:
+                    self.save(child_id)
+                except (OSError, ValueError):
+                    self.sessions.pop(child_id, None)
+                    raise
+                return {'ok': True, 'session': self.public(child)}
+        finally:
+            with self.lock:
+                self._handoff_jobs.pop(sid, None)
 
     def _resume_options(self, item):
         if 'branch' not in item:
@@ -2871,6 +2997,8 @@ class LocalApp:
                 data['state'] = item['state']
             elif kind == "status":
                 item["state"] = data["state"]
+                if data['state'] in {'starting', 'running', 'stopped'}:
+                    item.pop('contextUsage', None)
                 if data["state"] == "stopped":
                     item["requests"].clear()
                     item.pop('choice', None)
@@ -2886,11 +3014,13 @@ class LocalApp:
                         item['connection'] = self.public(item)['connection']
                         data['connection'] = item['connection']
             elif kind == "connected":
+                item.pop('contextUsage', None)
                 item["connection"] = data
                 item["sessionId"] = data.get("sessionId")
                 item['modelOverride'] = data.get('modelOverride')
                 item['permissionModeOverride'] = data.get('permissionModeOverride')
             elif kind == "model_changed":
+                item.pop('contextUsage', None)
                 item.setdefault('connection', {}).update(data)
                 item['modelOverride'] = data.get('modelOverride')
             elif kind == 'permission_mode_changed':
@@ -2930,11 +3060,21 @@ class LocalApp:
                     return
                 item["sessionId"] = data.get("sessionId")
                 item["state"] = "done"
+                seed_run = item.pop('_handoffSeedRun', None)
+                if (seed_run and seed_run == item.get('lastRunId') and item.get('handoff')
+                        and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', item['sessionId'] or '')):
+                    item['handoff']['deliveredTo'] = item['sessionId']
+                from .context_usage import normalize_snapshot
+                context = (normalize_snapshot(data.get('contextUsage'))
+                           if item.get('kind', 'work') == 'work' and item['sessionId'] else None)
+                item['contextUsage'] = context
+                data['contextUsage'] = context
                 if item.get('branch') and item['sessionId'] == item['branch']['childSessionId']:
                     item['branch']['status'] = 'active'
                     data['branch'] = dict(item['branch'])
                 item['verification'] = data.get('verification')
             elif kind == "error":
+                item.pop('contextUsage', None)
                 item["state"] = "error"
                 item["requests"].clear()
                 item.pop('choice', None)
@@ -3199,6 +3339,7 @@ class LocalApp:
                     self.emit(sid, 'choice_closed', {'id': item['choice']['id']})
                 item.pop('_choiceSourceKey', None)
                 item.pop('verification', None)
+                item.pop('contextUsage', None)
                 item["trusted"] = True
                 item["attachments"] = list(dict.fromkeys(item.get("attachments", []) + paths))
                 if chat and not item['messages'] and re.fullmatch(r'새 (?:업무|대화)(?: \((?:[2-9]|[1-9][0-9]+)\))?', item['title']):
@@ -3229,16 +3370,22 @@ class LocalApp:
                     item['artifactObservation'] = item['_artifactSnapshot'].public() | {'attribution': 'tool'}
                 if start_ticket:
                     item.pop('_observationPending', None)
-                self.save(sid)
-                if _dispatch_claim is not None:
-                    self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
-                # No copied files, skill hardcode, auxiliary inference or rewritten user intent.
                 prompt = text.strip()
                 if chat:
                     prompt = chat_content
                 elif paths:
                     label = "사용자가 선택한 원본 파일·폴더 경로(JSON):" if any(Path(value).is_dir() for value in paths) else "사용자가 선택한 원본 파일 경로(JSON):"
                     prompt += "\n\n" + label + "\n" + json.dumps(paths, ensure_ascii=False)
+                note = item.get('handoff')
+                if note and (not note.get('deliveredTo') or note['deliveredTo'] != item.get('sessionId')):
+                    from .task_handoff import is_command, prompt_digest, seed_prompt
+                    if not is_command(text.strip()):
+                        prompt = seed_prompt(note, prompt)
+                        item['messages'][-1]['_handoffPromptDigest'] = prompt_digest(prompt)
+                        item['_handoffSeedRun'] = run_id
+                self.save(sid)
+                if _dispatch_claim is not None:
+                    self.emit(sid, 'queued_user', {'text': text.strip(), 'files': paths, 'requestId': _dispatch_claim})
                 if self.demo:
                     if chat:
                         self.emit(sid, 'connected', {'model': '화면 체험 · AI 미호출', 'skills': [], 'tools': [], 'mcp': []})
@@ -3573,6 +3720,8 @@ class LocalApp:
                 if self._shutdown_state in {'running', 'failed'}:
                     self._shutdown_state = 'closing'
                 self._picker_cancel.set()
+                for event in self._handoff_jobs.values():
+                    event.set()
                 self.customizations.cancel.set()
         with self._close_lock:
             with self._lifecycle:
@@ -4121,7 +4270,8 @@ class Handler(BaseHTTPRequestHandler):
                     # Deliver completion only after cleanup, then stop accepting HTTP.
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
             read_only = route in {'/api/ui-health', '/api/completions', '/api/browse-paths', '/api/attention/bind',
-                                  '/api/attachments/prepare', '/api/drafts', '/api/session/result-read'}
+                                  '/api/attachments/prepare', '/api/drafts', '/api/session/result-read',
+                                  '/api/session/context-notice'}
             read_only = read_only or route == '/api/notifications' and data.get('action') in {'view', 'read', 'open'}
             read_only = read_only or route == '/api/session/import-status'
             read_only = read_only or route == '/api/table-reference' and data.get('action') in {'review', 'check'}
@@ -4345,6 +4495,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(browse_paths(data))
         if route == '/api/session/branch':
             return self.reply(app.fork_session(sid))
+        if route == '/api/session/continue':
+            if set(data) != {'id'}:
+                raise ValueError('이어갈 업무를 선택해 주세요.')
+            return self.reply(app.continue_work(sid))
         if route == "/api/create":
             return self.reply(app.create(data.get("workspace", ""), data.get("trusted"), managed=data.get('managed', False), title=data.get('title'), managed_root=data.get('managedRoot'), kind=data.get('kind', 'work')))
         if route == '/api/session/delete':
@@ -4353,6 +4507,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(app.delete_chat(sid, data['confirmed']))
         if route == '/api/session/update':
             return self.reply(app.update_session(sid, data))
+        if route == '/api/session/context-notice':
+            if set(data) != {'id'}:
+                raise ValueError('컨텍스트 안내를 표시할 업무를 확인해 주세요.')
+            return self.reply(app.claim_context_notice(sid))
         if route == '/api/session/result-read':
             if set(data) != {'id', 'revision'}:
                 raise ValueError('확인한 결과 요청의 항목을 확인해 주세요.')

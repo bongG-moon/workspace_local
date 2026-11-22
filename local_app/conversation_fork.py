@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import time
+import unicodedata
 import uuid
 
 from .history import safe
@@ -64,7 +65,42 @@ def normalize_branch(value):
         raise ConversationForkError('invalid_branch', '대화 분기의 이름과 시각을 확인하지 못했습니다.')
     result.update(scope='latest', status=value['status'], sourceFingerprint=fingerprint,
                   configRoot=config, sourceTitle=title, createdAt=stamp)
+    number = value.get('number')
+    if type(number) is int and 0 < number <= 9007199254740991:
+        result['number'] = number
     return result
+
+
+def _fork_title(base, number):
+    suffix = f' · 분기{number}'
+    return base.strip()[:100-len(suffix)].rstrip() + suffix
+
+
+def assign_fork_title(child, tasks):
+    """Use saved task metadata, including archived siblings and manually renamed forks."""
+    branch = child['branch']
+    count = highest = 0
+    used = set()
+    for task in tasks:
+        used.add(unicodedata.normalize('NFC', task['title']).casefold())
+        sibling = task.get('branch')
+        if not sibling or sibling['sourceTaskId'] != branch['sourceTaskId']:
+            continue
+        count += 1
+        number = sibling.get('number', 0)
+        if not number and task.get('titleSource') != 'manual':
+            # Older versions saved the number only in titles such as "보고서 · 분기 (3)".
+            legacy = re.search(r' · 분기 \(([1-9][0-9]{0,8})\)$', task['title'])
+            if legacy:
+                number = int(legacy[1])
+        highest = max(highest, number)
+    number = max(count, highest) + 1
+    title = _fork_title(branch['sourceTitle'], number)
+    while unicodedata.normalize('NFC', title).casefold() in used:
+        number += 1
+        title = _fork_title(branch['sourceTitle'], number)
+    child['title'] = title
+    branch['number'] = number
 
 
 def _source_fingerprint(reader, session_id):
@@ -131,7 +167,7 @@ def prepare_fork(parent, info, config_root):
     target_id = str(uuid.uuid4())
     while target_id == source_id:
         target_id = str(uuid.uuid4())
-    return {'id': str(uuid.uuid4()), 'sessionId': None, 'title': title + ' · 분기',
+    return {'id': str(uuid.uuid4()), 'sessionId': None, 'title': _fork_title(title, 1),
             'workspace': record['workspace'], 'created': created, 'updated': created,
             'pinned': False, 'trusted': False, 'importedConfigRoot': str(root),
             'messages': [{'role': message['role'], 'text': message['text']} for message in record['messages']],

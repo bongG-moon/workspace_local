@@ -109,6 +109,9 @@ def _display(source):
 def _same(current, source, legacy_resolver=None):
     if current.get('role') != source.get('role'):
         return False
+    if current.get('_handoffPromptDigest') and current.get('role') == 'user':
+        from .task_handoff import prompt_digest
+        return current['_handoffPromptDigest'] == prompt_digest(source['text'])
     files = current.get('files')
     if current.get('role') == 'user' and isinstance(files, list) and files:
         original = current.get('text', '')

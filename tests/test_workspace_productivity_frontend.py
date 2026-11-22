@@ -216,7 +216,7 @@ class WorkspaceProductivityFrontendTests(unittest.TestCase):
           assert.equal(active.id,'A');assert.equal(active.state,'done');
           assert.equal(active.sessionId,'child-native');assert.equal(active.branch,completed);
           assert.equal(WorkspaceProductivityActions.canBranch(),true);assert.equal($('branch-open').disabled,false);
-          assert.equal($('branch-origin').hidden,false);assert.match($('branch-origin-status').textContent,/원본 대화에서 분기/);
+          assert.equal($('branch-origin').hidden,false);assert.equal($('branch-origin-status').textContent,'이전 대화 기록을 복사한 업무 (기존 대화 분기)');
           assert.equal($('prompt').value,'next draft');assert.equal(active.messages,messages);
         """, ("productivity",))
 

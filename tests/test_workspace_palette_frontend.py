@@ -182,6 +182,18 @@ class WorkspacePaletteFrontendTests(unittest.TestCase):
           await find('model').onclick();assert.equal(calls.length,0);assert.equal($('palette-dialog').open,true);
         })()""")
 
+    def test_branch_search_by_new_and_previous_names_opens_existing_branch_action(self):
+        self.run_case(r"""(async()=>{
+          let opened=0;globalThis.WorkspaceProductivityActions={openBranch(){opened++;}};
+          WorkspacePalette.open();
+          for(const query of ['대화 기록 복사하기','기존 대화 분기','대화 분기 만들기','fork','branch']){
+            $('palette-search').value=query;$('palette-search').oninput();
+            assert.match(flatText(find('branch')),/대화 기록 복사하기 \(기존 대화 분기\)/);
+          }
+          await find('branch').onclick();
+          assert.equal(opened,1);assert.equal(calls.length,0);
+        })()""")
+
     def test_arrow_selection_has_one_active_option_and_keeps_editing_shortcuts(self):
         self.run_case(r"""(()=>{
           WorkspacePalette.open();const first=$('palette-search').attributes['aria-activedescendant'];

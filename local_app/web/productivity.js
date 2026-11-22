@@ -1,20 +1,97 @@
 "use strict";
 
-// On-demand panels: no background scan, timers, transcript cache, or AI request.
+// Panels share the active task lifecycle. Only explicit continuation creates a summary.
 globalThis.WorkspaceProductivityActions = (() => {
-  let generation = 0, fileGeneration = 0, context = null, runs = [], branching = false, priorFocus = null;
+  let generation = 0, fileGeneration = 0, context = null, runs = [], priorFocus = null;
   const changes = $("changes-dialog"), branch = $("branch-dialog");
   let closeExplorer = null, comparison = null, mode = "unified", selectedHunk = 0, candidateContext = null;
   const current = ticket => ticket === generation && context === active?.id && !appClosed;
   const canBranch = () => !!active?.sessionId && active?.branch?.status !== "pending" && ["idle", "done"].includes(active.state) && !boot.demo && !sending;
-  function update() {
+  const pendingContinuations = new Set(), noticeClaims = new Map(), noticeAttempts = new WeakMap();
+  let noticeOwner = null, introOwner = null;
+  function workView() {
+    return !!active && active.kind !== "chat" && !appClosed && !boot.demo &&
+      !globalThis.WorkspaceModes?.isChat() && !globalThis.WorkspaceCapabilities?.isOpen() &&
+      !globalThis.WorkspaceExtensions?.isOpen?.();
+  }
+  function canContinue() {
+    return workView() && canBranch() && active.trusted !== false &&
+      !active.choice && !$("requests").children.length && !!(active.lastRunId || active.messages?.length >= 2);
+  }
+  function hideNotice() {
+    noticeOwner = null;
+    $("context-notice").hidden = true;
+  }
+  function updateNotice() {
+    const usage = active?.contextUsage, sid = active?.id;
+    if (!usage || !Number.isFinite(usage.usedTokens) || !(usage.windowTokens > 0) ||
+        usage.usedTokens * 100 <= usage.windowTokens * 60 || !canContinue()) {
+      if (noticeOwner) hideNotice();
+      return;
+    }
+    if (noticeOwner && noticeOwner !== sid) hideNotice();
+    if (noticeOwner === sid) return;
+    const claim = noticeClaims.get(sid);
+    if (claim === "pending" || (claim !== "ready" && active.contextNoticeShown)) return;
+    if (document.hidden || (typeof pendingSelection !== "undefined" && pendingSelection) ||
+        document.querySelector?.("dialog[open]")) return;
+    if (claim === "ready") {
+      noticeClaims.delete(sid);
+      noticeOwner = sid;
+      active.contextNoticeShown = true;
+      const percent = Math.round(100 * usage.usedTokens / usage.windowTokens);
+      $("context-notice-title").textContent = `이 대화의 컨텍스트를 약 ${percent}% 사용했어요.`;
+      $("context-notice").hidden = false;
+      return;
+    }
+    const owner = active, run = active.lastRunId || usage;
+    if (noticeAttempts.get(owner) === run) return;
+    noticeAttempts.set(owner, run);
+    noticeClaims.set(sid, "pending");
+    api("/api/session/context-notice", {id:sid}).then(response => {
+      if (response.show) noticeClaims.set(sid, "ready");
+      else noticeClaims.delete(sid);
+      owner.contextNoticeShown = response.contextNoticeShown;
+      if (active?.id === sid) updateNotice();
+    }).catch(() => { noticeClaims.delete(sid); });
+  }
+  function renderHandoffIntro() {
+    const info = active?.handoff;
+    if (!info && introOwner === null) return;
+    const intro = $("handoff-origin");
+    intro.hidden = !info || !workView();
+    if (intro.hidden) {
+      if (introOwner !== null) {
+        introOwner = null;
+        $("handoff-summary").replaceChildren();
+        $("handoff-source-open").textContent = "";
+      }
+      return;
+    }
+    if (introOwner !== active.id) {
+      introOwner = active.id;
+      const body = $("handoff-summary");
+      body.replaceChildren();
+      renderText(body, info.summary);
+      intro.open = !active.messages?.length;
+      $("handoff-source-open").textContent = info.sourceTitle ? `이전 업무 보기 · ${info.sourceTitle}` : "이전 업무 보기";
+    }
+    $("handoff-source-open").hidden = !sessions.some(row => row.id === info.sourceTaskId);
+  }
+  function update(checkNotice = true) {
     if($("branch-origin")) {
       $("branch-origin").hidden = !active?.branch || (!!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.());
-      $("branch-origin-status").textContent = active?.branch?.status === "pending" ? "분기 준비 · 첫 요청부터 독립된 Claude 대화로 이어가요" : "원본 대화에서 분기한 업무";
+      $("branch-origin-status").textContent = active?.branch?.status === "pending" ? "첫 요청부터 이전 대화 기록을 이어받아요 (기존 대화 분기)" : "이전 대화 기록을 복사한 업무 (기존 대화 분기)";
       $("branch-source-open").hidden = !sessions.some(row => row.id === active?.branch?.sourceTaskId);
     }
     $("branch-open").hidden = !active || (!!globalThis.WorkspaceCapabilities?.isOpen()||!!globalThis.WorkspaceExtensions?.isOpen?.());
-    $("branch-open").disabled = !canBranch();
+    const busy = pendingContinuations.has(active?.id);
+    $("branch-open").disabled = !canBranch() || busy;
+    if (branch.open) {
+      $("handoff-create").disabled = !canContinue() || busy;
+      $("branch-create").disabled = !canBranch() || busy;
+    }
+    renderHandoffIntro(); if (checkNotice) updateNotice();
     $("changes-open").disabled = !active;
   }
   function release() {
@@ -24,7 +101,7 @@ globalThis.WorkspaceProductivityActions = (() => {
     $("changes-run").onchange = null;
   }
   function close() { closeExplorer?.(); if(changes.open) changes.close(); if(branch.open) branch.close(); release(); }
-  function contextChanged() { close(); update(); }
+  function contextChanged() { hideNotice(); close(); update(false); }
   function resetComparison() {
     comparison = null; selectedHunk = 0;
     $("changes-content").replaceChildren();
@@ -250,37 +327,112 @@ globalThis.WorkspaceProductivityActions = (() => {
       if(response.errors) $("changes-summary").textContent += " · 일부 기록을 읽지 못했어요";
     } catch(e) { if(current(ticket)) $("changes-empty").textContent = e.message; }
   }
-  async function openBranch() {
+  function openContinuationMenu() {
     if(globalThis.WorkspaceModes?.isChat())return;
-    if(!canBranch()) return;
+    if(!canBranch() || appClosed || pendingContinuations.has(active.id)) return;
     close(); priorFocus = document.activeElement; context = active.id; const ticket = ++generation;
     $("branch-source-title").textContent = active.title;
     $("branch-source-path").textContent = active.workspace;
-    $("branch-status").textContent = "분기할 수 있는 Claude 기록을 확인하고 있어요…";
-    $("branch-create").disabled = true; showDialog("branch-dialog");
+    $("handoff-create").disabled = !canContinue();
+    $("handoff-status").hidden = true;
+    $("branch-title").textContent = "새 업무에 무엇을 가져갈까요?";
+    $("branch-choice").hidden = false;
+    $("branch-status").textContent = "";
+    $("branch-create").disabled = false;
+    showDialog("branch-dialog");
+    return ticket;
+  }
+  function openBranch() {
+    if (openContinuationMenu() !== undefined) $("branch-create").focus();
+  }
+  async function createHandoff(fromNotice = false) {
+    if (!canContinue() || pendingContinuations.has(active.id) ||
+        (typeof pendingSelection !== "undefined" && pendingSelection)) return;
+    const sid = active.id;
+    if (fromNotice) {
+      if (noticeOwner !== sid || openContinuationMenu() === undefined) return;
+      hideNotice();
+      $("branch-title").textContent = "요약으로 이어가기 (handoff)";
+      $("branch-choice").hidden = true;
+    } else if (!branch.open || context !== sid) return;
+    const ticket = generation;
+    const sameView = () => current(ticket) && branch.open && workView();
+    const selection = typeof selectionGeneration !== "undefined" ? selectionGeneration : null;
+    const status = $("handoff-status");
+    pendingContinuations.add(sid);
+    status.textContent = "이전 업무의 진행 내용과 남은 일을 정리하고 있어요…";
+    status.hidden = false;
+    update();
     try {
-      const response = await api(`/api/session/branch?id=${encodeURIComponent(context)}`);
-      if(!current(ticket) || !branch.open) return;
-      $("branch-status").textContent = response.reason || "새 대화에 입력을 보내기 전에는 AI 작업을 실행하지 않아요.";
-      $("branch-create").disabled = response.available !== true;
-    } catch(e) { if(current(ticket)) $("branch-status").textContent = e.message; }
+      const {session} = await api("/api/session/continue", {id:sid});
+      if (!sessions.some(row => row.id === session.id)) {
+        sessions.unshift(sessionMetadata(session));
+        renderSessions();
+      }
+      if (sameView() && (selection === null || selection === selectionGeneration) &&
+          !(typeof pendingSelection !== "undefined" && pendingSelection)) {
+        if (await selectSession(session.id, {canActivate:sameView}) !== false) {
+          if (branch.open) branch.close();
+          toast("새 업무에서 이어갈 내용을 정리했어요.");
+        }
+      } else if (!appClosed && active?.id === sid) toast("업무 목록에 이어갈 새 업무를 추가했어요.");
+    } catch (e) {
+      if (sameView()) status.textContent = e.message;
+      else if (!appClosed && active?.id === sid) toast(e.message);
+    } finally {
+      pendingContinuations.delete(sid);
+      update();
+    }
   }
   $("branch-create").onclick = async () => {
-    if(branching || !context || $("branch-create").disabled) return;
-    const ticket = generation, sid = context; branching = true; $("branch-create").disabled = true;
-    $("branch-status").textContent = "독립된 대화를 준비하고 있어요…";
+    if (!branch.open || context !== active?.id || !workView() || !canBranch() ||
+        $("branch-choice").hidden || pendingContinuations.has(context) ||
+        (typeof pendingSelection !== "undefined" && pendingSelection)) return;
+    const ticket = generation, sid = context;
+    const sameView = () => current(ticket) && branch.open && workView();
+    const selection = typeof selectionGeneration !== "undefined" ? selectionGeneration : null;
+    pendingContinuations.add(sid);
+    update(false);
+    $("branch-status").textContent = "이전 대화 기록으로 새 업무를 만들고 있어요…";
+    let created = false;
     try {
-      const result = await api("/api/session/branch", {id:sid});
-      // Retain the created task even if the user closed the panel mid-request.
-      sessions.unshift({...result.session, messages:undefined, artifacts:undefined}); renderSessions();
-      if(current(ticket) && branch.open) { branch.close(); await selectSession(result.session.id); toast("분기를 준비했어요. 첫 요청부터 별도 Claude 세션으로 이어갑니다."); }
-    } catch(e) { if(current(ticket)) $("branch-status").textContent = e.message; }
-    finally { branching = false; if(current(ticket)) $("branch-create").disabled = false; }
+      const {session} = await api("/api/session/branch", {id:sid});
+      created = true;
+      if (!sessions.some(row => row.id === session.id)) {
+        sessions.unshift({...session, messages:undefined, artifacts:undefined});
+        renderSessions();
+      }
+      if (!sameView() || (selection !== null && selection !== selectionGeneration) ||
+          (typeof pendingSelection !== "undefined" && pendingSelection)) return;
+      if (await selectSession(session.id, {canActivate:sameView}) !== false) {
+        if (branch.open) branch.close();
+        toast("새 업무를 만들었어요. 첫 요청부터 이전 대화 기록을 이어받아요.");
+      }
+    } catch (e) {
+      if (sameView()) {
+        if (created) {
+          branch.close();
+          toast("새 업무를 만들었어요. 업무 목록에서 열어 주세요.");
+        } else $("branch-status").textContent = e.message;
+      }
+    } finally {
+      pendingContinuations.delete(sid);
+      update(false);
+    }
   };
   for(const dialog of [changes, branch]) dialog.addEventListener("close", () => { if(changes.open || branch.open || closeExplorer) return; release(); if(priorFocus?.isConnected) priorFocus.focus(); });
   $("changes-close").onclick = () => closeExplorer ? closeExplorer() : changes.close();
   $("branch-close").onclick = $("branch-cancel").onclick = () => branch.close();
-  $("changes-open").onclick = openChanges; $("branch-open").onclick = openBranch;
+  $("changes-open").onclick = openChanges; $("branch-open").onclick = openContinuationMenu;
+  $("handoff-create").onclick = () => createHandoff();
+  $("context-continue").onclick = () => createHandoff(true);
+  $("context-stay").onclick = hideNotice;
+  $("handoff-source-open").onclick = () => {
+    const id = active?.handoff?.sourceTaskId;
+    if(id) selectSession(id).catch(e => toast(e.message));
+  };
+  document.addEventListener?.("visibilitychange", updateNotice);
+  document.addEventListener?.("close", updateNotice, true);
   if($("branch-source-open")) $("branch-source-open").onclick = () => {
     const source = active?.branch?.sourceTaskId;
     if(source) selectSession(source).catch(e => toast(e.message));

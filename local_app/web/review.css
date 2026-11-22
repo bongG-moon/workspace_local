@@ -6,3 +6,47 @@
 
 /* Claude session command shares the compact header controls. */
 .title-copy{min-width:0;flex:0 1 auto}
+
+.context-notice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px clamp(12px, 2vw, 26px);
+  border-bottom: 1px solid var(--line);
+  background: var(--accent-tint, var(--theme-surface));
+  font-size: .82rem;
+}
+.context-notice[hidden], .handoff-origin[hidden], .branch-option[hidden] { display: none; }
+.context-notice strong { font-weight: 650; }
+.context-notice p, .branch-option p { margin: 3px 0; line-height: 1.55; color: var(--muted); }
+.context-notice-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.context-notice-actions button { min-height: 32px; }
+.branch-dialog { width: min(44rem, 92vw); max-height: 88dvh; overflow-y: auto; }
+.branch-dialog .branch-source { margin-block: 12px; padding: 12px 15px; gap: 4px; box-shadow: none; }
+.continuation-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 10px; }
+.branch-option { display: flex; flex-direction: column; align-items: flex-start; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--theme-surface-raised); word-break: keep-all; overflow-wrap: anywhere; }
+.branch-option h3 { font-size: .95rem; margin: 0 0 5px; }
+.branch-option h3 small { font-size: .81em; color: var(--muted); font-weight: 500; white-space: nowrap; }
+.branch-option p { font-size: .83rem; color: var(--text); }
+.branch-option .branch-example { margin: 4px 0 14px; color: var(--muted); font-size: .78rem; }
+.branch-option > button { margin-top: auto; }
+.branch-option [role=status]:empty { margin: 0; }
+.branch-option [role=status]:not(:empty) { margin-block: 8px; }
+.branch-dialog .branch-shared-note { margin: 12px 0 0; }
+.branch-dialog :is(#branch-status,#handoff-status) { min-height: 0; color: var(--muted); }
+.branch-dialog .branch-actions { margin-top: 14px; }
+.handoff-origin {
+  margin-block: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--theme-surface-raised, var(--surface));
+}
+.handoff-origin summary { cursor: pointer; font-weight: 600; }
+.handoff-origin .message-body { margin: 10px 0; max-height: min(48dvh,26rem); overflow: auto; overflow-wrap: anywhere; }
+.handoff-origin .message-body h3 { margin: 10px 0 4px; font-size: .9rem; }
+.handoff-origin .message-body :is(ul,ol,p) { margin: 3px 0; }
+.handoff-origin .text-button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }

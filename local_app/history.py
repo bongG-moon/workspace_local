@@ -11,6 +11,7 @@ import time
 import uuid
 import threading
 
+from .context_usage import normalize_snapshot
 from .executions import normalize_executions, safe_run_id
 from .tool_activity import normalize_activities
 
@@ -155,6 +156,10 @@ def row(item):
         clean = {'role':message['role'], 'text':message['text'][:100000]}
         if message.get('source') == 'claude':
             clean['source'] = 'claude'
+        if '_handoffPromptDigest' in message and message['role'] == 'user':
+            digest = message['_handoffPromptDigest']
+            if isinstance(digest, str) and len(digest) == 64 and all(c in '0123456789abcdef' for c in digest):
+                clean['_handoffPromptDigest'] = digest
         fingerprint = message.get('_syncContentHash')
         if (message['role'] == 'user' and isinstance(fingerprint, str) and fingerprint.startswith('v2:')
                 and len(fingerprint) == 67 and all(c in '0123456789abcdef' for c in fingerprint[3:])):
@@ -184,6 +189,11 @@ def row(item):
         removed.append(previous)
     retain_run_timings(messages, removed)
     result['messages'] = messages
+    if 'handoff' in item and result['kind'] == 'work':
+        from .task_handoff import normalize_handoff
+        result['handoff'] = normalize_handoff(item['handoff'])
+    if item.get('kind', 'work') == 'work' and item.get('contextNoticeShown') is True:
+        result['contextNoticeShown'] = True
     artifacts = []
     for artifact in (item.get('artifacts') or [])[-MAX_ARTIFACTS:]:
         if (not isinstance(artifact, dict) or artifact.get('change') not in {'created', 'modified', 'deleted'}
@@ -222,6 +232,9 @@ def row(item):
     receipt = normalize_result_receipt(item.get('resultReceipt'))
     if receipt is not None:
         result['resultReceipt'] = receipt
+    context = normalize_snapshot(item.get('contextUsage'))
+    if context is not None and result['kind'] == 'work' and result['sessionId']:
+        result['contextUsage'] = context
     if 'branch' in item:
         from .conversation_fork import normalize_branch
         result['branch'] = normalize_branch(item['branch'])
@@ -257,6 +270,7 @@ class HistoryStore:
         """Keep navigation/attention metadata, release dormant conversation bodies."""
         item['_artifactCount'] = len(item.get('artifacts', []))
         item.pop('messages', None)
+        item.pop('handoff', None)
         item.pop('artifacts', None)
         item.pop('executions', None)
         item.pop('toolActivity', None)
@@ -279,13 +293,19 @@ class HistoryStore:
                 # and index atomic writes. Do not override live metadata on LRU
                 # reloads, which never carry this startup-only marker.
                 item.update({key: value[key] for key in KEYS})
+                if 'contextUsage' in value:
+                    item['contextUsage'] = value['contextUsage']
                 for key in INDEX_METADATA:
                     if key in value:
                         item[key] = value[key]
                     else:
                         item.pop(key, None)
             item.pop('_historyMetadataPending', None)
+            if value.get('contextNoticeShown'):
+                item['contextNoticeShown'] = True
             item['messages'] = value['messages']
+            if 'handoff' in value:
+                item['handoff'] = value['handoff']
             item['artifacts'] = value['artifacts']
             item['executions'] = normalize_executions(value['executions'], interrupted=True)
             item['toolActivity'] = normalize_activities(value['toolActivity'], interrupted=True)
@@ -293,6 +313,17 @@ class HistoryStore:
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             self.warning = '대화 기록을 다시 읽지 못해 원본을 보존했습니다. 앱을 다시 열어 기록 위치를 확인해 주세요.'
             raise ValueError(self.warning) from exc
+
+    def complete_folder_metadata(self, items, workspace):
+        """Older indexes omitted fork ancestry. Read each affected body once, on demand."""
+        folder = os.path.normcase(os.path.normpath(workspace))
+        for item in items:
+            if (item.get('_historyMetadataPending') and item.get('kind') == 'work'
+                    and os.path.normcase(os.path.normpath(item['workspace'])) == folder):
+                self.hydrate(item)
+                self.compact(item)
+                # Include the recovered metadata when the new task's index is saved.
+                self.index_entries.pop(item['id'], None)
 
     def load(self, *, lazy=False):
         index = self.root/'history-index.json'

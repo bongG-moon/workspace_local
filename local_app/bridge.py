@@ -20,6 +20,7 @@ import unicodedata
 import uuid
 from collections import OrderedDict, deque
 
+from .context_usage import capture_sample
 from .permission_contract import help_permission_modes, help_bypass_opt_in, BYPASS_MODE, mode_options, mode_label, mode_cycle, mode_wire_value, observed_mode, session_choices, request_context
 from .windows_job import CREATE_SUSPENDED, WindowsJob
 from .owned_process import CancelledError, run_owned
@@ -578,6 +579,7 @@ class ClaudeSession:
         self.seen_text = OrderedDict()
         self.model = ""
         self.turn_model = None
+        self._context_sample = None
         self._turn_model_error = None
         self.original_model = None
         self.model_override = None
@@ -1281,6 +1283,7 @@ class ClaudeSession:
             self._turn_epoch += 1
             turn_epoch = self._turn_epoch
             self.turn_model = None
+            self._context_sample = None
             self._turn_model_error = None
             self._turn_submitted = False
             self._turn_activity_seen = False
@@ -1403,6 +1406,13 @@ class ClaudeSession:
             self.close()
             self.process.stdout.close()
 
+    def _capture_context_message(self, data, message, *, starting=False):
+        if (self.runtime_profile == 'work' and self.busy and self._turn_submitted is True
+                and not self.stopping and not data.get('parent_tool_use_id') and not data.get('isReplay')):
+            previous = None if starting else self._context_sample
+            same_session = self.session_id is None or data.get('session_id') == self.session_id
+            self._context_sample = capture_sample(data, message, previous) if same_session and not data.get('error') else None
+
     def _handle_stream(self, data: dict):
         # A delegated agent's text must never become the coordinator's answer.
         if data.get("parent_tool_use_id"):
@@ -1421,6 +1431,7 @@ class ClaudeSession:
         event = data.get("event", {})
         kind = event.get("type")
         if kind == "message_start":
+            self._capture_context_message(data, event.get('message'), starting=True)
             identifier = event.get("message", {}).get("id")
             self._stream_message_id = identifier if isinstance(identifier, str) and 0 < len(identifier) <= 200 else "stream-" + uuid.uuid4().hex
             self._stream_index = None
@@ -1778,6 +1789,10 @@ class ClaudeSession:
             self.emit("request_closed", {"id": data.get("request_id")})
         elif kind == "system":
             subtype = data.get("subtype")
+            if (not data.get('parent_tool_use_id') and not data.get('isReplay')
+                    and (subtype in ('compact_boundary', 'model_fallback') or
+                         subtype == 'status' and data.get('status') == 'compacting')):
+                self._context_sample = None
             if subtype == "init":
                 self.session_id = data.get("session_id") or self.session_id
                 with self.lock:
@@ -1882,6 +1897,7 @@ class ClaudeSession:
             self._tool_activity_capture().progress(data)
         elif kind == "assistant":
             message = data.get('message')
+            self._capture_context_message(data, message)
             blocks = message.get('content', []) if isinstance(message, dict) else []
             if data.get('error') and data.get('isReplay'):
                 return
@@ -2061,6 +2077,8 @@ class ClaudeSession:
                 # It must not publish a completed-work notification after Stop.
                 self._record_stop_terminal(stop_attempt)
             elif not self.tasks:
+                context_usage = self._context_sample.for_result(data) if self.busy and self._context_sample else None
+                self._context_sample = None
                 self.busy = False
                 self.resume_id = self.session_id
                 from .hook_status import at_result
@@ -2069,7 +2087,7 @@ class ClaudeSession:
                 verification = at_result(problems[-1] if problems else None)
                 self.emit("result", {"sessionId": self.session_id, "durationMs": data.get("duration_ms"),
                     "usage": data.get("usage", {}), "costUsd": data.get("total_cost_usd"),
-                    "verification": verification})
+                    "verification": verification, "contextUsage": context_usage})
             else:
                 self.emit("status", {"state": "running", "label": "작업자의 결과를 기다리고 있어요"})
 
