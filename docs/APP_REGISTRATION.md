@@ -55,3 +55,20 @@ $version = Sync-WorkspaceVersion -RepoRoot (Get-Location).Path -Check
 앱은 사내 빌드에 포함된 설정을 `%LOCALAPPDATA%\CompanyAgent\local-ui\workspace-registration.json`에 보관해 이후 앱 내부 업데이트에서도 이어서 사용합니다. 새 빌드에 유효한 사내 설정이 있으면 그 설정을 우선 적용하고 사용자 설정에도 보관합니다. 빌드에 설정이 없을 때만 보관된 사용자 설정을 사용합니다. 빌드에 설정이 있으나 올바르지 않으면 이전 주소로 조용히 전송하지 않고 집계를 끕니다. 운영 주소나 인증키를 교체할 때는 웹 서버와 새 사내 배포 설정을 같은 값으로 갱신합니다. 앱 화면이나 API 응답에는 인증키를 노출하지 않습니다.
 
 기존 웹의 로그인과 CSRF 보호는 그대로 두고 집계 경로의 기존 HMAC 인증을 사용합니다. 앱의 등록용 키는 일반 사용자가 입력하지 않습니다.
+
+## 등록된 사번 조회
+
+배포 담당자가 설치 또는 업데이트를 한 번이라도 등록한 사번과 그 수를 확인하는 방법입니다. 같은 사람이 여러 버전을 설치해도 한 번만 포함됩니다. 평소 앱 사용 여부는 이 집계로 알 수 없습니다.
+
+1. 사내 MongoDB에 접속할 수 있는 PC에서 [조회용 Python 파일](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/export_registration_employee_ids.py)을 내려받습니다.
+2. 웹 서버 설정의 `MONGODB_DATABASE`와 `PTAI_AX_REGISTRATION_COLLECTION`을 확인합니다. 기본값은 각각 `pt_ai_square`와 `ax_workspace_version_users`입니다. 운영값이 다르면 Python 파일 상단의 `MONGODB_DATABASE`와 `MONGODB_COLLECTION`을 수정합니다.
+3. 파일을 내려받은 폴더에서 PowerShell을 열고 아래 명령을 실행합니다. 첫 줄은 이 PC에 PyMongo를 처음 설치할 때만 필요합니다.
+
+```powershell
+py -m pip install pymongo
+py export_registration_employee_ids.py
+```
+
+접속 주소를 물으면 해당 컬렉션을 읽을 수 있는 계정의 **MongoDB URI**를 입력하고 Enter를 누릅니다. 입력한 주소는 화면에 표시되지 않습니다. 웹 주소나 앱 배포용 인증키는 필요하지 않습니다.
+
+조회가 끝나면 터미널에 고유 사번 수와 저장 경로가 표시됩니다. 결과 JSON에는 정렬된 사번만 문자열로 들어갑니다. 앞자리가 0인 사번도 그대로 확인할 수 있습니다. 파일 이름을 정하려면 `py export_registration_employee_ids.py --output 등록사번.json`으로 실행하세요.

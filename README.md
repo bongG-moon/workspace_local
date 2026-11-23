@@ -16,7 +16,9 @@
 
 **[EXE ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/AX-Workspace-0.23.49-exe.zip)** · **[VBS ZIP 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/AX-Workspace-0.23.49-vbs.zip)** · **[사내 반입용 소스 ZIP](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/workspace-local-0.23.49-source.zip)**
 
-[화면과 웹 차이 확인 예시](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/AX-Workspace-0.23.49-Web-Preview-Example.zip) · [예시 사용방법](examples/html-project-preview/README.ko.md)
+[화면과 웹 차이 확인 예시 및 사용법](examples/html-project-preview/README.ko.md)
+
+배포 담당자는 MongoDB에 설치 또는 업데이트가 등록된 사번을 중복 없이 추출할 수 있습니다. [사번 조회 Python 파일 다운로드](https://github.com/bongG-moon/workspace_local/releases/download/v0.23.49/export_registration_employee_ids.py) / [조회 방법](docs/APP_REGISTRATION.md#등록된-사번-조회)
 
 **2026-11-02 배포 소스 보완:** XLS 판독기 파일이 `bundle-check`에서 거부되는 문제를 수정했습니다. 이 오류가 발생한 배포 담당자는 위 소스 ZIP을 다시 내려받아 새 폴더에서 빌드해 주세요. 이 검사 수정도 0.23.43 배포본에 포함됩니다. [검사 수정 내용](docs/VALIDATION_BUNDLE_CHECK_2026-11-02.md)
 
