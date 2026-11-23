@@ -294,7 +294,15 @@
       <div class="inspector-head"><span class="inspector-heading">자료와 결과</span><div class="inspector-actions"><button id="refresh-files" class="icon-button" type="button" aria-label="자료와 결과 새로고침" title="자료와 결과 새로고침" aria-busy="false" disabled><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg></button><button id="close-materials" class="icon-button materials-button" aria-label="자료와 결과 접기" title="자료와 결과 접기"><svg class="icon"><use href="#i-inspector"/></svg></button></div></div>
       <div class="inspector-tabs" role="tablist" aria-label="자료와 결과 선택"><button id="files-tab" class="inspector-tab" role="tab" aria-selected="true" aria-controls="source-panel"><svg class="icon"><use href="#i-folder"/></svg>자료<span id="file-count">0</span></button><button id="results-tab" class="inspector-tab" role="tab" aria-selected="false" aria-controls="results-panel"><svg class="icon"><use href="#i-box"/></svg>이번 결과<span id="result-count">0</span></button></div>
       <section id="source-panel" class="inspector-panel" role="tabpanel" aria-labelledby="files-tab">
-        <div class="folder-card"><span class="folder-card-icon"><svg class="icon"><use href="#i-folder"/></svg></span><span class="eyebrow">업무 저장 위치</span><strong id="folder-name">아직 시작한 업무가 없어요</strong><p id="folder-path">새 업무를 만들면 자료와 결과를 모아둘 공간이 준비돼요.</p><button id="choose-folder" class="text-button">저장 위치 선택 <svg class="action-link-icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg></button></div>
+        <div class="folder-card">
+          <span class="folder-card-icon"><svg class="icon"><use href="#i-folder"/></svg></span>
+          <span class="eyebrow">업무 저장 위치</span><strong id="folder-name">아직 시작한 업무가 없어요</strong>
+          <p id="folder-path">새 업무를 만들면 자료와 결과를 모아둘 공간이 준비돼요.</p>
+          <div class="folder-card-actions">
+            <button id="choose-folder" class="text-button" type="button">저장 위치 선택 <svg class="action-link-icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg></button>
+            <button id="open-workspace-folder" class="text-button" type="button" title="파일 탐색기에서 업무 폴더 열기" hidden>폴더 열기</button>
+          </div>
+        </div>
         <div class="section-heading"><h2>업무 폴더의 자료</h2></div>
         <div id="files" class="files"><div class="empty-files file-list-empty"><div class="file-list-empty-heading"><span class="file-list-empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg></span><strong>표시할 자료가 없어요</strong></div><p>다른 위치의 파일은 ‘자료 추가’로 첨부하세요.</p></div></div>
       </section>

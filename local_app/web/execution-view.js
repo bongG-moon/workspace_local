@@ -26,6 +26,15 @@ globalThis.WorkspaceExecutionView = (() => {
     return (documents.length?documents:ordered).slice(0,6);
   }
   const codeFile = file => /\.(?:md|js|mjs|cjs|jsx|ts|tsx|py|pyi|css|scss|sql|ps1|sh|bash|bat|cmd|yaml|yml|json|jsonc|toml|xml|ini|cfg|svg|cs|java|go|rs|c|h|cpp|hpp|r|rb|php|swift|kt)$/i.test(file.path);
+  function folderButton(path, owner, generation, valid) {
+    const button=el("button","폴더에서 보기","text-button run-result-folder");
+    button.type="button";button.disabled=!!boot.demo;button.title=path;
+    button.setAttribute("aria-label",basename(path)+" 폴더에서 보기");
+    button.onclick=()=>{
+      if(button.isConnected&&valid())return openFileAction("reveal",{sessionId:owner,path,generation});
+    };
+    return button;
+  }
   function reviewActions(card, runId, items) {
     const owner = sessionId, generation = selectionGeneration;
     const actions = el("div",null,"run-result-actions");
@@ -57,6 +66,7 @@ globalThis.WorkspaceExecutionView = (() => {
     const rows=(changes||[]).filter(file=>file.attribution==="observed"&&file.id&&file.runId);
     if(!rows.length)return null;
     if(previous){previous.updateCandidates(rows);return previous;}
+    const generation=selectionGeneration;
     const section=el("section",null,"observed-changes");
     const title=el("h3","명령 실행 중 확인된 폴더 변경");
     const note=el("p","다른 업무나 외부에서 바꾼 파일이 포함될 수 있어요. 확인한 파일만 이 업무 결과에 추가하세요.","observed-changes-note");
@@ -74,6 +84,7 @@ globalThis.WorkspaceExecutionView = (() => {
         if(!activeRow()||pendingReviews.has(key))return;
         return globalThis.WorkspaceProductivityActions?.openChanges({sessionId:owner,runId:file.runId,candidateId:file.id,path:file.path,opener:compare});
       });
+      actions.append(folderButton(file.path,owner,generation,activeRow));
       async function decide(action){
         if(!activeRow()||pendingReviews.has(key))return;
         pendingReviews.add(key);
@@ -122,7 +133,7 @@ globalThis.WorkspaceExecutionView = (() => {
     for(const file of files.filter(file=>file.change==="deleted")){
       const row=el("div",null,"run-result-deleted"),name=el("span",file.name||file.path);
       const badge=el("span","삭제","observed-change-kind file-change-badge");badge.dataset.change="deleted";
-      name.title=file.path;row.append(badge,name);parent.append(row);
+      name.title=file.path;row.append(badge,name,options.fileAction(file.path));parent.append(row);
     }
   }
   function place(node, runId, beforeReply = false) {
@@ -186,8 +197,9 @@ globalThis.WorkspaceExecutionView = (() => {
       const counts=[created && `새 파일 ${created}개`, modified && `수정한 파일 ${modified}개`,deleted&&`삭제된 파일 ${deleted}개`].filter(Boolean);
       if (counts.length) card.append(el("div",counts.join(" · "),"run-result-counts"));
     }
-    const options={sessionId,workspace:active.workspace,onOpenFile:(path) => {
-      if (!current()) return;
+    const owner=sessionId,generation=selectionGeneration,valid=()=>card.isConnected&&currentFileLocation(owner,generation);
+    const options={sessionId:owner,workspace:active.workspace,fileAction:path=>folderButton(path,owner,generation,valid),onOpenFile:(path) => {
+      if (!valid()) return;
       return preview(path,{changeRunId:runId});
     }};
     const primary=primaryFiles(items);
@@ -200,7 +212,7 @@ globalThis.WorkspaceExecutionView = (() => {
       const populate=()=>{if(detail.open&&!populated){populated=true;for(let start=0;start<items.length;start+=24)appendResultFiles(content,items.slice(start,start+24),options);}};
       detail.ontoggle=populate;detail.open=wasOpen;populate();card.append(detail);
     }
-    if(candidates.length){const owner=sessionId,generation=selectionGeneration;card.append(observedCard(candidates,{sessionId:owner,current:()=>currentFileLocation(owner,generation)&&card.isConnected}));}
+    if(candidates.length)card.append(observedCard(candidates,{sessionId:owner,current:valid}));
     card.dataset.messageSize=String([...items,...candidates].reduce((sum,file)=>sum+file.path.length,0));
     if(!old) {
       if(restoring){

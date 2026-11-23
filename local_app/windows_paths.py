@@ -23,7 +23,8 @@ def redirects_path(info) -> bool:
 
 def workspace_path(path: Path) -> Path:
     """Check user workspace ancestry; history/config keep their stricter checks."""
-    for part in (path, *path.parents):
+    # Reject a replaced parent before looking up any child through it.
+    for part in reversed((path, *path.parents)):
         try:
             info = part.lstat()
         except FileNotFoundError:

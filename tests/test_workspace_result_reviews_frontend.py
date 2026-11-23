@@ -40,29 +40,82 @@ class DeletedHistoryTests(unittest.TestCase):
 class ResultReviewsFrontendTests(unittest.TestCase):
     def run_case(self, body):
         harness = HARNESS.replace('const scenario=process.argv[3];',
-            "vm.runInContext(fs.readFileSync(process.argv[4],'utf8'),context);\nconst scenario=process.argv[3];")
+            "context.document.createElementNS=(_ns,tag)=>new Element(tag);\n"
+            "for(const file of process.argv.slice(4))vm.runInContext(fs.readFileSync(file,'utf8'),context);\n"
+            "const scenario=process.argv[3];")
         result = subprocess.run([NODE, '-', str(ROOT / 'local_app/web/app.js'), SETUP + body,
+                                 str(ROOT / 'local_app/web/rich-content.js'),
                                  str(ROOT / 'local_app/web/execution-view.js')], input=harness,
                                 text=True, encoding='utf-8', capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
-    def test_deleted_result_only_offers_saved_comparison(self):
+    def test_deleted_result_offers_saved_comparison_and_containing_folder(self):
         self.run_case(r"""(async()=>{
           const opened=[],richPaths=[],dragged=[];
           globalThis.WorkspaceRichContent={files(parent,paths){richPaths.push(...paths);}};
           globalThis.WorkspaceAttachments={makeDraggable(node,path){dragged.push(path);}};
           globalThis.WorkspaceProductivityActions={openChanges:options=>opened.push(options)};
           const file={path:'C:/task/deleted.csv',name:'deleted.csv',runId:'now',change:'deleted',attribution:'confirmed',observedAt:1};
-          api=async()=>snapshot([file]);await refreshResults();
+          const posts=[];api=async(path,body)=>{if(body)posts.push({path,body});return snapshot([file]);};
+          await refreshResults();
           const row=$('results-list').querySelector('.result-card');
           assert.equal(row.querySelector('.result-change').textContent,'삭제된 파일');
           assert.deepEqual(dragged,[]);assert.deepEqual(richPaths,[]);
-          for(const label of ['미리보기','기본 앱에서 열기','폴더에서 보기','이 결과로 요청'])assert.equal(button(row,label),undefined);
+          for(const label of ['미리보기','기본 앱에서 열기','이 결과로 요청'])assert.equal(button(row,label),undefined);
+          await button(row,'폴더에서 보기').onclick();
           button(row,'변경 내용 보기').onclick();assert.equal(opened[0].path,file.path);
           const gallery=$('conversation').querySelector('.run-results');
-          assert.ok(gallery.querySelector('.run-result-deleted'));
+          await button(gallery.querySelector('.run-result-deleted'),'폴더에서 보기').onclick();
+          assert.deepEqual(posts,Array.from({length:2},()=>({path:'/api/open',body:{id:'A',path:file.path,action:'reveal'}})));
           assert.equal(button(gallery,'원본 표 보기'),undefined);
           assert.equal(gallery.querySelector('.run-results-label').textContent,'이번 요청 중 바뀐 파일');
+        })()""")
+
+    def test_chat_file_and_image_reveal_are_independent_of_preview_and_survive_overflow(self):
+        self.run_case(r"""(async()=>{
+          const names=['표.html','공정 이미지.png',...Array.from({length:25},(_,i)=>'입력 '+i+'.txt')];
+          const files=names.map(name=>({runId:'now',attribution:'tool',change:'created',name,path:'C:/task/'+name}));
+          const posts=[],previews=[];
+          api=async(path,body)=>posts.push({path,body});
+          preview=async(path,options)=>previews.push([path,options.changeRunId]);
+          WorkspaceExecutionView.results('now',files);
+          const gallery=$('conversation').querySelector('.run-results');
+          const primary=gallery.querySelector('.rich-file-with-action');
+          const reveal=row=>button(row,'폴더에서 보기');
+          await reveal(primary).onclick();assert.equal(previews.length,0);
+          await primary.querySelector('.rich-file-chip').onclick();
+          assert.deepEqual(previews,[[files[0].path,'now']]);
+          const details=gallery.querySelector('details');assert.equal(details.children[1].children.length,0);
+          details.open=true;details.ontoggle();
+          const rows=walk(details).filter(n=>n.classList.contains('rich-file-with-action'));
+          assert.equal(rows.length,files.length);
+          const imageRow=rows.find(row=>row.querySelector('.rich-image'));
+          await reveal(imageRow).onclick();await imageRow.querySelector('.rich-image').onclick();
+          await reveal(rows.at(-1)).onclick();
+          assert.deepEqual(posts,[files[0],files[1],files.at(-1)].map(f=>({path:'/api/open',body:{id:'A',path:f.path,action:'reveal'}})));
+          assert.deepEqual(previews,[[files[0].path,'now'],[files[1].path,'now']]);
+          const plain=el('div');WorkspaceRichContent.files(plain,[files[0].path]);assert.equal(reveal(plain),undefined);
+          selectionGeneration++;await reveal(rows.at(-1)).onclick();assert.equal(posts.length,3);
+        })()""")
+
+    def test_candidate_folder_opens_its_own_path_in_both_views_without_confirming(self):
+        self.run_case(r"""(async()=>{
+          const rows=Array.from({length:7},(_,i)=>({...candidate,id:'c-'+i,path:'C:/task/'+i+'.py',
+            change:i===6?'deleted':'modified'}));
+          const posts=[];api=async(path,body)=>{if(body)posts.push({path,body});return snapshot([],rows);};
+          await refreshResults();
+          for(const root of [$('conversation'),$('results-list')]){
+            const section=root.querySelector('.observed-changes');
+            await button(section.querySelector('.observed-change'),'폴더에서 보기').onclick();
+            const details=section.querySelector('details');details.open=true;details.ontoggle();
+            const removed=walk(details).find(n=>n.dataset.candidateId==='c-6');
+            await button(removed,'폴더에서 보기').onclick();
+            for(const label of ['변경 내용 보기','이 업무 결과에 추가','제외'])assert.ok(button(removed,label));
+          }
+          assert.deepEqual(posts,[rows[0],rows[6],rows[0],rows[6]].map(f=>({path:'/api/open',body:{id:'A',path:f.path,action:'reveal'}})));
+          active={id:'B',workspace:'C:/other'};selectionGeneration++;
+          await button($('conversation').querySelector('.observed-changes'),'폴더에서 보기').onclick();
+          assert.equal(posts.length,4);
         })()""")
 
     def test_candidate_is_separate_never_auto_opens_or_becomes_primary(self):

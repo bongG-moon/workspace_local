@@ -1007,6 +1007,8 @@ function taskHeader(){
   $("session-id-copy").hidden=!active||catalog;
   $("task-view").hidden=!active||catalog;
   $("workspace-summary").hidden=catalog||isGeneralChat();
+  $("open-workspace-folder").hidden=!active?.workspace||sessionKind(active)!=="work"||catalog;
+  $("open-workspace-folder").disabled=!!boot.demo||appClosed;
   updateRestartControls();globalThis.WorkspaceSessionImport?.render();globalThis.WorkspaceProductivityActions?.update();$("chat-title").textContent=globalThis.WorkspaceExtensions?.isOpen?.()?globalThis.WorkspaceExtensions.title():globalThis.WorkspaceCapabilities?.isOpen()?"스킬과 기능":active?.title||(isGeneralChat()?"일반 대화":"업무 홈");$("chat-title").title=$("chat-title").textContent;$("task-title").hidden=$("task-pin").hidden=!active||catalog;$("task-pin").setAttribute("aria-pressed",String(!!active?.pinned));$("task-pin").setAttribute("aria-label",active?.pinned?"업무 고정 해제":"업무 고정");$("task-pin").title=$("task-pin").getAttribute("aria-label");$("workspace-summary").textContent=active?basename(active.workspace):"자료와 결과를 한곳에서 관리해요";$("workspace-summary").title=active?.workspace||"새 업무 공간 선택";$("folder-name").textContent=active?basename(active.workspace):"업무 공간";$("folder-name").title=$("folder-name").textContent;$("folder-path").textContent=active?.workspace||"시작할 때 새 공간을 만들거나 기존 폴더를 선택하세요.";$("home-button").setAttribute("aria-current",active||secondaryViewOpen()?"false":"page");document.querySelector(".app").classList.toggle("task-open",!!active);updateModeNavigation();}
 function setPendingSelection(request){
   pendingSelection=request;
@@ -1375,7 +1377,7 @@ async function refreshResults(reveal=false){
       const deleted=file.change==="deleted";
       const changeBadge=el("span",deleted?"삭제된 파일":file.change==="created"?"새로 확인한 파일":"변경된 파일","result-change file-change-badge");changeBadge.dataset.change=file.change;
       kind.setAttribute("aria-hidden","true");heading.append(kind,el("strong",name,"result-file-name"));meta.append(changeBadge,el("span",when(file.observedAt),"result-meta"));card.append(heading,meta);card.title=file.path;if(!deleted)globalThis.WorkspaceAttachments?.makeDraggable(card,file.path,id);
-      const actions=el("div",null,"result-actions"),open=el("button","미리보기","quiet-button"),external=el("button","기본 앱에서 열기","text-button"),folder=el("button","폴더에서 보기","text-button"),follow=el("button","이 결과로 요청","text-button"),context={sessionId:id,path:file.path};
+      const actions=el("div",null,"result-actions"),open=el("button","미리보기","quiet-button"),external=el("button","기본 앱에서 열기","text-button"),folder=el("button","폴더에서 보기","text-button"),follow=el("button","이 결과로 요청","text-button"),context={sessionId:id,path:file.path,generation:request.generation};
       const valid=()=>currentFileLocation(id,request.generation)&&list.resultView===view&&card.isConnected;
       open.onclick=()=>{if(valid())preview(file.path,{opener:open,changeRunId:file.runId}).catch(e=>{if(valid())error(e.message);});};external.onclick=()=>{if(valid())return openFileAction("open",context);};folder.onclick=()=>{if(valid())return openFileAction("reveal",context);};external.disabled=folder.disabled=!!boot.demo;external.hidden=!/\.(?:md|txt|csv|tsv|html?|pdf|pptx|docx|xlsx?|png|jpe?g|webp|zip)$/i.test(file.path);folder.hidden=false;
       follow.onclick=()=>{if(!valid())return;const added=globalThis.WorkspaceAttachments?.addPath(file.path,{id,generation:request.generation,kind:"work"});if(added==="added"||added==="duplicate")$("prompt").focus();if(added==="added")toast("요청할 자료에 추가했어요. 원하는 수정 내용을 입력하세요.");};
@@ -1385,8 +1387,8 @@ async function refreshResults(reveal=false){
         compare.onclick=()=>{if(valid())return globalThis.WorkspaceProductivityActions?.openChanges({sessionId:id,runId:run,path:file.path,opener:compare});};
         actions.append(compare);
       }
-      if(!deleted)actions.append(external,folder,follow);
-      card.append(actions);if(deleted)card.append(el("p","파일이 삭제되어 저장된 변경 내용만 확인할 수 있어요.","external-file-note"));else if(/\.html?$/i.test(file.path))card.append(el("p","기본 앱에서 열면 원본의 스크립트와 외부 연결이 동작할 수 있어요.","external-file-note"));return card;
+      if(deleted)actions.append(folder);else actions.append(external,folder,follow);
+      card.append(actions);if(deleted)card.append(el("p","삭제된 파일이에요. 저장된 변경 내용을 보거나 파일이 있던 위치를 탐색기에서 확인하세요.","external-file-note"));else if(/\.html?$/i.test(file.path))card.append(el("p","기본 앱에서 열면 원본의 스크립트와 외부 연결이 동작할 수 있어요.","external-file-note"));return card;
     }
     const cardFor=(file,place)=>reuse(place+JSON.stringify([file.path,file.change,file.attribution,file.observedAt]),()=>fileCard(file));
     if(items.length>primary.length)next.push(reuse("label",()=>el("p","먼저 확인할 파일","run-results-label")));
@@ -1550,7 +1552,8 @@ async function openFileAction(action,context=previewContext){
       (context.generation!==undefined&&context.generation!==selectionGeneration))
     return toast("이 파일을 선택한 업무에서 다시 열어 주세요.");
   if(boot.demo)return;
-  try{await api("/api/open",{id:context.sessionId,path:context.path,action});}catch(e){toast(e.message);}
+  const generation=selectionGeneration;
+  try{await api("/api/open",{id:context.sessionId,path:context.path,action});}catch(e){if(currentFileLocation(context.sessionId,generation))toast(e.message);}
 }
 function previewFileActions(path,{directory=false,unavailable=false}={}) {
   // Keep source files separate from documents: a default association may run code.
@@ -1808,6 +1811,12 @@ $("new-chat").onclick=()=>{showHome(true);modeViews[currentMode].selected=null;p
 $("mode-chat").onclick=()=>switchMode("chat");$("mode-work").onclick=()=>switchMode("work");
 $("chat-file-input").onchange=event=>{const files=[...event.target.files];event.target.value="";void globalThis.WorkspaceAttachments?.uploadFiles(files);};
 $("choose-folder").onclick=$("workspace-button").onclick=$("workspace-summary").onclick=()=>chooseFolder(!!active);
+$("open-workspace-folder").onclick=async()=>{
+  if(!active?.workspace||sessionKind(active)!=="work"||appClosed||pendingSelection||boot.demo||secondaryViewOpen())return;
+  const id=active.id,generation=selectionGeneration;
+  try{await api("/api/open-workspace-folder",{id});}
+  catch(err){if(currentFileLocation(id,generation))toast(err.message);}
+};
 document.querySelectorAll(".task-card,[data-prompt].prompt-shortcut").forEach(button=>button.onclick=()=>{if(appClosed)return;$("prompt").value=button.dataset.prompt;$("prompt").focus();});
 document.querySelectorAll(".chat-starter[data-chat-prompt]").forEach(button=>button.onclick=()=>insertChatStarter(button.dataset.chatPrompt));
 function handleStopFailure(failure,id=active?.id,revision=stopStates.get(id)?.revision||0){
@@ -2185,7 +2194,7 @@ function enterShutdown(state,issues=[]){
   globalThis.WorkspaceExtensionImport?.stop();
   globalThis.WorkspaceAttention?.stop();globalThis.WorkspaceRegistration?.stop();globalThis.WorkspaceAppUpdates?.stop();globalThis.WorkspaceReleaseHistory?.stop();globalThis.WorkspaceProgressView?.close();globalThis.WorkspaceProductivityActions?.close();globalThis.WorkspacePalette?.close();globalThis.WorkspaceStream?.reset();globalThis.WorkspaceComposer?.close();globalThis.WorkspaceInlineControls?.close();closePreview();
   if(pollController)pollController.abort();
-  for(const id of ["new-chat","choose-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
+  for(const id of ["new-chat","choose-folder","open-workspace-folder","workspace-button","workspace-summary","native","hide-window"])$(id).disabled=true;
   renderShutdown();
 }
 async function requestShutdown(payload={}){

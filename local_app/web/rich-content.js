@@ -509,7 +509,12 @@ globalThis.WorkspaceRichContent = (() => {
   function fileChip(parent,path,options) {const chip=button(nameOf(path),path);chip.className="rich-file-chip";chip.replaceChildren(linkIcon("doc"),document.createTextNode(nameOf(path)));chip.onclick=()=>Promise.resolve(openFile(path,options)).catch(()=>{chip.title="파일을 열 수 없습니다";});parent.append(chip);}
   function files(parent,paths,options={}) {
     options=context(options);prune();const wrap=make("div",null,"rich-files"),unique=[...new Set((paths||[]).map(item=>typeof item==="string"?item:item?.path).filter(Boolean))];
-    for(const raw of unique.slice(0,24)){const path=localPath(raw,options.workspace);if(!path)continue;if(/\.(?:png|jpe?g|webp)$/i.test(path))image(wrap,path,"",options);else fileChip(wrap,path,options);}
+    for(const raw of unique.slice(0,24)){
+      const path=localPath(raw,options.workspace);if(!path)continue;
+      const action=options.fileAction?.(path),row=action?make("div",null,"rich-file-with-action"):wrap;
+      if(/\.(?:png|jpe?g|webp)$/i.test(path))image(row,path,"",options);else fileChip(row,path,options);
+      if(action){row.append(action);wrap.append(row);}
+    }
     if(unique.length>24)wrap.append(make("span",`그 외 ${unique.length-24}개 파일`,"rich-limit"));parent.append(wrap);return wrap;
   }
   function render(parent, source, options={}) {

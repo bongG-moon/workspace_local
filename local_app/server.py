@@ -3495,6 +3495,27 @@ class LocalApp:
             raise ValueError("이 대화의 작업 폴더 또는 직접 선택한 파일만 열 수 있습니다.")
         return path
 
+    def reveal_file(self, sid, value):
+        from .external_apps import REVEAL_TYPES, open_document, open_folder
+        if self.demo:
+            raise ValueError('파일 탐색기는 실사용 모드에서 열 수 있어요.')
+        item = self.get(sid)
+        if item.get('kind', 'work') == 'work':
+            root = workspace_folder(item)
+            if workspace_write_name(root, value) is not None and Path(value).suffix.lower() in REVEAL_TYPES:
+                path = Path(value)
+                try:
+                    workspace_path(path).stat()
+                except (FileNotFoundError, NotADirectoryError):
+                    parent = path.parent
+                    while parent != root and not parent.is_dir():
+                        parent = parent.parent
+                    return dict(open_folder(parent), action='reveal')
+                return open_document(path, 'reveal')
+        # An attachment permits selecting that file, never an outside parent
+        # or a general chat's private workspace if the attachment is missing.
+        return open_document(self.allowed_file(sid, value), 'reveal')
+
     def project_preview_availability(self, sid, path):
         """Do not extend an attachment grant into access to its sibling files."""
         with self.lock:
@@ -4652,11 +4673,19 @@ class Handler(BaseHTTPRequestHandler):
             if set(data) - {'id', 'disconnect'}:
                 raise ValueError('중지 요청의 항목을 확인해 주세요.')
             return self.reply(app.stop(sid, disconnect=data.get('disconnect', False)))
+        elif route == '/api/open-workspace-folder':
+            if set(data) != {'id'} or app.demo:
+                raise ValueError('실사용 모드에서 열 업무 폴더를 선택해 주세요.')
+            from .external_apps import open_folder
+            return self.reply(open_folder(workspace_folder(app.require_work(sid))))
         elif route == "/api/open":
+            action = data.get('action', 'open')
+            if action == 'reveal':
+                return self.reply(app.reveal_file(sid, data.get('path', '')))
             path = app.allowed_file(sid, data.get("path", ""))
             from .external_apps import open_document
-            result = open_document(path, data.get('action', 'open'))
-            if data.get('action', 'open') != 'reveal' and app.get(sid).get('observation'):
+            result = open_document(path, action)
+            if app.get(sid).get('observation'):
                 app.get(sid)['observation']['fileOpened'] = True
             return self.reply(result)
         elif route == "/api/native":

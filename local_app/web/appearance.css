@@ -705,7 +705,8 @@ dialog.path-picker .path-picker-location .quiet-button{
 .folder-card>.eyebrow{grid-column:2;grid-row:1;align-self:end;font-size:11px;line-height:18px;letter-spacing:0}
 .folder-card>strong{grid-column:2;grid-row:2;min-width:0;margin:0;font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .folder-card>p{grid-column:1 / -1;margin:10px 0 4px;font-size:11px;line-height:18px;overflow-wrap:anywhere}
-.folder-card>.text-button{grid-column:1 / -1;justify-self:start;min-height:28px;padding:4px 0;font-size:11px;line-height:20px}
+.folder-card-actions{grid-column:1 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:0 14px}
+.folder-card-actions>.text-button{min-height:28px;padding:4px 0;font-size:11px;line-height:20px;white-space:nowrap}
 
 /* Preview cleanup immediately releases iframe content and resize observers. */
 #preview-dialog:not([open]){transition:none}

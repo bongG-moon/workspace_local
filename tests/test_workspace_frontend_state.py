@@ -70,6 +70,34 @@ class WorkspaceFrontendStateTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_materials_folder_opens_the_selected_workspace_without_changing_the_draft(self):
+        self.run_case(r"""(async()=>{
+          const calls=[],messages=[];
+          api=async(path,body)=>{calls.push({path,body});};
+          toast=text=>messages.push(text);
+          const open=$('open-workspace-folder');
+          active=null;taskHeader();assert.equal(open.hidden,true);
+          await open.onclick();assert.equal(calls.length,0);
+
+          active={id:'A',workspace:'C:/업무 자료',kind:'work',messages:[]};
+          $('prompt').value='작성 중인 요청';taskHeader();
+          assert.equal(open.hidden,false);assert.equal(open.disabled,false);
+          await open.onclick();
+          assert.deepEqual(calls,[{path:'/api/open-workspace-folder',body:{id:'A'}}]);
+          assert.equal($('folder-dialog').open,undefined);assert.equal($('prompt').value,'작성 중인 요청');
+          setPendingSelection({id:'B'});await open.onclick();setPendingSelection(null);
+          boot.demo=true;taskHeader();assert.equal(open.disabled,true);await open.onclick();
+          boot.demo=false;active.kind='chat';taskHeader();assert.equal(open.hidden,true);await open.onclick();
+          assert.equal(calls.length,1);
+
+          active.kind='work';taskHeader();
+          let fail;api=()=>new Promise((resolve,reject)=>{fail=reject;});
+          const pending=open.onclick();selectionGeneration++;active={...active,id:'B'};
+          fail(Error('이전 업무 오류'));await pending;assert.deepEqual(messages,[]);
+          api=async()=>{throw Error('업무 폴더를 찾을 수 없습니다.');};
+          await open.onclick();assert.deepEqual(messages,['업무 폴더를 찾을 수 없습니다.']);
+        })()""")
+
     def test_managed_location_button_selects_parent_without_resetting_draft(self):
         self.run_case(r"""(async()=>{
           boot={defaultWorkspace:'C:/Desktop',managedWorkspaceRoot:'C:/Desktop/Company Workspace'};

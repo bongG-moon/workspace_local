@@ -82,6 +82,71 @@ class FlowRoutesTests(unittest.TestCase):
                 self.request('/api/open', {'id': self.b, 'path': str(doc)})
             self.assertEqual(before, opened.call_count)
 
+    def test_workspace_folder_is_derived_from_selected_work_without_changing_trust(self):
+        item = self.app.get(self.a)
+        item['trusted'] = False
+        chat = self.app.create(kind='chat')['id']
+        with patch('local_app.external_apps.open_folder', return_value={'requested': True}) as opened:
+            self.assertTrue(self.request('/api/open-workspace-folder', {'id': self.a})['requested'])
+            opened.assert_called_once_with(self.work)
+            self.assertFalse(item['trusted'])
+            self.request('/api/open-workspace-folder', {'id': self.b})
+            opened.assert_called_with(self.root / 'other')
+            for data in ({'id': chat}, {'id': 'unknown'}, {'id': self.a, 'path': str(self.root)}):
+                with self.subTest(data=data), self.assertRaises(HTTPError):
+                    self.request('/api/open-workspace-folder', data)
+            self.app.demo = True
+            with self.assertRaises(HTTPError):
+                self.request('/api/open-workspace-folder', {'id': self.a})
+            self.assertEqual(2, opened.call_count)
+
+    def test_reveal_deleted_file_opens_nearest_workspace_parent_without_claiming_it(self):
+        parent = self.work / '한글 자료'
+        parent.mkdir()
+        path = parent / 'removed' / 'chart.svg'
+        candidate = {'path': str(path), 'attribution': 'observed', 'change': 'deleted'}
+        item = self.app.get(self.a)
+        item.update(observedChanges=[candidate], observation={'fileOpened': False})
+        data = {'id': self.a, 'path': str(path), 'action': 'reveal'}
+        with patch('local_app.external_apps.open_folder', return_value={'ok': True, 'requested': True}) as folder, \
+             patch('local_app.external_apps.open_document') as document:
+            self.assertEqual('reveal', self.request('/api/open', data)['action'])
+            folder.assert_called_once_with(parent)
+            parent.rmdir()
+            self.request('/api/open', data)
+            folder.assert_called_with(self.work)
+            # A missing external attachment grants no permission to its parent.
+            other = self.app.get(self.b)
+            other['attachments'] = [str(path)]
+            for invalid in (dict(data, id=self.b), dict(data, action='open'),
+                            dict(data, path=str(self.work / '..' / 'absent.txt'))):
+                with self.subTest(invalid=invalid), self.assertRaises(HTTPError):
+                    self.request('/api/open', invalid)
+            self.app.demo = True
+            with self.assertRaises(HTTPError):
+                self.request('/api/open', data)
+            self.assertEqual(2, folder.call_count)
+            document.assert_not_called()
+        self.assertEqual([candidate], item['observedChanges'])
+        self.assertEqual([], item['artifacts'])
+        self.assertFalse(item['observation']['fileOpened'])
+
+    def test_review_only_file_types_can_be_selected_without_preview_or_default_open(self):
+        with patch('local_app.external_apps.open_document', return_value={'requested': True}) as opened:
+            for suffix in ('.doc', '.ppt', '.gif', '.svg'):
+                path = self.work / ('result' + suffix)
+                path.touch()
+                data = {'id': self.a, 'path': str(path)}
+                self.request('/api/open', dict(data, action='reveal'))
+                opened.assert_called_with(path, 'reveal')
+                with self.assertRaises(HTTPError):
+                    self.request('/api/open', data)
+                with self.assertRaises(ValueError):
+                    self.app.allowed_file(self.a, str(path))
+                with self.assertRaises(HTTPError):
+                    self.request('/api/open', dict(data, id=self.b, action='reveal'))
+            self.assertEqual(4, opened.call_count)
+
     def test_file_suggestions_do_not_grant_trust_or_read_file_contents(self):
         doc = self.work / '한글.md'; doc.write_text('SECRET-SENTINEL', encoding='utf-8')
         self.app.get(self.a)['trusted'] = False

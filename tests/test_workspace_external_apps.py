@@ -1,10 +1,12 @@
 """Explicit original-file opening must preserve scope and existing associations."""
 from pathlib import Path
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from local_app.external_apps import open_document
+from local_app.external_apps import open_document, open_folder
 from local_app.server import LocalApp
 
 
@@ -50,6 +52,40 @@ class ExternalAppsTests(unittest.TestCase):
             self.assertNotIn('shell', run.call_args.kwargs)
             open_document(self.html, 'text')
             self.assertEqual(['C:/Windows/notepad.exe', str(self.html)], run.call_args.args[0])
+
+    def test_folder_uses_explorer_on_the_literal_directory_only(self):
+        directory = self.work / '업무 자료, 1 & 2'
+        directory.mkdir()
+        with patch('local_app.external_apps.windows_program', return_value='C:/Windows/explorer.exe'), \
+             patch('local_app.external_apps.subprocess.Popen') as run:
+            self.assertTrue(open_folder(directory)['requested'])
+            self.assertEqual(['C:/Windows/explorer.exe', str(directory)], run.call_args.args[0])
+            self.assertNotIn('shell', run.call_args.kwargs)
+            for invalid in (self.html, directory / 'missing', Path('relative'), directory / '..'):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    open_folder(invalid)
+            with patch('local_app.external_apps.workspace_path', side_effect=ValueError('replaced junction')):
+                with self.assertRaises(ValueError):
+                    open_folder(directory)
+            self.assertEqual(1, run.call_count)
+
+    def test_reveal_stops_before_reading_metadata_beyond_a_replaced_parent(self):
+        app = LocalApp(self.root / 'state', command=['never-start'], managed_workspace_root=self.root / 'managed')
+        self.addCleanup(app.close)
+        sid = app.create(str(self.work), True)['id']
+        directory = Path(app.get(sid)['workspace']) / 'reports'
+        target = directory / 'removed.txt'
+        original = Path.lstat
+        def lstat(path):
+            if path == directory:
+                return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400, st_reparse_tag=0xA0000003)
+            if path == target:
+                self.fail('file metadata lookup through a replaced junction')
+            return original(path)
+        with patch.object(Path, 'lstat', lstat), patch('local_app.external_apps.subprocess.Popen') as run:
+            with self.assertRaises(ValueError):
+                app.reveal_file(sid, str(target))
+            run.assert_not_called()
 
     def test_reference_only_files_reveal_but_never_execute(self):
         with patch('local_app.external_apps.os.startfile', create=True) as start, \

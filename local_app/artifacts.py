@@ -362,8 +362,8 @@ def available_artifacts(root: Path, rows, *, seconds=.25):
         if (row.get('change') == 'deleted' and row.get('attribution') == 'confirmed'
                 and isinstance(row.get('runId'), str) and row['runId']):
             # A user-confirmed captured deletion is historical evidence, not a
-            # missing live file. Its UI offers comparison only, even if another
-            # process later recreates the same name.
+            # missing live file. Keep its saved comparison and folder location
+            # available even if another process later recreates the same name.
             visible.append(row)
             continue
         current, available = root, True

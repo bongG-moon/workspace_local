@@ -20,3 +20,9 @@
 .observed-change-actions button:disabled{opacity:.5;cursor:wait}
 .observed-change-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .run-result-deleted{display:flex;align-items:center;gap:8px;margin:7px 0;font-size:12px;line-height:1.6;color:var(--theme-text-secondary,#52617b);overflow-wrap:anywhere}
+.run-results .rich-file-with-action{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.run-results .rich-file-with-action>.rich-file-chip{min-width:0}
+.run-results .rich-file-with-action:has(>.rich-image){align-items:flex-start;flex-direction:column;gap:0}
+.run-results .rich-file-with-action>.rich-image{margin:0}
+.run-result-folder{flex:none;min-height:30px;padding:2px 0;font:inherit;font-size:11px;white-space:nowrap}
+.run-result-folder:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
